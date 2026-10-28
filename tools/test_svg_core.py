@@ -84,9 +84,9 @@ def main():
     binary = build/('svg-yonder' if args.yonder else 'svg-paint' if args.paint else 'svg-core')
     subprocess.run([cc, *common, *map(str, objects), '-o', str(binary)], check=True)
     inputs = {p for p, _ in entries}
-    inputs.add(ROOT/'tools/test_svg_gradient_sampler.inc')
+    inputs.update([ROOT/'tools/test_svg_gradient_sampler.inc', ROOT/'tools/test_svg_radial_sampler.inc'])
     if args.yonder:
-        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc', ROOT/'tools/test_yonder_svg_clips.inc', ROOT/'tools/test_yonder_svg_bounds.inc', ROOT/'tools/test_yonder_svg_document.inc', ROOT/'tools/test_yonder_svg_gradients.inc', ROOT/'tools/test_svg_gradient_sampler.inc'])
+        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc', ROOT/'tools/test_yonder_svg_clips.inc', ROOT/'tools/test_yonder_svg_bounds.inc', ROOT/'tools/test_yonder_svg_document.inc', ROOT/'tools/test_yonder_svg_gradients.inc', ROOT/'tools/test_yonder_svg_radial.inc', ROOT/'tools/test_svg_gradient_sampler.inc'])
         for directory in ('abi/include', 'tools', 'userland/apps/yonder',
                           'userland/libflow', 'userland/libhtml', 'userland/libxml', 'userland/libpage',
                           'userland/libgarb', 'userland/libfetch/include',

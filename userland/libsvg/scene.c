@@ -24,8 +24,8 @@ static Status style_status(const svg_style_t *s)
         s->stroke_style.miter_limit < 1 || s->stroke_style.cap < OS64_GEOMETRY_BUTT ||
         s->stroke_style.cap > OS64_GEOMETRY_SQUARE || s->stroke_style.join < OS64_GEOMETRY_MITER ||
         s->stroke_style.join > OS64_GEOMETRY_ARCS || s->fill.kind < SVG_PAINT_NONE ||
-        s->fill.kind > SVG_PAINT_LINEAR || s->stroke.kind < SVG_PAINT_NONE ||
-        s->stroke.kind > SVG_PAINT_LINEAR)
+        s->fill.kind > SVG_PAINT_RADIAL || s->stroke.kind < SVG_PAINT_NONE ||
+        s->stroke.kind > SVG_PAINT_RADIAL)
         return SVG_PROVIDER_ERROR;
     if (s->viewport.active &&
         (!isfinite(s->viewport.width) || !isfinite(s->viewport.height) || s->viewport.width < 0 ||
@@ -40,12 +40,16 @@ static Status style_status(const svg_style_t *s)
             return SVG_PROVIDER_ERROR;
     const svg_paint_t *paints[] = {&s->fill, &s->stroke};
     for (unsigned i = 0; i < 2; ++i) {
-        if (paints[i]->kind != SVG_PAINT_LINEAR)
+        if (paints[i]->kind != SVG_PAINT_LINEAR && paints[i]->kind != SVG_PAINT_RADIAL)
             continue;
         Map identity = {1, 0, 0, 1, 0, 0};
         svg_bounds_t box = {.max_x = 1, .max_y = 1};
         svg_linear_sampler_t sampler;
-        Status status = svg_linear_gradient_prepare(paints[i]->linear, &identity, &box, &sampler);
+        svg_radial_sampler_t radial;
+        Status status =
+            paints[i]->kind == SVG_PAINT_LINEAR
+                ? svg_linear_gradient_prepare(paints[i]->linear, &identity, &box, &sampler)
+                : svg_radial_gradient_prepare(paints[i]->radial, &identity, &box, &radial);
         if (status != SVG_OK)
             return status == SVG_BAD_ARGUMENT ? SVG_PROVIDER_ERROR : status;
     }
@@ -81,6 +85,8 @@ static void free_scene(Context *c, svg_scene_t *scene)
         svg_free(c, (void *)scene->items[i].style.dash.values);
         svg_free(c, (void *)scene->items[i].style.fill.linear);
         svg_free(c, (void *)scene->items[i].style.stroke.linear);
+        svg_free(c, (void *)scene->items[i].style.fill.radial);
+        svg_free(c, (void *)scene->items[i].style.stroke.radial);
     }
     svg_free(c, scene->items);
     if (scene->pinned)
@@ -112,7 +118,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
     *scene = (svg_scene_t){.owner = c, .provider = *provider};
     Frame *stack = NULL;
     double *pending_dash = NULL;
-    svg_linear_gradient_t *pending_gradient[2] = {0};
+    void *pending_gradient[2] = {0};
     size_t capacity = 0, depth = 0, visits = 0;
     uint64_t root = 0;
     if (!svg_spend(c, 1)) {
@@ -229,23 +235,36 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         }
         svg_paint_t *paints[] = {&item.style.fill, &item.style.stroke};
         for (unsigned part = 0; part < 2; ++part) {
-            const svg_linear_gradient_t *source = paints[part]->linear;
+            const svg_linear_gradient_t *linear = paints[part]->linear;
+            const svg_radial_gradient_t *radial = paints[part]->radial;
             paints[part]->linear = NULL;
-            if (paints[part]->kind != SVG_PAINT_LINEAR)
+            paints[part]->radial = NULL;
+            bool is_radial = paints[part]->kind == SVG_PAINT_RADIAL;
+            if (paints[part]->kind != SVG_PAINT_LINEAR && !is_radial)
                 continue;
-            size_t bytes = sizeof(*source) + source->count * sizeof(*source->stops);
-            svg_linear_gradient_t *copy = svg_alloc(c, bytes);
+            size_t count = is_radial ? radial->count : linear->count;
+            size_t descriptor = is_radial ? sizeof(*radial) : sizeof(*linear);
+            const svg_gradient_stop_t *source = is_radial ? radial->stops : linear->stops;
+            void *copy = svg_alloc(c, descriptor + count * sizeof(*source));
             pending_gradient[part] = copy;
-            if (!copy || !svg_spend(c, source->count)) {
+            if (!copy || !svg_spend(c, count)) {
                 status = c->why;
                 goto done;
             }
-            *copy = *source;
-            svg_gradient_stop_t *stops = (void *)(copy + 1);
-            for (size_t i = 0; i < source->count; ++i)
-                stops[i] = source->stops[i];
-            copy->stops = stops;
-            paints[part]->linear = copy;
+            svg_gradient_stop_t *stops = (void *)((unsigned char *)copy + descriptor);
+            for (size_t i = 0; i < count; ++i)
+                stops[i] = source[i];
+            if (is_radial) {
+                svg_radial_gradient_t *g = copy;
+                *g = *radial;
+                g->stops = stops;
+                paints[part]->radial = g;
+            } else {
+                svg_linear_gradient_t *g = copy;
+                *g = *linear;
+                g->stops = stops;
+                paints[part]->linear = g;
+            }
         }
         if (item.style.dash.count) {
             pending_dash = svg_alloc(c, item.style.dash.count * sizeof(*pending_dash));

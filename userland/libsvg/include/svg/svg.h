@@ -103,12 +103,37 @@ typedef struct {
     svg_spread_t spread;
     bool constant;
 } svg_linear_sampler_t;
-typedef enum { SVG_PAINT_NONE, SVG_PAINT_COLOR, SVG_PAINT_UNSUPPORTED,
-               SVG_PAINT_LINEAR } svg_paint_kind_t;
+typedef struct {
+    double cx, cy, r, fx, fy, fr;
+    os64_geometry_map_t transform;
+    bool object_bbox;
+    svg_spread_t spread;
+    const svg_gradient_stop_t *stops;
+    size_t count;
+} svg_radial_gradient_t;
+/* Prepared radial sampler borrows immutable stops, like the linear sampler.
+ * Initialize through svg_radial_gradient_prepare before sampling. */
+typedef struct {
+    const svg_gradient_stop_t *stops;
+    size_t count;
+    os64_geometry_map_t sample_to_gradient;
+    double fx, fy, dx, dy, fr, dr, scale, quadratic;
+    svg_spread_t spread;
+    uint32_t average;
+    bool constant, tangent;
+} svg_radial_sampler_t;
+typedef enum {
+    SVG_PAINT_NONE,
+    SVG_PAINT_COLOR,
+    SVG_PAINT_UNSUPPORTED,
+    SVG_PAINT_LINEAR,
+    SVG_PAINT_RADIAL
+} svg_paint_kind_t;
 typedef struct {
     svg_paint_kind_t kind;
     uint32_t argb; /* Straight-alpha color. */
     const svg_linear_gradient_t *linear; /* Borrowed by providers; scene owns a copy. */
+    const svg_radial_gradient_t *radial; /* Same ownership; selected by kind. */
 } svg_paint_t;
 #define SVG_DASH_MAX 256u
 typedef struct {
@@ -247,6 +272,19 @@ typedef struct {
 svg_status_t svg_linear_gradient_prepare(const svg_linear_gradient_t *,
     const os64_geometry_map_t *user_to_sample, const svg_bounds_t *, svg_linear_sampler_t *);
 uint32_t svg_linear_gradient_sample(const svg_linear_sampler_t *, double x, double y);
+/* SVG radial geometry: circles may be eccentric, tangent, outside or reversed.
+ * Negative radii are invalid. Identical circles are empty. SVG's tangent-cone
+ * extension uses terminal/average colors. The position query omits that SVG
+ * extension so another caller can apply its own spread/interpolation policy. */
+svg_status_t svg_radial_gradient_prepare(const svg_radial_gradient_t *,
+                                         const os64_geometry_map_t *user_to_sample,
+                                         const svg_bounds_t *, svg_radial_sampler_t *);
+uint32_t svg_radial_gradient_sample(const svg_radial_sampler_t *, double x, double y);
+/* Returns the last nonnegative-radius circle's parameter, before spread or
+ * color interpolation. False means outside the cone/empty geometry or an
+ * unrepresentable sample. Clears position on failure. */
+bool svg_radial_gradient_position(const svg_radial_sampler_t *, double x, double y,
+                                  double *position);
 
 svg_limits_t svg_default_limits(void);
 svg_style_t svg_initial_style(void);
@@ -298,7 +336,7 @@ svg_status_t svg_scene_release(svg_context_t *, svg_scene_t *);
 svg_status_t svg_scene_object_bounds(svg_context_t *, const svg_scene_t *, size_t item,
                                      svg_bounds_t *out);
 svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *);
-/* Paints solid/linear-gradient fills followed by ordinary user-space strokes, using source-over
+/* Paints solid/gradient fills followed by ordinary user-space strokes, using source-over
  * in sRGB and isolated element/group opacity. Replaces the target, including
  * transparent pixels; preserves row padding. RGB is zero when exported alpha
  * is zero. The scene stays reusable and the renderer never frees the target.

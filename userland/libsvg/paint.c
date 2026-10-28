@@ -13,6 +13,7 @@ typedef struct {
 typedef struct {
     bool active, paint[2];
     svg_linear_sampler_t gradient[2];
+    svg_radial_sampler_t radial[2];
     Map map;
     Rect box, ink[2];
     os64_geometry_outline_t *outline[2], *clip[2];
@@ -212,17 +213,20 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         for (unsigned part = 0; part < 2; ++part) {
             const svg_paint_t *paint = paints_for_item[part];
             bool ink = paint->kind == SVG_PAINT_COLOR && (paint->argb >> 24);
-            if (paint->kind == SVG_PAINT_LINEAR) {
+            if (paint->kind == SVG_PAINT_LINEAR || paint->kind == SVG_PAINT_RADIAL) {
                 svg_bounds_t box = {0};
                 Status status = SVG_OK;
-                if (paint->linear->object_bbox)
+                bool radial = paint->kind == SVG_PAINT_RADIAL;
+                if (radial ? paint->radial->object_bbox : paint->linear->object_bbox)
                     status = svg_object_bounds(r->c, scene, i, &box);
                 if (status == SVG_OK)
-                    status = svg_linear_gradient_prepare(paint->linear, &p->map, &box,
-                                                         &p->gradient[part]);
+                    status = radial ? svg_radial_gradient_prepare(paint->radial, &p->map, &box,
+                                                                  &p->radial[part])
+                                    : svg_linear_gradient_prepare(paint->linear, &p->map, &box,
+                                                                  &p->gradient[part]);
                 if (status != SVG_OK)
                     return status;
-                ink = p->gradient[part].count != 0;
+                ink = (radial ? p->radial[part].count : p->gradient[part].count) != 0;
             }
             p->paint[part] =
                 ink && (part ? s->style.stroke_opacity > 0 && s->style.stroke_style.width > 0
@@ -508,19 +512,20 @@ static Status paint_path(Render *r, const svg_scene_item_t *s, Item *p, Layer *s
         }
         const svg_paint_t *paint = part ? &s->style.stroke : &s->style.fill;
         uint16_t opacity = alpha(part ? s->style.stroke_opacity : s->style.fill_opacity);
-        bool gradient = paint->kind == SVG_PAINT_LINEAR;
+        bool gradient = paint->kind == SVG_PAINT_LINEAR || paint->kind == SVG_PAINT_RADIAL;
+        bool radial = paint->kind == SVG_PAINT_RADIAL;
         for (uint32_t y = b.y0; y < b.y1; ++y) {
-            if (!raster_work(r, (uint64_t)(b.x1 - b.x0) * (gradient ? 12 : 1))) {
+            if (!raster_work(r, (uint64_t)(b.x1 - b.x0) * (radial ? 32 : gradient ? 12 : 1))) {
                 status = r->c->why;
                 break;
             }
             Pixel *dest = at(surface, b.x0, y);
             uint8_t *mask = coverage + (size_t)(y - b.y0) * (b.x1 - b.x0);
             for (uint32_t x = b.x0; x < b.x1; ++x, ++dest, ++mask) {
-                uint32_t color = gradient ? svg_linear_gradient_sample(&p->gradient[part],
-                                                                       r->target->origin_x + x + .5,
-                                                                       r->target->origin_y + y + .5)
-                                          : paint->argb;
+                double sx = r->target->origin_x + x + .5, sy = r->target->origin_y + y + .5;
+                uint32_t color = radial     ? svg_radial_gradient_sample(&p->radial[part], sx, sy)
+                                 : gradient ? svg_linear_gradient_sample(&p->gradient[part], sx, sy)
+                                            : paint->argb;
                 uint16_t a = multiply((uint16_t)((color >> 24) * 257), opacity);
                 uint16_t red = (uint16_t)(((color >> 16) & 255) * 257);
                 uint16_t green = (uint16_t)(((color >> 8) & 255) * 257);

@@ -5560,6 +5560,41 @@ static void svg_gradient_window_cases(void)
     probe_drop();
 }
 
+static void svg_radial_window_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+               "<svg width='64' height='32'><radialGradient id='g' fx='.25' fy='.5'>"
+               "<stop stop-color='red'/><stop offset='1' stop-color='white'/></radialGradient>"
+               "<rect width='64' height='32' fill='url(#g)'/></svg>"
+               "<svg width='64' height='32'><rect width='64' height='32' fill='url(#g)'/></svg>"
+               "<script>document.getElementById('g').setAttribute('fx','.75')</script>",
+               true);
+    uint32_t *px = stand_in_shot();
+    uint32_t original = px[16 * 800 + 16];
+    check(original == px[48 * 800 + 16], "SVG radial: shared focus reaches both roots");
+    os64_free(px);
+    while (yonder_scripts_pending(g.page.scripts))
+        script_turn();
+    px = stand_in_shot();
+    check(px[16 * 800 + 16] == px[48 * 800 + 16] && px[16 * 800 + 16] != original,
+          "SVG radial: focal-point mutation repaints both consumers");
+    os64_free(px);
+    check(g.page.svg_bytes == 0, "SVG radial returns the geometry/pixel ledger");
+    probe_drop();
+    const char *xml = "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
+                      "<radialGradient id='g' fx='.25' fy='.5'><stop stop-color='red'/>"
+                      "<stop offset='1' stop-color='white'/></radialGradient>"
+                      "<rect width='64' height='32' fill='url(#g)'/></svg>";
+    picture_svg_arrive("<!doctype html><style>body{margin:0;background:white}"
+                       "stop{stop-color:black!important}img{display:block}</style>"
+                       "<img src=file:///svg-image.svg>",
+                       xml);
+    px = stand_in_shot();
+    check(px[16 * 800 + 16] == original, "SVG radial image retains private gradient styles");
+    os64_free(px);
+    probe_drop();
+}
+
 static void svg_window_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -10317,6 +10352,7 @@ int main(void)
     inserted_frame_cases();
     stand_in_paint_cases();
     svg_gradient_window_cases();
+    svg_radial_window_cases();
     svg_window_cases();
     picture_svg_window_cases();
     covered_link_cases();

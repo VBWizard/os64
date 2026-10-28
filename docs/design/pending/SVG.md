@@ -40,7 +40,8 @@ with shared-consumer boundaries for gradients and Canvas 2D through 6c.
 isolated embedded styles and secure-static rendering. [SVG_IMAGES.md](SVG_IMAGES.md)
 connects picture jobs, default object sizing, `<img>` and background painting.
 [SVG_GRADIENTS.md](SVG_GRADIENTS.md) adds linear paint servers and a numeric
-sampler shared with future non-markup callers.
+sampler shared with future non-markup callers. [SVG_RADIAL.md](SVG_RADIAL.md)
+adds radial paint and a separate numeric circle-position query.
 This design does not establish
 performance or compatibility percentages.
 

@@ -34,6 +34,7 @@ typedef struct {
     double width, height;
     double dash_values[SVG_DASH_MAX];
     svg_linear_gradient_t gradients[2];
+    svg_radial_gradient_t radial_gradients[2];
     svg_gradient_stop_t gradient_stops[2][SVG_GRADIENT_STOPS_MAX];
     uint32_t root_color, initial_color;
     os64_geometry_memory_t memory;
@@ -1526,13 +1527,25 @@ static svg_status_t gradient_paint(Adapter *a, const garb_val_t *paint, uint32_t
     if (status != SVG_OK || !target)
         return status;
     const os64_html_node_t *resource = (const void *)(uintptr_t)target;
-    if (same_word(resource->name, "radialGradient"))
+    if (same_word(resource->name, "pattern"))
         return SVG_UNSUPPORTED;
-    if (!same_word(resource->name, "linearGradient"))
+    bool radial = same_word(resource->name, "radialGradient");
+    if (!radial && !same_word(resource->name, "linearGradient"))
         return SVG_OK;
-    const char *names[] = {
-        "x1", "y1", "x2", "y2", "gradientUnits", "spreadMethod", "gradientTransform"};
-    const char *attrs[7] = {0};
+    const char *names[] = {"gradientUnits",
+                           "spreadMethod",
+                           "gradientTransform",
+                           "x1",
+                           "y1",
+                           "x2",
+                           "y2",
+                           "cx",
+                           "cy",
+                           "r",
+                           "fx",
+                           "fy",
+                           "fr"};
+    const char *attrs[13] = {0};
     const os64_html_node_t *seen[SVG_DEPTH_MAX], *stops = NULL, *node = resource;
     size_t depth = 0;
     while (node) {
@@ -1546,9 +1559,12 @@ static svg_status_t gradient_paint(Adapter *a, const garb_val_t *paint, uint32_t
             if (seen[i] == node)
                 return SVG_OK;
         seen[depth++] = node;
-        if (!same_word(node->name, "linearGradient"))
-            return SVG_UNSUPPORTED;
-        for (size_t i = 0; i < 7; ++i) {
+        bool template_radial = same_word(node->name, "radialGradient");
+        for (size_t i = 0; i < 13; ++i) {
+            // Different gradient types share stop content and common attributes,
+            // but geometric attributes belong to their own element type.
+            if (i >= 3 && (i >= 7) != template_radial)
+                continue;
             const os64_html_attr_t *v = os64_html_attr(node, names[i]);
             if (!attrs[i] && v && !v->ns)
                 attrs[i] = v->value;
@@ -1579,29 +1595,44 @@ static svg_status_t gradient_paint(Adapter *a, const garb_val_t *paint, uint32_t
     svg_linear_gradient_t *g = &a->gradients[part];
     *g = (svg_linear_gradient_t){
         .x2 = 1, .transform = identity, .object_bbox = true, .stops = a->gradient_stops[part]};
-    if (attrs[4]) {
-        if (same_word(attrs[4], "userSpaceOnUse"))
+    if (attrs[0]) {
+        if (same_word(attrs[0], "userSpaceOnUse"))
             g->object_bbox = false;
-        else if (!same_word(attrs[4], "objectBoundingBox"))
+        else if (!same_word(attrs[0], "objectBoundingBox"))
             return SVG_UNSUPPORTED;
     }
-    if (attrs[5]) {
-        if (same_word(attrs[5], "repeat"))
+    if (attrs[1]) {
+        if (same_word(attrs[1], "repeat"))
             g->spread = SVG_SPREAD_REPEAT;
-        else if (same_word(attrs[5], "reflect"))
+        else if (same_word(attrs[1], "reflect"))
             g->spread = SVG_SPREAD_REFLECT;
-        else if (!same_word(attrs[5], "pad"))
+        else if (!same_word(attrs[1], "pad"))
             return SVG_UNSUPPORTED;
     }
-    double *coords[] = {&g->x1, &g->y1, &g->x2, &g->y2};
-    const char *defaults[] = {"0%", "0%", "100%", "0%"};
-    for (size_t i = 0; i < 4; ++i) {
-        double percent = g->object_bbox ? 1 : i % 2 ? a->height : a->width;
-        status = gradient_number(a, attrs[i] ? attrs[i] : defaults[i], percent, false, coords[i]);
+    svg_radial_gradient_t *rg = &a->radial_gradients[part];
+    *rg = (svg_radial_gradient_t){0};
+    double *coords[] = {&g->x1,  &g->y1, &g->x2,  &g->y2,  &rg->cx,
+                        &rg->cy, &rg->r, &rg->fx, &rg->fy, &rg->fr};
+    const char *defaults[] = {"0%", "0%", "100%", "0%", "50%", "50%", "50%", NULL, NULL, "0%"};
+    for (size_t i = radial ? 4 : 0; i < (radial ? 10 : 4); ++i) {
+        const char *text = attrs[i + 3] ? attrs[i + 3] : defaults[i];
+        if (!text) {
+            *coords[i] = i == 7 ? rg->cx : rg->cy;
+            continue;
+        }
+        bool radius = i == 6 || i == 9;
+        bool vertical = i == 1 || i == 3 || i == 5 || i == 8;
+        double percent = g->object_bbox ? 1
+                         : radius       ? hypot(a->width, a->height) / sqrt(2)
+                         : vertical     ? a->height
+                                        : a->width;
+        status = gradient_number(a, text, percent, false, coords[i]);
         if (status != SVG_OK)
             return status;
+        if (radius && *coords[i] < 0)
+            return SVG_MALFORMED;
     }
-    status = resource_transform(a, resource, attrs[6], &g->transform);
+    status = resource_transform(a, resource, attrs[2], &g->transform);
     if (status != SVG_OK)
         return status;
     const garb_prop_t extra[] = {GARB_TRANSFORM_ORIGIN, GARB_TRANSLATE, GARB_ROTATE, GARB_SCALE};
@@ -1644,7 +1675,15 @@ static svg_status_t gradient_paint(Adapter *a, const garb_val_t *paint, uint32_t
             rgba = (rgba & 0xffffff) | (uint32_t)((rgba >> 24) * stop.opacity + .5) << 24;
             a->gradient_stops[part][g->count++] = (svg_gradient_stop_t){offset, rgba};
         }
-    *out = (svg_paint_t){.kind = SVG_PAINT_LINEAR, .linear = g};
+    if (radial) {
+        rg->transform = g->transform;
+        rg->object_bbox = g->object_bbox;
+        rg->spread = g->spread;
+        rg->stops = g->stops;
+        rg->count = g->count;
+        *out = (svg_paint_t){.kind = SVG_PAINT_RADIAL, .radial = rg};
+    } else
+        *out = (svg_paint_t){.kind = SVG_PAINT_LINEAR, .linear = g};
     return SVG_OK;
 }
 // A clip source inherits through its own DOM ancestors. Temporarily using the

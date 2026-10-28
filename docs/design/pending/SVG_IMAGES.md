@@ -161,8 +161,8 @@ Chris verified the `a013caf7` delivery on the P5: the complete gallery passes
 from 25% through 400% zoom. The frozen binary/library/fixture cohort contains
 33 files; the update transferred 26 changed files.
 
-[Linear gradients](SVG_GRADIENTS.md) extend the image profile. Radial gradients,
-raster-variant caching and corpus-led latency/fidelity work remain
+[Linear](SVG_GRADIENTS.md) and [radial gradients](SVG_RADIAL.md) extend the image
+profile. Raster-variant caching and corpus-led latency/fidelity work remain
 in 6c; broader graphics remain in 6d. SVGZ,
 data-URL picture dispatch, fragment-view selection and full intrinsic sizing
 are not delivered by this route.
