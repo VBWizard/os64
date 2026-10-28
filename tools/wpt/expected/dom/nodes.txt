@@ -349,6 +349,69 @@ case.html	createElement Abc
 case.html	createElement abc
 case.html	createElement Ä
 case.html	createElement ä
+# 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): the element kinds. Each
+# fails with the switch off.
+DOMImplementation-createHTMLDocument.html	Missing title argument
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 0: "","",""
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 1: null,"null","null"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 2: undefined,undefined,""
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 3: "foo  bar baz","foo  bar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 4: "foo\\t\\tbar baz","foo\\t\\tbar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 5: "foo\\n\\nbar baz","foo\\n\\nbar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 6: "foo\\f\\fbar baz","foo\\f\\fbar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 7: "foo\\r\\rbar baz","foo\\r\\rbar baz","foo bar baz"
+Document-createElementNS.html	Lower-case HTML element without a prefix
+Document-createElementNS.html	Upper-case HTML element without a prefix
+Document-getElementById.html	Document.getElementById with a script-inserted element
+Document-getElementById.html	add id attribute via innerHTML
+Document-getElementById.html	on static page
+Node-cloneNode.html	Node with custom prototype
+Node-cloneNode.html	createElement(area)
+Node-cloneNode.html	createElement(base)
+Node-cloneNode.html	createElement(body)
+Node-cloneNode.html	createElement(br)
+Node-cloneNode.html	createElement(canvas)
+Node-cloneNode.html	createElement(caption)
+Node-cloneNode.html	createElement(col)
+Node-cloneNode.html	createElement(colgroup)
+Node-cloneNode.html	createElement(data)
+Node-cloneNode.html	createElement(del)
+Node-cloneNode.html	createElement(dir)
+Node-cloneNode.html	createElement(div)
+Node-cloneNode.html	createElement(dl)
+Node-cloneNode.html	createElement(font)
+Node-cloneNode.html	createElement(h1)
+Node-cloneNode.html	createElement(h2)
+Node-cloneNode.html	createElement(h3)
+Node-cloneNode.html	createElement(h4)
+Node-cloneNode.html	createElement(h5)
+Node-cloneNode.html	createElement(h6)
+Node-cloneNode.html	createElement(head)
+Node-cloneNode.html	createElement(hr)
+Node-cloneNode.html	createElement(html)
+Node-cloneNode.html	createElement(ins)
+Node-cloneNode.html	createElement(li)
+Node-cloneNode.html	createElement(map)
+Node-cloneNode.html	createElement(meta)
+Node-cloneNode.html	createElement(ol)
+Node-cloneNode.html	createElement(p)
+Node-cloneNode.html	createElement(pre)
+Node-cloneNode.html	createElement(q)
+Node-cloneNode.html	createElement(span)
+Node-cloneNode.html	createElement(table)
+Node-cloneNode.html	createElement(tbody)
+Node-cloneNode.html	createElement(td)
+Node-cloneNode.html	createElement(th)
+Node-cloneNode.html	createElement(time)
+Node-cloneNode.html	createElement(title)
+Node-cloneNode.html	createElement(tr)
+Node-cloneNode.html	createElement(ul)
+Node-cloneNode.html	createElement(unknown)
+Node-cloneNode.html	node with children
+insert-adjacent.html	insertAdjacentElement(afterbegin, [object HTMLHeadingElement] )
+insert-adjacent.html	insertAdjacentElement(afterend, [object HTMLHeadingElement] )
+insert-adjacent.html	insertAdjacentElement(beforebegin, [object HTMLHeadingElement] )
+insert-adjacent.html	insertAdjacentElement(beforeend, [object HTMLHeadingElement] )
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -703,6 +766,15 @@ DOMImplementation-createDocumentType.html	createDocumentType("test:root", "test"
 DOMImplementation-createDocumentType.html	createDocumentType("{", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("}", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("~", "", "") should work
+DOMImplementation-createHTMLDocument.html	Missing title argument
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 0: "","",""
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 1: null,"null","null"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 2: undefined,undefined,""
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 3: "foo  bar baz","foo  bar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 4: "foo\\t\\tbar baz","foo\\t\\tbar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 5: "foo\\n\\nbar baz","foo\\n\\nbar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 6: "foo\\f\\fbar baz","foo\\f\\fbar baz","foo bar baz"
+DOMImplementation-createHTMLDocument.html	createHTMLDocument test 7: "foo\\r\\rbar baz","foo\\r\\rbar baz","foo bar baz"
 DOMImplementation-createHTMLDocument.html	createHTMLDocument(): characterSet aliases
 DOMImplementation-createHTMLDocument.html	createHTMLDocument(): document location getter is null
 DOMImplementation-createHTMLDocument.html	createHTMLDocument(): metadata
@@ -932,6 +1004,8 @@ Document-createElement.html	createElement("̀") in HTML document
 Document-createElement.html	createElement("̀foo") in HTML document
 Document-createElement.html	createElement(null) in HTML document
 Document-createElement.html	createElement(undefined) in HTML document
+Document-createElementNS.html	Lower-case HTML element without a prefix
+Document-createElementNS.html	Upper-case HTML element without a prefix
 Document-createElementNS.html	createElementNS test in HTML document: "","","INVALID_CHARACTER_ERR"
 Document-createElementNS.html	createElementNS test in HTML document: "",":foo","INVALID_CHARACTER_ERR"
 Document-createElementNS.html	createElementNS test in HTML document: "","f:oo","NAMESPACE_ERR"
@@ -1286,11 +1360,14 @@ Document-getElementById.html	Calling document.getElementById with a null argumen
 Document-getElementById.html	Calling document.getElementById with an empty string argument.
 Document-getElementById.html	Calling document.getElementById with an undefined argument.
 Document-getElementById.html	Document.getElementById must not return nodes not present in document
+Document-getElementById.html	Document.getElementById with a script-inserted element
 Document-getElementById.html	Ensure that the id attribute only affects elements present in a document
 Document-getElementById.html	Inserting an id by inserting its parent node
 Document-getElementById.html	Modern browsers optimize this method with using internal id cache. This test checks that their optimization should effect only append to `Document`, not append to `Node`.
+Document-getElementById.html	add id attribute via innerHTML
 Document-getElementById.html	changing attribute's value via `Attr` gotten from `Element.attribute`.
 Document-getElementById.html	in tree order, within the context object's tree
+Document-getElementById.html	on static page
 Document-getElementById.html	remove id attribute via innerHTML
 Document-getElementById.html	update `id` attribute via element.id
 Document-getElementById.html	update `id` attribute via setAttribute/removeAttribute
@@ -2296,6 +2373,7 @@ Node-cloneNode-svg.html	cloned <svg> should have the right properties
 Node-cloneNode-svg.html	cloned <svg>'s xmlns:xlink attribute should have the right properties
 Node-cloneNode-svg.html	cloned <use> should have the right properties
 Node-cloneNode-svg.html	cloned <use>'s xlink:href attribute should have the right properties
+Node-cloneNode.html	Node with custom prototype
 Node-cloneNode.html	createAttribute
 Node-cloneNode.html	createAttributeNS
 Node-cloneNode.html	createComment
@@ -2305,48 +2383,79 @@ Node-cloneNode.html	createElement(a)
 Node-cloneNode.html	createElement(abbr)
 Node-cloneNode.html	createElement(acronym)
 Node-cloneNode.html	createElement(address)
+Node-cloneNode.html	createElement(area)
 Node-cloneNode.html	createElement(article)
 Node-cloneNode.html	createElement(aside)
 Node-cloneNode.html	createElement(b)
+Node-cloneNode.html	createElement(base)
 Node-cloneNode.html	createElement(bdi)
 Node-cloneNode.html	createElement(bdo)
 Node-cloneNode.html	createElement(bgsound)
 Node-cloneNode.html	createElement(big)
 Node-cloneNode.html	createElement(blockquote)
+Node-cloneNode.html	createElement(body)
+Node-cloneNode.html	createElement(br)
 Node-cloneNode.html	createElement(button)
+Node-cloneNode.html	createElement(canvas)
+Node-cloneNode.html	createElement(caption)
 Node-cloneNode.html	createElement(center)
 Node-cloneNode.html	createElement(cite)
 Node-cloneNode.html	createElement(code)
+Node-cloneNode.html	createElement(col)
+Node-cloneNode.html	createElement(colgroup)
+Node-cloneNode.html	createElement(data)
 Node-cloneNode.html	createElement(dd)
+Node-cloneNode.html	createElement(del)
 Node-cloneNode.html	createElement(details)
 Node-cloneNode.html	createElement(dfn)
+Node-cloneNode.html	createElement(dir)
+Node-cloneNode.html	createElement(div)
+Node-cloneNode.html	createElement(dl)
 Node-cloneNode.html	createElement(dt)
 Node-cloneNode.html	createElement(fieldset)
 Node-cloneNode.html	createElement(figcaption)
 Node-cloneNode.html	createElement(figure)
+Node-cloneNode.html	createElement(font)
 Node-cloneNode.html	createElement(footer)
 Node-cloneNode.html	createElement(form)
+Node-cloneNode.html	createElement(h1)
+Node-cloneNode.html	createElement(h2)
+Node-cloneNode.html	createElement(h3)
+Node-cloneNode.html	createElement(h4)
+Node-cloneNode.html	createElement(h5)
+Node-cloneNode.html	createElement(h6)
+Node-cloneNode.html	createElement(head)
 Node-cloneNode.html	createElement(header)
 Node-cloneNode.html	createElement(hgroup)
+Node-cloneNode.html	createElement(hr)
+Node-cloneNode.html	createElement(html)
 Node-cloneNode.html	createElement(i)
 Node-cloneNode.html	createElement(iframe)
 Node-cloneNode.html	createElement(img)
 Node-cloneNode.html	createElement(input)
+Node-cloneNode.html	createElement(ins)
 Node-cloneNode.html	createElement(isindex)
 Node-cloneNode.html	createElement(kbd)
 Node-cloneNode.html	createElement(label)
 Node-cloneNode.html	createElement(legend)
+Node-cloneNode.html	createElement(li)
 Node-cloneNode.html	createElement(link)
 Node-cloneNode.html	createElement(main)
+Node-cloneNode.html	createElement(map)
 Node-cloneNode.html	createElement(mark)
 Node-cloneNode.html	createElement(marquee)
+Node-cloneNode.html	createElement(meta)
 Node-cloneNode.html	createElement(nav)
 Node-cloneNode.html	createElement(nobr)
 Node-cloneNode.html	createElement(noframes)
 Node-cloneNode.html	createElement(noscript)
+Node-cloneNode.html	createElement(ol)
 Node-cloneNode.html	createElement(optgroup)
 Node-cloneNode.html	createElement(option)
 Node-cloneNode.html	createElement(output)
+Node-cloneNode.html	createElement(p)
+Node-cloneNode.html	createElement(pre)
+Node-cloneNode.html	createElement(q)
 Node-cloneNode.html	createElement(rp)
 Node-cloneNode.html	createElement(rt)
 Node-cloneNode.html	createElement(ruby)
@@ -2357,19 +2466,30 @@ Node-cloneNode.html	createElement(section)
 Node-cloneNode.html	createElement(select)
 Node-cloneNode.html	createElement(small)
 Node-cloneNode.html	createElement(spacer)
+Node-cloneNode.html	createElement(span)
 Node-cloneNode.html	createElement(strike)
 Node-cloneNode.html	createElement(style)
 Node-cloneNode.html	createElement(sub)
 Node-cloneNode.html	createElement(summary)
 Node-cloneNode.html	createElement(sup)
+Node-cloneNode.html	createElement(table)
+Node-cloneNode.html	createElement(tbody)
+Node-cloneNode.html	createElement(td)
 Node-cloneNode.html	createElement(template)
 Node-cloneNode.html	createElement(textarea)
+Node-cloneNode.html	createElement(th)
+Node-cloneNode.html	createElement(time)
+Node-cloneNode.html	createElement(title)
+Node-cloneNode.html	createElement(tr)
 Node-cloneNode.html	createElement(tt)
 Node-cloneNode.html	createElement(u)
+Node-cloneNode.html	createElement(ul)
+Node-cloneNode.html	createElement(unknown)
 Node-cloneNode.html	createElement(var)
 Node-cloneNode.html	createElement(wbr)
 Node-cloneNode.html	createTextNode
 Node-cloneNode.html	implementation.createDocumentType
+Node-cloneNode.html	node with children
 Node-constants.html	Constants for createDocumentPosition on Element object.
 Node-constants.html	Constants for createDocumentPosition on Node interface object.
 Node-constants.html	Constants for createDocumentPosition on Node prototype object.
@@ -2831,10 +2951,10 @@ getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH JOINER t
 getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH NON-BREAKING SPACE to getElementsByClassName still finds the span
 getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH NON-JOINER to getElementsByClassName still finds the span
 getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH SPACE to getElementsByClassName still finds the span
-insert-adjacent.html	insertAdjacentElement(afterbegin, [object HTMLElement] )
-insert-adjacent.html	insertAdjacentElement(afterend, [object HTMLElement] )
-insert-adjacent.html	insertAdjacentElement(beforebegin, [object HTMLElement] )
-insert-adjacent.html	insertAdjacentElement(beforeend, [object HTMLElement] )
+insert-adjacent.html	insertAdjacentElement(afterbegin, [object HTMLHeadingElement] )
+insert-adjacent.html	insertAdjacentElement(afterend, [object HTMLHeadingElement] )
+insert-adjacent.html	insertAdjacentElement(beforebegin, [object HTMLHeadingElement] )
+insert-adjacent.html	insertAdjacentElement(beforeend, [object HTMLHeadingElement] )
 insert-adjacent.html	insertAdjacentText should return null
 insert-adjacent.html	insertAdjacentText(afterbegin, tartiflette )
 insert-adjacent.html	insertAdjacentText(afterend, gateau aux pommes )

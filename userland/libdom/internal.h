@@ -45,8 +45,52 @@ enum {
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_OPTION, D_PROTO_OPTGROUP,
     D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_TEMPLATE,
-    D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT, D_PROTO_STYLE, D_PROTO_COUNT
+    D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT, D_PROTO_STYLE,
+    /* The element kinds whose members are reflections (0f's P6). */
+    D_PROTO_META, D_PROTO_CANVAS, D_PROTO_UNKNOWN, D_PROTO_TIME, D_PROTO_DIV, D_PROTO_BODY, D_PROTO_OLIST,
+    D_PROTO_HEAD, D_PROTO_DATA, D_PROTO_LI, D_PROTO_AREA, D_PROTO_BASE, D_PROTO_MAP, D_PROTO_MOD, D_PROTO_QUOTE,
+    D_PROTO_TABLE_CELL, D_PROTO_TABLE_COL, D_PROTO_TABLE, D_PROTO_TABLE_ROW, D_PROTO_TABLE_SECTION, D_PROTO_ULIST,
+    D_PROTO_BR, D_PROTO_DLIST, D_PROTO_DIRECTORY, D_PROTO_FONT, D_PROTO_HR, D_PROTO_HEADING, D_PROTO_HTML,
+    D_PROTO_MENU, D_PROTO_PARAGRAPH, D_PROTO_PRE, D_PROTO_SPAN, D_PROTO_TABLE_CAPTION, D_PROTO_TITLE,
+    D_PROTO_COUNT
 };
+/* A set of kinds is a uint64_t, bit `kind` for each (D_KIND): the tables
+ * that put a member on some kinds' prototypes. More kinds than its bits
+ * need another representation. */
+_Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
+#define D_KIND(kind) ((uint64_t)1 << (kind))
+/* The kind of `node`'s wrapper: its prototype's (node.c). */
+int d_node_kind(const os64_html_node_t *node);
+/* A content attribute reflected as an IDL attribute (HTML § 2.6.1), by
+ * one of HTML's rules: a string (null as "null", or as "" for WebIDL's
+ * LegacyNullToEmptyString); a URL, read resolved, and base's href, read
+ * against the document's own URL; a form's action; a boolean; an
+ * enumerated one; and the integers, each with its own default and its own
+ * answer to a value out of range — a non-negative long, a long, the
+ * unsigned kinds, and a span's and a row span's clamps. A row is a member
+ * on the kinds `on` names; d_reflection_get and d_reflection_set
+ * (controls.c) read every rule. */
+enum { K_STRING, K_STRING_NULL_EMPTY, K_URL, K_BASE_URL, K_FORM_ACTION, K_BOOLEAN, K_ENUM, K_LIMITED_LONG,
+       K_LONG, K_UNSIGNED, K_LIMITED_UNSIGNED, K_UNSIGNED_FALLBACK, K_SPAN, K_ROW_SPAN };
+typedef struct {
+    const char *property, *attribute;
+    uint8_t kind;
+    uint64_t on;
+    /* An enumerated attribute's keywords, and what it reads as missing and
+     * as a value that is none of them. */
+    const char *const *keywords;
+    const char *missing, *invalid;
+    /* An integer's default (a long's as an int32_t). */
+    uint32_t number;
+} DReflection;
+JSValue d_reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const DReflection *row);
+/* HTML § 2.3.4.1, the rules for parsing integers: ASCII whitespace, a
+ * sign, digits. False when there is no integer or it is past a long's
+ * range (mixin.c). */
+bool d_parse_integer(const char *text, int32_t *out);
+/* Each setter converts its value before it reads anything of the tree. */
+JSValue d_reflection_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const DReflection *row,
+                         JSValueConst value);
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
  * for the node kinds, CharacterData's for TEXT and COMMENT, Element's for
  * HTMLElement and SVG, HTMLElement's for the HTML kinds; -1 for Node, which
@@ -1110,6 +1154,12 @@ uint32_t d_utf16_length(const char *text, size_t len);
 /* The controls' reflections and state: input's, textarea's, select's and
  * button's (controls.c, 0f's P3a). */
 int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* An element's child text content (DOM § 4.4): its Text children's data,
+ * in order (controls.c). */
+JSValue d_child_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+/* The element kinds whose members are reflections, and a title's text and
+ * a body's window-reflecting handlers (elements.c, 0f's P6a). */
+int d_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its
  * `for` names, when the first element of its tree with that ID is one;
  * without `for`, its first labelable descendant. NULL for none, or for a

@@ -30,7 +30,7 @@ mutants=[
  ('clone-template-descendants','page-state','if (source->template_contents != NULL && target->template_contents != NULL &&','if (false && source->template_contents != NULL && target->template_contents != NULL &&'),
  ('comment-parent-notification','page-state','tree_plan_textarea(&reserve, node->parent);\n    uint64_t version = os64_html_version(state->doc);','tree_plan_textarea(&reserve, node->kind == OS64_HTML_COMMENT ? NULL : node->parent);\n    uint64_t version = os64_html_version(state->doc);'),
  ('character-data-null','content','if (JS_IsNull(value) ||','if ((JS_IsNull(value) && property != D_DATA) ||'),
- ('generic-element-control-property','node','return 1u << D_PROTO_INPUT;','return (1u << D_PROTO_INPUT) | (1u << D_PROTO_ELEMENT);'),
+ ('generic-element-control-property','node','return D_KIND(D_PROTO_INPUT);','return D_KIND(D_PROTO_INPUT) | D_KIND(D_PROTO_ELEMENT);'),
  ('text-element-property','node','return D_PROTO_CHARACTER_DATA;','return D_PROTO_ELEMENT;'),
 
  ('wrapper-identity','node','if (entry != NULL) return JS_DupValue(ctx, entry->value);','if (entry != NULL && false) return JS_DupValue(ctx, entry->value);'),

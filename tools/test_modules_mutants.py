@@ -113,7 +113,7 @@ mutants = [
      '        if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE) continue;',
      '        if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE ||\n'
      '            os64_dom_script_kind(script) == OS64_DOM_SCRIPT_IMPORTMAP) continue;', (SCRIPTS,)),
-    ('type-unreflected', MIXIN_C, '        {"type", R_TYPE, true, 1u << D_PROTO_SCRIPT}, ',
+    ('type-unreflected', MIXIN_C, '        {"type", R_TYPE, true, D_KIND(D_PROTO_SCRIPT)}, ',
      '        ', (SCRIPTS,)),
     ('script-address-none', REPORT_C, '    return script != D_NO_SCRIPT ? dom->script_names[script].address : NULL;',
      '    return script != D_NO_SCRIPT && name == NULL ? dom->script_names[script].address : NULL;', (SCRIPTS,)),

@@ -1449,6 +1449,22 @@ output: a live NodeList made once (the collection kind LABELS), of the
 labels whose labeled control (`d_label_control`) the element is, walked
 from its tree's root.
 
+**The elements row** (`elements.c`, naming nothing on window;
+MODERN_WEB.md § 0f's P6a). The element kinds HTML gives an interface
+whose members are reflections: a prototype kind each (the interfaces row
+names them), chosen by HTML's element-interface rule from a table by tag
+(`node.c`'s `d_node_kind`: h1-h6 one kind, td and th one, listing and xmp
+a pre, the obsolete names HTMLUnknownElement, and a name libhtml does not
+know HTMLUnknownElement unless it is a valid custom element name). Its
+members are rows read by the controls row's rules (`d_reflection_get` and
+`d_reflection_set`: strings, LegacyNullToEmptyString, URLs and base's
+href against the document's own URL, booleans, enumerations, longs, the
+unsigned kinds and a span's and a row span's clamps), one row per member
+and interface, so each accessor's brand is its own interface. Beside
+them a title's `text` and a body's WindowEventHandlers, which are
+window's. A set of kinds is a uint64_t (`D_KIND`); a static assertion
+holds the kinds to 64.
+
 **The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
 window, and nothing else). `collection.c`'s: a form's `elements` is an
 HTMLFormControlsCollection, over a collection's, of its listed elements

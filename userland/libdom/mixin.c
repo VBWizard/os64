@@ -402,8 +402,7 @@ static bool focusable(const os64_html_node_t *node)
     }
 }
 
-/* HTML § Rules for parsing integers: leading whitespace, a sign, digits. */
-static bool parse_integer(const char *text, int32_t *out)
+bool d_parse_integer(const char *text, int32_t *out)
 {
     while (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\f' || *text == '\r') text++;
     bool negative = *text == '-';
@@ -473,7 +472,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
         case R_DIR: return d_dir_value(ctx, self);
         case R_TAB_INDEX: {
             int32_t index;
-            if (attr != NULL && parse_integer(attr->value, &index)) return JS_NewInt32(ctx, index);
+            if (attr != NULL && d_parse_integer(attr->value, &index)) return JS_NewInt32(ctx, index);
             return JS_NewInt32(ctx, focusable(self) ? 0 : -1);
         }
         case R_URL: {
@@ -1020,11 +1019,11 @@ JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 
 /* ── Installation ─────────────────────────────────────────────────────── */
 
-#define PARENTS ((1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT))
-#define CHILDREN ((1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA) | (1u << D_PROTO_DOCTYPE))
-#define ELEMENTS (1u << D_PROTO_ELEMENT)
-#define HTML_ELEMENTS (1u << D_PROTO_HTML_ELEMENT)
-#define HTML_OR_SVG ((1u << D_PROTO_HTML_ELEMENT) | (1u << D_PROTO_SVG))
+#define PARENTS (D_KIND(D_PROTO_DOCUMENT) | D_KIND(D_PROTO_ELEMENT) | D_KIND(D_PROTO_FRAGMENT))
+#define CHILDREN (D_KIND(D_PROTO_ELEMENT) | D_KIND(D_PROTO_CHARACTER_DATA) | D_KIND(D_PROTO_DOCTYPE))
+#define ELEMENTS D_KIND(D_PROTO_ELEMENT)
+#define HTML_ELEMENTS D_KIND(D_PROTO_HTML_ELEMENT)
+#define HTML_OR_SVG (D_KIND(D_PROTO_HTML_ELEMENT) | D_KIND(D_PROTO_SVG))
 
 int d_url_reflection(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *name)
 {
@@ -1040,14 +1039,14 @@ int d_form_rel_install(os64_dom_t *dom, JSContext *ctx)
 
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
 {
-    static const struct { const char *name; int magic, argc; unsigned on; } methods[] = {
+    static const struct { const char *name; int magic, argc; uint64_t on; } methods[] = {
         {"append", D_APPEND_NODES, 0, PARENTS}, {"prepend", D_PREPEND, 0, PARENTS},
         {"replaceChildren", D_REPLACE_CHILDREN, 0, PARENTS},
         {"before", D_BEFORE, 0, CHILDREN}, {"after", D_AFTER, 0, CHILDREN},
         {"replaceWith", D_REPLACE_WITH, 0, CHILDREN}, {"remove", D_REMOVE_SELF, 0, CHILDREN},
-        {"contains", D_CONTAINS, 1, 1u << D_PROTO_NODE},
-        {"getElementsByClassName", D_BY_CLASS, 1, (1u << D_PROTO_DOCUMENT) | ELEMENTS},
-        {"getElementsByName", D_BY_NAME, 1, 1u << D_PROTO_DOCUMENT},
+        {"contains", D_CONTAINS, 1, D_KIND(D_PROTO_NODE)},
+        {"getElementsByClassName", D_BY_CLASS, 1, D_KIND(D_PROTO_DOCUMENT) | ELEMENTS},
+        {"getElementsByName", D_BY_NAME, 1, D_KIND(D_PROTO_DOCUMENT)},
         {"matches", D_MATCHES, 1, ELEMENTS}, {"closest", D_CLOSEST, 1, ELEMENTS},
         {"insertAdjacentHTML", D_ADJACENT_HTML, 2, ELEMENTS},
         {"insertAdjacentElement", D_ADJACENT_ELEMENT, 2, ELEMENTS},
@@ -1055,8 +1054,8 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"getAttributeNames", D_ATTRIBUTE_NAMES, 0, ELEMENTS},
         {"toggleAttribute", D_TOGGLE_ATTR, 1, ELEMENTS}, {"hasAttributes", D_HAS_ATTRS, 0, ELEMENTS},
     };
-    static const struct { const char *name; int magic; bool writable; unsigned on; } reflections[] = {
-        {"isConnected", R_CONNECTED, false, 1u << D_PROTO_NODE},
+    static const struct { const char *name; int magic; bool writable; uint64_t on; } reflections[] = {
+        {"isConnected", R_CONNECTED, false, D_KIND(D_PROTO_NODE)},
         // HTMLElement's own, and HTMLOrSVGElement's (HTMLElement's and
         // SVGElement's), where HTML puts them: Svelte sets a member as a
         // property only when it finds its setter below Element.prototype,
@@ -1065,25 +1064,25 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"hidden", R_HIDDEN, true, HTML_ELEMENTS}, {"lang", R_LANG, true, HTML_ELEMENTS},
         {"dir", R_DIR, true, HTML_ELEMENTS}, {"tabIndex", R_TAB_INDEX, true, HTML_OR_SVG},
         {"classList", R_CLASS_LIST, true, ELEMENTS}, {"dataset", R_DATASET, false, HTML_OR_SVG},
-        {"src", R_URL, true, 1u << D_PROTO_SCRIPT},
+        {"src", R_URL, true, D_KIND(D_PROTO_SCRIPT)},
         // What a loader sets before it connects a script (`type = 'module'`
         // makes it a module, MODERN_WEB.md § Slice 3); `async`, with HTML's
         // force-async flag, is DEBTS.md § ES modules'.
-        {"type", R_TYPE, true, 1u << D_PROTO_SCRIPT}, {"defer", R_DEFER, true, 1u << D_PROTO_SCRIPT},
-        {"noModule", R_NO_MODULE, true, 1u << D_PROTO_SCRIPT},
-        {"href", R_URL, true, (1u << D_PROTO_ANCHOR) | (1u << D_PROTO_LINK)},
+        {"type", R_TYPE, true, D_KIND(D_PROTO_SCRIPT)}, {"defer", R_DEFER, true, D_KIND(D_PROTO_SCRIPT)},
+        {"noModule", R_NO_MODULE, true, D_KIND(D_PROTO_SCRIPT)},
+        {"href", R_URL, true, D_KIND(D_PROTO_ANCHOR) | D_KIND(D_PROTO_LINK)},
         // What a module loader asks before it preloads (`relList.supports
         // ('modulepreload')`, Vite's first statement), and what it sets.
-        {"rel", R_REL, true, 1u << D_PROTO_LINK}, {"relList", R_REL_LIST, true, 1u << D_PROTO_LINK},
+        {"rel", R_REL, true, D_KIND(D_PROTO_LINK)}, {"relList", R_REL_LIST, true, D_KIND(D_PROTO_LINK)},
     };
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
         JSValueConst prototype = dom->prototypes[kind]->value;
         for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++)
-            if ((methods[i].on & (1u << kind)) &&
+            if ((methods[i].on & D_KIND(kind)) &&
                 d_method(dom, ctx, prototype, methods[i].name, mixin_method, methods[i].argc, methods[i].magic) < 0)
                 return -1;
         for (size_t i = 0; i < sizeof(reflections) / sizeof(reflections[0]); i++)
-            if ((reflections[i].on & (1u << kind)) &&
+            if ((reflections[i].on & D_KIND(kind)) &&
                 d_accessor(dom, ctx, prototype, reflections[i].name, reflect, reflections[i].magic,
                            reflections[i].writable) < 0)
                 return -1;

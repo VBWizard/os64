@@ -168,7 +168,7 @@ DEBTS.md ("Interface objects only for the binding's own prototypes") records
 the rule this inventory is bound by: **naming a broader prototype for an
 interface would make `instanceof` lie**, so an interface whose objects share
 a prototype with another needs a prototype of its own first. The binding's
-kinds (`internal.h` `D_PROTO_*`, chosen in `node.c`'s `node_prototype_kind`,
+kinds (`internal.h` `D_PROTO_*`, chosen in `node.c`'s `d_node_kind`,
 parented by `d_proto_parent`) are Node, Document, Element, CharacterData,
 DocumentFragment, DocumentType, Attr, HTMLElement, and the HTML kinds input,
 textarea, select, button, form, image, script, anchor, link and iframe. Every
@@ -608,8 +608,8 @@ Oracle: `the-input-element`'s `input-valueasnumber*.html`,
   elements (whose `rows`, `insertRow` and the rest are tree verbs, the
   largest part) and the obsolete `HTMLFontElement`, `HTMLDirectoryElement`
   and `HTMLMenuElement`. Appendix A lists all 36.
-- Machinery: a kind per tag in `node_prototype_kind`, which wants a table
-  rather than the `if` chain it is today.
+- Machinery: a kind per tag in `node.c`'s `d_node_kind`, a table
+  (`kTagKinds`) since P6a, where it was an `if` chain.
 - Size: M, the tables most of it.
 
 Oracle: `html/dom` (fetched) `reflection-grouping.html`, `reflection-text.html`,

@@ -4045,7 +4045,7 @@ collections, and the label, fieldset, legend and output.
 
 - **Four kinds of their own**: HTMLLabelElement, HTMLFieldSetElement,
   HTMLLegendElement and HTMLOutputElement, made by the interfaces row
-  (`node_prototype_kind`, the classic interface table).
+  (`d_node_kind`, the classic interface table).
 - **Their reflections are P3a's table's rows** (libdom `controls.c`): the
   form's `acceptCharset`, `action` (the document's URL when missing or
   empty, as formAction's), `autocomplete` (on or off, `on` by default),
@@ -4370,6 +4370,69 @@ Two rules have no mutant a test can see: a spelled year below 1 (the
 value sanitizer empties it either way), and the min's clamp onto a grid
 it is off (only a range's default min can be, and its sanitizer
 re-snaps). P4b's group was re-anchored onto `p_input_limits`.
+
+### 0f's P6a, as built — 2026-10-28
+
+P6's first PR: the element kinds whose members are reflections, every
+interface of the plan's 36 a prototype (34 new; template and style had
+theirs), and their members but the table kinds' tree verbs and a
+map's `areas`, which are P6b's. The brief is in the opus kit.
+
+- **HTML's element interface by tag** (`node.c`'s `d_node_kind`, a table
+  where an `if` chain was): h1-h6 one kind, ins and del, q and
+  blockquote, td and th, col and colgroup, the three table sections, pre
+  with listing and xmp; the obsolete names HTML gives HTMLUnknownElement,
+  and math and svg in HTML's namespace; a name libhtml does not know is
+  HTMLUnknownElement unless it is a valid custom element name, which is
+  HTMLElement.
+- **A set of kinds is a uint64_t** (`D_KIND`): the 32-bit masks the tables
+  built (`1u << D_PROTO_*`, and `1u << kind` over every kind) would have
+  overflowed. A static assertion holds the kinds to 64 (P6a leaves 63);
+  slice 6's SVG interfaces will need another representation.
+- **One reflection engine.** controls.c's rules (`d_reflection_get`,
+  `d_reflection_set`) serve `elements.c`'s rows too, with four more:
+  LegacyNullToEmptyString (a body's colors, a table's), a long with its
+  default (`ol.start` 1), a span's clamp to 1-1000 and a row span's to
+  0-65534 (read clamped, set as any unsigned), and base's `href`, read
+  against the document's own URL and that URL when it is missing.
+- **One row per member and interface**, the WebIDL shape, so an
+  accessor's brand is its own interface: div's `align` getter called on a
+  p is a TypeError. (controls.c's shared rows are not; DEBTS.md.)
+- Beside the rows: a title's `text` (its child text, set as textContent
+  is), and a body's WindowEventHandlers, which are window's as its other
+  window-reflecting handlers already were. An area's `href` is a row of
+  its own, a URL as the anchor's is, so that it exists with the switch
+  alone.
+- **Left, and booked** (DEBTS.md § Classic browser scripting): an area's
+  `relList` and the hyperlink members of an area and an anchor; a style's
+  `disabled`, whose sheet is never disabled; a template's declarative
+  shadow DOM members.
+
+**Numbers.** WPT: `html/dom`'s eight reflection pages for these kinds,
+excluded until the phase that names them, now run: 29,000 passes, 5,038
+of them `[required]` (the rest pass with the switch off too, and 11 more
+are subtests whose names hold a line break, which a line of the
+expectation file cannot spell, so they cannot be required); what fails
+of P6's own members is a NUL set through a string (U+FFFD, as every
+reflection page has it) and every URL reflection, whose expected value
+the harness builds from an anchor's `protocol` and `host`, which yonder
+lacks. `dom/events` +56, `dom/nodes` +61 (four renamed: a heading now
+prints as HTMLHeadingElement), `url` +1 and `xhr` +1, each `[required]`;
+the other directories unchanged. `css/cssom`'s serialize-all-longhands
+"Computed style" fails on the branch P6 is built on as well, unrelated.
+Hosts, 0 failed: DOM 19,894 and 125,221, jQuery among them; yonder's
+scripted pages 8,892. Read cold once: an area's `href` had joined a
+row that exists with the switch off, a base without `href` kept the
+document URL's fragment, and a second copy of the rules for parsing
+integers (now one, `d_parse_integer`); four of text. All fixed. Mutants
+(`tools/test_interfaces_mutants.py`, its P6a group): 17, each caught —
+kinds in 32 bits, an unknown name and a reserved one, h6's and
+listing's kinds, the span's clamp and the row span's floor, a long's
+sign and its overflow, null as "null", a base's fragment, the brand,
+a canvas's default, scope as a string, a title's text, the body's
+handlers, and an area's `href` without the switch. Five anchors the
+rewrites moved were re-anchored (one in `test_dom_mutants.py`, whose
+harness does not build: DEBTS.md).
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 
