@@ -4286,9 +4286,12 @@ which P4a left reading false.
   each type's scale and default step applied, `any` drawing none; whether
   a value is on it is judged in exact decimal, the scale multiplied there
   too (`range.c`'s arithmetic, `p_step_aligned`), as `step=1e-12` against
-  `-12345678.9` and a time's `step=16.1` need; a step finer than a double
-  resolves at the value judges nothing, as Blink guards, and neither does
-  any step a range pinned at its min. A bound's time fraction is read at
+  `-12345678.9` and a time's `step=16.1` need. A range's value, which its
+  sanitizer chose on the grid and held as the nearest double, is on the
+  grid when it is that double (a step of seventeen digits, or one finer
+  than the value's precision, puts the point between doubles); a number a
+  script or a person gave is judged as given, as WPT's `step=3e-15`
+  against 17 asks. No step judges a range pinned at its min. A bound's time fraction is read at
   any length, its first three digits kept.
 - **The sentences**: "Value must be greater than or equal to 2." for a
   number, "Value must be 2000-01-02 or later." for a date: a date's bound
@@ -4300,15 +4303,16 @@ which P4a left reading false.
 fails is `:invalid`, an element in no namespace, `object`, `execCommand`,
 `getClientRects` and named access. Nothing new or lost in P3's and P4a's
 other directories; with the switch off no required line passes. Hosts, 0
-failed: libpage 254,276 (41 range and step cases across the types); DOM
+failed: libpage 254,277 (42 range and step cases across the types); DOM
 17,810 and 115,923. Mutants (`tools/test_interfaces_mutants.py`, its P4b
-group): 20, each caught — a date's, a month's, a week's and a time
+group): 21, each caught — a date's, a month's, a week's and a time
 fraction's conversion, the year's bound, a number read leniently, a
 week's step base, a time's wrap and its sentence (and a date's that does
 not wrap), `step=any`, the step base from the min and from the value
 attribute, the exact remainder and the scale multiplied exactly, a
-range's max below its min and its pinned value's step, a step finer than
-a double, a bound's long time fraction, and a number's bound as read.
+range's max below its min and its pinned value's step, a range's grid
+point held as a double and only a range's, a bound's long time fraction,
+and a number's bound as read.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 

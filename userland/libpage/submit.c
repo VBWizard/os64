@@ -442,15 +442,7 @@ static uint32_t range_flags(const os64_html_node_t *n, os64_page_input_t input, 
         base = min;
     else if (p_input_number(input, p_attr(n, "value"), &from))
         base = from;
-    // A step finer than a double can resolve at this value judges nothing,
-    // as Blink's StepMismatch guards: the value a range's sanitizer chose
-    // on its decimal grid may round to a double off that grid.
-    double span = number - base;
-    if (span < 0)
-        span = -span;
-    if (span / ((double)scale * step) > 9007199254740992.0)
-        return flags;
-    if (!p_step_aligned(number, base, step, scale))
+    if (!p_step_aligned(number, base, step, scale, input == OS64_PAGE_INPUT_RANGE))
         flags |= OS64_PAGE_VALIDITY_STEP;
     return flags;
 }

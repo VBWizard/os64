@@ -1021,7 +1021,10 @@ static void state_validity_range(void)
         /* a year past a Date's does not convert (DEBTS.md § libpage) */
         {"<input type=date max=2030-12-31>", "300000-01-01", 0, NULL},
         {"<input type=range min=150 max=abc>", NULL, 0, NULL},
-        /* a step finer than a double resolves at the value judges nothing */
+        /* the value a range's sanitizer chose, a grid point held as the
+         * nearest double, is on the grid: a step finer than the value's
+         * precision, and a step of seventeen digits */
+        {"<input type=range step=0.12345678901234567>", NULL, 0, NULL},
         {"<input type=range min=0 max=1e17 step=0.3>", NULL, 0, NULL},
         /* a range pinned at its min is snapped to no step, nor judged by one */
         {"<input type=range max=-10 value=0.5>", NULL, 0, NULL},
