@@ -373,8 +373,71 @@ static void document_contracts(void)
            parse_allocations, cascade_allocations, render_allocations, parse_polls, render_polls);
 }
 
+static void image_fixed_dimension_contracts(void)
+{
+    // A bottom-right mark must move with the image, rather than be cropped
+    // at its original coordinates when the host gives it a smaller box.
+    static const struct {
+        const char *attrs;
+        int x, y, right, bottom;
+    } cases[] = {
+        {"width='120' height='60'", 40, 40, 80, 80},
+        {"width='120'", 40, 30, 80, 60},
+        {"height='60'", 60, 40, 80, 80},
+        {"", 60, 30, 80, 60},
+        {"width='100%' height='100%'", 60, 30, 80, 60},
+        {"width='120' height='60' preserveAspectRatio='xMidYMid meet'", 40, 40, 80, 80},
+        {"width='120' height='60' viewBox='0 0 120 60'", 40, 40, 80, 60},
+        {"width='1.25in' height='45pt'", 40, 40, 80, 80},
+        {"width='120' height='60' transform='translate(12)'", 52, 40, 80, 80},
+    };
+    size_t baseline = live;
+    SvgLedger ledger = {.cap = 64 << 20};
+    os64_geometry_memory_t memory = {&ledger, svg_alloc_test, svg_free_test};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char xml[1024];
+        snprintf(xml, sizeof(xml), "<svg xmlns='http://www.w3.org/2000/svg' %s>"
+                 "<style>rect{fill:red}@media(min-width:100px){rect{fill:blue}}</style>"
+                 "<rect x='60' y='30' width='60' height='30'/></svg>", cases[i].attrs);
+        yonder_svg_document_t *d = NULL;
+        assert(yonder_svg_document_parse(xml, strlen(xml), NULL, NULL, &d, NULL) == SVG_OK);
+        const uint32_t extents[] = {20, 80, 320};
+        for (size_t z = 0; z < sizeof(extents) / sizeof(extents[0]); ++z) {
+            uint32_t extent = extents[z];
+            yonder_svg_image_view_t view = {.width = 80, .height = 80,
+                .pixel_width = extent, .pixel_height = extent};
+            yonder_svg_pixels_t p;
+            assert(yonder_svg_document_render(d, &view, &memory,
+                       os64_freetype_geometry_v1(), &p) == SVG_OK);
+            for (int y = 0; y < p.rect.h; ++y)
+                for (int x = 0; x < p.rect.w; ++x) {
+                    double left = cases[i].x * extent / 80.0;
+                    double top = cases[i].y * extent / 80.0;
+                    double right = cases[i].right * extent / 80.0;
+                    double bottom = cases[i].bottom * extent / 80.0;
+                    // At 25%, fractional edges have antialias coverage;
+                    // the interior and exterior still have exact colours.
+                    if (fabs(x + .5 - left) < .5 || fabs(x + .5 - right) < .5 ||
+                        fabs(y + .5 - top) < .5 || fabs(y + .5 - bottom) < .5)
+                        continue;
+                    bool inside = x + .5 >= left && x + .5 < right &&
+                        y + .5 >= top && y + .5 < bottom;
+                    uint32_t want = inside ? 0xffff0000 : 0;
+                    if (pixel(&p, x, y) != want)
+                        fprintf(stderr, "image fixed dimensions case %zu extent %u at %d,%d\n",
+                                i, extent, x, y);
+                    assert(pixel(&p, x, y) == want);
+                }
+            pixels_free(&ledger, &p);
+        }
+        yonder_svg_document_free(d);
+        assert(live == baseline && !ledger.live);
+    }
+    puts("SVG image fixed dimensions: complete bounds, per-axis scaling, units, viewBox and media pass");
+}
 static void image_route_contracts(const char *directory)
 {
+    image_fixed_dimension_contracts();
     static const struct { const char *attrs, *body; uint32_t w, h; } sizes[] = {
         {"width='80' height='40'", "", 80, 40},
         {"viewBox='0 0 60 30'", "", 300, 150},

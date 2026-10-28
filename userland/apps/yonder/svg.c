@@ -2089,12 +2089,32 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *doc,
     Adapter a = {.doc = doc, .cascade = cascade, .root = root, .initial_color = 0xff000000,
                  .memory = *memory, .mode = SVG_MODE_IMAGE,
                  .cancel_context = view->cancel_context, .cancelled = view->cancelled};
+    double width = view->width, height = view->height;
+    if (!*attr(root, "viewBox")) {
+        // Without viewBox, fixed root dimensions define the image's drawing
+        // space. Scale that space into the host's object rectangle per axis;
+        // using the smaller host dimensions here would crop the artwork.
+        // The cascade still uses the host viewport for media queries.
+        double fixed;
+        if (natural_dimension(winner(cascade, root, GARB_WIDTH), &fixed) && fixed > 0)
+            width = fixed;
+        if (natural_dimension(winner(cascade, root, GARB_HEIGHT), &fixed) && fixed > 0)
+            height = fixed;
+        if (width > 1000000 || height > 1000000)
+            return SVG_LIMIT;
+    }
     Map content_map;
-    svg_status_t status = viewport(&a, view->width, view->height, 1000, &content_map);
+    svg_status_t status = viewport_map(root, width, height, &a.width, &a.height, &content_map);
     if (status == SVG_PENDING)
         return SVG_OK;
     if (status != SVG_OK)
         return status;
+    // Root transforms and root clipping remain in the host viewport's
+    // coordinates; only the content mapping scales the fixed drawing space.
+    content_map = multiply((Map){view->width / width, 0, 0, view->height / height, 0, 0},
+                           content_map);
+    if (!finite_map(content_map))
+        return SVG_LIMIT;
     a.image_viewport = (svg_viewport_t){.active = true, .width = view->width,
                                        .height = view->height, .content_transform = content_map};
     Map output = {(double)pw / view->width, 0, 0, (double)ph / view->height, 0, 0};
