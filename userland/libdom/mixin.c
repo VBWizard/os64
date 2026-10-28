@@ -516,7 +516,7 @@ typedef struct { const char *at; size_t length; } Token;
 /* The attribute a list's entry stands for. */
 static const char *token_attribute(const DValue *entry)
 {
-    return entry->rel_tokens ? "rel" : "class";
+    return entry->tokens == D_TOKENS_REL ? "rel" : entry->tokens == D_TOKENS_FOR ? "for" : "class";
 }
 
 static bool space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'; }
@@ -661,9 +661,12 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
             result = JS_NewBool(ctx, find_token(tokens, count, given[0].data, given[0].length) < count);
             break;
         case T_SUPPORTS:
-            /* A classList has no supported tokens, which is a TypeError. */
-            result = entry->rel_tokens ? JS_NewBool(ctx, rel_supported(dom, given[0].data, given[0].length))
-                                       : JS_ThrowTypeError(ctx, "DOMTokenList has no supported tokens");
+            /* A classList and an htmlFor have no supported tokens, which
+             * is a TypeError; a form's rel names none yonder acts on. */
+            result = entry->tokens != D_TOKENS_REL
+                ? JS_ThrowTypeError(ctx, "DOMTokenList has no supported tokens")
+                : JS_NewBool(ctx, is_html(entry->target, OS64_HTML_TAG_LINK) &&
+                                      rel_supported(dom, given[0].data, given[0].length));
             break;
         case T_ADD: case T_REMOVE: case T_TOGGLE: case T_REPLACE: {
             /* Room for every token added; removing writes the list again
@@ -796,7 +799,7 @@ JSClassExoticMethods d_token_exotic = {
     .define_own_property = token_define, .delete_property = token_delete,
 };
 
-enum { VIEW_CLASS_LIST, VIEW_REL_LIST, VIEW_DATASET };
+enum { VIEW_CLASS_LIST, VIEW_REL_LIST, VIEW_FOR_LIST, VIEW_DATASET };
 
 /* One view object per element, made the first time it is asked for. */
 static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
@@ -805,14 +808,14 @@ static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
     DValue *owner = d_find(dom, node);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
     DValue **slot = view == VIEW_CLASS_LIST ? &owner->class_list : view == VIEW_REL_LIST ? &owner->rel_list
-                                                                                         : &owner->dataset;
+                  : view == VIEW_FOR_LIST ? &owner->for_list : &owner->dataset;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->value);
     JSValue object = JS_NewObjectClass(ctx, class_id);
     DValue *entry = d_retain(dom, ctx, object);
     if (entry == NULL) return JS_EXCEPTION;
     entry->dom = dom;
     entry->target = node;
-    entry->rel_tokens = view == VIEW_REL_LIST;
+    entry->tokens = view == VIEW_REL_LIST ? D_TOKENS_REL : view == VIEW_FOR_LIST ? D_TOKENS_FOR : D_TOKENS_CLASS;
     os64_html_hold(dom->document, node);
     JS_SetOpaque(object, entry);
     *slot = entry;
@@ -827,6 +830,11 @@ JSValue d_class_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
 JSValue d_rel_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     return element_view(dom, ctx, node, dom->token_class, VIEW_REL_LIST);
+}
+
+JSValue d_for_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+{
+    return element_view(dom, ctx, node, dom->token_class, VIEW_FOR_LIST);
 }
 
 /* ── dataset: a DOMStringMap over the data-* attributes ─────────────── */
@@ -1023,6 +1031,13 @@ int d_url_reflection(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, co
     return d_accessor(dom, ctx, prototype, name, reflect, R_URL, true);
 }
 
+int d_form_rel_install(os64_dom_t *dom, JSContext *ctx)
+{
+    JSValueConst form = dom->prototypes[D_PROTO_FORM]->value;
+    return d_accessor(dom, ctx, form, "rel", reflect, R_REL, true) < 0 ||
+           d_accessor(dom, ctx, form, "relList", reflect, R_REL_LIST, true) < 0 ? -1 : 0;
+}
+
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
 {
     static const struct { const char *name; int magic, argc; unsigned on; } methods[] = {
@@ -1213,13 +1228,40 @@ static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, 
     return name != NULL ? JS_NewString(ctx, name) : JS_NULL;
 }
 
+/* Node's `baseURI` (DOM § 4.4): its node document's base URL, the `<base
+ * href>` as that document's tree stands now, its fragment kept (libpage's
+ * os64_page_base_url_in). A document with no window has no URL of its
+ * own, so about:blank is its fallback, and a base in it still counts. */
+JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
+{
+    bool window = d_window_document(dom, self);
+    const char *url = window && dom->url != NULL ? dom->url : "about:blank";
+    char *base = d_alloc(dom, OS64_DOM_URL_MAX);
+    if (base == NULL) return d_error(ctx, "QuotaExceededError", "DOM address quota exceeded");
+    JSValue result = os64_page_base_url_in(dom->document, window ? NULL : d_node_document(dom, self), url, base,
+                                           OS64_DOM_URL_MAX)
+        ? JS_NewString(ctx, base) : JS_NewString(ctx, url);
+    d_free(dom, base);
+    return result;
+}
+
+static JSValue base_uri(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
+                        JSValue *data)
+{
+    (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    return self != NULL ? d_base_uri(dom, ctx, self) : JS_EXCEPTION;
+}
+
 /* 0f's P1a, the Modern Web table's node row (INTERFACES_FORMS.md):
  * getRootNode on Node's prototype, which Vue's v-model asks, and on Attr's,
  * whose shadow answers every Node member for an Attr; Text's own
- * `wholeText` and `splitText`; a template's `content`; and an element's
- * `localName`, `namespaceURI` and `prefix`. Members of prototypes, so the
- * row names nothing on window; the DOM host's chain shape holds them
- * (tools/test_dom_modern.inc). */
+ * `wholeText` and `splitText`; a template's `content`; an element's
+ * `localName`, `namespaceURI` and `prefix`; and Node's `baseURI`. Members
+ * of prototypes, so the row names nothing on window; the DOM host's chain
+ * shape holds them (tools/test_dom_modern.inc). */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     (void)global;
@@ -1236,5 +1278,7 @@ int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_ELEMENT]->value, kNames[i].name, element_names,
                        kNames[i].magic, false) < 0)
             return -1;
+    if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, "baseURI", base_uri, 0, false) < 0)
+        return -1;
     return d_attr_root_install(dom, ctx);
 }

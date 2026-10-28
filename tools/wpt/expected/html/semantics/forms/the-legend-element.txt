@@ -1,0 +1,20 @@
+# WPT's html/semantics/forms/the-legend-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-legend-element --update
+# rewrites [passing].
+[required]
+# 0f's phases (MODERN_WEB.md § 0f's P3b, as built), this directory joining
+# the run whole with P3b: each line fails with the switch off, the earlier
+# phases' members among them. The passes not listed pass either way.
+HTMLLegendElement.html	Interface HTMLLegendElement
+HTMLLegendElement.html	The legend.form must be same value as fieldset.form
+HTMLLegendElement.html	The legend.form return null when it has no fieldset parent
+legend-form.html	Check if legend.form return null when legend has no fieldset element as its parent
+legend-form.html	Check if legend.form returns its parent when it's inside a fieldset
+[excluded]
+[passing]
+HTMLLegendElement.html	Interface HTMLLegendElement
+HTMLLegendElement.html	The legend.form must be same value as fieldset.form
+HTMLLegendElement.html	The legend.form return null when it has no fieldset parent
+legend-form.html	Check if legend.form return null when legend has no fieldset element as its parent
+legend-form.html	Check if legend.form returns its parent when it's inside a fieldset

@@ -486,6 +486,7 @@ void os64_dom_free(os64_dom_t *dom)
         DValue *next = entry->next;
         d_event_free(dom, entry);
         d_attr_free(dom, entry);
+        d_free(dom, entry->output_default);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);
         if (entry->target != NULL)

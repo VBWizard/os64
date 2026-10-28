@@ -370,6 +370,15 @@ const char *os64_page_base(const os64_page_t *page);
 // there was no memory to look.
 bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url, char *out,
                        size_t cap);
+// HTML's document base URL, which a script reads as `baseURI`: that base
+// with a fragment, as resolution never has one. The document's own when
+// there is no `<base href>`, or it will not resolve; else the base's, as
+// the page wrote it, after the document's address for `<base href="#x">`.
+// `root` is the document whose base it is, when that is not `doc`'s own
+// but another libhtml keeps beside it (one a script made), at
+// `document_url`; NULL for `doc`'s own.
+bool os64_page_base_url_in(const os64_html_document_t *doc, const os64_html_node_t *root,
+                           const char *document_url, char *out, size_t cap);
 // `reference` resolved against `base` by the rule the page resolves its own
 // by, canonical — for an address a page's resources name in turn, as a
 // style sheet's @import does against the sheet's own address. False when

@@ -76,7 +76,7 @@ static char *modern_chain_shape(DomFixture *f)
         "|^setSelectionRange$|^select$|^setRangeText$|^content$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
         "|formNoValidate|formTarget|height|indeterminate|max|maxLength|min|minLength|multiple|pattern|placeholder"
-        "|readOnly|required|size|src|step|width|align|useMap|form|labels|localName|namespaceURI|prefix)$)/;"
+        "|readOnly|required|size|src|step|width|align|useMap|form|labels|localName|namespaceURI|prefix|baseURI)$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
@@ -343,6 +343,108 @@ static void dom_modern_cases(void)
         "var df=document.createElement('form'),di=document.createElement('input');di.setAttribute('form','theform');"
         "df.appendChild(di);assert(di.form===df,'out of a document, its ancestor whatever the attribute says');",
         "modern-on-controls");
+    /* 0f's P3b: the form's, label's, fieldset's, legend's and output's
+     * members, and a form's controls collection and RadioNodeList. */
+    dom_script(&f, MODERN_ASSERT
+        "assert([HTMLLabelElement,HTMLFieldSetElement,HTMLLegendElement,HTMLOutputElement,"
+        "HTMLFormControlsCollection,RadioNodeList].every(function(i){return typeof i==='function'}),'interfaces');"
+        "var F=document.createElement('form');document.body.appendChild(F);"
+        "assert(document.createElement('label') instanceof HTMLLabelElement&&"
+        "Object.getPrototypeOf(HTMLOutputElement.prototype)===HTMLElement.prototype,'kinds of their own');"
+        /* the form's reflections */
+        "assert(F.action===document.URL&&F.method==='get'&&F.enctype==='application/x-www-form-urlencoded'&&"
+        "F.autocomplete==='on'&&F.target===''&&!F.noValidate,'defaults');"
+        "F.setAttribute('method','POST');F.setAttribute('enctype','TEXT/plain');F.autocomplete='nonsense';"
+        "assert(F.method==='post'&&F.encoding==='text/plain'&&F.autocomplete==='on','enumerated');"
+        "F.acceptCharset='utf-8';F.noValidate=true;"
+        "assert(F.getAttribute('accept-charset')==='utf-8'&&F.hasAttribute('novalidate'),'set');"
+        "F.rel='noopener nofollow';assert(F.relList.length===2&&F.relList.contains('noopener')&&"
+        "F.relList.supports('noopener')===false,'rel and relList');"
+        /* elements: listed elements, an image button left out */
+        "F.innerHTML='<input name=a><fieldset name=fs><output name=o>x</output></fieldset>"
+        "<input type=image name=img><input type=radio name=r value=1><input type=radio name=r value=2>"
+        "<input type=checkbox name=r value=3>';"
+        "var E=F.elements;assert(E instanceof HTMLFormControlsCollection&&E===F.elements,'the same collection');"
+        "assert(E.length===6&&F.length===6&&E[1].localName==='fieldset'&&E[2].localName==='output','listed');"
+        "assert(F[0]===E[0]&&F[5]===E[5]&&F[6]===undefined,'form[i]');"
+        "var R=E.namedItem('r');assert(R instanceof RadioNodeList&&R instanceof NodeList&&R.length===3,'a RadioNodeList');"
+        "assert(E.r instanceof RadioNodeList&&F.r instanceof RadioNodeList&&E.namedItem('a')===E[0],'and by name');"
+        "assert(R.value==='','none checked');R[2].checked=true;assert(R.value==='','a checkbox is no radio');"
+        "R[1].checked=true;assert(R.value==='2','the checked radio');"
+        "R.value='1';assert(R[0].checked&&R.value==='1','set: the first of that value');"
+        "R.value='2';assert(R[1].checked&&!R[0].checked,'set: the radio of that value');"
+        "R.value='9';assert(R[1].checked,'set: none of that value changes nothing');"
+        "assert(R.r===undefined&&R.namedItem===undefined,'a NodeList, with no names');"
+        "assert(E.namedItem('r')===R&&F.r===R&&E.r===R,'one RadioNodeList a name');"
+        "assert(HTMLCollection.prototype.namedItem.call(E,'r')===R[0],"
+        "'HTMLCollection\\'s own namedItem, called on the controls, is the first');"
+        /* the form is a legacy platform object: names over builtins, its own names, no redefinition */
+        "var K=document.createElement('form');K.innerHTML='<input name=submit><input id=two><input name=submit id=x>';"
+        "assert(K.submit instanceof RadioNodeList&&K.two.localName==='input','a control hides the method');"
+        "assert(Object.getOwnPropertyNames(K).join()==='0,1,2,submit,two,x'&&Object.keys(K).join()==='0,1,2','own names');"
+        "var refused=false;try{Object.defineProperty(K,'two',{value:5})}catch(x){refused=x instanceof TypeError}"
+        "assert(refused&&K.two.localName==='input','a name is not redefined');"
+        "refused=false;try{(function(){'use strict';delete K[0]})()}catch(x){refused=x instanceof TypeError}"
+        "assert(refused&&K[0].localName==='input','an index is not deleted');"
+        "K.expando=1;assert(K.expando===1&&delete K.expando&&K.expando===undefined,'an expando is as it was');"
+        "var Z=document.createElement('form');refused=false;"
+        "try{Object.defineProperty(Z,'0',{value:1})}catch(x){refused=x instanceof TypeError}"
+        "Z.appendChild(document.createElement('input'));"
+        "assert(refused&&Z[0]===Z.elements[0]&&Z[0].localName==='input','an index it has no control for is refused too');"
+        "var N=document.createElement('form');N.innerHTML='<input name=0><input id=1 name=n>';"
+        "assert(Object.getOwnPropertyNames(N).join()==='0,1,n'&&Object.keys(N).join()==='0,1',"
+        "'a name an index spells is that index');"
+        "var X=document.createElement('form');X.extra=1;var XI=document.createElement('input');XI.name='extra';"
+        "X.appendChild(XI);var xn=Object.getOwnPropertyNames(X),xk=Object.keys(X);"
+        "assert(xn.filter(function(k){return k==='extra'}).length===1&&xk.filter(function(k){return k==='extra'}).length===1&&"
+        "xn.indexOf('0')>=0,'a name the form has as an expando is listed once');"
+        "var FI=document.createElement('fieldset');FI.innerHTML='<input type=image><input>';"
+        "assert(FI.elements.length===2,'a fieldset lists an image button, as a form does not');"
+        /* baseURI and a lone webauthn */
+        "assert(document.body.baseURI===document.baseURI&&typeof document.baseURI==='string','baseURI');"
+        "var at=document.createAttribute('q');assert(at.baseURI===document.baseURI,'an Attr\\'s');"
+        "var W=document.createElement('input');W.setAttribute('autocomplete',' WEBAUTHN ');"
+        "assert(W.autocomplete==='webauthn','webauthn alone');"
+        /* requestSubmit's submitter, and a form in no document */
+        "var Q=document.createElement('form'),QB=document.createElement('button');Q.appendChild(QB);"
+        "refused=false;try{Q.requestSubmit(document.body)}catch(x){refused=x instanceof TypeError}"
+        "assert(refused,'no submit button is a TypeError');"
+        "refused=false;try{Q.requestSubmit(document.createElement('button'))}catch(x){refused=x.name==='NotFoundError'}"
+        "assert(refused,'another form\\'s is NotFoundError');"
+        "var sent=0;Q.addEventListener('submit',function(e){sent++;e.preventDefault()});Q.requestSubmit(QB);"
+        "assert(sent===0,'a form in no document submits nothing, not even the event');"
+        /* requestSubmit's submitter, and a form in no document */
+        "var Q=document.createElement('form'),QB=document.createElement('button');Q.appendChild(QB);"
+        "refused=false;try{Q.requestSubmit(document.body)}catch(x){refused=x instanceof TypeError}"
+        "assert(refused,'no submit button is a TypeError');"
+        "refused=false;try{Q.requestSubmit(document.createElement('button'))}catch(x){refused=x.name==='NotFoundError'}"
+        "assert(refused,'another form\\'s is NotFoundError');"
+        "var sent=0;Q.addEventListener('submit',function(e){sent++;e.preventDefault()});Q.requestSubmit(QB);"
+        "assert(sent===0,'a form in no document submits nothing, not even the event');"
+        /* label */
+        "var L=document.createElement('label');L.htmlFor='lx';var LX=document.createElement('input');LX.id='lx';"
+        "F.append(L,LX);assert(L.getAttribute('for')==='lx'&&L.control===LX&&L.form===F,'label');"
+        "var L2=document.createElement('label');assert(L2.control===null&&L2.form===null,'no control');"
+        /* fieldset */
+        "var S=F.querySelector('fieldset');"
+        "assert(S.type==='fieldset'&&S.name==='fs'&&S.form===F&&!S.disabled,'fieldset');"
+        "var SE=S.elements;assert(SE===S.elements&&SE.length===1&&SE[0].localName==='output','its listed descendants');"
+        "S.appendChild(document.createElement('button'));assert(SE.length===2,'live');"
+        /* legend */
+        "var G=S.insertBefore(document.createElement('legend'),S.firstChild);G.align='left';"
+        "assert(G.form===F&&G.getAttribute('align')==='left'&&document.createElement('legend').form===null,'legend');"
+        /* output: value, defaultValue and their override */
+        "var O=document.createElement('output');assert(O.type==='output'&&O.value===''&&O.defaultValue==='','empty');"
+        "O.textContent='5';assert(O.value==='5'&&O.defaultValue==='5','default mode follows the text');"
+        "O.defaultValue='10';assert(O.textContent==='10'&&O.value==='10','default mode: defaultValue sets the text');"
+        "O.value='20';assert(O.defaultValue==='10'&&O.textContent==='20','value mode: the default is kept');"
+        "O.defaultValue='15';assert(O.value==='20'&&O.defaultValue==='15','value mode: defaultValue alone');"
+        "O.htmlFor='a b';assert(O.htmlFor.length===2&&O.getAttribute('for')==='a b','htmlFor, PutForwards');"
+        "var bad=false;try{O.htmlFor.supports('a')}catch(x){bad=x instanceof TypeError}assert(bad,'no supported tokens');"
+        "O.name='o';assert(O.getAttribute('name')==='o'&&O.form===null&&O.labels.length===0,'output');"
+        "bad=false;try{Object.getOwnPropertyDescriptor(HTMLOutputElement.prototype,'value').get.call(L)}"
+        "catch(x){bad=x instanceof TypeError}assert(bad,'the brand is checked');",
+        "modern-on-forms");
     /* The select event a set queues: a task of its own, which the host runs
      * (a binding timer due at once); trusted, bubbling, not cancelable; and
      * none for a set that moves nothing. The cases before this one queued
@@ -518,7 +620,29 @@ static void dom_modern_cases(void)
     char *chain_on = modern_chain_shape(&f);
     fixture_free(&f);
 
+    /* baseURI is the document's base URL, its fragment kept: the page's
+     * address's, and a base's own. */
     os64_dom_options_t options = os64_dom_default_options();
+    options.url = "https://example.test/dir/page#top";
+    f = fixture_new(&options);
+    if (fixture_ready(&f))
+        dom_script(&f, MODERN_ASSERT
+            "assert(document.baseURI==='https://example.test/dir/page#top'&&"
+            "document.body.baseURI===document.baseURI,'the page\\'s address, its fragment kept');"
+            "var B=document.createElement('base');B.setAttribute('href','/other/x#frag');document.head.appendChild(B);"
+            "assert(document.baseURI==='https://example.test/other/x#frag'&&"
+            "document.createAttribute('q').baseURI===document.baseURI,'a base, its own fragment kept');"
+            "B.remove();assert(document.baseURI==='https://example.test/dir/page#top','and without it again');"
+            "var D=document.implementation.createHTMLDocument('x');"
+            "assert(D.baseURI==='about:blank'&&D.body.baseURI==='about:blank','a document with no window: about:blank');"
+            "var DB=D.createElement('base');DB.setAttribute('href','https://example.test/assets/#a');D.head.appendChild(DB);"
+            "assert(D.baseURI==='https://example.test/assets/#a'&&D.body.baseURI===D.baseURI&&"
+            "document.baseURI==='https://example.test/dir/page#top','its own base counts, and is not the page\\'s');"
+            "DB.setAttribute('href','rel/');assert(D.baseURI==='about:blank','one that will not resolve: its fallback');",
+            "modern-on-base-uri");
+    fixture_free(&f);
+
+    options = os64_dom_default_options();
     options.modern = false;
     f = fixture_new(&options);
     if (!fixture_ready(&f)) { modern_names_free(on, non); free(chain_on); return; }
@@ -548,6 +672,10 @@ static void dom_modern_cases(void)
         "assert(fr.getAttribute('src')===null&&fr.hasOwnProperty('src')&&!('HTMLIFrameElement' in window));"
         /* the node row's element names */
         "assert(!('localName' in b)&&!('namespaceURI' in b)&&!('prefix' in b));"
+        /* 0f's P3b's members; a form's elements are a collection, and form[i] nothing */
+        "var lf=document.createElement('form');lf.innerHTML='<input name=x><input name=x>';"
+        "assert(!('control' in document.createElement('label'))&&!('length' in lf)&&lf[0]===undefined&&"
+        "('namedItem' in lf.x)&&!('value' in lf.x));"
         /* 0f's P3a's controls' members; their name and value are every page's */
         "var ci=document.createElement('input');"
         "assert(!('formAction' in ci)&&!('labels' in ci)&&!('indeterminate' in ci)&&!('form' in ci)&&"

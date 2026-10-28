@@ -371,7 +371,7 @@ enum {
     A_NAME, A_LOCAL_NAME, A_PREFIX, A_NAMESPACE, A_VALUE, A_OWNER_ELEMENT, A_SPECIFIED,
     A_NODE_TYPE, A_NODE_VALUE, A_TEXT_CONTENT, A_NO_NODE, A_OWNER_DOCUMENT, A_CHILD_NODES,
     A_CONNECTED, A_APPEND, A_INSERT, A_REPLACE, A_REMOVE_CHILD, A_CLONE, A_HAS_CHILDREN, A_CONTAINS,
-    A_ROOT
+    A_ROOT, A_BASE_URI
 };
 
 static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
@@ -455,6 +455,9 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     case A_OWNER_DOCUMENT:
         return d_wrap(dom, ctx, element != NULL ? d_node_document(dom, element) :
                                 rec->document != NULL ? rec->document : window_document(dom));
+    case A_BASE_URI:
+        return d_base_uri(dom, ctx, element != NULL ? element :
+                                    rec->document != NULL ? rec->document : window_document(dom));
     case A_CHILD_NODES: return empty_child_nodes(dom, ctx, rec);
     case A_CONNECTED: case A_HAS_CHILDREN: return JS_FALSE;
     case A_APPEND: case A_INSERT: case A_REPLACE:
@@ -1117,7 +1120,9 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
 
 int d_attr_root_install(os64_dom_t *dom, JSContext *ctx)
 {
-    return d_method(dom, ctx, dom->prototypes[D_PROTO_ATTR]->value, "getRootNode", attr_member, 0, A_ROOT);
+    JSValueConst attr = dom->prototypes[D_PROTO_ATTR]->value;
+    return d_method(dom, ctx, attr, "getRootNode", attr_member, 0, A_ROOT) < 0 ||
+           d_accessor(dom, ctx, attr, "baseURI", attr_member, A_BASE_URI, false) < 0 ? -1 : 0;
 }
 
 JSValue d_attr_map_interface(os64_dom_t *dom, JSContext *ctx)
