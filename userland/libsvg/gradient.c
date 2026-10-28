@@ -206,13 +206,22 @@ bool svg_radial_gradient_position(const svg_radial_sampler_t *s, double x, doubl
         return false;
     double roots[2];
     size_t count = 0;
+    bool double_root = false;
     if (!a) {
         if (b)
             roots[count++] = -c / b;
     } else {
-        double discriminant = b * b - 4 * a * c;
+        double bb = b * b, ac = 4 * a * c;
+        double discriminant = bb - ac;
         if (!isfinite(discriminant))
             return false;
+        // Cancellation between rounded products can move a double root to
+        // either side of zero. Scale the error by the products, without an absolute
+        // epsilon that would fill genuinely uncovered small cones.
+        double error = 8 * DBL_EPSILON * fmax(bb, fabs(ac));
+        double_root = fabs(discriminant) <= error;
+        if (double_root)
+            discriminant = 0;
         if (discriminant >= 0) {
             double q = -.5 * (b + (b < 0 ? -sqrt(discriminant) : sqrt(discriminant)));
             roots[count++] = q / a;
@@ -222,11 +231,17 @@ bool svg_radial_gradient_position(const svg_radial_sampler_t *s, double x, doubl
     }
     bool found = false;
     double t = 0;
-    for (size_t i = 0; i < count; ++i)
-        if (isfinite(roots[i]) && s->fr + roots[i] * s->dr >= 0 && (!found || roots[i] > t)) {
+    for (size_t i = 0; i < count; ++i) {
+        double delta = roots[i] * s->dr, radius = s->fr + delta;
+        // A zero-radius double root also subtracts nearly equal terms here.
+        // Ordinary roots retain the strict nonnegative-radius test.
+        double error = double_root ? 8 * DBL_EPSILON * fmax(s->fr, fabs(delta)) : 0;
+        if (isfinite(roots[i]) && isfinite(radius) && radius >= -error &&
+            (!found || roots[i] > t)) {
             found = true;
             t = roots[i];
         }
+    }
     if (found)
         *position = t;
     return found;

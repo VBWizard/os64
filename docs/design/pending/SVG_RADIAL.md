@@ -21,7 +21,11 @@ negative radius and chooses the last valid root. The stable quadratic-root
 form avoids subtracting almost-equal roots. Geometry is normalized by the
 larger radius or center distance. Tangency uses a tolerance of eight binary64
 epsilons relative to the center distance/radius difference, accommodating
-roundoff from separately resolved values. A tangent equation is linear.
+roundoff from separately resolved values. A tangent equation is linear. Near a double root, discriminant cancellation
+uses an eight-epsilon bound relative to its two products. The matching radius
+check admits a rounded zero within the same relative bound; ordinary roots
+retain the nonnegative-radius test. There is no absolute epsilon that would
+fill uncovered cones at small coordinate scales.
 
 This position query returns false for uncovered/empty geometry and samples
 whose arithmetic is unrepresentable, clearing its output. A non-markup caller
@@ -75,7 +79,7 @@ close a mixed-type reference cycle through the fallback paint.
 
 Numeric API tests independently check analytic colors/positions, transformed
 object coordinates, invalid inputs, cone coverage and tangent roundoff. The
-painter suite passes 1,818,900 assertions. Both linear and radial scene tests
+painter suite passes 1,822,957 assertions. Both linear and radial scene tests
 poison provider storage after preparation, sweep allocation failures in both
 refusal modes, sweep cancellation, preserve output padding and return ownership
 to baseline. The scripted-window suite passes 10,970 checks, including shared
@@ -114,6 +118,18 @@ ASAN_OPTIONS=detect_leaks=1 bash tools/test_yonder_scripts_host.sh
 python3 tools/svg_reftests/radial.py --native /tmp/svg-radial-native --output /tmp/svg-radial-browser
 python3 tools/svg_reftests/gradients.py --native /tmp/svg-radial-native --output /tmp/svg-linear-regression
 ```
+
+## Review regression
+
+PR #385 exposed a transparent center pixel for concentric gradients with a
+nonzero focal radius: the discriminant rounded slightly below zero. A second
+rounding boundary could reject the corresponding zero-radius root. The numeric
+regressions cover growing/reversed radii at scales from 1e-12 to 1e12, both
+signs of discriminant cancellation, eccentric cone boundaries and genuinely
+uncovered or negative-radius roots. An odd-sized painted rectangle places the
+center exactly on a pixel sample and verifies that its interior remains opaque.
+The painter suite passes with ASan, UBSan and LeakSanitizer enabled. The frozen
+gallery delivery below retains its hardware-tested bytes.
 
 ## Delivery checkpoint
 
