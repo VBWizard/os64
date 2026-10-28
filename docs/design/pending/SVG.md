@@ -42,6 +42,8 @@ connects picture jobs, default object sizing, `<img>` and background painting.
 [SVG_GRADIENTS.md](SVG_GRADIENTS.md) adds linear paint servers and a numeric
 sampler shared with future non-markup callers. [SVG_RADIAL.md](SVG_RADIAL.md)
 adds radial paint and a separate numeric circle-position query.
+[SVG_CACHE.md](SVG_CACHE.md) adds owned raster keys and bounded cache storage;
+Yonder adoption is a separate integration cut.
 This design does not establish
 performance or compatibility percentages.
 

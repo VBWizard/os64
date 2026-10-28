@@ -4100,3 +4100,14 @@ SVG's tangent-edge coloring for a future Canvas caller.
 `/tests/pages/svg-radial.html` moves a highlight across shared consumers while
 an independent SVG keeps its own light. Raster caching and corpus-led
 latency/fidelity gates remain in 6c.
+
+
+### Slice 6c, raster-cache foundation — 2026-10-27
+
+[SVG_CACHE.md](SVG_CACHE.md) adds value keys and bounded owned-pixel storage in
+libsvg. Keys describe resolved scenes and render extents; full byte comparison
+after digest lookup prevents collision reuse. Entry ownership is independent
+of documents, scenes and temporary keys. Limits, eviction, failure/cancellation
+and exact cached-versus-uncached output are covered by the painter harness.
+Yonder adoption and corpus-led measurements remain separate 6c cuts; this
+foundation does not change browser painting or require a hardware gallery.

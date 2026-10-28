@@ -8,6 +8,8 @@ typedef struct svg_context svg_context_t;
 typedef struct svg_path svg_path_t;
 typedef struct svg_geometry svg_geometry_t;
 typedef struct svg_scene svg_scene_t;
+typedef struct svg_raster_key svg_raster_key_t;
+typedef struct svg_raster_cache svg_raster_cache_t;
 typedef enum {
     SVG_OK,
     SVG_MALFORMED,
@@ -40,6 +42,7 @@ typedef struct {
 typedef struct {
     size_t live_bytes, peak_bytes, paths, geometries, scenes;
     uint64_t last_work;
+    size_t raster_keys, raster_caches;
 } svg_stats_t;
 typedef enum { SVG_MOVE, SVG_LINE, SVG_QUADRATIC, SVG_CUBIC, SVG_CLOSE, SVG_ARC } svg_verb_t;
 typedef struct {
@@ -264,8 +267,43 @@ typedef struct {
     uint64_t raster_work, geometry_work;
     size_t painted_paths, peak_layers;
 } svg_render_stats_t;
+typedef struct {
+    size_t bytes, entries;
+    uint64_t hits, misses, stores, evictions;
+} svg_raster_cache_stats_t;
 
 #pragma GCC visibility push(default)
+/* Owned, process-local value keys. Preparation must resolve fresh styles and
+ * resources before key creation. Source identities, pointers and struct padding
+ * are not serialized; signed zero is normalized. The immutable geometry backend
+ * is a separate cache domain and must outlive keys and entries made with it.
+ * max_bytes bounds key storage, excluding the key descriptor/allocation headers.
+ * Target storage is validated but not read. Keys can outlive their scene. */
+svg_status_t svg_raster_key_create(svg_context_t *, const svg_scene_t *,
+    const svg_render_options_t *, const svg_render_target_t *, size_t max_bytes,
+    svg_raster_key_t **);
+svg_status_t svg_raster_key_release(svg_context_t *, svg_raster_key_t *);
+/* Serialized caller access, like the context. Cache ownership is independent
+ * of scene/key ownership: read/store accept keys from another context.
+ * max_bytes bounds retained entry allocations including library headers;
+ * the cache descriptor and temporary caller-owned keys use the owner's ledger
+ * separately. Zero bytes/entries disables storage. No DOM pins are retained. */
+svg_status_t svg_raster_cache_create(svg_context_t *, size_t max_bytes, size_t max_entries,
+                                    svg_raster_cache_t **);
+svg_status_t svg_raster_cache_clear(svg_context_t *, svg_raster_cache_t *);
+svg_status_t svg_raster_cache_release(svg_context_t *, svg_raster_cache_t *);
+svg_status_t svg_raster_cache_stats(const svg_raster_cache_t *, svg_raster_cache_stats_t *);
+/* A miss returns OK with hit=false and leaves the destination untouched.
+ * Hits copy owned pixels, preserving row padding; cancellation may leave a
+ * partially copied destination, which the caller must discard on failure. */
+svg_status_t svg_raster_cache_read(svg_context_t *, svg_raster_cache_t *,
+    const svg_raster_key_t *, const svg_render_target_t *, bool *hit);
+/* Supply the result of rendering this key's scene/options/extent. A non-OK
+ * rendered status is returned without storing. Successful pixels are copied;
+ * failed admission/cancellation publishes no entry. Capacity evictions can
+ * precede admission failure, bounding peak retained entry storage. */
+svg_status_t svg_raster_cache_store(svg_context_t *, svg_raster_cache_t *,
+    const svg_raster_key_t *, const svg_render_target_t *, svg_status_t rendered);
 /* No markup, cascade or allocator is involved. user_to_sample maps consumer user
  * space to the sampling space. Object-box gradients require geometric bounds;
  * a singular map or zero object extent produces a transparent sampler. */

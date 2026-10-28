@@ -33,7 +33,19 @@ struct svg_scene {
     svg_scene_item_t *items;
     size_t count, capacity;
     bool pinned;
+    svg_mode_t mode;
 };
+struct svg_raster_key {
+    Context *owner;
+    const os64_geometry_backend_t *backend;
+    size_t size;
+    uint64_t digest;
+    double origin_x, origin_y;
+    uint32_t width, height;
+    unsigned char data[];
+};
+size_t svg_allocation_cost(size_t);
+Status svg_render_validate(const svg_render_options_t *, const svg_render_target_t *);
 bool svg_spend(Context *, uint64_t);
 Status svg_enter(Context *);
 Status svg_leave(Context *, Status);

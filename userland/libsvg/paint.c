@@ -564,7 +564,7 @@ static Status export_pixels(Render *r, Layer *root)
     }
     return SVG_OK;
 }
-static Status validate(const svg_render_options_t *o, const svg_render_target_t *t)
+Status svg_render_validate(const svg_render_options_t *o, const svg_render_target_t *t)
 {
     if (!o || !t || !t->pixels || (uintptr_t)t->pixels % _Alignof(uint32_t) || !t->width ||
         !t->height || !isfinite(t->origin_x) || !isfinite(t->origin_y) ||
@@ -600,7 +600,7 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
         *stats = (svg_render_stats_t){0};
     if (!c || !scene || scene->owner != c)
         return SVG_BAD_ARGUMENT;
-    Status status = validate(o, target);
+    Status status = svg_render_validate(o, target);
     if (status != SVG_OK)
         return status;
     status = svg_enter(c);
