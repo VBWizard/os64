@@ -26,7 +26,7 @@ yonder_host_build() {
     host_flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
         -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns
         -fno-stack-protector -DOS64_JS_TARGET
-        -Iuserland/libxml/include -Iuserland/libsvg/include -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
+        -Iuserland/libdraw2d/include -Iuserland/libxml/include -Iuserland/libsvg/include -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
         -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
         -Iuserland/libflow/include -Iuserland/libgarb/include -Iuserland/libway/include
         -Iuserland/libfetch/include -Iuserland/libimage/include -Iuserland/libwebp/include -Iuserland/libgzip/include
@@ -48,7 +48,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets}.c \
         userland/apps/yonder/{scripts,modules,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture}.c \
-        "${svg_sources[@]}" \
+        "${svg_sources[@]}" userland/libdraw2d/paint.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \

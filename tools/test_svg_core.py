@@ -31,7 +31,8 @@ def main():
               '-fexcess-precision=standard', '-mno-avx', '-mno-fma',
               '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
               '-fno-omit-frame-pointer', '-Wall', '-Wextra', '-Werror']
-    includes = ['-I'+str(ROOT/'userland/libsvg/include'),
+    includes = ['-I'+str(ROOT/'userland/libdraw2d/include'),
+                '-I'+str(ROOT/'userland/libsvg/include'),
                 '-I'+str(ROOT/'userland/libmath/include'),
                 '-I'+str(ROOT/'userland/libos64/include')]
     if args.yonder:
@@ -40,7 +41,7 @@ def main():
             'userland/libhtml/include', 'userland/libxml/include', 'userland/libpage/include', 'userland/libpage/upstream/ryu',
             'userland/libgarb/include', 'userland/libfetch/include', 'userland/libgzip/include',
             'userland/libtls/include', 'userland/libway/include')]
-    entries = []
+    entries = [(ROOT/'userland/libdraw2d/paint.c', includes)]
     # Read production membership; new source files cannot silently miss the harness.
     membership = (ROOT/'userland/libsvg/library.mk').read_text().replace('\\\n', ' ')
     membership = membership.split('LIBSVG_SRCS := ', 1)[1].splitlines()[0]
@@ -97,10 +98,10 @@ def main():
                           'userland/libgzip/include', 'userland/libtls/include',
                           'userland/libway/include'):
             inputs.update((ROOT/directory).rglob('*.h'))
-    for directory in ('userland/libsvg', 'userland/libfreetype', 'userland/libmath', 'userland/libos64/include'):
+    for directory in ('userland/libdraw2d', 'userland/libsvg', 'userland/libfreetype', 'userland/libmath', 'userland/libos64/include'):
         inputs.update((ROOT/directory).rglob('*.h'))
     inputs.update((ft.LIB/'upstream').rglob('*.c'))
-    inputs.update([ROOT/'userland/libsvg/library.mk', ft.LIB/'sources.mk',
+    inputs.update([ROOT/'userland/libdraw2d/library.mk', ROOT/'userland/libsvg/library.mk', ft.LIB/'sources.mk',
                    ROOT/'userland/libmath/sources.mk', Path(__file__).resolve()])
     provenance = {'compiler': subprocess.check_output([cc, '--version'], text=True).splitlines()[0],
                   'flags': common, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
