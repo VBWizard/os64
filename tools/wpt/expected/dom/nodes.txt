@@ -418,6 +418,23 @@ getElementsByClassName-20.htm	get elements in document then add element to colle
 getElementsByClassName-21.htm	delete element from collection
 getElementsByClassName-22.htm	move item in collection order
 getElementsByClassName-25.htm	verify spacing is handled correctly
+# Node's comparisons and normalize (MODERN_WEB.md § Node's members, as
+# built). Each fails with the switch off.
+Node-isEqualNode.html	comments should be compared on data
+Node-isEqualNode.html	doctypes should be compared on name, public ID, and system ID
+Node-isEqualNode.html	document fragments should not be compared based on properties
+Node-isEqualNode.html	documents should not be compared based on properties
+Node-isEqualNode.html	node equality testing should test descendant equality too
+Node-isEqualNode.html	text nodes should be compared on data
+Node-isSameNode.html	attributes should be compared on reference
+Node-isSameNode.html	comments should be compared on reference
+Node-isSameNode.html	doctypes should be compared on reference
+Node-isSameNode.html	document fragments should be compared on reference
+Node-isSameNode.html	documents should be compared on reference
+Node-isSameNode.html	text nodes should be compared on reference
+Node-normalize.html	Empty text nodes
+Node-normalize.html	Empty text nodes separated by a non-empty text node
+Node-normalize.html	Node.normalize()
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -2541,6 +2558,18 @@ Node-insertBefore.html	Should check that 'node' is not an ancestor of 'parent' b
 Node-insertBefore.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' can be inserted into the document given the kids the document has right now.
 Node-insertBefore.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent.
 Node-isConnected.html	Test with ordinary child nodes
+Node-isEqualNode.html	comments should be compared on data
+Node-isEqualNode.html	doctypes should be compared on name, public ID, and system ID
+Node-isEqualNode.html	document fragments should not be compared based on properties
+Node-isEqualNode.html	documents should not be compared based on properties
+Node-isEqualNode.html	node equality testing should test descendant equality too
+Node-isEqualNode.html	text nodes should be compared on data
+Node-isSameNode.html	attributes should be compared on reference
+Node-isSameNode.html	comments should be compared on reference
+Node-isSameNode.html	doctypes should be compared on reference
+Node-isSameNode.html	document fragments should be compared on reference
+Node-isSameNode.html	documents should be compared on reference
+Node-isSameNode.html	text nodes should be compared on reference
 Node-mutation-adoptNode.html	Adopting an element into a different document update's the element's owner doc as well as the owner docs of it's attributes
 Node-mutation-adoptNode.html	simple append of foreign div with text
 Node-nodeName.html	For Comment nodes, nodeName should return "#comment".
@@ -2555,6 +2584,9 @@ Node-nodeValue.html	DocumentFragment.nodeValue
 Node-nodeValue.html	DocumentType.nodeValue
 Node-nodeValue.html	Element.nodeValue
 Node-nodeValue.html	Text.nodeValue
+Node-normalize.html	Empty text nodes
+Node-normalize.html	Empty text nodes separated by a non-empty text node
+Node-normalize.html	Node.normalize()
 Node-parentElement.html	When the parent is a document, parentElement should be null (comment)
 Node-parentElement.html	When the parent is a document, parentElement should be null (doctype)
 Node-parentElement.html	When the parent is a document, parentElement should be null (element)

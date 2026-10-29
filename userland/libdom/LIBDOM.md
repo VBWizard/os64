@@ -623,7 +623,8 @@ whose dispatch path is itself. A tree verb handed an Attr refuses it as DOM
 does (HierarchyRequestError to insert one, NotFoundError as a reference or
 to remove one, `contains` false); a `Node.prototype` member called on an
 Attr itself is the TypeError "an Attr is a Node with no place in the tree"
-(DIVERGENCES.md).
+(DIVERGENCES.md), but for the comparisons (`compare.c`), whose one
+function is Node's and Attr's both.
 
 **The map holds no snapshot either.** `length`, `item(i)`, the indices
 (live, read-only) and the names (each attribute's qualified name, an HTML
@@ -1407,7 +1408,11 @@ fails); Element's `localName`, `namespaceURI` and `prefix` (libhtml's name,
 Node's `baseURI`, its node document's base URL, its fragment kept
 (`d_base_uri`, over libpage's `os64_page_base_url_in`; a document with no
 window has about:blank for a fallback, and its own `<base>` counts), which
-Attr's prototype shadows with the same answer.
+Attr's prototype shadows with the same answer; and Node's `normalize()`,
+which removes the empty text nodes among a node's descendants and makes
+each run of adjacent ones its first, given the run's data (that node's
+data set before the rest of the run is removed, so a failure part way
+loses no text). An Attr's has no children to join.
 
 **The select row** (`options.c`, which names `Option` on window): an
 option's `value` (its attribute, else its text), `text` (its descendant
@@ -1487,6 +1492,19 @@ reads the collection a page reads (`d_query_items`), so the two agree on
 every index, and changes the tree through `d_tree_change`, the door
 appendChild takes; an element it makes joins the owner's tree at once,
 and with it the owner's node document.
+
+**The comparisons row** (`compare.c`, naming nothing on window; MODERN_WEB.md
+§ Node's members, as built). Node's `isSameNode`, `isEqualNode` and
+`compareDocumentPosition`, one function on Node's prototype and on Attr's,
+since either side of each may be an Attr: an operand is a tree node or an
+Attr's view (`attr.c`'s `d_attr_view`: its element, names and value), the
+element standing in the tree for the Attr. Equality is DOM's, walked side
+by side in tree order rather than by recursion; a template's contents are
+not its children, so they are not compared. Two Attrs of one element are
+in the order of its attribute list, as DOM's steps walk it; two nodes in
+different trees are ordered by the addresses of their roots (a detached
+Attr's own entry standing for a root), the one order DOM leaves open,
+asking only that it be consistent.
 
 **The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
 window, and nothing else). `collection.c`'s: a form's `elements` is an

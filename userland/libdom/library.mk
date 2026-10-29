@@ -36,6 +36,8 @@ LIBDOM_SRCS += libdom/tables.c
 LIBDOM_SRCS += libdom/forms.c
 # 0f P4: constraint validation.
 LIBDOM_SRCS += libdom/validity.c
+# Node's comparisons: isSameNode, isEqualNode, compareDocumentPosition.
+LIBDOM_SRCS += libdom/compare.c
 LIBDOM_SRCS += libdom/sheets.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
