@@ -8421,6 +8421,35 @@ static void webfont_cases(void) {
     check(!s_web.moved && first_text_font()!=before && first_text_font()!=0,
           "web fonts: the page is laid out again in the face, named twice and listed once");
 
+    /* Canvas resolves fonts after layout has released its temporary cascade. */
+    {
+        os64_font_family_name_t name={"Web",3};
+        os64_font_family_list_t families={.names=&name,.count=1,.generic=OS64_FONT_FAMILY_SERIF};
+        os64_text_run_t *run=NULL;os64_text_run_view_t view;
+        WebFontFamilies laying_before=s_web.laying, shown_before=s_web.families;
+        uint8_t uses_before[GARB_FONT_FACES_MAX];
+        memcpy(uses_before,s_web.face_laying,sizeof(uses_before));
+        check(s_laying.cascade==NULL && s_laying.entry==NULL,"Canvas font: outside layout");
+        check(canvas_text_layout(g.page.way.doc,&families,false,false,16,
+              (const uint8_t *)"hello",5,&run)==OS64_FONT_OK &&
+              os64_text_run_view(run,&view)==OS64_FONT_OK && view.glyph_count>0 &&
+              view.glyphs[0].font_identity==first_text_font(),
+              "Canvas font: loaded page face matches DOM text outside layout");
+        os64_text_run_release(run);
+        check(s_laying.cascade==NULL && s_laying.entry==NULL && s_web.nfiles==1,
+              "Canvas font: leaves layout context and file cache intact");
+        run=NULL;
+        check(canvas_text_layout(NULL,&families,false,false,16,(const uint8_t *)"hello",5,&run)==OS64_FONT_OK &&
+              os64_text_run_view(run,&view)==OS64_FONT_OK && view.glyph_count>0 &&
+              view.glyphs[0].font_identity!=first_text_font(),
+              "Canvas font: an unrelated document cannot borrow the shown page's face");
+        os64_text_run_release(run);
+        check(!memcmp(&laying_before,&s_web.laying,sizeof(laying_before)) &&
+              !memcmp(&shown_before,&s_web.families,sizeof(shown_before)) &&
+              !memcmp(uses_before,s_web.face_laying,sizeof(uses_before)),
+              "Canvas font: preserves layout font diagnostics");
+    }
+
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(strstr(record,"MISSING font")==NULL,"web fonts: a family a face serves is not missing");
     diag_fonts(&g.page);

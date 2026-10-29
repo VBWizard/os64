@@ -246,7 +246,7 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     double x=0,y=0,max_width=0;bool limited=magic&&argc>3;
     if(magic&&(JS_ToFloat64(ctx,&x,argv[1])<0||JS_ToFloat64(ctx,&y,argv[2])<0||
        (limited&&JS_ToFloat64(ctx,&max_width,argv[3])<0))){JS_FreeCString(ctx,string);return JS_EXCEPTION;}
-    if(magic&&(!isfinite(x)||!isfinite(y)||(limited&&(!isfinite(max_width)||max_width<=0)))) {
+    if(magic&&(!isfinite(x)||!isfinite(y)||(limited&&(isnan(max_width)||max_width<=0)))) {
         JS_FreeCString(ctx,string);return JS_UNDEFINED;
     }
     if(length>TEXT_BYTES){JS_FreeCString(ctx,string);return d_error(ctx,"QuotaExceededError","Canvas text exceeds byte budget");}

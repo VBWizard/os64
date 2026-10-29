@@ -94,6 +94,26 @@ Visible QEMU runs exercise all four buttons, text fill/stroke/fitting, and
 an additional 25% smoke check. Canvas retains bitmap pixels when browser zoom
 changes; this does not promise fresh vector rasterization at each zoom.
 
+## Review regressions
+
+The first review identified two reproduced defects: explicit positive infinity
+suppressed text drawing, and Canvas font lookup outside layout omitted loaded
+page faces. Both new regression cases fail against the submitted code.
+
+Text preparation now rejects NaN and nonpositive maximum widths while allowing
+positive infinity, following the [HTML text preparation algorithm](https://html.spec.whatwg.org/multipage/canvas.html#text-preparation-algorithm).
+Pixel comparisons cover `fillText` and `strokeText` against an omitted width;
+invalid widths and non-finite coordinates remain no-ops.
+The focused Canvas DOM suite passes 129 checks in each JavaScript engine
+profile with ASan, UBSan and leak detection enabled.
+
+Font resolution uses the owning page's retained cascade and stylesheet mapping
+between layouts. The production-resolver regression compares the Canvas run's
+font identity to ordinary DOM text after a page face loads, checks isolation
+from an unrelated document, and checks that layout diagnostics are preserved.
+The full Yonder suite passes 11,752 checks with ASan, UBSan and leak detection;
+the target Yonder and updated libdom cross-build also pass.
+
 ## Limits
 
 The shared Western text profile supplies pair positioning and fallback, not
