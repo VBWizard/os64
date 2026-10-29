@@ -4801,3 +4801,12 @@ of documents, scenes and temporary keys. Limits, eviction, failure/cancellation
 and exact cached-versus-uncached output are covered by the painter harness.
 Yonder adoption and corpus-led measurements remain separate 6c cuts; this
 foundation does not change browser painting or require a hardware gallery.
+
+### Slice 6, Part 1 closeout — 2026-10-29
+
+[SVG_PART1.md](../completed/SVG_PART1.md) records the accepted static profile
+through 6c and its final reconciliation with current userland. Browser raster
+reuse, real-page sizing/metadata fixes, computed SVG style serialization and
+partial-artwork diagnostics are implemented. The closeout distinguishes the
+P5-accepted feature slices from combined-tree integration checks and retains
+the broader graphics, performance and Canvas design work as follow-ons.

@@ -1,9 +1,14 @@
 # SVG rendering design
 
-Status: implementation design, 2026-10-25. Quinn, building on Fable's
+Status: Part 1 implemented through the accepted 6a–6c profile; integration
+candidate verified on 2026-10-29. [The Part 1 closeout](../completed/SVG_PART1.md)
+records its scope, evidence and deferred work. The broader arc remains open.
+Original design: 2026-10-25. Quinn, building on Fable's
 2026-10-21 SVG proposal. Source baseline: `userland` at `d922229c`.
 This is the revised slice 6 design for [MODERN_WEB.md](MODERN_WEB.md).
-The stages below are proposed implementation cuts, not completed features.
+The stages below describe the arc; their broad deliverables are not a claim
+that every listed capability is complete. Component documents record the
+implemented subsets and limits.
 Quinn owns slice 6. The disposition of Fable's review is in
 [SVG_REVIEW.md](SVG_REVIEW.md#quinns-disposition).
 
@@ -43,7 +48,10 @@ connects picture jobs, default object sizing, `<img>` and background painting.
 sampler shared with future non-markup callers. [SVG_RADIAL.md](SVG_RADIAL.md)
 adds radial paint and a separate numeric circle-position query.
 [SVG_CACHE.md](SVG_CACHE.md) adds owned raster keys and bounded cache storage;
-Yonder adoption is a separate integration cut.
+[SVG_CACHE_YONDER.md](SVG_CACHE_YONDER.md) records its browser adoption.
+[SVG_PARTIAL.md](SVG_PARTIAL.md) records unsupported-drawing omission and
+partial-support diagnostics. The computed-style repair and architectural
+review disposition are in [SVG_INTEGRATION_REVIEW.md](SVG_INTEGRATION_REVIEW.md).
 This design does not establish
 performance or compatibility percentages.
 
