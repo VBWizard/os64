@@ -53,12 +53,12 @@ performance or compatibility percentages.
 |---|---|
 | `libhtml` and its document adapters | Inline SVG nodes, namespaced attributes, document identity, mutation and lifetime |
 | `libxml` | Standalone XML byte-to-event parser; `libhtml` consumes its events to build the shared tree |
-| `libgarb` | Selectors, presentation attributes, cascade and SVG computed styles |
-| `libflow` | The outer SVG's participation in CSS layout and sizing negotiation |
+| `libgarb` | Selectors, presentation attributes and cascade winners |
+| `libflow` | The outer SVG's CSS layout and sizing negotiation; CSSOM resolved-value serialization |
 | `libsvg` | SVG scene construction, paths, viewports, instances, paint servers, clipping and compositing |
 | FreeType port | Outline rasterization, stroke expansion and later glyph-outline export |
 | `libimage` | Raster decoding and its existing owned pixel representation |
-| Yonder | Fetching, processing mode, style/text providers, caches, work scheduling, diagnostics and display |
+| Yonder | Fetching, processing mode, SVG style computation/providers, caches, work scheduling, diagnostics and display |
 
 SVG belongs in its own library. Its inputs include a viewport and document
 state, and its result can change without new encoded bytes. Do not make
@@ -487,10 +487,13 @@ report distinguishes supported passes/failures from unsupported-profile cases;
 rejecting a valid out-of-profile file is not a conformance pass.
 
 Keep `UNSUPPORTED`, malformed input, `LIMIT`, allocation failure, pending resource
-and cancellation separate. Optional-feature omission reports a diagnostic and
-partial capability; it must not masquerade as fully supported SVG. Legal invalid
-elements follow the specification's local error behavior; a resource-budget
-failure aborts the unpublished result. Count scene builds, rasterizations,
+and cancellation separate. The implemented profile refuses a root containing
+active unsupported graphics and publishes no partial pixels, as recorded in
+[SVG_YONDER.md](SVG_YONDER.md). Omitting unsupported visible subtrees with a
+partial-capability diagnostic is a proposed policy change awaiting a ruling;
+see the [integration review disposition](SVG_INTEGRATION_REVIEW.md#disposition-of-fables-architectural-review).
+Legal invalid elements follow the specification's local error behavior; a
+resource-budget failure aborts the unpublished result. Count scene builds, rasterizations,
 cache hits, peak bytes, work-limit refusals and elapsed time.
 
 ## Alternatives and reasons
