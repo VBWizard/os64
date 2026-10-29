@@ -1,0 +1,130 @@
+// download_job.c — a download, on a worker (download_job.h).
+
+#include "download_job.h"
+
+#include "os64/fmt.h"
+#include "os64/gui.h"
+#include "os64/mem.h"
+#include "os64/str.h"
+#include "ticker.h"
+
+// How often the window hears that bytes arrived: often enough for a meter
+// to move, seldom enough that a fast download costs the window nothing.
+#define RING_MS 200
+
+static void fail(yonder_download_job_t *j, const char *why)
+{
+    os64_strcopy(j->why, sizeof(j->why), why);
+}
+
+// What the server said, when it said something other than a body to keep:
+// an error's body is its page, not the file asked for.
+static bool refused(yonder_download_job_t *j, const os64_fetch_head_t *head)
+{
+    if (head->status >= 200 && head->status < 300)
+        return false;
+    os64_snprintf(j->why, sizeof(j->why), "the server answered %d%s%s", (int)head->status,
+                  head->reason[0] != '\0' ? " " : "", head->reason);
+    return true;
+}
+
+// Every byte of `buf[0..len)` written, or false.
+static bool write_all(int32_t h, const uint8_t *buf, size_t len)
+{
+    while (len > 0) {
+        int64_t n = os64_write(h, buf, len);
+        if (n <= 0)
+            return false;
+        buf += n;
+        len -= (size_t)n;
+    }
+    return true;
+}
+
+int64_t yonder_download_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
+{
+    yonder_download_job_t *j = job;
+    (void)out;                          // no product: the job is its own record
+    if (cancelled(ctx))
+        return -1;
+    os64_fetch_options_t opt = {0};
+    opt.user_agent = j->agent;
+    opt.accept = "*/*";
+    // The bytes as the server keeps them: a .tar.gz is not to arrive
+    // decompressed because the server also spoke gzip.
+    opt.identity = true;
+    j->hooks.cancelled = cancelled;
+    j->hooks.cancel_ctx = ctx;
+    way_fetch_hooks(&j->hooks, &opt);
+    os64_fetch_t *f = os64_fetch_open(j->url, &opt);
+    if (f == NULL) {
+        fail(j, "out of memory");
+        return 0;
+    }
+    const os64_fetch_head_t *head = os64_fetch_head(f);
+    if (head == NULL || refused(j, head)) {
+        if (head == NULL)
+            fail(j, os64_fetch_reason(f));
+        os64_fetch_close(f);
+        return cancelled(ctx) ? -1 : 0;
+    }
+    __atomic_store_n(&j->total, head->has_length ? head->length : 0, __ATOMIC_RELAXED);
+    uint8_t *buf = os64_malloc(YONDER_DOWNLOAD_CHUNK);
+    int64_t h = buf != NULL ? os64_open(j->part, "w") : -1;
+    if (h < 0) {
+        fail(j, buf == NULL ? "out of memory" : "the folder would not take a new file");
+        os64_free(buf);
+        os64_fetch_close(f);
+        return 0;
+    }
+    uint64_t got = 0, rang = yonder_now_ms();
+    int64_t n;
+    bool written = true;
+    while (written && !cancelled(ctx) && (n = os64_fetch_read(f, buf, YONDER_DOWNLOAD_CHUNK)) > 0) {
+        written = write_all((int32_t)h, buf, (size_t)n);
+        got += (uint64_t)n;
+        __atomic_store_n(&j->got, got, __ATOMIC_RELAXED);
+        if (yonder_now_ms() - rang >= RING_MS) {
+            rang = yonder_now_ms();
+            (void)os64_gui_event_ring(j->window, j->bell);
+        }
+    }
+    os64_free(buf);
+    bool stopped = cancelled(ctx);
+    bool whole = written && !stopped && os64_fetch_status(f) == OS64_FETCH_OK;
+    if (!written)
+        fail(j, "the disk would not take it (is it full?)");
+    else if (!stopped && !whole)
+        fail(j, os64_fetch_reason(f));
+    os64_fetch_close(f);
+    if (whole && os64_sync((int32_t)h) < 0) {
+        whole = false;
+        fail(j, "the disk would not take it (is it full?)");
+    }
+    if (os64_close((int32_t)h) < 0 && whole) {
+        whole = false;
+        fail(j, "the disk would not take it (is it full?)");
+    }
+    if (whole) {
+        int64_t rc = j->replace ? os64_rename(j->part, j->path)
+                                : os64_rename_with_flags(j->part, j->path, OS64_RENAME_NOREPLACE);
+        if (rc < 0) {
+            whole = false;
+            fail(j, j->replace ? "it could not be put under its name"
+                               : "a file of that name appeared meanwhile");
+        }
+    }
+    if (!whole)
+        (void)os64_unlink(j->part);
+    j->whole = whole;
+    (void)os64_gui_event_ring(j->window, j->bell);
+    return whole ? 1 : stopped ? -1 : 0;
+}
+
+void yonder_download_release(void *job, void *product)
+{
+    (void)product;
+    // Nothing to remove: a run cancelled before it began wrote nothing, and
+    // one that ran published or removed its own `.part` before returning.
+    os64_free(job);
+}

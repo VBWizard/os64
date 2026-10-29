@@ -66,6 +66,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
         // No page: libway's sentence says what there was instead.
         os64_strcopy(verdict.reason, sizeof(verdict.reason), leg.status);
         verdict.cookies_short = leg.cookies_short;
+        verdict.offer = leg.offer;
         yonder_mail_post_verdict(trip->mail, &verdict);
         ring(trip);
         return 0;

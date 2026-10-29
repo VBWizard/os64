@@ -130,6 +130,12 @@ int64_t os64_rename(const char *from, const char *to) {
     fake_writes++;
     return 0;
 }
+/* The safe-publish rename a download makes: NOREPLACE refuses a name that
+ * is there, as the kernel's does. */
+int64_t os64_rename_with_flags(const char *from, const char *to, uint64_t flags) {
+    if((flags&OS64_RENAME_NOREPLACE) && fake_file(to)>=0) return -1;
+    return os64_rename(from,to);
+}
 int64_t os64_sync(int32_t h) {
     (void)h;
     void (*hook)(void)=fake_sync_hook;
@@ -552,6 +558,8 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     os64_strcopy(out->content_type,sizeof(out->content_type),picture_http_type ? picture_http_type : "");
     return true;
 }
+/* A download's fetch rides the fake network, which reads no hooks. */
+void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *options) { (void)hooks; (void)options; }
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
     if(len==6 && !memcmp(bytes,"RASTER",6)) {
