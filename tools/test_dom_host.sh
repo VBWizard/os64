@@ -11,7 +11,7 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
     forms validity compare \
-    sheets; do
+    sheets image_data; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 # THE ONE DOOR (attr.c): libdom sets and removes attributes through d_set_attr
@@ -26,7 +26,7 @@ make -C userland -j8 js-runtime-test > "$work/build.log" 2>&1 || { cat "$work/bu
 flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
-    -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
+    -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
     -Iuserland/libgarb/include -Iuserland/libway/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
     -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
     '-DGARB_MODERN_PROBE="animation-name"')
@@ -57,7 +57,7 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
     forms validity compare \
-    sheets; do
+    sheets image_data; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \

@@ -38,13 +38,13 @@ LIBDOM_SRCS += libdom/forms.c
 LIBDOM_SRCS += libdom/validity.c
 # Node's comparisons: isSameNode, isEqualNode, compareDocumentPosition.
 LIBDOM_SRCS += libdom/compare.c
-LIBDOM_SRCS += libdom/sheets.c
+LIBDOM_SRCS += libdom/sheets.c libdom/image_data.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
-LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libway/include
+LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libcanvas/include -I$(CURDIR)/libdraw2d/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libway/include
 
 # libway for one copy of the origin and CORS rules (way/origin.h), which a
 # script's Headers and Request ask as the fetch job does.

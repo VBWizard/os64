@@ -12,6 +12,8 @@
 #define D_SET 0x1000
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
 #define D_CLONE_HELD 34
+#include <canvas/canvas.h>
+
 typedef struct DValue DValue;
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
@@ -875,6 +877,15 @@ bool d_secure_context(const os64_dom_t *context);
 int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_image_data_install(os64_dom_t *, JSContext *, JSValueConst);
+int d_image_data_settings(JSContext *, JSValueConst);
+/* Clone reads internal fields, not page-replaceable getters. The returned
+ * array is borrowed; the constructor below takes its own reference. */
+bool d_image_data_parts(JSValueConst, JSValue *array, uint32_t *width, uint32_t *height);
+JSValue d_image_data_from_array(JSContext *, JSValueConst, uint32_t width, uint32_t height);
+JSValue d_image_data_new(JSContext *, uint32_t width, uint32_t height);
+/* Borrowed bytes expire on the next call into page code. */
+int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *);
 /* The frames row (frames.c; IFRAME.md § The cluster and the window proxy):
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

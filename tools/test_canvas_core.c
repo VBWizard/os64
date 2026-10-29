@@ -230,9 +230,57 @@ static void shared_owner(void)
     canvas_stats_t stats; OK(canvas_stats(a, &stats)); CHECK(!stats.saved_states);
     OK(canvas_destroy(a)); CHECK(!o.live);
 }
+static void pixels(void)
+{
+    Owner o = {0}; canvas_options_t opts = options(&o); canvas_context_t *c;
+    OK(canvas_create(&opts, 3, 2, &c));
+    uint8_t source[] = {255, 0, 0, 255, 0, 255, 0, 128, 255, 255, 255, 0,
+                         1, 2, 3, 4, 0, 0, 255, 255, 0, 255, 255, 255};
+    canvas_rgba8_t src = {source, 3, 2, 12, sizeof(source)};
+    OK(canvas_set_alpha(c, 0)); OK(canvas_set_fill(c, 0));
+    OK(canvas_put_pixels(c, &src, 0, 0, NULL));
+    pixel(c, 0, 0, 0xffff0000); pixel(c, 1, 0, 0x80008000); pixel(c, 2, 0, 0);
+    pixel(c, 1, 1, 0xff0000ff);
+    uint8_t read[40]; memset(read, 0xa5, sizeof(read));
+    canvas_rgba8_t dst = {read, 4, 2, 20, 36};
+    OK(canvas_ack_damage(c)); OK(canvas_read_pixels(c, -1, 0, &dst));
+    const uint8_t first[] = {0, 0, 0, 0, 255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 0, 0};
+    CHECK(!memcmp(read, first, sizeof(first)));
+    for (unsigned i = 16; i < 20; ++i) CHECK(read[i] == 0xa5 && read[i+20] == 0xa5);
+    draw2d_damage_t d; OK(canvas_damage(c, &d)); CHECK(!d.x1);
+    OK(canvas_read_pixels(c, INT64_MIN, INT64_MAX, &dst));
+    for (unsigned y = 0; y < 2; ++y)
+        for (unsigned x = 0; x < 16; ++x) CHECK(!read[y * 20 + x]);
+    dst.capacity = 35; memset(read, 0xa5, sizeof(read));
+    CHECK(canvas_read_pixels(c, 0, 0, &dst) == CANVAS_LIMIT);
+    for (unsigned i = 0; i < sizeof(read); ++i) CHECK(read[i] == 0xa5);
+    canvas_bitmap_t v = bitmap(c);
+    canvas_rgba8_t alias = {(uint8_t *)v.pixels, v.width, v.height, v.stride, v.capacity};
+    CHECK(canvas_read_pixels(c, 0, 0, &alias) == CANVAS_BAD_ARGUMENT);
+    CHECK(canvas_put_pixels(c, &alias, 0, 0, NULL) == CANVAS_BAD_ARGUMENT);
+    OK(canvas_reset(c, 3, 2)); OK(canvas_ack_damage(c));
+    draw2d_damage_t dirty = {1, 0, 3, 1};
+    OK(canvas_put_pixels(c, &src, -1, 1, &dirty));
+    pixel(c, 0, 1, 0x80008000); pixel(c, 1, 1, 0); pixel(c, 2, 1, 0);
+    OK(canvas_damage(c, &d)); CHECK(d.x0 == 0 && d.y0 == 1 && d.x1 == 2 && d.y1 == 2);
+    OK(canvas_ack_damage(c));
+    OK(canvas_put_pixels(c, &src, INT64_MIN, INT64_MAX, NULL));
+    dirty = (draw2d_damage_t){UINT32_MAX, 0, UINT32_MAX, UINT32_MAX};
+    OK(canvas_put_pixels(c, &src, 0, 0, &dirty));
+    OK(canvas_damage(c, &d)); CHECK(!d.x1);
+    OK(canvas_destroy(c)); CHECK(!o.live);
+    opts.max_draw_pixels = 1;
+    OK(canvas_create(&opts, 3, 2, &c));
+    CHECK(canvas_put_pixels(c, &src, 0, 0, NULL) == CANVAS_LIMIT); pixel(c, 0, 0, 0);
+    dirty = (draw2d_damage_t){0, 0, 1, 1};
+    OK(canvas_put_pixels(c, &src, 0, 0, &dirty)); pixel(c, 0, 0, 0xffff0000);
+    dst.capacity = sizeof(read);
+    CHECK(canvas_read_pixels(c, 0, 0, &dst) == CANVAS_LIMIT);
+    OK(canvas_destroy(c)); CHECK(!o.live);
+}
 int main(void)
 {
-    basics(); surfaces(); repeated_blends(); failures(); shared_owner();
+    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels();
     printf("Canvas core: %zu assertions passed (pixels, rounding, bounds, state, reset, refusal, ownership)\n", checks);
     return 0;
 }

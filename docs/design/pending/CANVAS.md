@@ -303,3 +303,30 @@ and moves `libpage`; a partial installation must therefore include the rebuilt
 `libpage.so` alongside the new paint library and updated SVG library. C2's
 frozen delivery must check the complete dependency cohort and prelink ranges,
 including libraries whose source code did not change.
+
+## C2 pixel-transfer checkpoint
+
+The native pixel interface reads straight RGBA8 into caller-owned storage and
+writes source-coordinate dirty rectangles by replacement, ignoring drawing
+state. Out-of-bitmap reads produce transparent black. Admission checks stride,
+capacity, overlap with the retained bitmap and work bounds before modifying
+output. Transfers allocate no native scratch; the caller owns readback storage.
+
+The ImageData binding keeps a traced Uint8ClampedArray in engine memory,
+retains a supplied array's identity and exposes read-only dimensions. Pixel
+consumers reacquire its byte view after converting arguments so a script that
+detaches the buffer during conversion cannot leave a stale pointer. The shared
+structured-clone implementation serializes its array as a graph child, keeping
+aliases with other references to that same array and buffer. This profile
+supports sRGB RGBA8; requests for the other recognized color/pixel formats are
+refused explicitly rather than labeled as supported.
+
+This checkpoint does not expose `getContext` or replace Yonder's Canvas
+stand-in. The remaining C2 work connects native contexts to element wrappers,
+consumes the shared mutation callback, adds the paint-only rendering path and
+validates the visible gallery. The callback is being implemented in
+custom-elements cut a; integrate its reviewed commit rather than copying the
+active mutation-core edits. Reset notification must remain allocation-free:
+record a pending reset in the callback, and apply it before the next Canvas
+state/pixel operation or paint reads the bitmap. Same-value assignments must
+reach this path even when the document version does not move.
