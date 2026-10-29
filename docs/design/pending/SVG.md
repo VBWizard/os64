@@ -487,10 +487,13 @@ report distinguishes supported passes/failures from unsupported-profile cases;
 rejecting a valid out-of-profile file is not a conformance pass.
 
 Keep `UNSUPPORTED`, malformed input, `LIMIT`, allocation failure, pending resource
-and cancellation separate. Optional-feature omission reports a diagnostic and
-partial capability; it must not masquerade as fully supported SVG. Legal invalid
-elements follow the specification's local error behavior; a resource-budget
-failure aborts the unpublished result. Count scene builds, rasterizations,
+and cancellation separate. The implemented profile refuses a root containing
+active unsupported graphics and publishes no partial pixels, as recorded in
+[SVG_YONDER.md](SVG_YONDER.md). Omitting unsupported visible subtrees with a
+partial-capability diagnostic is a proposed policy change awaiting a ruling;
+see the [integration review disposition](SVG_INTEGRATION_REVIEW.md#disposition-of-fables-architectural-review).
+Legal invalid elements follow the specification's local error behavior; a
+resource-budget failure aborts the unpublished result. Count scene builds, rasterizations,
 cache hits, peak bytes, work-limit refusals and elapsed time.
 
 ## Alternatives and reasons

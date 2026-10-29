@@ -114,3 +114,67 @@ contract. Canvas is not promised to be merely a thin wrapper: its mutable
 state, script API, pixel access and compositing semantics need design.
 A future SVG animation implementation should use the browser's shared
 frame scheduling rather than create a competing loop.
+
+
+## Disposition of Fable's architectural review
+
+2026-10-29. [Fable's review](SVG_INTEGRATION_FABLE.md) was checked against
+`12e091f2`. Its performance findings are accepted as follow-up work after
+integration; they do not require reopening the validated CSSOM repair.
+No renderer policy change is made by this disposition.
+
+1. **Retain preparation before moving work to a worker.** Accepted. Retain
+   bounded prepared scenes per inline root, and isolated cascades/scenes for
+   image view variants, above the existing value-keyed raster cache. An inline
+   validity contract needs document version, root identity, a cascade lifetime
+   or explicit epoch (a recyclable address alone is insufficient), viewport
+   and environment, scale, and inherited/initial paint inputs. Font or animated
+   inputs must join that contract when consumed. An immutable image document
+   still has viewport, dark-mode and reduced-motion variants. Retention needs
+   charged memory, eviction, teardown and allocation-failure tests; it cannot
+   turn temporary preparation into unbounded retained state. Measure scene and
+   cascade builds separately from raster-cache hits.
+2. **Share document reference lookup.** Accepted. Cache the base-policy check
+   by document version, and design a bounded document ID lookup shared by SVG
+   and DOM consumers. Preserve first-in-document-order behavior for duplicate
+   IDs, including a first match outside SVG, and exclude separate template
+   trees. Version invalidation with lazy rebuild is a simpler starting point
+   than updating an index on every DOM verb. It must remain correct after ID
+   edits, moves, removals, and base changes, and have a bounded fallback when
+   index allocation fails.
+3. **Unsupported visible elements.** The contradictory design wording is
+   corrected to describe the implemented refusal policy. The recommendation
+   for Chris's ruling is to omit unsupported visible element subtrees and
+   report partial capability, while retaining refusal for unsupported paint,
+   clip, mask or other effect semantics on supported artwork. Resource
+   definitions and referenced clip/paint content need their own treatment;
+   they cannot inherit a blanket skip rule. Omission of a known but
+   unimplemented SVG feature is a product fallback, not proof of conformance
+   to the rules for unknown elements. SVG 2 distinguishes rendered elements
+   from never-rendered resource elements and describes their geometry effects
+   in its [rendering model](https://www.w3.org/TR/SVG2/render.html).
+   This policy decision remains open; existing pixels and diagnostics are
+   unchanged.
+4. **Avoid scroll-dependent raster keys.** Accepted for inline SVG. Prefer a
+   stable full-box raster when it fits both cache admission and live render
+   headroom, then apply the paint clip while compositing. The 8,388,608-pixel
+   render cap permits 32 MiB of ARGB, while the raster cache has an 8 MiB
+   budget including entry costs. The render cap alone is therefore not an
+   admission rule: a full raster that cannot be retained may make scrolling
+   more expensive. Keep bounded clipped rendering for larger/admission-failed
+   cases. Test repeated partial scrolls, output equivalence and memory pressure.
+5. **Share computed SVG semantics.** Accepted direction, with a boundary
+   correction. CSSOM currently computes these values on demand; its 24 SVG
+   longhands are not stored as a typed SVG record in flow_style_t. The renderer
+   should not consume serialized CSSOM strings. Extract a shared typed
+   computation contract when the next common property is added, taking the
+   appropriate inheritance/instance and percentage-resolution context.
+   Presentation attributes already enter libgarb's cascade; leave them there.
+   Keep image documents usable without an HTML layout tree, and keep use
+   instance ancestry and SVG viewport/reference semantics in the adapter.
+
+After the policy ruling, the proposed performance order remains retention,
+scroll-stable raster admission, then shared reference lookup. Instrument each
+step and compare P5 wallpaper and sprite-page paints before and after. A
+worker remains a possible responsiveness improvement for unavoidable misses;
+it is not the remedy for recomputing unchanged inputs.
