@@ -5523,6 +5523,67 @@ static uint32_t *stand_in_shot(void) {
 }
 #include "test_yonder_svg_images.inc"
 
+static void svg_partial_window_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=64 height=64><rect width=64 height=64 fill='blue'/>"
+        "<text id=label>One</text><foreignObject width=64 height=64>Two</foreignObject></svg>", false);
+    g.page.diag = yonder_diag_new("https://fixture.test/partial-svg", 1, 0);
+    check(g.page.diag != NULL, "SVG partial: diagnostic record allocated");
+    uint32_t *cold = stand_in_shot(), *warm = stand_in_shot();
+    char record[4096];
+    yonder_diag_render(g.page.diag, record, sizeof(record));
+    check((cold[16*800+16]&0xffffff)==0xff && !os64_memcmp(cold,warm,800u*600u*4),
+          "SVG partial: supported inline pixels survive omission and cached repaint");
+    check(strstr(record,"MISSING svg unsupported drawing subtrees omitted (maximum per render) (2)") &&
+          !strstr(record,"FAILED svg"), "SVG partial: omission is counted as missing capability, not failed artwork");
+    check(yonder_svg_cache_stats(g.page.svg_cache).raster.hits > 0,
+          "SVG partial: partial output remains cacheable");
+    os64_free(cold); os64_free(warm);
+    // Changing only omitted content preserves the rendered-value cache entry.
+    check(os64_html_set_attr(g.page.way.doc,probe_id("label"),"filter","url(#missing)",13)==OS64_HTML_OK,
+          "SVG partial: omitted-node mutation succeeds");
+    check(script_rebuild(),"SVG partial: mutated model and layout rebuild together");
+    uint64_t before=yonder_svg_cache_stats(g.page.svg_cache).raster.hits;
+    // Updating the diagnostic badge lays out window chrome. This headless
+    // probe has no OS window; restore its explicit paint viewport.
+    g.view.bounds=(os64_gui_rect_t){0,0,800,600};
+    warm=stand_in_shot();
+    yonder_diag_render(g.page.diag, record, sizeof(record));
+    check((warm[16*800+16]&0xffffff)==0xff &&
+          yonder_svg_cache_stats(g.page.svg_cache).raster.hits==before+1 &&
+          strstr(record,"maximum per render) (2)"),
+          "SVG partial: fresh diagnostics survive a value-cache hit without repaint inflation");
+    os64_free(warm);
+    probe_drop();
+
+    const char *xml="<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
+        "<rect width='64' height='32' fill='blue'/><text>Label</text>"
+        "<image href='https://example.invalid/never-fetch.png'/></svg>";
+    picture_svg_arrive("<!doctype html><style>body{margin:0}img{display:block}</style>"
+                      "<img src=file:///svg-image.svg>",xml);
+    g.page.diag=yonder_diag_new("https://fixture.test/partial-image",2,0);
+    cold=stand_in_shot(); warm=stand_in_shot();
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check((cold[16*800+32]&0xffffff)==0xff && !os64_memcmp(cold,warm,800u*600u*4) && g.page.npics==1,
+          "SVG partial: image picture route retains blue pixels and no embedded picture job");
+    check(strstr(record,"MISSING svg image unsupported drawing subtrees omitted (maximum per render) (2)") &&
+          !strstr(record,"FAILED svg image"),"SVG partial: image route reports its own partial capability");
+    os64_free(cold); os64_free(warm);
+    probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=64 height=64><text>Omit</text><rect width=64 height=64 fill='blue' mask='url(#m)'/></svg>",false);
+    g.page.diag=yonder_diag_new("https://fixture.test/refused-svg",3,0);
+    cold=stand_in_shot();
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check((cold[16*800+16]&0xffffff)==0xffffff && strstr(record,"FAILED svg:") &&
+          !strstr(record,"unsupported drawing subtrees omitted"),
+          "SVG partial: unsupported effect refuses the root without a successful-omission report");
+    os64_free(cold);
+    probe_drop();
+}
+
 static void svg_cache_window_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -10417,6 +10478,7 @@ int main(void)
     stand_in_paint_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
+    svg_partial_window_cases();
     svg_cache_window_cases();
     svg_window_cases();
     picture_svg_window_cases();

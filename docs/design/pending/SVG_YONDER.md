@@ -82,7 +82,8 @@ plus [dashes and zero-length caps](SVG_STROKES.md) and
 Definitions, clip resources, uninstantiated symbols, metadata, titles, descriptions and style
 elements are omitted from drawing. [Linear gradients](SVG_GRADIENTS.md) supply fill and stroke paint.
 [Radial gradients](SVG_RADIAL.md) extend the same paint path.
-Other active element kinds refuse the SVG job. Text,
+Unsupported drawing element kinds are omitted with their subtrees and counted
+as missing capability; see [SVG_PARTIAL.md](SVG_PARTIAL.md). Text,
 patterns, images, markers, broader clip combinations, masks, filters, non-scaling
 strokes and animation remain follow-on work. External SVG images use the [Yonder picture route](SVG_IMAGES.md),
 with document ownership separate from libimage raster decoding. SVG-specific hit testing and DOM interfaces are
@@ -96,8 +97,11 @@ descendant explicitly inheriting a calc opacity is outside the adapter profile. 
 translate/rotate/scale properties are refused. Color interpolation is sRGB.
 Nonzero strokes that collapse below the backend grid and the native arc-coverage limits still apply.
 
-Active unsupported paints/elements and recognized unsupported presentation
-attributes refuse the job without publishing partial pixels. Yonder records
+Unsupported paints, recognized unsupported effects on supported elements, and
+unsupported referenced clip/paint contents refuse the job without publishing
+pixels. Omitted drawing subtrees instead produce successful supported pixels
+and a `MISSING svg` diagnostic (or `MISSING svg image` for image documents),
+counted as the maximum omissions in one successful render. Yonder records
 `FAILED svg` for render failures, including malformed inputs and admission
 refusals. CSS properties absent from garb remain governed by its skipped-style
 diagnostics; this is **not** a claim that every omitted SVG feature causes a

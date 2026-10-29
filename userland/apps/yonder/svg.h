@@ -29,6 +29,10 @@ typedef struct {
     uint32_t *pixels;
     size_t bytes;
     os64_gui_rect_t rect;
+    // Displayed unsupported drawing subtrees omitted from this successful
+    // render, counted per occurrence (including use instances), not per paint.
+    // Zero on failure; resources and deliberately inert content do not count.
+    uint32_t omitted_subtrees;
 } yonder_svg_pixels_t;
 svg_status_t yonder_svg_render(const os64_html_document_t *, const garb_cascade_t *,
                                const flow_box_t *, os64_gui_rect_t content, os64_gui_rect_t clip,

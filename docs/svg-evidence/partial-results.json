@@ -1,0 +1,48 @@
+{
+  "base": "194a0f12",
+  "change": "Omit unsupported SVG drawing subtrees while preserving supported artwork and reporting partial support",
+  "regression": {
+    "before": "Text sibling causes SVG_UNSUPPORTED and blanks supported artwork",
+    "after": "Supported pixels match the supported-only reference in inline and image routes"
+  },
+  "native_adapter_suite": "pass",
+  "sanitizers": [
+    "ASan",
+    "UBSan",
+    "LeakSanitizer"
+  ],
+  "inline_zoom_percent": [
+    25,
+    50,
+    100,
+    200,
+    400
+  ],
+  "partial_allocation_positions": 33,
+  "partial_cancellation_positions": 570,
+  "refusal_controls_both_routes": 5,
+  "window_checks": 11014,
+  "window_failures": 0,
+  "freestanding_build": "pass",
+  "qemu": {
+    "gallery": "pass",
+    "label_round_trip": "original boat pixels restored exactly",
+    "paint_round_trip": "pattern refused, solid displayed, pattern refused again",
+    "zoom_percent": [
+      25,
+      100,
+      400
+    ]
+  },
+  "delivery": {
+    "files": 41,
+    "unchanged_from_foreign_metadata": 37,
+    "changed_or_added": [
+      "bin/yonder",
+      "bin/libflow.so",
+      "pages/svg-show-goes-on.html",
+      "pages/svg-show-goes-on-postcard.svg"
+    ]
+  },
+  "hardware_acceptance": "pending"
+}

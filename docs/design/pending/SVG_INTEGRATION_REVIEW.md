@@ -121,7 +121,8 @@ frame scheduling rather than create a competing loop.
 2026-10-29. [Fable's review](SVG_INTEGRATION_FABLE.md) was checked against
 `12e091f2`. Its performance findings are accepted as follow-up work after
 integration; they do not require reopening the validated CSSOM repair.
-No renderer policy change is made by this disposition.
+The unsupported-element policy below was subsequently approved and implemented
+in [SVG_PARTIAL.md](SVG_PARTIAL.md); the performance work remains follow-up work.
 
 1. **Retain preparation before moving work to a worker.** Accepted. Retain
    bounded prepared scenes per inline root, and isolated cascades/scenes for
@@ -142,10 +143,8 @@ No renderer policy change is made by this disposition.
    than updating an index on every DOM verb. It must remain correct after ID
    edits, moves, removals, and base changes, and have a bounded fallback when
    index allocation fails.
-3. **Unsupported visible elements.** The contradictory design wording is
-   corrected to describe the implemented refusal policy. The recommendation
-   for Chris's ruling is to omit unsupported visible element subtrees and
-   report partial capability, while retaining refusal for unsupported paint,
+3. **Unsupported visible elements — approved.** Omit unsupported drawing
+   element subtrees and report partial capability, while retaining refusal for unsupported paint,
    clip, mask or other effect semantics on supported artwork. Resource
    definitions and referenced clip/paint content need their own treatment;
    they cannot inherit a blanket skip rule. Omission of a known but
@@ -153,8 +152,8 @@ No renderer policy change is made by this disposition.
    to the rules for unknown elements. SVG 2 distinguishes rendered elements
    from never-rendered resource elements and describes their geometry effects
    in its [rendering model](https://www.w3.org/TR/SVG2/render.html).
-   This policy decision remains open; existing pixels and diagnostics are
-   unchanged.
+   Chris approved this policy on 2026-10-29. The adapter implementation,
+   diagnostic semantics and regression evidence are in [SVG_PARTIAL.md](SVG_PARTIAL.md).
 4. **Avoid scroll-dependent raster keys.** Accepted for inline SVG. Prefer a
    stable full-box raster when it fits both cache admission and live render
    headroom, then apply the paint clip while compositing. The 8,388,608-pixel
@@ -173,7 +172,7 @@ No renderer policy change is made by this disposition.
    Keep image documents usable without an HTML layout tree, and keep use
    instance ancestry and SVG viewport/reference semantics in the adapter.
 
-After the policy ruling, the proposed performance order remains retention,
+The proposed performance order remains retention,
 scroll-stable raster admission, then shared reference lookup. Instrument each
 step and compare P5 wallpaper and sprite-page paints before and after. A
 worker remains a possible responsiveness improvement for unavoidable misses;

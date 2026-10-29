@@ -561,6 +561,7 @@ static void stroke_cases(const char *dir)
 #include "test_yonder_svg_gradients.inc"
 #include "test_yonder_svg_radial.inc"
 #include "test_yonder_svg_cache.inc"
+#include "test_yonder_svg_partial.inc"
 
 int main(int argc, char **argv)
 {
@@ -571,6 +572,8 @@ int main(int argc, char **argv)
     assert(os64_text_create(&o, &s_text) == OS64_FONT_OK);
     kEnv.text = s_text;
     size_t base = live;
+    partial_element_cases();
+    partial_element_contracts();
     svg_cache_adapter_contracts();
     clip_cases(argv[1]);
     bounds_cases(argv[1]);
