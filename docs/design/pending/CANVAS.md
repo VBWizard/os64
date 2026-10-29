@@ -296,3 +296,10 @@ zero-sized bitmaps, row padding/capacity, allocation refusals, reentrancy guards
 and repeated blending under ASan/UBSan/LeakSanitizer. SVG's native painter
 suite and before/after fixture comparison gate the arithmetic extraction.
 C2 adds the JavaScript contracts, ImageData and the first visible gallery.
+
+C1 adds `libdraw2d.so` and `libcanvas.so` to both filesystem image manifests.
+The library placement allocator assigns `libdraw2d` the former `libpage` slot
+and moves `libpage`; a partial installation must therefore include the rebuilt
+`libpage.so` alongside the new paint library and updated SVG library. C2's
+frozen delivery must check the complete dependency cohort and prelink ranges,
+including libraries whose source code did not change.
