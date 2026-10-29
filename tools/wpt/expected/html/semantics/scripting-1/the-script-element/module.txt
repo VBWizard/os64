@@ -109,6 +109,9 @@ top-level-await/sibling-imports-not-blocked.any.html	Async modules scheduling ta
 type.html	type="MODULE"
 type.html	type="Module"
 type.html	type="module"
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+dynamic-import/inline-event-handler.html	dynamic import should work when triggered from inline event handlers
 [excluded]
 [passing]
 charset-02.html	UTF-16 module script with UTF-16BE BOM
@@ -129,6 +132,7 @@ dynamic-import/dynamic-imports-script-error.html	import() must reject with diffe
 dynamic-import/dynamic-imports-script-error.html	import() must reject with the same error object for each import when there is a evaluation error
 dynamic-import/dynamic-imports-script-error.html	import()ing a module with an evaluation error must stop evaluation
 dynamic-import/dynamic-imports.html	Dynamic imports should resolve module.
+dynamic-import/inline-event-handler.html	dynamic import should work when triggered from inline event handlers
 dynamic-import/microtasks/basic.any.html	import() should not drain the microtask queue if it fails during specifier resolution
 dynamic-import/microtasks/basic.any.html	import() should not drain the microtask queue when loading an already loaded module
 dynamic-import/propagate-nonce-external-classic.html	Dynamically imported module should eval when imported from script w/ a valid nonce.

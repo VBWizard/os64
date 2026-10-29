@@ -76,6 +76,42 @@ labelable-elements.html	Check if the select element is a labelable element
 labelable-elements.html	Check if the textarea element is a labelable form-element
 labels-live-attribute-changes.html	The labels NodeList stays live when label associations change.
 labels-live-label-removal.html	A retained labels list updates when an explicit label's subtree is removed and reinserted
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a tabindex=""></a> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a tabindex=""></a> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a></a> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a></a> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio tabindex=""></audio> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio tabindex=""></audio> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio></audio> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio></audio> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <details></details> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <details></details> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div tabindex=""></div> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div tabindex=""></div> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div></div> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div></div> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img tabindex=""> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img tabindex=""> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden" tabindex=""> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden" tabindex=""> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden"> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden"> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object tabindex=""></object> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object tabindex=""></object> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object usemap=""></object> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object usemap=""></object> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object></object> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object></object> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <svg></svg> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <svg></svg> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video tabindex=""></video> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video tabindex=""></video> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video></video> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video></video> deeply nested under <label>
 [excluded]
 [passing]
 clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> as first child of <label>
@@ -120,6 +156,40 @@ clicking-noninteractive-labelable-content.html	labelable element <output></outpu
 clicking-noninteractive-labelable-content.html	labelable element <output></output> deeply nested under <label>
 clicking-noninteractive-labelable-content.html	labelable element <progress></progress> as first child of <label>
 clicking-noninteractive-labelable-content.html	labelable element <progress></progress> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a tabindex=""></a> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a tabindex=""></a> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a></a> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <a></a> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio tabindex=""></audio> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio tabindex=""></audio> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio></audio> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <audio></audio> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <details></details> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <details></details> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div tabindex=""></div> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div tabindex=""></div> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div></div> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <div></div> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img tabindex=""> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img tabindex=""> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <img> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden" tabindex=""> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden" tabindex=""> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden"> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <input type="hidden"> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object tabindex=""></object> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object tabindex=""></object> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object usemap=""></object> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object usemap=""></object> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object></object> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <object></object> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <svg></svg> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <svg></svg> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video tabindex=""></video> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video tabindex=""></video> deeply nested under <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video></video> as first child of <label>
+clicking-noninteractive-unlabelable-content.html	noninteractive unlabelable content <video></video> deeply nested under <label>
 disabled-labeled-control.html	A disabled checkbox input remains its explicit label's control
 disabled-labeled-control.html	A disabled checkbox input remains its implicit label's control
 disabled-labeled-control.html	A disabled text input remains its explicit label's control

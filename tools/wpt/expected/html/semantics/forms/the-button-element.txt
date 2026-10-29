@@ -20,6 +20,25 @@ button-validation.html	submit type attribute
 button-validationmessage.html	Forms
 button-validity.html	Forms
 button-willvalidate.html	Forms
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+button-click-submits.html	clicking a button by dispatching an event should not trigger a submit (form disconnected)
+button-click-submits.html	clicking a button by dispatching an event should trigger a submit (form connected)
+button-click-submits.html	clicking a button inside a disabled fieldset's legend *should* trigger submit
+button-click-submits.html	clicking a button that cancels the event should not trigger a submit
+button-click-submits.html	clicking a button with .click() should not trigger a submit (form disconnected)
+button-click-submits.html	clicking a button with .click() should trigger a submit (form connected)
+button-click-submits.html	clicking a disabled button (via disabled attribute) should not trigger submit
+button-click-submits.html	clicking the child of a button by dispatching a bubbling event should trigger a submit
+button-click-submits.html	clicking the child of a button by dispatching a non-bubbling event should not trigger submit
+button-click-submits.html	clicking the child of a button with .click() should trigger a submit
+button-click-submits.html	clicking the child of a disabled button with .click() should not trigger submit
+button-untrusted-key-event.html	Dispatching untrusted keypress events to button button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keypress events to reset button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keypress events to submit button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to button button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to reset button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to submit button should not cause click event
 [excluded]
 [passing]
 button-checkvalidity.html	Forms
@@ -29,6 +48,17 @@ button-click-resets-with-commandfor.html	clicking a reset button should trigger 
 button-click-submits-with-commandfor.html	clicking a button (explicit type=submit) SHOULD trigger a submit (with command and commandfor attribute)
 button-click-submits-with-commandfor.html	clicking a button (explicit type=submit) SHOULD trigger a submit (with command attribute)
 button-click-submits-with-commandfor.html	clicking a button (explicit type=submit) SHOULD trigger a submit (with commandfor attribute)
+button-click-submits.html	clicking a button by dispatching an event should not trigger a submit (form disconnected)
+button-click-submits.html	clicking a button by dispatching an event should trigger a submit (form connected)
+button-click-submits.html	clicking a button inside a disabled fieldset's legend *should* trigger submit
+button-click-submits.html	clicking a button that cancels the event should not trigger a submit
+button-click-submits.html	clicking a button with .click() should not trigger a submit (form disconnected)
+button-click-submits.html	clicking a button with .click() should trigger a submit (form connected)
+button-click-submits.html	clicking a disabled button (via disabled attribute) should not trigger submit
+button-click-submits.html	clicking the child of a button by dispatching a bubbling event should trigger a submit
+button-click-submits.html	clicking the child of a button by dispatching a non-bubbling event should not trigger submit
+button-click-submits.html	clicking the child of a button with .click() should trigger a submit
+button-click-submits.html	clicking the child of a disabled button with .click() should not trigger submit
 button-events.html	Anchor inside a button should be prevent button activation
 button-events.html	Innermost button should reset its form
 button-events.html	Innermost button should submit its form
@@ -44,6 +74,12 @@ button-type-enumerated-ascii-case-insensitive.html	keyword reset
 button-type-enumerated-ascii-case-insensitive.html	keyword submit
 button-type.html	a button's type should be submit by default
 button-type.html	a button's type should stay within the range of valid values
+button-untrusted-key-event.html	Dispatching untrusted keypress events to button button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keypress events to reset button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keypress events to submit button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to button button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to reset button should not cause click event
+button-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to submit button should not cause click event
 button-validation.html	button type attribute
 button-validation.html	historical menu type attribute
 button-validation.html	invalid type attribute

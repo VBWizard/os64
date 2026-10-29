@@ -3,8 +3,234 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh uievents --update
 # rewrites [passing].
 [required]
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Alt') reflects altKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('AltGraph') reflects modifierAltGraph in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('CapsLock') reflects modifierCapsLock in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Control') reflects ctrlKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Meta') reflects metaKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Shift') reflects shiftKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState() reports every modifier when all are set
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState() returns false for every modifier when none are set
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Alt') reflects altKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('AltGraph') reflects modifierAltGraph in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('CapsLock') reflects modifierCapsLock in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Control') reflects ctrlKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Meta') reflects metaKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Shift') reflects shiftKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState() reports every modifier when all are set
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState() returns false for every modifier when none are set
+constructors/inputevent-constructor.html	InputEvent constructor with an explicit inputType
+constructors/inputevent-constructor.html	InputEvent constructor without InputEventInit.
+constructors/inputevent-constructor.html	InputEvent construtor with InputEventInit where data is empty string
+constructors/inputevent-constructor.html	InputEvent construtor with InputEventInit where data is non empty string
+constructors/inputevent-constructor.html	InputEvent construtor with InputEventInit where data is null
+getModifierState.html	getModifierState Alt false
+getModifierState.html	getModifierState Alt true
+getModifierState.html	getModifierState Control false
+getModifierState.html	getModifierState Control true
+getModifierState.html	getModifierState false
+getModifierState.html	getModifierState invalid modifier
+getModifierState.html	getModifierState true
+idlharness.window.html	CompositionEvent interface object length
+idlharness.window.html	CompositionEvent interface object name
+idlharness.window.html	CompositionEvent interface: calling initCompositionEvent(DOMString, optional boolean, optional boolean, optional WindowProxy?, optional DOMString) on new CompositionEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	CompositionEvent interface: existence and properties of interface object
+idlharness.window.html	CompositionEvent interface: existence and properties of interface prototype object
+idlharness.window.html	CompositionEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	CompositionEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	CompositionEvent interface: new CompositionEvent("event") must inherit property "data" with the proper type
+idlharness.window.html	CompositionEvent interface: new CompositionEvent("event") must inherit property "initCompositionEvent(DOMString, optional boolean, optional boolean, optional WindowProxy?, optional DOMString)" with the proper type
+idlharness.window.html	CompositionEvent must be primary interface of new CompositionEvent("event")
+idlharness.window.html	FocusEvent interface object length
+idlharness.window.html	FocusEvent interface object name
+idlharness.window.html	FocusEvent interface: existence and properties of interface object
+idlharness.window.html	FocusEvent interface: existence and properties of interface prototype object
+idlharness.window.html	FocusEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	FocusEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	FocusEvent interface: new FocusEvent("event") must inherit property "relatedTarget" with the proper type
+idlharness.window.html	FocusEvent must be primary interface of new FocusEvent("event")
+idlharness.window.html	InputEvent interface object length
+idlharness.window.html	InputEvent interface object name
+idlharness.window.html	InputEvent interface: existence and properties of interface object
+idlharness.window.html	InputEvent interface: existence and properties of interface prototype object
+idlharness.window.html	InputEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	InputEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	InputEvent interface: new InputEvent("event") must inherit property "data" with the proper type
+idlharness.window.html	InputEvent interface: new InputEvent("event") must inherit property "inputType" with the proper type
+idlharness.window.html	InputEvent interface: new InputEvent("event") must inherit property "isComposing" with the proper type
+idlharness.window.html	InputEvent must be primary interface of new InputEvent("event")
+idlharness.window.html	KeyboardEvent interface object length
+idlharness.window.html	KeyboardEvent interface object name
+idlharness.window.html	KeyboardEvent interface: calling getModifierState(DOMString) on new KeyboardEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	KeyboardEvent interface: calling initKeyboardEvent(DOMString, optional boolean, optional boolean, optional Window?, optional DOMString, optional unsigned long, optional boolean, optional boolean, optional boolean, optional boolean) on new KeyboardEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_LEFT on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_LEFT on interface prototype object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_NUMPAD on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_NUMPAD on interface prototype object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_RIGHT on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_RIGHT on interface prototype object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_STANDARD on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_STANDARD on interface prototype object
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface object
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface prototype object
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_LEFT" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_NUMPAD" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_RIGHT" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_STANDARD" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "altKey" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "charCode" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "code" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "ctrlKey" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "getModifierState(DOMString)" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "initKeyboardEvent(DOMString, optional boolean, optional boolean, optional Window?, optional DOMString, optional unsigned long, optional boolean, optional boolean, optional boolean, optional boolean)" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "isComposing" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "key" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "keyCode" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "location" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "metaKey" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "repeat" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "shiftKey" with the proper type
+idlharness.window.html	KeyboardEvent must be primary interface of new KeyboardEvent("event")
+idlharness.window.html	Stringification of new CompositionEvent("event")
+idlharness.window.html	Stringification of new FocusEvent("event")
+idlharness.window.html	Stringification of new InputEvent("event")
+idlharness.window.html	Stringification of new KeyboardEvent("event")
+idlharness.window.html	Stringification of new UIEvent("event")
+idlharness.window.html	UIEvent interface object length
+idlharness.window.html	UIEvent interface object name
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new CompositionEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new FocusEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new InputEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new KeyboardEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new UIEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: existence and properties of interface object
+idlharness.window.html	UIEvent interface: existence and properties of interface prototype object
+idlharness.window.html	UIEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	UIEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent must be primary interface of new UIEvent("event")
+keyboard/keyboardevent-legacy.html	KeyboardEvent constructor should initialize legacy keyCode and charCode
+legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html	Checkbox state is unchanged before the synthetic click event is dispatched
+legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html	Test Description: MouseEvent: Default action is performed when a synthetic click event is dispatched on a checkbox element
+legacy/Event-subclasses-init.html	Call initCompositionEvent without parameters
+legacy/Event-subclasses-init.html	Call initKeyboardEvent without parameters
+legacy/Event-subclasses-init.html	Call initMouseEvent without parameters
+legacy/Event-subclasses-init.html	Call initUIEvent without parameters
 [excluded]
 [passing]
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Alt') reflects altKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('AltGraph') reflects modifierAltGraph in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('CapsLock') reflects modifierCapsLock in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Control') reflects ctrlKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Meta') reflects metaKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState('Shift') reflects shiftKey in isolation
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState() reports every modifier when all are set
+constructors/event-getmodifierstate.html	KeyboardEvent.getModifierState() returns false for every modifier when none are set
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Alt') reflects altKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('AltGraph') reflects modifierAltGraph in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('CapsLock') reflects modifierCapsLock in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Control') reflects ctrlKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Meta') reflects metaKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState('Shift') reflects shiftKey in isolation
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState() reports every modifier when all are set
+constructors/event-getmodifierstate.html	MouseEvent.getModifierState() returns false for every modifier when none are set
+constructors/inputevent-constructor.html	InputEvent constructor with an explicit inputType
+constructors/inputevent-constructor.html	InputEvent constructor without InputEventInit.
+constructors/inputevent-constructor.html	InputEvent construtor with InputEventInit where data is empty string
+constructors/inputevent-constructor.html	InputEvent construtor with InputEventInit where data is non empty string
+constructors/inputevent-constructor.html	InputEvent construtor with InputEventInit where data is null
+getModifierState.html	getModifierState Alt false
+getModifierState.html	getModifierState Alt true
+getModifierState.html	getModifierState Control false
+getModifierState.html	getModifierState Control true
+getModifierState.html	getModifierState false
+getModifierState.html	getModifierState invalid modifier
+getModifierState.html	getModifierState true
+idlharness.window.html	CompositionEvent interface object length
+idlharness.window.html	CompositionEvent interface object name
+idlharness.window.html	CompositionEvent interface: calling initCompositionEvent(DOMString, optional boolean, optional boolean, optional WindowProxy?, optional DOMString) on new CompositionEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	CompositionEvent interface: existence and properties of interface object
+idlharness.window.html	CompositionEvent interface: existence and properties of interface prototype object
+idlharness.window.html	CompositionEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	CompositionEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	CompositionEvent interface: new CompositionEvent("event") must inherit property "data" with the proper type
+idlharness.window.html	CompositionEvent interface: new CompositionEvent("event") must inherit property "initCompositionEvent(DOMString, optional boolean, optional boolean, optional WindowProxy?, optional DOMString)" with the proper type
+idlharness.window.html	CompositionEvent must be primary interface of new CompositionEvent("event")
+idlharness.window.html	FocusEvent interface object length
+idlharness.window.html	FocusEvent interface object name
+idlharness.window.html	FocusEvent interface: existence and properties of interface object
+idlharness.window.html	FocusEvent interface: existence and properties of interface prototype object
+idlharness.window.html	FocusEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	FocusEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	FocusEvent interface: new FocusEvent("event") must inherit property "relatedTarget" with the proper type
+idlharness.window.html	FocusEvent must be primary interface of new FocusEvent("event")
+idlharness.window.html	InputEvent interface object length
+idlharness.window.html	InputEvent interface object name
+idlharness.window.html	InputEvent interface: existence and properties of interface object
+idlharness.window.html	InputEvent interface: existence and properties of interface prototype object
+idlharness.window.html	InputEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	InputEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	InputEvent interface: new InputEvent("event") must inherit property "data" with the proper type
+idlharness.window.html	InputEvent interface: new InputEvent("event") must inherit property "inputType" with the proper type
+idlharness.window.html	InputEvent interface: new InputEvent("event") must inherit property "isComposing" with the proper type
+idlharness.window.html	InputEvent must be primary interface of new InputEvent("event")
+idlharness.window.html	KeyboardEvent interface object length
+idlharness.window.html	KeyboardEvent interface object name
+idlharness.window.html	KeyboardEvent interface: calling getModifierState(DOMString) on new KeyboardEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	KeyboardEvent interface: calling initKeyboardEvent(DOMString, optional boolean, optional boolean, optional Window?, optional DOMString, optional unsigned long, optional boolean, optional boolean, optional boolean, optional boolean) on new KeyboardEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_LEFT on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_LEFT on interface prototype object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_NUMPAD on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_NUMPAD on interface prototype object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_RIGHT on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_RIGHT on interface prototype object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_STANDARD on interface object
+idlharness.window.html	KeyboardEvent interface: constant DOM_KEY_LOCATION_STANDARD on interface prototype object
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface object
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface prototype object
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	KeyboardEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_LEFT" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_NUMPAD" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_RIGHT" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "DOM_KEY_LOCATION_STANDARD" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "altKey" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "charCode" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "code" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "ctrlKey" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "getModifierState(DOMString)" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "initKeyboardEvent(DOMString, optional boolean, optional boolean, optional Window?, optional DOMString, optional unsigned long, optional boolean, optional boolean, optional boolean, optional boolean)" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "isComposing" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "key" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "keyCode" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "location" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "metaKey" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "repeat" with the proper type
+idlharness.window.html	KeyboardEvent interface: new KeyboardEvent("event") must inherit property "shiftKey" with the proper type
+idlharness.window.html	KeyboardEvent must be primary interface of new KeyboardEvent("event")
 idlharness.window.html	Partial dictionary KeyboardEventInit: member names are unique
 idlharness.window.html	Partial dictionary KeyboardEventInit: original dictionary defined
 idlharness.window.html	Partial dictionary UIEventInit: member names are unique
@@ -20,6 +246,43 @@ idlharness.window.html	Partial interface UIEvent: original interface defined
 idlharness.window.html	Partial interface UIEvent[2]: member names are unique
 idlharness.window.html	Partial interface UIEvent[2]: original interface defined
 idlharness.window.html	Partial interface Window: member names are unique
+idlharness.window.html	Stringification of new CompositionEvent("event")
+idlharness.window.html	Stringification of new FocusEvent("event")
+idlharness.window.html	Stringification of new InputEvent("event")
+idlharness.window.html	Stringification of new KeyboardEvent("event")
+idlharness.window.html	Stringification of new UIEvent("event")
+idlharness.window.html	UIEvent interface object length
+idlharness.window.html	UIEvent interface object name
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new CompositionEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new FocusEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new InputEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new KeyboardEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: calling initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long) on new UIEvent("event") with too few arguments must throw TypeError
+idlharness.window.html	UIEvent interface: existence and properties of interface object
+idlharness.window.html	UIEvent interface: existence and properties of interface prototype object
+idlharness.window.html	UIEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	UIEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new CompositionEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new FocusEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new InputEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new KeyboardEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "detail" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "initUIEvent(DOMString, optional boolean, optional boolean, optional Window?, optional long)" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "view" with the proper type
+idlharness.window.html	UIEvent interface: new UIEvent("event") must inherit property "which" with the proper type
+idlharness.window.html	UIEvent must be primary interface of new UIEvent("event")
 idlharness.window.html	Window includes AnimationFrameProvider: member names are unique
 idlharness.window.html	Window includes GlobalEventHandlers: member names are unique
 idlharness.window.html	Window includes WindowEventHandlers: member names are unique
@@ -28,9 +291,16 @@ idlharness.window.html	Window includes WindowOrWorkerGlobalScope: member names a
 idlharness.window.html	Window includes WindowSessionStorage: member names are unique
 idlharness.window.html	idl_test setup
 idlharness.window.html	idl_test validation
+keyboard/keyboardevent-legacy.html	KeyboardEvent constructor should initialize legacy keyCode and charCode
+legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html	Checkbox state is unchanged before the synthetic click event is dispatched
+legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html	Test Description: MouseEvent: Default action is performed when a synthetic click event is dispatched on a checkbox element
 legacy-domevents-tests/approved/stopImmediatePropagation.effect.html	Test Description: stopImmediatePropagation() prevents other event listeners from being triggered and, unlike Event.stopPropagation(), its effect must be immediate. Once it has been called, further calls to this method have no additional effect.
 legacy-domevents-tests/approved/stopPropagation.deferred.effect.html	Test Description: stopPropagation() prevents other event listeners from being triggered but its effect must be deferred until all event listeners attached on the Event.currentTarget have been triggered.
 legacy-domevents-tests/submissions/Microsoft/converted/EventListener.dispatch.new.event.html	Test Description: Implementations of the DOM event model must be reentrant. Event listeners may perform actions that cause additional events to be dispatched. Such events are handled in a synchronous manner, the event propagation that causes the event listener to be triggered must resume only after the event dispatch of the new event is completed.
+legacy/Event-subclasses-init.html	Call initCompositionEvent without parameters
+legacy/Event-subclasses-init.html	Call initKeyboardEvent without parameters
+legacy/Event-subclasses-init.html	Call initMouseEvent without parameters
+legacy/Event-subclasses-init.html	Call initUIEvent without parameters
 mouse/synthetic-mouse-enter-leave-over-out-button-state-after-target-removed.tentative.html?buttonType=LEFT&button=0&buttons=1	Setup event listeners and wait for load
 mouse/synthetic-mouse-enter-leave-over-out-button-state-after-target-removed.tentative.html?buttonType=MIDDLE&button=1&buttons=4	Setup event listeners and wait for load
 textInput/api.html	initTextEvent() no arguments

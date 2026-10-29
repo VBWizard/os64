@@ -902,7 +902,8 @@ mutants = [
     ('view-any-object', EVENT_C,
      '    if (JS_IsObject(value) && JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(dom->window->value))\n'
      '        return JS_DupValue(ctx, value);\n    return JS_ThrowTypeError(ctx, "A view',
-     '    if (JS_IsObject(value))\n        return JS_DupValue(ctx, value);\n    return JS_ThrowTypeError(ctx, "A view', (DOM,)),
+     '    if (JS_IsObject(value) && (JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(dom->window->value) || true))\n'
+     '        return JS_DupValue(ctx, value);\n    return JS_ThrowTypeError(ctx, "A view', (DOM,)),
     ('related-any-value', EVENT_C, '    if (!target) return JS_ThrowTypeError(ctx, "A relatedTarget',
      '    if (!target && false) return JS_ThrowTypeError(ctx, "A relatedTarget', (DOM,)),
     ('submitter-any-element', EVENT_C,

@@ -831,6 +831,56 @@ time.html	stepUp step value empty on default step value
 time.html	stepUp stop because it exceeds the maximum value
 time.html	stop at border on stepDown
 time.html	stop at border on stepUp
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+checkable-active-space-key-untrusted-event.html	Space key shouldn't active the checkbox when space key press is emulated by untrusted events
+checkable-active-space-key-untrusted-event.html	Space key shouldn't active the radio when space key press is emulated by untrusted events
+checkbox-click-events.html	a checkbox input emits click, input, change events in order after dispatching click event
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input button should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input checkbox should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input color should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input date should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input datetime-local should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input email should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input file should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input hidden should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input image should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input month should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input number should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input password should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input radio should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input range should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input reset should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input search should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input submit should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input tel should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input text should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input time should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input url should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input week should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input button should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input checkbox should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input color should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input date should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input datetime-local should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input email should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input file should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input hidden should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input image should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input month should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input number should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input password should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input radio should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input range should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input reset should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input search should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input submit should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input tel should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input text should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input time should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input url should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input week should not cause submission, click, change, input, or focus events
+radio-click-events.html	radio input emits click, input, change events in order after dispatching click event
 [excluded]
 [passing]
 button.html	clicking on button should not change its indeterminate IDL attribute
@@ -839,6 +889,9 @@ button.html	clicking on button should not submit a form
 button.html	clicking on button should not unchecked radio buttons
 button.html	the element is barred from constraint validation
 checkable-active-onblur-with-click.html	Wait for load
+checkable-active-space-key-untrusted-event.html	Space key shouldn't active the checkbox when space key press is emulated by untrusted events
+checkable-active-space-key-untrusted-event.html	Space key shouldn't active the radio when space key press is emulated by untrusted events
+checkbox-click-events.html	a checkbox input emits click, input, change events in order after dispatching click event
 checkbox-click-events.html	a checkbox input emits click, input, change events in order after synthetic click
 checkbox-click-events.html	checkbox input respects cancel behavior on synthetic clicks
 checkbox-click-events.html	clicking and preventDefaulting a checkbox causes the checkbox to be checked during the click handler but reverted
@@ -1156,6 +1209,50 @@ input-type-checkbox.html	default checkbox has no checkedness state
 input-type-checkbox.html	default/on: on getting, if the element has a value attribute, it must return that attribute's value; otherwise, it must return the string 'on'
 input-type-checkbox.html	on getting, if the element has a value attribute, it must return that attribute's value
 input-type-checkbox.html	on setting, a checkbox's indeterminate state must be set to the new value and returns the last value it was set to
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input button should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input checkbox should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input color should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input date should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input datetime-local should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input email should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input file should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input hidden should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input image should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input month should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input number should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input password should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input radio should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input range should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input reset should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input search should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input submit should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input tel should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input text should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input time should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input url should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keypress events to input week should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input button should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input checkbox should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input color should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input date should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input datetime-local should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input email should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input file should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input hidden should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input image should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input month should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input number should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input password should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input radio should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input range should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input reset should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input search should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input submit should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input tel should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input text should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input time should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input url should not cause submission, click, change, input, or focus events
+input-untrusted-key-event.html	Dispatching untrusted keyup/keydown events to input week should not cause submission, click, change, input, or focus events
 input-validationmessage.html	Forms
 input-validity.html	Forms
 input-value-dirty-flag.html	Input checked/defaultChecked dirty checkedness semantics
@@ -1352,6 +1449,7 @@ password.html	Value sanitization algorithm should strip line breaks for password
 password.html	sanitization algorithm doesn't strip leading and trailing whitespaces
 password.html	sanitization algorithm strips line breaks
 radio-click-events.html	checked radio input emits only click event on click 
+radio-click-events.html	radio input emits click, input, change events in order after dispatching click event
 radio-click-events.html	radio input emits click, input, change events in order after synthetic click
 radio-click-events.html	radio input synthetic click respects cancelling behaviour
 radio-disconnected-group-owner.html	Appending input radio input into a disconnect form should update the other radio inputs in the same radio group.
