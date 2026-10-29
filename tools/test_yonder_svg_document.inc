@@ -145,6 +145,51 @@ static bool image_cancel(void *opaque)
     ImageCancel *c = opaque;
     return ++c->polls == c->stop;
 }
+static void document_foreign_metadata(void)
+{
+    const char *foreign[] = {
+        "<e:namedview xmlns:e='http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd' "
+        "pagecolor='#fff'/>",
+        "<rect xmlns='urn:editor' style='transform-origin:50% 50%'>"
+        "<path xmlns='http://www.w3.org/2000/svg' d='malformed'/></rect>",
+        "<foreign xmlns=''><rect xmlns='http://www.w3.org/2000/svg' "
+        "width='128' height='128' fill='red'/></foreign>",
+    };
+    const char *contexts[] = {
+        "%s<rect x='16' y='16' width='64' height='48' fill='blue'/>",
+        "<rect x='16' y='16' width='64' height='48' fill='blue'/>%s",
+        "<clipPath id='c'>%s<rect x='16' y='16' width='64' height='48'/></clipPath>"
+        "<rect width='128' height='128' fill='blue' clip-path='url(#c)'/>",
+        "<linearGradient id='g'>%s<stop stop-color='blue'/></linearGradient>"
+        "<rect x='16' y='16' width='64' height='48' fill='url(#g)'/>",
+        "<linearGradient id='g'><stop stop-color='blue'/>%s</linearGradient>"
+        "<rect x='16' y='16' width='64' height='48' fill='url(#g)'/>",
+    };
+    size_t baseline = live;
+    SvgLedger ledger = {.cap = 64 << 20};
+    os64_geometry_memory_t memory = {&ledger, svg_alloc_test, svg_free_test};
+    for (size_t i = 0; i < sizeof(foreign) / sizeof(foreign[0]); ++i)
+        for (size_t j = 0; j < sizeof(contexts) / sizeof(contexts[0]); ++j) {
+            char body[2048], xml[2304];
+            snprintf(body, sizeof(body), contexts[j], foreign[i]);
+            snprintf(xml, sizeof(xml), "<svg xmlns='http://www.w3.org/2000/svg'>%s</svg>", body);
+            yonder_svg_document_t *d = NULL;
+            assert(yonder_svg_document_parse(xml, strlen(xml), NULL, NULL, &d, NULL) == SVG_OK);
+            yonder_svg_pixels_t p;
+            svg_status_t status = image_draw(d, &ledger, &p);
+            if (status != SVG_OK)
+                fprintf(stderr, "foreign metadata %zu context %zu: %d\n", i, j, status);
+            assert(status == SVG_OK);
+            for (int y = 0; y < 128; ++y)
+                for (int x = 0; x < 128; ++x)
+                    assert(pixel(&p, x, y) ==
+                           (x >= 16 && x < 80 && y >= 16 && y < 64 ? 0xff0000ff : 0));
+            yonder_svg_pixels_free(&memory, &p);
+            yonder_svg_document_free(d);
+            assert(live == baseline && !ledger.live);
+        }
+    puts("SVG foreign metadata: 15 scene, clip and gradient contexts preserve artwork");
+}
 static void document_inert_clips(void)
 {
     const char *names[] = {"script", "animate", "animateMotion", "animateTransform", "set", "discard"};
@@ -188,7 +233,7 @@ static void document_inert_clips(void)
             assert(live == baseline && !ledger.live);
         }
     }
-    const char *refused[] = {"<set xmlns='urn:foreign'/>", "<Set/>", "<rect width='8' height='8'/>"};
+    const char *refused[] = {"<foreignObject/>", "<Set/>", "<rect width='8' height='8'/>"};
     for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
         char source[1024];
         snprintf(source, sizeof(source),
@@ -205,6 +250,7 @@ static void document_inert_clips(void)
 }
 static void document_contracts(void)
 {
+    document_foreign_metadata();
     document_inert_clips();
     const char *xml = "<s:svg xmlns:s='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
                       "<s:style>:root{color:blue} rect{fill:currentColor}</s:style>"
@@ -304,7 +350,7 @@ static void document_contracts(void)
            !d);
     // Namespace identity and case are independent of the qualified spelling.
     const char *refused[] = {"<RECT width='10' height='10'/>",
-                             "<rect xmlns='urn:foreign' width='10' height='10'/>",
+                             "<foreignObject/>",
                              "<rect width='10' height='10' style='transform-origin:50% 50%'/>",
                              "<image href='https://example.invalid/image.png'/>"};
     for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
@@ -373,8 +419,71 @@ static void document_contracts(void)
            parse_allocations, cascade_allocations, render_allocations, parse_polls, render_polls);
 }
 
+static void image_fixed_dimension_contracts(void)
+{
+    // A bottom-right mark must move with the image, rather than be cropped
+    // at its original coordinates when the host gives it a smaller box.
+    static const struct {
+        const char *attrs;
+        int x, y, right, bottom;
+    } cases[] = {
+        {"width='120' height='60'", 40, 40, 80, 80},
+        {"width='120'", 40, 30, 80, 60},
+        {"height='60'", 60, 40, 80, 80},
+        {"", 60, 30, 80, 60},
+        {"width='100%' height='100%'", 60, 30, 80, 60},
+        {"width='120' height='60' preserveAspectRatio='xMidYMid meet'", 40, 40, 80, 80},
+        {"width='120' height='60' viewBox='0 0 120 60'", 40, 40, 80, 60},
+        {"width='1.25in' height='45pt'", 40, 40, 80, 80},
+        {"width='120' height='60' transform='translate(12)'", 52, 40, 80, 80},
+    };
+    size_t baseline = live;
+    SvgLedger ledger = {.cap = 64 << 20};
+    os64_geometry_memory_t memory = {&ledger, svg_alloc_test, svg_free_test};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char xml[1024];
+        snprintf(xml, sizeof(xml), "<svg xmlns='http://www.w3.org/2000/svg' %s>"
+                 "<style>rect{fill:red}@media(min-width:100px){rect{fill:blue}}</style>"
+                 "<rect x='60' y='30' width='60' height='30'/></svg>", cases[i].attrs);
+        yonder_svg_document_t *d = NULL;
+        assert(yonder_svg_document_parse(xml, strlen(xml), NULL, NULL, &d, NULL) == SVG_OK);
+        const uint32_t extents[] = {20, 80, 320};
+        for (size_t z = 0; z < sizeof(extents) / sizeof(extents[0]); ++z) {
+            uint32_t extent = extents[z];
+            yonder_svg_image_view_t view = {.width = 80, .height = 80,
+                .pixel_width = extent, .pixel_height = extent};
+            yonder_svg_pixels_t p;
+            assert(yonder_svg_document_render(d, &view, &memory,
+                       os64_freetype_geometry_v1(), &p) == SVG_OK);
+            for (int y = 0; y < p.rect.h; ++y)
+                for (int x = 0; x < p.rect.w; ++x) {
+                    double left = cases[i].x * extent / 80.0;
+                    double top = cases[i].y * extent / 80.0;
+                    double right = cases[i].right * extent / 80.0;
+                    double bottom = cases[i].bottom * extent / 80.0;
+                    // At 25%, fractional edges have antialias coverage;
+                    // the interior and exterior still have exact colours.
+                    if (fabs(x + .5 - left) < .5 || fabs(x + .5 - right) < .5 ||
+                        fabs(y + .5 - top) < .5 || fabs(y + .5 - bottom) < .5)
+                        continue;
+                    bool inside = x + .5 >= left && x + .5 < right &&
+                        y + .5 >= top && y + .5 < bottom;
+                    uint32_t want = inside ? 0xffff0000 : 0;
+                    if (pixel(&p, x, y) != want)
+                        fprintf(stderr, "image fixed dimensions case %zu extent %u at %d,%d\n",
+                                i, extent, x, y);
+                    assert(pixel(&p, x, y) == want);
+                }
+            pixels_free(&ledger, &p);
+        }
+        yonder_svg_document_free(d);
+        assert(live == baseline && !ledger.live);
+    }
+    puts("SVG image fixed dimensions: complete bounds, per-axis scaling, units, viewBox and media pass");
+}
 static void image_route_contracts(const char *directory)
 {
+    image_fixed_dimension_contracts();
     static const struct { const char *attrs, *body; uint32_t w, h; } sizes[] = {
         {"width='80' height='40'", "", 80, 40},
         {"viewBox='0 0 60 30'", "", 300, 150},

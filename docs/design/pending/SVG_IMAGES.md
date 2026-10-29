@@ -56,6 +56,14 @@ media-query width. Thus the same image remains vector-rendered at 25% and
 400%, and each differently sized use receives its own viewport. The image's
 own viewBox/preserveAspectRatio operates inside that viewport.
 
+Without a `viewBox`, positive absolute root dimensions define the drawing
+space on their respective axes. That space scales into the host object
+rectangle; an unspecified or percentage dimension retains the host extent.
+The SVG cascade's media viewport remains the host object size. Percentage
+geometry uses the drawing space; root transforms and root viewport clipping
+use the host viewport outside that content mapping. This avoids cropping a
+fixed-size icon when CSS displays it smaller.
+
 Rasterization is synchronous on the window, serialized with document size
 queries and teardown. The output uses the existing 64 MiB geometry/pixel
 ledger and is released after compositing/tiling. Unsupported or over-budget
