@@ -2,8 +2,9 @@
 
 C2 connects the retained 2D bitmap to libdom and Yonder. The gallery is
 `tools/pages/canvas-pixels.html`; enable Scripts and Modern Web.
-P5 validation is pending. `c2-bundle.sha256` identifies the frozen cohort
-used in QEMU and prepared for hardware testing.
+P5 validation passed: all four gallery interactions work at every tested zoom
+from 25% through 400%. `c2-bundle.sha256` identifies the frozen cohort used
+in QEMU and on the P5.
 
 ## Automated checks
 
@@ -48,5 +49,6 @@ page/screen-coordinate error in damage invalidation is covered by a host
 regression and the final scrolled interaction checks.
 
 At 25% all four cards remain visible; at 400% the enlarged retained mosaic
-paints correctly within the scrolled viewport. Hardware zoom testing remains
-part of the P5 handoff.
+paints correctly within the scrolled viewport. The P5 hardware check also
+passed all four samples at every zoom, including repeated rapid palette
+switches.

@@ -381,3 +381,12 @@ pixel-only updates keep the same layout tree, overlapping content remains
 painted above the canvas, and simultaneous CSS/pixel changes use fresh boxes.
 Pinned upstream expectations under `tools/wpt/expected/html/canvas/element/`
 record both this profile's passes and the broader families awaiting C3–C6.
+
+## Integration workflow
+
+C1's reusable core is on `userland`. C2 connects Canvas to Yonder and targets
+`canvas-integration`, initially based on `userland` after custom-elements
+cut a (#403). Subsequent Canvas slices target that integration branch or stack
+on an unmerged Canvas slice. Their review merges accumulate there; promotion
+to `userland` is a separate reviewed integration step. Incorporate concurrent
+Yonder changes explicitly and repeat affected checks before that promotion.
