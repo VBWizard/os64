@@ -10,7 +10,7 @@
  * not a bitmap quota. The aligned header preserves geometry's allocator ABI. */
 #define CANVAS_PAGE_BYTES ((size_t)128 * 1024 * 1024)
 typedef union { max_align_t alignment; size_t bytes; } CanvasAllocation;
-static JSClassID canvas_slot;
+static JSClassID canvas_slot, gradient_slot;
 os64_geometry_status_t d_canvas_allocate(void *opaque, size_t size, void **out)
 {
     os64_dom_t *dom = opaque;
@@ -79,6 +79,8 @@ void d_canvas_free(DValue *e)
 {
     if (e->canvas) canvas_destroy(e->canvas);
     e->canvas = NULL;
+    canvas_gradient_release(e->canvas_gradient);
+    e->canvas_gradient = NULL;
 }
 JSValue d_canvas_result(JSContext *ctx, canvas_status_t status)
 {
@@ -175,6 +177,59 @@ static int color(JSContext *ctx, JSValueConst value, uint32_t *out, bool *curren
     if (refused) { d_error(ctx, "QuotaExceededError", "Canvas color parse refused"); return -1; }
     return valid;
 }
+static JSValue gradient_method(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
+{
+    os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);
+    if(!dom)return JS_EXCEPTION;
+    if(magic==3) {
+        DValue *g=JS_GetOpaque(self,dom->gradient_class);
+        if(!g||g->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasGradient");
+        if(argc<2)return JS_ThrowTypeError(ctx,"addColorStop requires offset and color");
+        double offset;if(JS_ToFloat64(ctx,&offset,argv[0])<0)return JS_EXCEPTION;
+        if(!isfinite(offset))return JS_ThrowTypeError(ctx,"Gradient offset must be finite");
+        /* WebIDL converts both arguments before the range check. */
+        size_t n;const char *string=JS_ToCStringLen(ctx,&n,argv[1]);if(!string)return JS_EXCEPTION;
+        JSValue value=JS_NewStringLen(ctx,string,n);JS_FreeCString(ctx,string);
+        if(JS_IsException(value))return value;
+        if(offset<0||offset>1){JS_FreeValue(ctx,value);return d_error(ctx,"IndexSizeError","Gradient offset is outside [0,1]");}
+        uint32_t argb;bool current;double alpha;int valid=color(ctx,value,&argb,&current,&alpha);JS_FreeValue(ctx,value);
+        if(valid<0)return JS_EXCEPTION;
+        if(!valid)return d_error(ctx,"SyntaxError","Invalid gradient color");
+        return d_canvas_result(ctx,canvas_gradient_add_stop(g->canvas_gradient,offset,argb));
+    }
+    DValue *e=JS_GetOpaque(self,dom->canvas_class);
+    if(!e||e->dom!=dom)return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
+    unsigned count=magic==0?4:magic==1?6:3;
+    if(argc<(int)count)return JS_ThrowTypeError(ctx,"Gradient requires coordinates");
+    double v[6];for(unsigned i=0;i<count;++i) {
+        if(JS_ToFloat64(ctx,&v[i],argv[i])<0)return JS_EXCEPTION;
+        if(!isfinite(v[i]))return JS_ThrowTypeError(ctx,"Gradient coordinates must be finite");
+    }
+    if(magic==1&&(v[2]<0||v[5]<0))return d_error(ctx,"IndexSizeError","Gradient radius is negative");
+    canvas_gradient_t *gradient=NULL;
+    canvas_status_t status=canvas_gradient_create((os64_geometry_memory_t){dom,d_canvas_allocate,d_canvas_release},magic,v,&gradient);
+    if(status!=CANVAS_OK)return d_canvas_result(ctx,status);
+    JSValue object=JS_NewObjectClass(ctx,dom->gradient_class);
+    if(JS_IsException(object)){canvas_gradient_release(gradient);return object;}
+    DValue *held=d_retain(dom,ctx,object);
+    if(!held){canvas_gradient_release(gradient);return JS_EXCEPTION;}
+    held->dom=dom;held->canvas_gradient=gradient;JS_SetOpaque(object,held);
+    return JS_DupValue(ctx,object);
+}
+static int gradients_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,JSValueConst context)
+{
+    dom->gradient_class=os64_js_class_id(&gradient_slot);
+    const JSClassDef definition={.class_name="CanvasGradient"};
+    if(JS_NewClass(dom->engine,dom->gradient_class,&definition)<0)return -1;
+    JSValue proto=JS_NewObject(ctx);if(!d_retain(dom,ctx,proto))return -1;
+    JS_SetClassProto(ctx,dom->gradient_class,JS_DupValue(ctx,proto));
+    JSValue constructor=d_interface_new(ctx,"CanvasGradient",0,NULL,proto,JS_UNDEFINED);
+    if(JS_IsException(constructor)||JS_DefinePropertyValueStr(ctx,global,"CanvasGradient",constructor,JS_PROP_WRITABLE|JS_PROP_CONFIGURABLE)<0)return -1;
+    if(d_method_named(dom,ctx,proto,"addColorStop",gradient_method,2,3)<0)return -1;
+    const char *names[]={"createLinearGradient","createRadialGradient","createConicGradient"};
+    for(unsigned i=0;i<3;++i)if(d_method_named(dom,ctx,context,names[i],gradient_method,i==0?4:i==1?6:3,i)<0)return -1;
+    return 0;
+}
 enum { C_CANVAS, C_FILL, C_ALPHA, C_SAVE, C_RESTORE, C_FILL_RECT, C_CLEAR_RECT,
        C_CREATE_IMAGE, C_GET_IMAGE, C_PUT_IMAGE, C_LOST, C_RESET, C_STROKE };
 static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
@@ -190,7 +245,13 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     if (magic == C_FILL || magic == C_STROKE || magic == C_ALPHA) {
         uint32_t fill = 0; double alpha = 1;
         if (set) {
-            if (magic == C_FILL || magic == C_STROKE) { bool current = false;
+            if (magic == C_FILL || magic == C_STROKE) {
+                DValue *gradient=argc?JS_GetOpaque(argv[0],dom->gradient_class):NULL;
+                if(gradient&&gradient->dom==dom) {
+                    d_canvas_sync(e);
+                    return e->canvas?d_canvas_result(ctx,canvas_set_gradient(e->canvas,gradient->canvas_gradient,magic==C_STROKE)):JS_UNDEFINED;
+                }
+                bool current = false;
                 int ok = color(ctx, argc ? argv[0] : JS_UNDEFINED, &fill, &current, &alpha);
                 if (ok > 0 && current) {
                     JSValue resolved = d_computed_color(dom, ctx, e->node);
@@ -209,6 +270,9 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         canvas_state_t state = {.fill_argb=0xff000000,.global_alpha=1,.fill_alpha=1, .stroke_argb=0xff000000,.stroke_alpha=1};
         if (e->canvas) canvas_state(e->canvas, &state);
         if (magic == C_ALPHA) return JS_NewFloat64(ctx, state.global_alpha);
+        canvas_gradient_t *gradient=magic==C_STROKE?state.stroke_gradient:state.fill_gradient;
+        if(gradient)for(DValue *held=dom->values;held;held=held->next)
+            if(held->canvas_gradient==gradient)return JS_DupValue(ctx,held->value);
         char text[80]; uint32_t p = magic == C_STROKE ? state.stroke_argb : state.fill_argb;
         double paint_alpha = magic == C_STROKE ? state.stroke_alpha : state.fill_alpha;
         if (paint_alpha == 1) os64_snprintf(text, sizeof(text), "#%06x", p & 0xffffff);
@@ -301,7 +365,9 @@ int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (d_accessor(dom, ctx, prototype, accessors[i], member, i, i != 0) < 0) return -1;
     if (d_accessor(dom, ctx, prototype, "strokeStyle", member, C_STROKE, true) < 0 ||
         d_canvas_paths_install(dom, ctx, prototype) < 0 ||
-        d_canvas_images_install(dom,ctx,prototype) < 0) return -1;
+        d_canvas_images_install(dom,ctx,prototype) < 0 ||
+        gradients_install(dom,ctx,global,prototype) < 0 ||
+        d_canvas_text_install(dom,ctx,global,prototype) < 0) return -1;
     const struct { const char *name; int magic, length; } methods[] = {
         {"save", C_SAVE, 0}, {"restore", C_RESTORE, 0}, {"fillRect", C_FILL_RECT, 4},
         {"clearRect", C_CLEAR_RECT, 4}, {"createImageData", C_CREATE_IMAGE, 2},

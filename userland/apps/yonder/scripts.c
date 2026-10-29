@@ -430,6 +430,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         os64_dom_set_view(s->dom, &s->options.view);
     os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
     os64_dom_set_images(s->dom,&s->options.images);
+    os64_dom_set_text(s->dom,&s->options.canvas_text);
     if (s->options.history.update != NULL)
         os64_dom_set_history(s->dom, &s->options.history);
     // The state the session gave the document before there was a binding

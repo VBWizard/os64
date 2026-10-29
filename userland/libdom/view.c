@@ -263,17 +263,17 @@ static const char *snapshot_value(const os64_dom_t *dom, int32_t prop, size_t *l
     return s->text + s->at[prop];
 }
 
-/* Canvas resolves currentColor at style assignment, without calling a
- * replaceable JavaScript getComputedStyle. Detached canvases use black. */
-JSValue d_computed_color(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+/* Resolve Canvas style inputs without a replaceable script getComputedStyle.
+ * Detached canvases and hosts without a provider use the specified fallback. */
+JSValue d_computed_property(os64_dom_t *dom,JSContext *ctx,const os64_html_node_t *node,int32_t prop,const char *fallback)
 {
-    if (!d_in_window_tree(dom, node) || !dom->computed) return JS_NewString(ctx, "#000000");
-    int made = snapshot_of(dom, ctx, node);
-    if (made < 0) return JS_EXCEPTION;
-    size_t length = 0;
-    const char *text = made ? snapshot_value(dom, GARB_COLOR, &length) : "";
-    return length ? JS_NewStringLen(ctx, text, length) : JS_NewString(ctx, "#000000");
+    if(!d_in_window_tree(dom,node)||!dom->computed)return JS_NewString(ctx,fallback);
+    int made=snapshot_of(dom,ctx,node);if(made<0)return JS_EXCEPTION;
+    size_t length=0;const char *text=made?snapshot_value(dom,prop,&length):"";
+    return length?JS_NewStringLen(ctx,text,length):JS_NewString(ctx,fallback);
 }
+JSValue d_computed_color(os64_dom_t *dom,JSContext *ctx,const os64_html_node_t *node)
+{ return d_computed_property(dom,ctx,node,GARB_COLOR,"#000000"); }
 
 /* A declaration getComputedStyle made: the element it reads (its wrapper,
  * which holds the node), and `empty` for a pseudo-element's, which answers

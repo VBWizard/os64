@@ -156,8 +156,9 @@ static void clip_refusal(void)
     OK(canvas_stroke(c));pixel(c,16,16,0xff000000);pixel(c,16,4,0);OK(canvas_destroy(c));CHECK(!o.live);
 }
 #include "test_canvas_images.inc"
+#include "test_canvas_paints.inc"
 int main(void)
 {
-    canvas_baseline_main();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();
+    canvas_baseline_main();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();paints();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }

@@ -38,7 +38,7 @@ LIBDOM_SRCS += libdom/forms.c
 LIBDOM_SRCS += libdom/validity.c
 # Node's comparisons: isSameNode, isEqualNode, compareDocumentPosition.
 LIBDOM_SRCS += libdom/compare.c
-LIBDOM_SRCS += libdom/sheets.c libdom/image_data.c libdom/canvas.c libdom/canvas_path.c libdom/canvas_image.c libdom/mutation.c
+LIBDOM_SRCS += libdom/sheets.c libdom/image_data.c libdom/canvas.c libdom/canvas_path.c libdom/canvas_text.c libdom/canvas_image.c libdom/mutation.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))

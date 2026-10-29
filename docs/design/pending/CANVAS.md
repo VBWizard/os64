@@ -495,3 +495,55 @@ Validation and measured limitations are in
 `tools/pages/canvas-images.html`: SVG stamps, nearest/bilinear crop comparison,
 overlapping self-copy, and PNG export/decode/draw. Presentation continues through
 the existing pixel-damage path. C4 introduces no animation clock.
+
+
+## C5 implemented profile
+
+Linear, radial and conic gradients are live native handles. Context state and
+saved states retain them; adding a stop changes subsequent draws through those
+references. Stops are inserted stably, with a literal 256-stop cap and a shared
+owner allocation ledger. Gradient coordinates use the transform at painting,
+not at creation. Paint preparation is synchronous and immutable while sampled.
+No shader callback allocates or enters script.
+
+`libdraw2d` owns the linear/radial numeric samplers, stop interpolation and
+circle root solver extracted from SVG. SVG keeps its public function adapters,
+its coincident-linear behavior and its tangent-cone extension. Canvas supplies
+its own coincident-linear rule and leaves uncovered radial-cone pixels
+transparent, including gradients containing only one color. Conic angles use
+clockwise turns from the positive X axis. Colors interpolate straight sRGB and
+alpha independently, then enter the existing premultiplied compositor.
+
+The font backend's optional outline visitor exports unhinted curves and tight
+bounds. `os64_text_run_outline` adds the shared run's glyph positions and fallback
+contours. Canvas consumes that independent command stream through
+`canvas_draw_contours`, preserving the current path. Placement/maxWidth fitting
+changes glyph coordinates; stroke width and paint coordinates still use the
+context transform. Font curves do not pass through SVG markup or private scenes.
+
+The script profile includes `font`, `textAlign`, `textBaseline`, `direction`,
+`fillText`, `strokeText` and the numeric TextMetrics attributes. The existing CSS
+parser validates font shorthand. Absolute sizes, em/rem/ex/ch, percentages,
+keyword sizes and supported arithmetic resolve before saving the font; viewport
+units are outside this profile. Detached-canvas relative sizes start from 10px.
+Font styles are copied with native save/restore/reset. Pixel font assignments
+need no computed-style layout; relative inputs request the applicable style.
+Yonder supplies font selection through its existing page/system family provider
+and text-run layout. Font size is bounded at 1280px, input at 16 KiB, and emitted
+contours at 4096 commands per operation. Resource refusal occurs before painting.
+
+TextMetrics owns engine-managed storage and is collectible independently of the
+page. Gradient wrappers share the binding's retained-object registry and remain
+until binding teardown; native state references are released on restore, reset
+and destruction. The DOM record cap and 128 MiB Canvas owner ledger bound that
+retention. High-churn gradient construction is recorded in DEBTS.md.
+
+This uses the shared Western text profile, with pair positioning and fallback;
+it does not add general complex-script shaping or bidi layout. Direction affects
+start/end alignment, with HTML dir inheritance. Non-alphabetic baselines use
+metric-based synthesis. Additional text styling, CSS Font Loading, pattern paints,
+shadow/filter effects and advanced blending remain outside C5. The shared run
+and outline interfaces are usable independently of these browser omissions.
+
+Validation and the test/gallery entry points are recorded in
+[the C5 evidence](../../canvas-evidence/c5-validation.md).

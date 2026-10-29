@@ -5,6 +5,7 @@
  * FONT_CONTRACTS.md. This standalone header has no libos64 link dependency. */
 #include <stddef.h>
 #include <stdint.h>
+#include "geometry_backend.h"
 
 #define OS64_FONT_BACKEND_REVISION 1u
 #define OS64_FONT_UNIT 64
@@ -110,6 +111,10 @@ typedef struct {
  * BUSY without changing the engine. The caller retains and keeps font bytes
  * immutable until face_close. Glyphs remain valid after face_close and retain
  * their engine until glyph_release. No operation reads a path or a surface. */
+/* A synchronous outline visitor. Coordinates are pixels, baseline-relative,
+ * X right and Y down. The receiver copies commands it keeps and must not
+ * reenter the font engine. A refusal stops emission; discard partial output. */
+typedef os64_font_status_t (*os64_font_outline_emit_t)(void *,const os64_geometry_command_t *);
 typedef struct {
     uint32_t revision;
     size_t struct_size;
@@ -138,6 +143,13 @@ typedef struct {
                                  os64_font_glyph_t **out);
     os64_font_status_t (*glyph_view)(os64_font_glyph_t *, os64_font_glyph_view_t *out);
     void (*glyph_release)(os64_font_glyph_t *);
+    /* Optional v1 tail. Unhinted scaled outlines, closed contours, with tight
+     * geometric bounds. Check struct_size before reading. No borrowed FreeType
+     * storage escapes. max_commands includes CLOSE; emit may be NULL to measure.
+     * Failure clears bounds and may have called emit before returning. */
+    os64_font_status_t (*outline)(os64_font_face_t *,uint32_t glyph_index,size_t max_commands,
+        os64_font_outline_emit_t emit,void *,os64_geometry_bounds_t *);
+
 } os64_font_backend_t;
 
 /* The FreeType library exports this getter. Consumers check revision and

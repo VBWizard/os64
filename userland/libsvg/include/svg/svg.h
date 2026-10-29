@@ -1,6 +1,7 @@
 #ifndef OS64_SVG_H
 #define OS64_SVG_H
 #include <os64/geometry_backend.h>
+#include <draw2d/gradient.h>
 
 /* Native SVG foundation. The scene provider is a source interface, not a
  * stable browser ABI. No DOM, CSS-engine or FreeType private types cross it. */
@@ -82,49 +83,16 @@ typedef struct {
     double x, y, width, height, rx, ry, x2, y2;
     svg_string_t points; /* Borrowed coordinate pairs for polyline/polygon. */
 } svg_shape_t;
-#define SVG_GRADIENT_STOPS_MAX 256u
-typedef enum { SVG_SPREAD_PAD, SVG_SPREAD_REPEAT, SVG_SPREAD_REFLECT } svg_spread_t;
-typedef struct {
-    double offset; /* Normalized, nondecreasing [0,1]; duplicate offsets retain order. */
-    uint32_t argb; /* Straight-alpha sRGB. */
-} svg_gradient_stop_t;
-typedef struct {
-    double x1, y1, x2, y2;
-    os64_geometry_map_t transform;
-    bool object_bbox;
-    svg_spread_t spread;
-    const svg_gradient_stop_t *stops;
-    size_t count;
-} svg_linear_gradient_t;
-/* Prepared numeric sampler. Stop storage is borrowed and must remain immutable
- * until sampling ends. Initialize with svg_linear_gradient_prepare; sample
- * positions use the coordinate space selected by that call's map. */
-typedef struct {
-    const svg_gradient_stop_t *stops;
-    size_t count;
-    double x, y, bias;
-    svg_spread_t spread;
-    bool constant;
-} svg_linear_sampler_t;
-typedef struct {
-    double cx, cy, r, fx, fy, fr;
-    os64_geometry_map_t transform;
-    bool object_bbox;
-    svg_spread_t spread;
-    const svg_gradient_stop_t *stops;
-    size_t count;
-} svg_radial_gradient_t;
-/* Prepared radial sampler borrows immutable stops, like the linear sampler.
- * Initialize through svg_radial_gradient_prepare before sampling. */
-typedef struct {
-    const svg_gradient_stop_t *stops;
-    size_t count;
-    os64_geometry_map_t sample_to_gradient;
-    double fx, fy, dx, dy, fr, dr, scale, quadratic;
-    svg_spread_t spread;
-    uint32_t average;
-    bool constant, tangent;
-} svg_radial_sampler_t;
+#define SVG_GRADIENT_STOPS_MAX DRAW2D_GRADIENT_STOPS_MAX
+#define SVG_SPREAD_PAD DRAW2D_SPREAD_PAD
+#define SVG_SPREAD_REPEAT DRAW2D_SPREAD_REPEAT
+#define SVG_SPREAD_REFLECT DRAW2D_SPREAD_REFLECT
+typedef draw2d_spread_t svg_spread_t;
+typedef draw2d_gradient_stop_t svg_gradient_stop_t;
+typedef draw2d_linear_gradient_t svg_linear_gradient_t;
+typedef draw2d_linear_sampler_t svg_linear_sampler_t;
+typedef draw2d_radial_gradient_t svg_radial_gradient_t;
+typedef draw2d_radial_sampler_t svg_radial_sampler_t;
 typedef enum {
     SVG_PAINT_NONE,
     SVG_PAINT_COLOR,

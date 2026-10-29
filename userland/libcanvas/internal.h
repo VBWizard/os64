@@ -21,6 +21,16 @@ struct canvas_context {
     bool busy, origin_clean;
 };
 
+typedef struct {
+    unsigned kind;
+    draw2d_linear_sampler_t linear;
+    draw2d_radial_sampler_t radial;
+    canvas_gradient_t *gradient;
+    os64_geometry_map_t inverse;
+} GradientProgram;
+void c_style_release(canvas_state_t *);
+canvas_status_t c_gradient_prepare(canvas_gradient_t *,const os64_geometry_map_t *,GradientProgram *);
+uint32_t c_gradient_sample(void *,double,double);
 canvas_status_t c_enter(canvas_context_t *);
 canvas_status_t c_leave(canvas_context_t *,canvas_status_t);
 canvas_status_t c_allocate(canvas_context_t *,size_t,void **);

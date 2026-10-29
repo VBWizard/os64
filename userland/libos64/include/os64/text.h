@@ -113,6 +113,14 @@ os64_font_status_t os64_text_layout(os64_text_context_t *, const uint8_t *,
     size_t length, const os64_text_layout_t *, os64_text_run_t **out);
 os64_font_status_t os64_text_run_view(const os64_text_run_t *, os64_text_run_view_t *out);
 void os64_text_run_release(os64_text_run_t *);
+/* Positioned run contours for vector consumers. Uses unhinted font curves;
+ * builtin/missing glyphs become contours of their binary bitmap cells. The
+ * caller's visitor owns copied output. No script/engine reentry is permitted.
+ * The command budget spans the entire run. emit may be NULL for tight bounds.
+ * A failure clears bounds; discard any commands already emitted. */
+os64_font_status_t os64_text_run_outline(const os64_text_run_t *,size_t max_commands,
+    os64_font_outline_emit_t emit,void *,os64_geometry_bounds_t *);
+
 
 typedef enum {
     OS64_TEXT_BEFORE = 0,

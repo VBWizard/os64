@@ -1,5 +1,5 @@
 # Native draw2d: allocation and scheduling belong to the caller.
-LIBDRAW2D_SRCS := libdraw2d/paint.c libdraw2d/stroke.c
+LIBDRAW2D_SRCS := libdraw2d/gradient.c libdraw2d/paint.c libdraw2d/stroke.c
 LIBDRAW2D_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDRAW2D_SRCS))
 LIBDRAW2D_SO := $(BIN)/libdraw2d.so
 LIBDRAW2D_BASE = $(patsubst libdraw2d.so=%,%,$(filter libdraw2d.so=%,$(LIB_BASE_PAIRS)))

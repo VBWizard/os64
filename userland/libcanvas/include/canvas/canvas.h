@@ -1,12 +1,14 @@
 #ifndef OS64_CANVAS_H
 #define OS64_CANVAS_H
 #include <draw2d/paint.h>
+#include <draw2d/gradient.h>
 #include <os64/geometry_backend.h>
 
 /* Native bitmap/context, with no DOM or script objects. The binding owns this
  * handle and keeps it alive for retained element/context wrappers. Calls are
  * serialized by that owner; callbacks must not reenter the context. */
 typedef struct canvas_context canvas_context_t;
+typedef struct canvas_gradient canvas_gradient_t;
 typedef enum {
     CANVAS_OK, CANVAS_BAD_ARGUMENT, CANVAS_LIMIT, CANVAS_NO_MEMORY, CANVAS_BUSY, CANVAS_UNSUPPORTED
 } canvas_status_t;
@@ -19,6 +21,15 @@ typedef struct {
     size_t max_commands;
     uint64_t max_geometry_work;
 } canvas_options_t;
+/* Value-owned text style; copied with save/restore. font is canonical CSS
+ * supplied by the binding; the native renderer consumes positioned contours. */
+typedef struct {
+    char font[1024];
+    double size;
+    unsigned align; /* 0 start, 1 end, 2 left, 3 right, 4 center. */
+    unsigned baseline; /* 0 alphabetic, 1 top, 2 hanging, 3 middle, 4 ideographic, 5 bottom. */
+    unsigned direction; /* 0 inherit, 1 ltr, 2 rtl. */
+} canvas_text_style_t;
 typedef struct {
     uint32_t fill_argb; /* Straight-alpha sRGB. */
     double global_alpha;
@@ -30,6 +41,8 @@ typedef struct {
     double dash[256], dash_offset;
     size_t dash_count;
     draw2d_operator_t composite;
+    canvas_gradient_t *fill_gradient, *stroke_gradient; /* Borrowed by state queries. */
+    canvas_text_style_t text;
     bool image_smoothing;
     unsigned image_quality; /* 0 low, 1 medium, 2 high; filtering may share one algorithm. */
 } canvas_state_t;
@@ -93,6 +106,21 @@ canvas_status_t canvas_set_line(canvas_context_t *,const os64_geometry_stroke_t 
 canvas_status_t canvas_set_dash(canvas_context_t *,const double *,size_t);
 canvas_status_t canvas_set_dash_offset(canvas_context_t *,double);
 canvas_status_t canvas_set_composite(canvas_context_t *,draw2d_operator_t);
+/* Gradient handles use an owner ledger independent of any single context.
+ * Contexts and saved states retain live handles; stops added later affect them.
+ * kind: 0 linear (x0,y0,x1,y1), 1 radial (x0,y0,r0,x1,y1,r1),
+ * 2 conic (angle,x,y). Coordinates are transformed at paint time. */
+canvas_status_t canvas_gradient_create(os64_geometry_memory_t,unsigned kind,const double *,canvas_gradient_t **);
+void canvas_gradient_retain(canvas_gradient_t *);
+void canvas_gradient_release(canvas_gradient_t *);
+canvas_status_t canvas_gradient_add_stop(canvas_gradient_t *,double,uint32_t);
+canvas_status_t canvas_set_gradient(canvas_context_t *,canvas_gradient_t *,bool stroke);
+canvas_status_t canvas_set_text_style(canvas_context_t *,const canvas_text_style_t *);
+/* Paint a separate, closed contour stream without changing the current path.
+ * placement maps run coordinates to user space before the current transform.
+ * Stroke widths and paints use the current transform, not placement. */
+canvas_status_t canvas_draw_contours(canvas_context_t *,const os64_geometry_command_t *,size_t,
+    const os64_geometry_map_t *placement,bool stroke);
 canvas_status_t canvas_set_smoothing(canvas_context_t *,bool,unsigned quality);
 /* Source is borrowed for this synchronous operation. Overlapping destination
  * storage is snapshotted before drawing. Negative extents normalize without
