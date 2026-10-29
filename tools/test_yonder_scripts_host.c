@@ -8,6 +8,7 @@
 #define main yonder_fixture_main
 #include "../userland/apps/yonder/yonder.c"
 #include "paint_cache.h"
+#include <png/png.h>
 #undef main
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
@@ -554,6 +555,12 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 }
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
+    if(len>=8&&bytes[0]==137&&!memcmp(bytes+1,"PNG",3)) {
+        os64_png_image_t png;
+        os64_png_status_t status=os64_png_decode(bytes,len,0,&png);
+        if(status!=OS64_PNG_OK)return OS64_IMAGE_MALFORMED;
+        out->width=png.width;out->height=png.height;out->pixels=png.pixels;return OS64_IMAGE_OK;
+    }
     if(len==6 && !memcmp(bytes,"RASTER",6)) {
         out->pixels=os64_malloc(4); if(!out->pixels) return OS64_IMAGE_NO_MEMORY;
         out->width=out->height=1; out->pixels[0]=0xff123456; return OS64_IMAGE_OK;
@@ -6717,22 +6724,22 @@ static void diag_picture_workerless_case(void) {
  * those still coming when the page is left are counted; a layout that
  * stopped partway is one standing failure however often it is written. */
 static void diag_picture_unasked_case(void) {
-    probe_page("<img src='data:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
+    probe_page("<img src='blob:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
         "<img src=file:///slow.png><img src='x:asset'>",true);
     g.page.diag=diag_new_claimed("http://u.test/",1);
     pictures_start(&g.page);        /* no workers: slow.png is refused too */
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"MISSING picture-scheme data (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
+    check(has(text,"MISSING picture-scheme blob (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
           has(text,"MISSING picture-scheme x (1)") && has(text,"not asked for") && g.page.unasked==3,
         "diag: a picture refused before the table is on the record, by its scheme (one letter is one) or its refusal");
     /* Met with nothing out, the record is written then; met again (a
      * script's rebuild), it is the same picture and records nothing more. */
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
-    check(has(diag_file("/tmp/diag",name),"MISSING picture-scheme data (1)"),
+    check(has(diag_file("/tmp/diag",name),"MISSING picture-scheme blob (1)"),
         "diag: a refusal met with no picture out writes the record");
     pictures_start(&g.page);
     yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(g.page.unasked==3 && has(text,"MISSING picture-scheme data (1)") &&
+    check(g.page.unasked==3 && has(text,"MISSING picture-scheme blob (1)") &&
           has(text,"FAILED picture: http://[bad: the address was refused (the address it names is not one that resolves) (1)"),
         "diag: a refused picture met again is the same picture");
     /* Left with one still out: counted, not failed. */
@@ -6853,11 +6860,11 @@ static void diag_fact_short_case(void) {
 static void diag_css_unasked_case(void) {
     /* A page whose only picture is refused before the table: nothing will
      * ever come in to write the record, so meeting it writes it. */
-    probe_page("<img src='data:image/png;base64,iVBORw0KGgo='>",true);
+    probe_page("<img src='blob:image/png;base64,iVBORw0KGgo='>",true);
     g.page.diag=diag_new_claimed("http://only.test/",1);
     pictures_start(&g.page);
     char only[64]; yonder_diag_file_name(g.page.diag,only,sizeof(only));
-    check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme data (1)"),
+    check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme blob (1)"),
         "diag: a page whose only picture is refused writes the record when it meets it");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();

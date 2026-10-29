@@ -19,6 +19,8 @@
 2d.composite.clip.source-out.html	fill() does not affect pixels outside the clip region.
 2d.composite.clip.source-over.html	fill() does not affect pixels outside the clip region.
 2d.composite.clip.xor.html	fill() does not affect pixels outside the clip region.
+2d.composite.globalAlpha.canvas.html	Canvas test: 2d.composite.globalAlpha.canvas
+2d.composite.globalAlpha.canvascopy.html	Canvas test: 2d.composite.globalAlpha.canvascopy
 2d.composite.globalAlpha.default.html	Canvas test: 2d.composite.globalAlpha.default
 2d.composite.globalAlpha.fill.html	Canvas test: 2d.composite.globalAlpha.fill
 2d.composite.globalAlpha.invalid.html	Canvas test: 2d.composite.globalAlpha.invalid
@@ -58,3 +60,8 @@
 2d.composite.uncovered.fill.destination-in.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
 2d.composite.uncovered.fill.source-in.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
 2d.composite.uncovered.fill.source-out.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.nocontext.copy.html	drawImage() of a canvas with no context draws pixels as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.nocontext.destination-atop.html	drawImage() of a canvas with no context draws pixels as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.nocontext.destination-in.html	drawImage() of a canvas with no context draws pixels as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.nocontext.source-in.html	drawImage() of a canvas with no context draws pixels as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.nocontext.source-out.html	drawImage() of a canvas with no context draws pixels as (0,0,0,0), and does not leave the pixels unchanged.

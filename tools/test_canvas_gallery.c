@@ -1,6 +1,31 @@
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
 
+static os64_work_t gallery_jobs[32];
+static os64_work_id_t gallery_ids[32];
+static unsigned gallery_queued;
+static os64_work_id_t gallery_submit(const os64_work_t *work)
+{
+    check(*(const uint32_t *)work->job==YONDER_JOB_PICTURE,"gallery only submits image jobs");
+    if(gallery_queued==32)return 0;
+    gallery_jobs[gallery_queued]=*work;gallery_ids[gallery_queued]=++pool_ids;
+    return gallery_ids[gallery_queued++];
+}
+static void gallery_pump(void)
+{
+    for(unsigned turn=0;turn<100;++turn) {
+        bool ran=script_turn();
+        (void)yonder_scripts_images_pending(g.page.scripts);
+        if(gallery_queued) {
+            os64_work_t work=gallery_jobs[0];os64_work_id_t id=gallery_ids[0];
+            --gallery_queued;memmove(gallery_jobs,gallery_jobs+1,gallery_queued*sizeof(*gallery_jobs));
+            memmove(gallery_ids,gallery_ids+1,gallery_queued*sizeof(*gallery_ids));
+            void *product=NULL;work.run(work.job,NULL,NULL,&product);reaped(id,work.job,product);ran=true;
+        }
+        if(!ran&&!yonder_scripts_images_pending(g.page.scripts))return;
+    }
+    check(false,"gallery image tasks settle");
+}
 static void dump_canvas(const char *directory,const char *name,const char *suffix)
 {
     canvas_bitmap_t bitmap;
@@ -10,6 +35,7 @@ static void dump_canvas(const char *directory,const char *name,const char *suffi
     FILE *out=fopen(path,"wb");check(out!=NULL,"gallery dump opens");if(!out)return;
     for(uint32_t y=0;y<bitmap.height;++y)for(uint32_t x=0;x<bitmap.width;++x) {
         uint32_t p=bitmap.pixels[(size_t)y*bitmap.stride/4+x];unsigned a=p>>24;
+        check(((p>>16)&255)<=a&&((p>>8)&255)<=a&&(p&255)<=a,"gallery pixels remain premultiplied at translucent image edges");
         unsigned char rgba[]={a?(((p>>16)&255)*255+a/2)/a:0,a?(((p>>8)&255)*255+a/2)/a:0,a?((p&255)*255+a/2)/a:0,a};
         check(fwrite(rgba,1,4,out)==4,"gallery pixel written");
     }
@@ -28,14 +54,27 @@ int main(int argc,char **argv)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
-    probe_page(html,true);free(html);script_turn();
-    const char *names[]={"route","turn","stencil","scratch"},*buttons[]={"march","spin","slide","reveal"};
+    bool images=strstr(html,"YONDER / CANVAS 2D / C4")!=NULL;
+    probe_page(html,true);free(html);
+    if(images){pool_open=true;g.pool=(os64_work_pool_t *)1;pool_submit_hook=gallery_submit;}
+    gallery_pump();
+    const char *names[]={images?"stamps":"route",images?"crop":"turn",images?"echo":"stencil",images?"returned":"scratch"};
+    const char *buttons[]={images?"stamp":"march",images?"inspect":"spin",images?"scoot":"slide",images?"export":"reveal"};
     for(unsigned i=0;i<4;++i)dump_canvas(argv[2],names[i],"");
     for(unsigned i=0;i<4;++i) {
         os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};
         bool prevented=false;os64_js_outcome_t outcome;
         check(yonder_scripts_dispatch(g.page.scripts,probe_id(buttons[i]),&event,&prevented,&outcome)==OS64_JS_OK,"gallery button executes");
-        dump_canvas(argv[2],names[i],"-clicked");
+        gallery_pump();dump_canvas(argv[2],names[i],"-clicked");
+    }
+    if(images) {
+        check(g.page.waiting==0&&g.page.in_flight==0&&!gallery_queued,"gallery images all settled");
+        canvas_bitmap_t original,returned,stamps;
+        check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("original"),&original)&&
+              yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("returned"),&returned),"export has source and returned pixels");
+        check(original.capacity==returned.capacity&&!memcmp(original.pixels,returned.pixels,original.capacity),"PNG export/decode/draw preserves every premultiplied pixel");
+        check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("stamps"),&stamps)&&stamps.pixels[75*400+53]!=0,"SVG stamp loaded and drawn");
+        pool_submit_hook=NULL;g.pool=NULL;pool_open=false;
     }
     probe_drop();os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"gallery text released");

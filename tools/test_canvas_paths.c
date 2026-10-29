@@ -155,8 +155,9 @@ static void clip_refusal(void)
     os64_geometry_stroke_t pen={4,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER};OK(canvas_set_line(c,&pen));
     OK(canvas_stroke(c));pixel(c,16,16,0xff000000);pixel(c,16,4,0);OK(canvas_destroy(c));CHECK(!o.live);
 }
+#include "test_canvas_images.inc"
 int main(void)
 {
-    canvas_baseline_main();paths();clips();composite_oracles();refusal();clip_refusal();
+    canvas_baseline_main();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }

@@ -333,7 +333,7 @@ static os64_geometry_status_t cut_cap(void *p,Point at,Point tangent)
 }
 /* Geometry and coverage are scratch until preparation succeeds. Neither a
  * backend refusal nor a failed clip allocation can partially paint a bitmap. */
-static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool even_odd)
+static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool even_odd,const draw2d_image_t *image)
 {
     const os64_geometry_backend_t *b=c->options.geometry;
     if(!b || b->revision!=OS64_GEOMETRY_BACKEND_REVISION ||
@@ -400,7 +400,9 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
         }
     } else if(status==CANVAS_OK) {
         draw2d_damage_t damage;
-        draw2d_status_t result=draw2d_paint_mask(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,
+        draw2d_status_t result=image?draw2d_paint_image(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,image,
+            (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},
+            c->options.max_draw_pixels,&damage):draw2d_paint_mask(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,
             (draw2d_solid_t){mode==2?c->state.stroke_argb:c->state.fill_argb},
             (draw2d_composite_t){mode==1?DRAW2D_CLEAR:c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},
             c->options.max_draw_pixels,&damage);
@@ -415,7 +417,7 @@ done:
 static canvas_status_t draw(canvas_context_t *c,int mode,bool even_odd)
 {
     canvas_status_t s=c_enter(c);if(s!=CANVAS_OK)return s;
-    return c_leave(c,render(c,&c->path,mode,even_odd));
+    return c_leave(c,render(c,&c->path,mode,even_odd,NULL));
 }
 canvas_status_t canvas_fill(canvas_context_t *c,bool even_odd){return draw(c,0,even_odd);}
 canvas_status_t canvas_stroke(canvas_context_t *c){return draw(c,2,false);}
@@ -438,6 +440,61 @@ canvas_status_t c_rectangle(canvas_context_t *c,double x,double y,double w,doubl
     }
     Path path={0};
     s=rectangle_path(c,&path,x,y,w,h);
-    if(s==CANVAS_OK)s=render(c,&path,mode,false);
+    if(s==CANVAS_OK)s=render(c,&path,mode,false,NULL);
     c_path_release(c,&path);return c_leave(c,s);
+}
+
+bool canvas_origin_clean(const canvas_context_t *c) { return c && c->origin_clean; }
+canvas_status_t canvas_set_smoothing(canvas_context_t *c,bool enabled,unsigned quality)
+{
+    canvas_status_t status=c_enter(c);if(status!=CANVAS_OK)return status;
+    if(quality>2)return c_leave(c,CANVAS_BAD_ARGUMENT);
+    c->state.image_smoothing=enabled;c->state.image_quality=quality;
+    return c_leave(c,CANVAS_OK);
+}
+canvas_status_t canvas_draw_image(canvas_context_t *c,const draw2d_surface_t *source,bool clean,
+    double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh)
+{
+    canvas_status_t status=c_enter(c);if(status!=CANVAS_OK)return status;
+    double args[]={sx,sy,sw,sh,dx,dy,dw,dh};
+    for(unsigned i=0;i<8;++i)if(!isfinite(args[i]))return c_leave(c,CANVAS_OK);
+    if(!source||draw2d_surface_validate(source)!=DRAW2D_OK||!source->width||!source->height)
+        return c_leave(c,CANVAS_BAD_ARGUMENT);
+    if(!sw||!sh||!dw||!dh)return c_leave(c,CANVAS_OK);
+    if(sw<0){sx+=sw;sw=-sw;}if(sh<0){sy+=sh;sh=-sh;}
+    if(dw<0){dx+=dw;dw=-dw;}if(dh<0){dy+=dh;dh=-dh;}
+    double right=fmin(source->width,sx+sw),bottom=fmin(source->height,sy+sh);
+    double left=fmax(0,sx),top=fmax(0,sy);
+    if(right<=left||bottom<=top)return c_leave(c,CANVAS_OK);
+    double x=dx+(left-sx)/sw*dw,y=dy+(top-sy)/sh*dh;
+    double width=(right-left)/sw*dw,height=(bottom-top)/sh*dh;
+    if(!isfinite(x)||!isfinite(y)||!isfinite(width)||!isfinite(height))return c_leave(c,CANVAS_LIMIT);
+    Map inv;
+    if(!inverse(&c->state.transform,&inv)) {
+        /* A singular transform suppresses pixels, not source-origin taint. */
+        if(!clean)c->origin_clean=false;
+        return c_leave(c,CANVAS_OK);
+    }
+    double ax=sw/dw,ay=sh/dh;
+    draw2d_image_t image={*source,{ax*inv.a,ay*inv.b,ax*inv.c,ay*inv.d,
+        sx+ax*(inv.tx-dx),sy+ay*(inv.ty-dy)},c->state.image_smoothing};
+    /* Address ranges are checked before copying; self-draw has snapshot semantics. */
+    uintptr_t a=(uintptr_t)source->pixels,b=(uintptr_t)c->surface.pixels;
+    if(source->capacity>UINTPTR_MAX-a||c->surface.capacity>UINTPTR_MAX-b)return c_leave(c,CANVAS_LIMIT);
+    void *copy=NULL;size_t bytes=0;
+    if(a<b+c->surface.capacity&&b<a+source->capacity) {
+        size_t unit=source->format==DRAW2D_ARGB16_PREMULTIPLIED?sizeof(draw2d_pixel_t):sizeof(uint32_t);
+        size_t stride=(size_t)source->width*unit;
+        if(source->height>SIZE_MAX/stride)return c_leave(c,CANVAS_LIMIT);
+        bytes=stride*source->height;
+        status=c_allocate(c,bytes,&copy);if(status!=CANVAS_OK)return c_leave(c,status);
+        for(uint32_t row=0;row<source->height;++row)for(size_t col=0;col<stride;++col)
+            ((unsigned char *)copy)[row*stride+col]=((const unsigned char *)source->pixels)[row*source->stride+col];
+        image.surface.pixels=copy;image.surface.stride=stride;image.surface.capacity=bytes;
+    }
+    Path path={0};status=rectangle_path(c,&path,x,y,width,height);
+    if(status==CANVAS_OK)status=render(c,&path,0,false,&image);
+    if(status==CANVAS_OK&&!clean)c->origin_clean=false;
+    c_path_release(c,&path);c_release(c,copy,bytes);
+    return c_leave(c,status);
 }

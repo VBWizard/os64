@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <os64/geometry_backend.h>
 
 /* Numeric sRGB paint, independent of markup, paths and fonts. Channels in
  * this intermediate are premultiplied; RGB must not exceed alpha. */
@@ -70,6 +71,14 @@ typedef struct {
     uint16_t opacity;
 } draw2d_composite_t;
 
+/* A read-only sRGB image view. The caller holds storage stable and keeps it
+ * disjoint from the destination for the complete paint. Map transforms device
+ * pixel centers into source pixel coordinates; filtering clamps to image edges. */
+typedef struct {
+    draw2d_surface_t surface;
+    os64_geometry_map_t device_to_source;
+    bool smoothing;
+} draw2d_image_t;
 #pragma GCC visibility push(default)
 /* Empty surfaces may have NULL storage. Nonempty surfaces require aligned
  * storage/stride, nonoverflowing row bounds and sufficient capacity. */
@@ -95,6 +104,9 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *, double x, double y,
  * Validates inputs/work before any write; output damage is conservative. */
 draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *coverage,
     const uint8_t *clip, size_t length, draw2d_solid_t, draw2d_composite_t,
+    uint64_t max_pixels, draw2d_damage_t *);
+draw2d_status_t draw2d_paint_image(const draw2d_surface_t *, const uint8_t *coverage,
+    const uint8_t *clip, size_t length, const draw2d_image_t *, draw2d_composite_t,
     uint64_t max_pixels, draw2d_damage_t *);
 #pragma GCC visibility pop
 #endif

@@ -1,7 +1,7 @@
 #include "internal.h"
 static canvas_state_t defaults(void) { return (canvas_state_t){.fill_argb=0xff000000,.global_alpha=1,.fill_alpha=1,
     .stroke_argb=0xff000000,.stroke_alpha=1,.transform={1,0,0,1,0,0},
-    .line={1,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER}}; }
+    .line={1,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER},.image_smoothing=true}; }
 canvas_options_t canvas_options_default(os64_geometry_memory_t memory)
 {
     return (canvas_options_t){.memory = memory, .max_dimension = 16384,
@@ -85,6 +85,7 @@ static canvas_status_t reset(canvas_context_t *c, uint32_t w, uint32_t h)
     c_clip_release(c,c->clip);c->clip=NULL;
     c_path_release(c,&c->path);
     c->state = defaults();
+    c->origin_clean = true;
     c->damage = w && h ? (draw2d_damage_t){0, 0, w, h} : (draw2d_damage_t){0};
     return CANVAS_OK;
 }

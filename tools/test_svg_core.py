@@ -91,7 +91,7 @@ def main():
     subprocess.run([cc, *common, *map(str, objects), '-o', str(binary)], check=True)
     inputs = {p for p, _ in entries}
     if args.canvas:
-        inputs.update([ROOT/'tools/test_canvas_core.c', ROOT/'userland/libcanvas/include/canvas/canvas.h', ROOT/'userland/libcanvas/internal.h'])
+        inputs.update([ROOT/'tools/test_canvas_core.c', ROOT/'tools/test_canvas_images.inc', ROOT/'userland/libcanvas/include/canvas/canvas.h', ROOT/'userland/libcanvas/internal.h'])
     inputs.update([ROOT/'tools/test_svg_gradient_sampler.inc', ROOT/'tools/test_svg_radial_sampler.inc'])
     if args.paint:
         inputs.add(ROOT/'tools/test_svg_cache.inc')

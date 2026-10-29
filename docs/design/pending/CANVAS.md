@@ -219,7 +219,7 @@ canvas and reset behavior.
 | C1 shared surfaces and context core | Extract shared blend/coverage primitives; bounded bitmap and context lifetime, resets, solid rectangles, clear and state foundation | Literal pixel tests, SVG equivalence, failure sweeps, bounds/stride guards and same-value reset cases |
 | C2 browser connection and pixels | getContext, painting, ImageData construction/read/write, dirty repaint, detach/reattach and undo/redo fixture | Browser bindings, read-after-write, no layout for pixel-only changes; first visible gallery |
 | C3 paths and compositing | Shared path/stroke/dash helpers, transforms, clipping and the composite modes needed for scratching | Mixed-transform paths, clip stack, destination-out reveal and independent blend oracles |
-| C4 image sources and export | drawImage overloads, source snapshots, scaling/smoothing, origin-clean enforcement, PNG encoder and data-URL route (the existing libpng is a decoder) | Self-copy, crop/scale, decoded image and SVG sources, taint and encode/decode round trips |
+| C4 image sources and export | drawImage overloads, source snapshots, scaling/smoothing, origin-clean enforcement, PNG encoder and data-URL route | Self-copy, crop/scale, decoded image and SVG sources, taint and encode/decode round trips |
 | C5 gradients and text | Shared samplers, live gradient objects; shared font selection/shaping and usable metrics/outlines for text | Gradient mutation across saved states, transformed text, metrics/fallback tests; reuse ready for later SVG text |
 | C6 target fidelity and motion | Shadows and other required target behavior; connect the shared frame and pointer APIs; captured signature and scratch flows | Signature draw/erase/undo/redo, ticket render/reveal, scheduled frames, navigation teardown and P5 measurements |
 
@@ -441,3 +441,57 @@ outside it. Wide-stroke overlap artifacts and extreme-coordinate refusals are
 recorded separately in DEBTS.md. The four-card gallery is
 `tools/pages/canvas-paths.html`; evidence and the upstream pass/fail census are
 in [C3 validation](../../canvas-evidence/c3-validation.md).
+
+
+## C4 image sources and PNG export
+
+`canvas_draw_image` accepts a stable read-only surface, its origin-clean bit,
+and explicit source/destination rectangles. libcanvas clips source bounds
+proportionally, normalizes negative extents, snapshots overlapping storage,
+and prepares transformed coverage before painting. libdraw2d samples straight
+or premultiplied sRGB pixels into the shared premultiplied compositing path.
+Nearest-neighbor and bilinear sampling both clamp to the whole source image;
+the saved smoothing-quality hint uses the same bilinear algorithm at each
+quality level. The current path is unchanged by image drawing.
+
+libdom exposes the three drawImage overloads for HTML canvas and image elements,
+image smoothing state, natural image dimensions, complete/crossOrigin, and
+PNG `toDataURL`. Numeric argument conversion completes before source acquisition
+or painting, so reentrant script changes are observed. The provider loans
+pixels synchronously, does not enter script, and receives a release for every
+acquisition, including status-only queries and refusals. Blank canvas sources
+and exports can create native pixels without creating a JavaScript context.
+Canvas taint propagates through image draws and canvas-to-canvas copies; pixel
+readback and export reject tainted pixels. Resetting dimensions or the context
+restores a clean bitmap. save/restore does not restore origin cleanliness.
+
+Yonder's bounded picture catalog is keyed by URL and request mode. A native
+image fetch uses libway's request, redirect and CORS checks, retaining an opaque
+body exclusively for decoding and marking its pixels unclean. The script-fetch
+entry still discards opaque bodies. Display-only products cannot supply CORS
+proof; a Canvas source may therefore fetch a displayed URL separately. Data
+URLs and local fixtures use the same decode path; a network document cannot
+request local file pixels. GIF sources use the default frame. SVG sources use
+the isolated secure-static renderer, without a fetch resolver or script host.
+
+Image requests begin when their document owns the displayed page's catalog.
+Streaming and coming pages report pending instead of retaining catalog entries
+outside that lifecycle. Wrapped image elements receive load/error tasks through
+both host task dispatch paths. This is a bounded image-source lifecycle, not
+full HTML image loading: unwrapped markup handlers, document-load dependencies,
+srcset/picture selection and Image.decode are follow-up work. Other Canvas image
+source interfaces, including ImageBitmap and video, are not exposed.
+
+libpng's caller-owned writer emits RGBA8 PNG with sRGB and 96-dpi metadata.
+Stored DEFLATE blocks give an exact admission size without an encoder workspace;
+exports are valid but larger than compressed PNGs. Transparent premultiplied
+pixels are unassociated before encoding. The DOM charges temporary PNG/base64
+storage to its Canvas ledger, then returns an engine-owned string. Unsupported
+MIME types fall back to PNG; quality is not coerced for PNG. Empty or refused
+exports return `data:,`; tainted exports throw SecurityError.
+
+Validation and measured limitations are in
+[C4 validation](../../canvas-evidence/c4-validation.md). The gallery is
+`tools/pages/canvas-images.html`: SVG stamps, nearest/bilinear crop comparison,
+overlapping self-copy, and PNG export/decode/draw. Presentation continues through
+the existing pixel-damage path. C4 introduces no animation clock.
