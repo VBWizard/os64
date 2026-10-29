@@ -3,8 +3,9 @@
 C5 adds live linear/radial/conic gradients, filled and stroked outline text,
 font/alignment/baseline state, and numeric TextMetrics. The gallery is
 `tools/pages/canvas-paints.html`, “A Few Choice Words”; enable Scripts and
-Modern Web. P5 acceptance is pending. This is the bounded C5 profile, not
-complete Canvas or text conformance.
+Modern Web. P5 acceptance is complete: all four samples passed at all four
+tested zoom levels. This is the bounded C5 profile, not complete Canvas or
+text conformance.
 
 ## Shared implementation
 
