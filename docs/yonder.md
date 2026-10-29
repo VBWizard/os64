@@ -69,9 +69,23 @@ works in the address field too.
 | Page Up, Page Down, Space | a screen, less one line |
 | Home, End | the top, the bottom |
 | Click a link | follow it |
+| Right-click a link or a picture | its menu (below) |
+| Shift+F10 | the same menu, for what is under the pointer, once a click on the page has given it the keys |
 | `p` | turn positioning off, and on again (below) |
 
 Resizing the window lays the page out again and keeps your place.
+
+**The right-click menu** opens over a link, a picture, or a picture that is
+a link, and offers what fits: **Open Link in New Window** and **Copy Link
+Address** for the link, **Open Picture in New Window** and **Copy Picture
+Address** for the picture, all four for a picture that is a link. Over
+anything else nothing opens. A copied address goes to the system clipboard,
+so it pastes into a gterm or any field (Ctrl+V). A new window is another
+yonder, with its own history; it shares the cookies through their file
+(unless `cookies` is `session` or `off`), so a site you are logged in to is
+logged in there too. A link that runs a
+script (`javascript:`) can be copied but not opened in a new window, which
+has no page for it to run in.
 
 **`p` shows a page with positioning off**: every box in document order,
 nothing fixed or stacked over anything else. With no scripts, a

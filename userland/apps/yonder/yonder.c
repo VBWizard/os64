@@ -20,6 +20,7 @@
 #include "way/way.h"
 #include "image/image.h"
 #include "os64/os64.h"
+#include "os64/clip.h"
 #include "os64/date.h"
 #include "os64/draw.h"
 #include "os64/fmt.h"
@@ -1309,6 +1310,11 @@ typedef struct {
 
 #define INPUTS_MAX 32
 
+// The right-click menu's verbs, and its models: what it offers depends on
+// what is under the pointer (§ The right-click menu).
+enum { ACT_OPEN_LINK = 1, ACT_COPY_LINK, ACT_OPEN_PICTURE, ACT_COPY_PICTURE };
+enum { CONTEXT_LINK, CONTEXT_PICTURE, CONTEXT_BOTH, CONTEXT_MENUS };
+
 static struct {
     int64_t win;
     os64_draw_ctx_t ctx;
@@ -1321,6 +1327,13 @@ static struct {
     // The window's popup controller, which a dropdown's list opens in
     // (DROPDOWN.md); NULL if it could not be made, and then no list opens.
     os64_ui_menu_session_t *menus;
+    // The right-click menu's verbs, one model for each kind of thing it
+    // opens over, and the addresses it acts on, copied as it opened (§ The
+    // right-click menu). Empty for the kind not under the pointer.
+    os64_ui_actions_t *actions;
+    os64_ui_action_view_t *action_view;
+    os64_ui_menu_model_t *context_menus[CONTEXT_MENUS];
+    char context_link[OS64_FETCH_URL_MAX], context_picture[OS64_FETCH_URL_MAX];
     os64_ui_widget_t root, status, view, back, forward, reload, stop;
     // The badge at the right of the status bar: the shown page's MISSING
     // and FAILED counts, the file's own tokens, present only when nonzero.
@@ -12568,6 +12581,195 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
     }
 }
 
+// ── The right-click menu ────────────────────────────────────────────────
+//
+// One popup over the page, opened on the right button (or Shift+F10 while
+// the page has focus, at the pointer) over a link, a picture, or a picture
+// inside a link; over
+// anything else nothing opens. The menu is the WINDOW's: no `contextmenu`
+// event reaches the page, so a page cannot keep it shut. What its verbs act
+// on is copied as it opens, the addresses and not the nodes, so a page that
+// changes or departs under an open menu leaves them meaning what was
+// clicked.
+
+// The link's address as following it would ask for it: the resolved
+// address, then the fragment, as a fragment navigation spells it.
+static bool context_link_address(const os64_html_node_t *node, char *out, size_t cap)
+{
+    const os64_page_t *model = page_model(&g.page);
+    int32_t at = node != NULL && model != NULL ? os64_page_link_for(model, node) : -1;
+    const os64_page_link_t *l = at >= 0 ? os64_page_link(model, at) : NULL;
+    if (l == NULL || l->href.url == NULL)
+        return false;
+    int n = l->href.has_fragment && l->href.fragment != NULL
+                ? os64_snprintf(out, cap, "%s#%s", l->href.url, l->href.fragment)
+                : os64_snprintf(out, cap, "%s", l->href.url);
+    return n > 0 && (size_t)n < cap;
+}
+
+// The address the picture was fetched from, `srcset`'s choice included: the
+// page's catalog entry the painter draws it from, so a picture not fetched
+// (a data: address, one the catalog had no room for) offers no address.
+static bool context_picture_address(const os64_html_node_t *node, char *out, size_t cap)
+{
+    const Page *p = &g.page;
+    const os64_page_t *model = page_model(p);
+    if (node == NULL || model == NULL || p->pic_of == NULL)
+        return false;
+    int32_t at = os64_page_image_for(model, node);
+    if (at < 0 || at >= p->nimage_map)
+        return false;
+    int32_t k = p->pic_of[at];
+    return k >= 0 && k < p->npics && os64_strcopy(out, cap, p->pics[k].url) < cap;
+}
+
+// A `javascript:` address is the page's own code, which a new window has no
+// page to run in.
+static bool context_openable(const char *address)
+{
+    static const char kScript[] = "javascript:";
+    if (address[0] == '\0')
+        return false;
+    for (size_t i = 0; i + 1 < sizeof(kScript); i++) {
+        char c = address[i];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+        if (c != kScript[i])
+            return true;
+    }
+    return false;
+}
+
+static void context_query(void *app, const os64_ui_action_context_t *ctx, uint32_t id,
+                          os64_ui_action_state_t *out)
+{
+    (void)app;
+    (void)ctx;
+    out->checked = false;
+    switch (id) {
+    case ACT_OPEN_LINK: out->enabled = context_openable(g.context_link); break;
+    case ACT_COPY_LINK: out->enabled = g.context_link[0] != '\0'; break;
+    case ACT_OPEN_PICTURE: out->enabled = context_openable(g.context_picture); break;
+    case ACT_COPY_PICTURE: out->enabled = g.context_picture[0] != '\0'; break;
+    default: out->enabled = false; break;
+    }
+}
+
+// A new window is another yonder, given the address; it shares this one's
+// profile files, its cookies among them as the jar last wrote them.
+static void context_open(const char *address)
+{
+    char *argv[] = {"/bin/yonder", (char *)address, NULL};
+    int64_t pid = os64_spawn(argv[0], argv);
+    if (pid == OS64_SPAWN_TOO_LONG)
+        status_rest("That address is too long to hand to a new window.");
+    else if (pid <= 0)
+        status_rest("A new window would not start.");
+}
+
+static void context_copy(const char *address, const char *said)
+{
+    size_t n = os64_strlen(address);
+    status_rest(os64_clip_copy(address, n) == (int64_t)n ? said : "The clipboard did not take it.");
+}
+
+static os64_ui_action_result_t context_invoke(void *app, const os64_ui_action_context_t *ctx, uint32_t id)
+{
+    (void)app;
+    (void)ctx;
+    os64_ui_action_state_t state;
+    context_query(NULL, NULL, id, &state);
+    if (!state.enabled)
+        return (os64_ui_action_result_t){OS64_UI_REFUSED, 0};
+    switch (id) {
+    case ACT_OPEN_LINK: context_open(g.context_link); break;
+    case ACT_COPY_LINK: context_copy(g.context_link, "Link address copied."); break;
+    case ACT_OPEN_PICTURE: context_open(g.context_picture); break;
+    case ACT_COPY_PICTURE: context_copy(g.context_picture, "Picture address copied."); break;
+    default: return (os64_ui_action_result_t){OS64_UI_REFUSED, 0};
+    }
+    return (os64_ui_action_result_t){OS64_UI_OK, 0};
+}
+
+// The window outlives every menu it opens, so the context is always valid.
+static bool context_retain(void *cookie, uint64_t generation) { (void)cookie; return generation == 1; }
+static void context_release(void *cookie, uint64_t generation) { (void)cookie; (void)generation; }
+static bool context_valid(void *cookie, uint64_t generation) { (void)cookie; return generation == 1; }
+
+// The registry, its view and the three models; false leaves whatever was
+// made for context_menus_drop, and no menu opens.
+static bool context_menus_make(void)
+{
+    static const os64_ui_action_spec_t specs[] = {
+        {ACT_OPEN_LINK, OS64_UI_ACTION_COMMAND, 0, "Open Link in New Window",
+         "Open the link in a window of its own", NULL, 'w', {0, 0}},
+        {ACT_COPY_LINK, OS64_UI_ACTION_COMMAND, 0, "Copy Link Address",
+         "Copy the link's address to the clipboard", NULL, 'l', {0, 0}},
+        {ACT_OPEN_PICTURE, OS64_UI_ACTION_COMMAND, 0, "Open Picture in New Window",
+         "Show the picture in a window of its own", NULL, 'i', {0, 0}},
+        {ACT_COPY_PICTURE, OS64_UI_ACTION_COMMAND, 0, "Copy Picture Address",
+         "Copy the picture's address to the clipboard", NULL, 'a', {0, 0}},
+    };
+    const os64_ui_action_callbacks_t callbacks = {context_query, context_invoke};
+    if (os64_ui_actions_create(specs, sizeof(specs) / sizeof(*specs), &callbacks, NULL, &g.actions) != OS64_UI_OK)
+        return false;
+    os64_ui_action_context_t ctx = {NULL, 1, context_retain, context_release, context_valid};
+    if (os64_ui_action_view_create(g.actions, &ctx, &g.action_view) != OS64_UI_OK)
+        return false;
+    const os64_ui_menu_entry_t link[] = {{.action = ACT_OPEN_LINK}, {.action = ACT_COPY_LINK}};
+    const os64_ui_menu_entry_t picture[] = {{.action = ACT_OPEN_PICTURE}, {.action = ACT_COPY_PICTURE}};
+    const os64_ui_menu_entry_t both[] = {{.action = ACT_OPEN_LINK}, {.action = ACT_COPY_LINK},
+                                         {.kind = OS64_UI_MENU_SEPARATOR},
+                                         {.action = ACT_OPEN_PICTURE}, {.action = ACT_COPY_PICTURE}};
+    return os64_ui_menu_model_create(g.actions, link, 2, &g.context_menus[CONTEXT_LINK]) == OS64_UI_OK &&
+           os64_ui_menu_model_create(g.actions, picture, 2, &g.context_menus[CONTEXT_PICTURE]) == OS64_UI_OK &&
+           os64_ui_menu_model_create(g.actions, both, 5, &g.context_menus[CONTEXT_BOTH]) == OS64_UI_OK;
+}
+
+// After the popup controller is disposed of, which borrows the view.
+static void context_menus_drop(void)
+{
+    for (size_t i = 0; i < CONTEXT_MENUS; i++) {
+        os64_ui_menu_model_release(g.context_menus[i]);
+        g.context_menus[i] = NULL;
+    }
+    if (g.action_view != NULL)
+        (void)os64_ui_action_view_destroy(g.action_view);
+    g.action_view = NULL;
+    if (g.actions != NULL)
+        (void)os64_ui_actions_destroy(g.actions);
+    g.actions = NULL;
+}
+
+static bool view_context(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *user)
+{
+    (void)w;
+    (void)user;
+    if (g.menus == NULL || g.context_menus[CONTEXT_BOTH] == NULL)
+        return false;
+    bool keyboard = ev->type == OS64_GUI_EVENT_KEY_DOWN;
+    int32_t x = keyboard ? g.pointer_x : ev->mouse.x, y = keyboard ? g.pointer_y : ev->mouse.y;
+    const os64_html_node_t *link = NULL;
+    const os64_html_node_t *at = element_at(x, y, &link);
+    bool has_link = context_link_address(link, g.context_link, sizeof(g.context_link));
+    bool has_picture = context_picture_address(at, g.context_picture, sizeof(g.context_picture));
+    if (!has_link)
+        g.context_link[0] = '\0';
+    if (!has_picture)
+        g.context_picture[0] = '\0';
+    if (!has_link && !has_picture)
+        return false;
+    os64_ui_menu_model_t *model = g.context_menus[has_link && has_picture ? CONTEXT_BOTH
+                                                  : has_link              ? CONTEXT_LINK
+                                                                          : CONTEXT_PICTURE];
+    (void)os64_ui_actions_refresh(g.action_view);
+    os64_ui_status_code_t rc = os64_ui_menu_open(g.menus, model, g.action_view,
+                                                 (os64_gui_rect_t){x, y, 0, 0}, OS64_UI_MENU_CONTEXT);
+    if (rc != OS64_UI_OK && rc != OS64_UI_BUSY)
+        status_rest("The menu would not open.");
+    return true;
+}
+
 static const os64_ui_class_t kViewClass = {
     .name = "pageview",
     .paint = view_paint,
@@ -13223,6 +13425,7 @@ int main(int argc, char **argv)
     os64_ui_label(&g.badge, g.badge_text);
     g.view.cls = &kViewClass;
     g.view.focusable = true;
+    g.view.on_context = view_context;
     os64_ui_scrollbar(&g.vbar, scrolled_v, NULL);
     os64_ui_scrollbar(&g.hbar, scrolled_h, NULL);
     g.hbar.horizontal = true;
@@ -13309,6 +13512,8 @@ int main(int argc, char **argv)
     } else if (os64_ui_menu_session_create(&g.dispatcher, &g.ui, g.win, NULL, NULL, NULL, &g.menus) != OS64_UI_OK) {
         g.menus = NULL;
         status_rest("No popup controller; a one-line list will not open.");
+    } else if (!context_menus_make()) {
+        status_rest("No right-click menu; its verbs could not be made.");
     }
     int64_t woke = 1;               // the wait's or the turn's last answer, said as yonder leaves
     bool looking = false;           // a disarmed bar: is anything waiting?
@@ -13372,12 +13577,15 @@ int main(int argc, char **argv)
     }
 
     left_said(woke);
-    // The Settings dialog, the popup controller (an open list goes with it)
-    // and the clock first; the clock only rings, and nothing after this
-    // should.
+    // The Settings dialog, the popup controller (an open list or menu goes
+    // with it) and the clock first; the clock only rings, and nothing after
+    // this should. The menus' verbs go only once the controller has, which
+    // borrows them; one it would not let go keeps them too.
     yonder_settings_close();
     if (g.menus != NULL && os64_ui_menu_session_dispose(g.menus) == OS64_UI_OK)
         g.menus = NULL;
+    if (g.menus == NULL)
+        context_menus_drop();
     yonder_ticker_stop(g.ticker);
     g.ticker = NULL;                    // the page's record, written after, reads its counts
     // The workers next: destroy cancels them — a fetch and a question
