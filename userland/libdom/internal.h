@@ -12,7 +12,24 @@
 #define D_SET 0x1000
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
 #define D_CLONE_HELD 34
+#include <canvas/canvas.h>
+
+/* Embedded consumers of libdom's document listener. Registration happens
+ * during binding construction; callbacks borrow records and never enter JS. */
+typedef struct DMutationConsumer {
+    struct DMutationConsumer *next;
+    void (*changed)(os64_dom_t *, const os64_html_change_t *);
+} DMutationConsumer;
+void d_mutation_register(os64_dom_t *, DMutationConsumer *,
+                         void (*)(os64_dom_t *, const os64_html_change_t *));
+void d_mutation_start(os64_dom_t *);
+void d_mutation_stop(os64_dom_t *);
+int64_t d_non_negative(const char *);
+JSValue d_computed_color(os64_dom_t *, JSContext *, const os64_html_node_t *);
+int d_canvas_install(os64_dom_t *, JSContext *, JSValueConst);
+
 typedef struct DValue DValue;
+void d_canvas_free(DValue *);
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
@@ -145,6 +162,10 @@ struct DValue {
     DValue *style, *class_list, *rel_list, *for_list, *dataset, *attributes;
     /* An Attr's own entry: its record (attr.c). */
     struct DAttr *attr;
+    /* Canvas bitmap and stable context identity belong to the element entry. */
+    canvas_context_t *canvas;
+    DValue *canvas_object;
+    bool canvas_reset_pending;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
@@ -274,6 +295,10 @@ struct os64_dom {
     os64_dom_options_t options;
     size_t bytes, retained;
     bool closed;
+    DMutationConsumer *mutation_consumers, canvas_mutations;
+    bool mutation_installed;
+    size_t canvas_bytes;
+    JSClassID canvas_class;
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;
     os64_dom_geometry_stats_t geometry_stats;
@@ -875,6 +900,15 @@ bool d_secure_context(const os64_dom_t *context);
 int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_image_data_install(os64_dom_t *, JSContext *, JSValueConst);
+int d_image_data_settings(JSContext *, JSValueConst);
+/* Clone reads internal fields, not page-replaceable getters. The returned
+ * array is borrowed; the constructor below takes its own reference. */
+bool d_image_data_parts(JSValueConst, JSValue *array, uint32_t *width, uint32_t *height);
+JSValue d_image_data_from_array(JSContext *, JSValueConst, uint32_t width, uint32_t height);
+JSValue d_image_data_new(JSContext *, uint32_t width, uint32_t height);
+/* Borrowed bytes expire on the next call into page code. */
+int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *);
 /* The frames row (frames.c; IFRAME.md § The cluster and the window proxy):
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

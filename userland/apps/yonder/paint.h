@@ -92,6 +92,8 @@ typedef struct {
     bool (*clip_open)(void *ctx, os64_gui_rect_t bounds);
     void (*clip_fill)(void *ctx);
     void (*clip_close)(void *ctx);
+    // Optional retained Canvas pixels; absent, the stand-in route applies.
+    void (*canvas)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has

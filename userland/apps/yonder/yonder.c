@@ -2159,15 +2159,15 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
 // whole: the tally is taken again at every write and holds the most any
 // look saw. A custom element its definition constructed is drawn as any
 // element is; one whose constructor failed is the page's failure, by
-// name. A canvas where scripting is on is also the page's failure, one
-// FAILED line however many it has (libflow lays out its fallback where
-// scripting is off). Enabled inline SVG reports individual render refusals
+// name. With Modern Web off, a scripted canvas is a stand-in and a
+// FAILED line (libflow lays out its fallback with scripting off). Enabled
+// Canvas draws its retained bitmap. Enabled inline SVG reports render refusals
 // at the paint boundary instead of declaring every SVG missing. A frame
 // is not a failure here: its stand-in takes a click to
 // its document.
 #define DIAG_CUSTOM_MAX 64
 static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, bool scripting,
-                          bool svg)
+                          bool modern)
 {
     // A frame's document is not loaded into its box (it is offered as a
     // link instead), and an embed makes no box: both are asked for and not
@@ -2183,7 +2183,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, boo
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
             for (int k = 0; k < NOTHING; k++)
                 nothing[k] +=
-                    os64_streq(n->name, kNothing[k]) && (!svg || !os64_streq(kNothing[k], "svg"));
+                    os64_streq(n->name, kNothing[k]) && (!modern || (!os64_streq(kNothing[k], "svg") && !os64_streq(kNothing[k], "canvas")));
             canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
             if (n->ns == OS64_HTML_NS_HTML && n->ce != OS64_HTML_CE_CUSTOM &&
                 os64_html_custom_name(n->name)) {
@@ -2212,7 +2212,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, boo
     for (int k = 0; k < NOTHING; k++)
         if (nothing[k] != 0)
             yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);
-    if (scripting && canvases != 0)
+    if (!modern && scripting && canvases != 0)
         yonder_diag_failed_seen(d, "unsupported", "canvas");
     for (int32_t c = 0; c < ncustom; c++) {
         if (custom[c].failed)
@@ -7723,6 +7723,13 @@ static void sheets_restage(Page *p)
     p->reuse_sheets = NULL;
 }
 
+static bool canvas_visible(void *opaque, const os64_html_node_t *node)
+{
+    Page *p = opaque;
+    const flow_box_t *box = p->tree ? flow_box_for(p->tree, node) : NULL;
+    return box && box->replaced && box->style->visibility == FLOW_VISIBLE;
+}
+
 static bool script_rebuild(void)
 {
     Page *p = &g.page;
@@ -7840,6 +7847,10 @@ static bool script_rebuild(void)
     // A selection a script set changes no revision: it is asked of every
     // text field, after its text.
     forms_pull_selections();
+    // A full viewport is conservative for transformed canvases and effects.
+    // This invalidates paint only; unchanged DOM versions skip the layout above.
+    if (yonder_scripts_canvas_dirty(p->scripts, canvas_visible, p))
+        mark_part((os64_gui_rect_t){g.sx, g.sy, g.view.bounds.w, g.view.bounds.h});
     return true;
 }
 
@@ -11701,6 +11712,28 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
         glass_image(gp->now[k], b, c, clip);
 }
 
+static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    GlassPane *gp = ctx;
+    canvas_bitmap_t bitmap;
+    if (!yonder_scripts_canvas_bitmap(g.page.scripts, b->node, &bitmap)) return;
+    draw2d_surface_t source = {(void *)bitmap.pixels, bitmap.width, bitmap.height,
+        bitmap.stride, bitmap.capacity, DRAW2D_ARGB8_PREMULTIPLIED};
+    os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(bitmap.width, g.page.laid_zoom),
+                                            zoomed_px(bitmap.height, g.page.laid_zoom));
+    bool consumed = gp->n > 0;
+    for (int32_t k = 0; k < gp->n; ++k) {
+        Glass *gl = gp->now[k];
+        os64_gui_rect_t cut = on_glass(gl, clip);
+        os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
+        if (!os64_rect_intersect(cut, content, &cut)) continue;
+        os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
+        consumed &= yonder_draw_surface(gl->surf->pixels, gl->surf->pitch_px, cut, box,
+                                        !b->style->pixelated, &source);
+    }
+    if (consumed) yonder_scripts_canvas_painted(g.page.scripts, b->node);
+}
+
 static void pane_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     GlassPane *gp = ctx;
@@ -12054,7 +12087,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
-                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
+                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;

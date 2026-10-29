@@ -83,6 +83,8 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"external", "External", NULL}, d_external_install},
     /* After the encoding row, whose DataView it tells a view by. */
     {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
+    {(const char *const[]){"ImageData", NULL}, d_image_data_install},
+    {(const char *const[]){"CanvasRenderingContext2D", NULL}, d_canvas_install},
     {(const char *const[]){"onerror", "onunhandledrejection", "onrejectionhandled", "reportError", "ErrorEvent",
                            "PromiseRejectionEvent", NULL},
      d_report_install},

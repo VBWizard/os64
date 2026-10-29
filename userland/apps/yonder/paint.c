@@ -1978,7 +1978,7 @@ static bool is_frame(const flow_box_t *b)
 }
 
 // A canvas's box that is a replaced one (flow_box_t.replaced: libflow
-// makes it one where scripting is on), whose drawing nothing here makes. A
+// makes it one where scripting is on). A
 // canvas laid out as an inline-block or a block is its fallback content,
 // and that is drawn instead.
 static bool is_canvas(const flow_box_t *b)
@@ -2161,6 +2161,8 @@ static void paint_box(void *ctx, const flow_box_t *b)
             p->v->control(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
         else if (is_picture(b) || (b->replaced && flow_svg_root(b->node)))
             p->v->image(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
+        else if (is_canvas(b) && p->v->canvas != NULL)
+            p->v->canvas(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
         else if ((is_frame(b) || is_canvas(b)) && p->v->stand_in != NULL)
             p->v->stand_in(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view),
                            ink_of(p, is_frame(b) ? FRAME_INK : CANVAS_INK), paper_of(p, STAND_IN_PAPER));

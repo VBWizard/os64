@@ -20,12 +20,13 @@ trap cleanup EXIT
 . tools/host_build.sh
 host_flags=(
    -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all
-   -fno-builtin -fno-tree-loop-distribute-patterns -I userland/libflow/include -I userland/libflow
+   -fno-builtin -fno-tree-loop-distribute-patterns -I userland/libdraw2d/include -I userland/libflow/include -I userland/libflow
    -I userland/apps/yonder -I userland/libpage/include -I userland/libgarb/include
    -I userland/libfetch/include -I userland/libgzip/include -I userland/libtls/include -I userland
    -I userland/libway/include -I userland/libhtml/include -I userland/libos64/include
    -I abi/include -I tools -I userland/libpage/upstream/ryu)
 host_sources=(
+   userland/libdraw2d/paint.c
    tools/test_yonder_host.c userland/apps/yonder/paint.c userland/apps/yonder/paint_cache.c
    userland/apps/yonder/scratch.c
    userland/apps/yonder/bar.c userland/apps/yonder/scale.c userland/apps/yonder/mail.c

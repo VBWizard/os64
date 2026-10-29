@@ -1,0 +1,11 @@
+# WPT's html/canvas/element/reset in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/reset --update
+# rewrites [passing].
+[required]
+2d.reset.basic.html	reset clears to transparent black
+[excluded]
+[passing]
+2d.reset.basic.html	reset clears to transparent black
+2d.reset.state.fill_style.html	check that the state is reset
+2d.reset.state.global_alpha.html	check that the state is reset

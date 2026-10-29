@@ -19,12 +19,20 @@ typedef struct {
 typedef struct {
     uint32_t fill_argb; /* Straight-alpha sRGB. */
     double global_alpha;
+    double fill_alpha; /* Unquantized source alpha for state serialization. */
 } canvas_state_t;
 typedef struct {
     const uint32_t *pixels; /* Borrowed premultiplied 0xAARRGGBB, sRGB. */
     uint32_t width, height;
     size_t stride, capacity;
 } canvas_bitmap_t;
+/* Byte-addressed, straight-alpha RGBA8 in sRGB. The descriptor borrows
+ * caller storage; padding is not image data. */
+typedef struct {
+    uint8_t *bytes;
+    uint32_t width, height;
+    size_t stride, capacity;
+} canvas_rgba8_t;
 typedef struct {
     size_t live_bytes, peak_bytes, saved_states;
 } canvas_stats_t;
@@ -44,12 +52,26 @@ canvas_status_t canvas_reset(canvas_context_t *, uint32_t width, uint32_t height
 canvas_status_t canvas_save(canvas_context_t *);
 canvas_status_t canvas_restore(canvas_context_t *); /* Empty stack is a no-op. */
 canvas_status_t canvas_set_fill(canvas_context_t *, uint32_t straight_argb);
+/* RGB is straight sRGB in the low 24 bits; retain the finite [0,1] alpha
+ * in state and quantize it at the ARGB8 paint boundary. */
+canvas_status_t canvas_set_fill_rgb_alpha(canvas_context_t *, uint32_t rgb, double alpha);
 /* Nonfinite/out-of-range values are ignored, matching Canvas assignment. */
 canvas_status_t canvas_set_alpha(canvas_context_t *, double);
 /* Axis-aligned bitmap-space rectangles; transform/path support is tracked in
  * CANVAS.md C3. clear ignores the fill color and global alpha. */
 canvas_status_t canvas_fill_rect(canvas_context_t *, double x, double y, double w, double h);
 canvas_status_t canvas_clear_rect(canvas_context_t *, double x, double y, double w, double h);
+/* Pixel transfer ignores drawing state. Read fills out-of-bitmap samples
+ * with transparent black; put replaces the intersection, optionally limited
+ * by a source-coordinate dirty rectangle. The binding normalizes WebIDL
+ * arguments before calling. Buffers may not overlap the retained bitmap;
+ * descriptors/output must not alias their byte storage. No allocations or
+ * partial writes on refusal. Zero extents are native no-ops (the binding
+ * implements the web API's zero-size errors). */
+canvas_status_t canvas_read_pixels(canvas_context_t *, int64_t x, int64_t y,
+                                    const canvas_rgba8_t *out);
+canvas_status_t canvas_put_pixels(canvas_context_t *, const canvas_rgba8_t *source,
+                                   int64_t x, int64_t y, const draw2d_damage_t *dirty);
 canvas_status_t canvas_state(const canvas_context_t *, canvas_state_t *);
 /* Views are read-only and expire at the next successful reset/destroy;
  * drawing changes their contents synchronously. No ownership is transferred. */

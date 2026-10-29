@@ -14,7 +14,7 @@ struct canvas_context {
     Saved *saved;
     bool busy;
 };
-static canvas_state_t defaults(void) { return (canvas_state_t){0xff000000, 1}; }
+static canvas_state_t defaults(void) { return (canvas_state_t){0xff000000, 1, 1}; }
 canvas_options_t canvas_options_default(os64_geometry_memory_t memory)
 {
     return (canvas_options_t){.memory = memory, .max_dimension = 16384,
@@ -171,9 +171,15 @@ canvas_status_t canvas_restore(canvas_context_t *c)
 }
 canvas_status_t canvas_set_fill(canvas_context_t *c, uint32_t argb)
 {
+    return canvas_set_fill_rgb_alpha(c, argb & 0xffffffu, (double)(argb >> 24) / 255);
+}
+canvas_status_t canvas_set_fill_rgb_alpha(canvas_context_t *c, uint32_t rgb, double alpha)
+{
     canvas_status_t status = enter(c);
     if (status != CANVAS_OK) return status;
-    c->state.fill_argb = argb;
+    if (!isfinite(alpha) || alpha < 0 || alpha > 1) return leave(c, CANVAS_BAD_ARGUMENT);
+    c->state.fill_argb = ((uint32_t)(alpha * 255 + .5) << 24) | (rgb & 0xffffffu);
+    c->state.fill_alpha = alpha;
     return leave(c, CANVAS_OK);
 }
 canvas_status_t canvas_set_alpha(canvas_context_t *c, double a)
@@ -183,6 +189,17 @@ canvas_status_t canvas_set_alpha(canvas_context_t *c, double a)
     if (isfinite(a) && a >= 0 && a <= 1)
         c->state.global_alpha = a;
     return leave(c, CANVAS_OK);
+}
+static void damage_union(canvas_context_t *c, draw2d_damage_t d)
+{
+    if (d.x1 <= d.x0 || d.y1 <= d.y0) return;
+    if (c->damage.x1 <= c->damage.x0 || c->damage.y1 <= c->damage.y0) c->damage = d;
+    else {
+        if (d.x0 < c->damage.x0) c->damage.x0 = d.x0;
+        if (d.y0 < c->damage.y0) c->damage.y0 = d.y0;
+        if (d.x1 > c->damage.x1) c->damage.x1 = d.x1;
+        if (d.y1 > c->damage.y1) c->damage.y1 = d.y1;
+    }
 }
 static canvas_status_t rectangle(canvas_context_t *c, double x, double y, double w, double h,
                                   draw2d_operator_t op)
@@ -194,15 +211,7 @@ static canvas_status_t rectangle(canvas_context_t *c, double x, double y, double
         (draw2d_solid_t){c->state.fill_argb},
         (draw2d_composite_t){op, (uint16_t)(c->state.global_alpha * 65535 + .5)},
         c->options.max_draw_pixels, &d);
-    if (result == DRAW2D_OK && d.x1 > d.x0 && d.y1 > d.y0) {
-        if (c->damage.x1 <= c->damage.x0 || c->damage.y1 <= c->damage.y0) c->damage = d;
-        else {
-            if (d.x0 < c->damage.x0) c->damage.x0 = d.x0;
-            if (d.y0 < c->damage.y0) c->damage.y0 = d.y0;
-            if (d.x1 > c->damage.x1) c->damage.x1 = d.x1;
-            if (d.y1 > c->damage.y1) c->damage.y1 = d.y1;
-        }
-    }
+    if (result == DRAW2D_OK) damage_union(c, d);
     return leave(c, result == DRAW2D_OK ? CANVAS_OK : result == DRAW2D_LIMIT ? CANVAS_LIMIT
                                                                                        : CANVAS_BAD_ARGUMENT);
 }
@@ -244,5 +253,103 @@ canvas_status_t canvas_ack_damage(canvas_context_t *c)
     canvas_status_t status = enter(c);
     if (status != CANVAS_OK) return status;
     c->damage = (draw2d_damage_t){0};
+    return leave(c, CANVAS_OK);
+}
+
+static canvas_status_t rgba_validate(const canvas_context_t *c, const canvas_rgba8_t *v)
+{
+    if (!v) return CANVAS_BAD_ARGUMENT;
+    if (!v->width || !v->height) return CANVAS_OK;
+    if (!v->bytes) return CANVAS_BAD_ARGUMENT;
+    if ((uint64_t)v->width * 4 > SIZE_MAX) return CANVAS_LIMIT;
+    size_t row = (size_t)v->width * 4;
+    if (v->stride < row) return CANVAS_BAD_ARGUMENT;
+    if (v->height > 1 && v->stride > (SIZE_MAX - row) / (v->height - 1)) return CANVAS_LIMIT;
+    size_t used = (size_t)(v->height - 1) * v->stride + row;
+    if (used > v->capacity) return CANVAS_LIMIT;
+    uintptr_t a = (uintptr_t)v->bytes, b = (uintptr_t)c->surface.pixels;
+    if (c->surface.capacity && (a <= b ? b - a < used : a - b < c->surface.capacity))
+        return CANVAS_BAD_ARGUMENT;
+    return CANVAS_OK;
+}
+/* Place a source axis at offset in a bounded destination. Reject distant
+ * offsets before negating/subtracting so INT64_MIN/MAX are harmless. */
+static bool transfer_axis(int64_t offset, uint32_t source, uint32_t dest,
+                           uint32_t *s, uint32_t *d, uint32_t *count)
+{
+    if (!source || !dest || offset >= (int64_t)dest || offset <= -(int64_t)source) return false;
+    *s = offset < 0 ? (uint32_t)-offset : 0;
+    *d = offset > 0 ? (uint32_t)offset : 0;
+    *count = source - *s < dest - *d ? source - *s : dest - *d;
+    return true;
+}
+canvas_status_t canvas_read_pixels(canvas_context_t *c, int64_t x, int64_t y,
+                                    const canvas_rgba8_t *out)
+{
+    canvas_status_t status = enter(c);
+    if (status != CANVAS_OK) return status;
+    status = rgba_validate(c, out);
+    if (status != CANVAS_OK) return leave(c, status);
+    if ((uint64_t)out->width * out->height > c->options.max_draw_pixels)
+        return leave(c, CANVAS_LIMIT);
+    if (!out->width || !out->height) return leave(c, CANVAS_OK);
+    uint32_t ox = 0, oy = 0, bx = 0, by = 0, w = 0, h = 0;
+    bool overlap = transfer_axis(x, out->width, c->surface.width, &ox, &bx, &w) &&
+                   transfer_axis(y, out->height, c->surface.height, &oy, &by, &h);
+    for (uint32_t py = 0; py < out->height; ++py) {
+        uint8_t *row = out->bytes + (size_t)py * out->stride;
+        for (uint32_t px = 0; px < out->width; ++px) {
+            uint32_t p = 0;
+            if (overlap && px >= ox && px - ox < w && py >= oy && py - oy < h)
+                p = ((const uint32_t *)c->surface.pixels)[
+                    (size_t)(by + py - oy) * c->surface.width + bx + px - ox];
+            unsigned a = p >> 24;
+            row[4 * (size_t)px] = a ? (((p >> 16) & 255) * 255 + a / 2) / a : 0;
+            row[4 * (size_t)px + 1] = a ? (((p >> 8) & 255) * 255 + a / 2) / a : 0;
+            row[4 * (size_t)px + 2] = a ? ((p & 255) * 255 + a / 2) / a : 0;
+            row[4 * (size_t)px + 3] = a;
+        }
+    }
+    return leave(c, CANVAS_OK);
+}
+canvas_status_t canvas_put_pixels(canvas_context_t *c, const canvas_rgba8_t *source,
+                                   int64_t x, int64_t y, const draw2d_damage_t *dirty)
+{
+    canvas_status_t status = enter(c);
+    if (status != CANVAS_OK) return status;
+    status = rgba_validate(c, source);
+    if (status != CANVAS_OK) return leave(c, status);
+    uint32_t sx, sy, dx, dy, w, h;
+    if (!transfer_axis(x, source->width, c->surface.width, &sx, &dx, &w) ||
+        !transfer_axis(y, source->height, c->surface.height, &sy, &dy, &h))
+        return leave(c, CANVAS_OK);
+    if (dirty) {
+        uint32_t ex = sx + w, ey = sy + h;
+        if (dirty->x1 < ex) ex = dirty->x1;
+        if (dirty->y1 < ey) ey = dirty->y1;
+        if (dirty->x0 > sx) {
+            if (dirty->x0 >= ex) return leave(c, CANVAS_OK);
+            dx += dirty->x0 - sx; sx = dirty->x0;
+        }
+        if (dirty->y0 > sy) {
+            if (dirty->y0 >= ey) return leave(c, CANVAS_OK);
+            dy += dirty->y0 - sy; sy = dirty->y0;
+        }
+        if (ex <= sx || ey <= sy) return leave(c, CANVAS_OK);
+        w = ex - sx; h = ey - sy;
+    }
+    if ((uint64_t)w * h > c->options.max_draw_pixels) return leave(c, CANVAS_LIMIT);
+    for (uint32_t py = 0; py < h; ++py) {
+        const uint8_t *row = source->bytes + (size_t)(sy + py) * source->stride + (size_t)sx * 4;
+        uint32_t *dest = (uint32_t *)c->surface.pixels + (size_t)(dy + py) * c->surface.width + dx;
+        for (uint32_t px = 0; px < w; ++px) {
+            unsigned a = row[4 * (size_t)px + 3];
+            unsigned r = (row[4 * (size_t)px] * a + 127) / 255;
+            unsigned g = (row[4 * (size_t)px + 1] * a + 127) / 255;
+            unsigned b = (row[4 * (size_t)px + 2] * a + 127) / 255;
+            dest[px] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+    damage_union(c, (draw2d_damage_t){dx, dy, dx + w, dy + h});
     return leave(c, CANVAS_OK);
 }

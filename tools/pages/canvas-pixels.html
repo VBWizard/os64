@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — Pixel by Pixel</title>
+<style>
+body { margin:0; background:#edf4ec; color:#213d36; font:18px sans-serif; }
+main { max-width:960px; margin:32px auto; padding:0 24px; }
+h1 { font-size:40px; margin:8px 0 12px; } h2 { font-size:23px; margin:0 0 12px; }
+p { line-height:1.5; } .eyebrow { color:#527b68; font-size:14px; letter-spacing:3px; }
+.cards { display:flex; flex-wrap:wrap; gap:20px; }
+.card { width:400px; padding:20px; border:1px solid #bfd1bf; background:#fffdf5; border-radius:12px; }
+canvas { width:100%; height:160px; display:block; background:#e2ebe3; border:1px solid #9fb8a8; }
+button { margin-top:14px; padding:10px 16px; background:#265d50; color:white; border:0; border-radius:6px; font-size:16px; }
+.slot { min-height:80px; padding:8px; border:1px dashed #95ae9d; margin-top:8px; }
+.slot canvas { height:80px; } .caption { font-size:15px; min-height:44px; }
+</style>
+<main>
+<p class="eyebrow">YONDER / CANVAS 2D / C2</p>
+<h1>Pixel by Pixel</h1>
+<p>A drawing that stays put. Pixels you can read, keep, erase, and bring back.</p>
+<p id="status">Enable Scripts and Modern Web, then reload to paint the canvases.</p>
+<div class="cards">
+<section class="card"><h2>1. A fresh coat</h2><canvas id="tiles" width="400" height="160"></canvas>
+<p class="caption">The button swaps the palette. Clear squares reveal the canvas background.</p><button id="coat">Change the palette</button></section>
+<section class="card"><h2>2. Keep a little history</h2><canvas id="history" width="400" height="160"></canvas>
+<p class="caption">An ImageData snapshot brings back the drawing, including its transparent window.</p><button id="undo">Undo / redo</button></section>
+<section class="card"><h2>3. The same size, a clean slate</h2><canvas id="reset" width="400" height="160"></canvas>
+<p class="caption">First click assigns the same width and clears it. Next click paints it again.</p><button id="clean">Reset / repaint</button></section>
+<section class="card"><h2>4. A change of address</h2><div class="slot" id="left"><canvas id="traveller" width="400" height="80"></canvas></div><div class="slot" id="right"></div>
+<p class="caption">The same canvas moves between its two homes. Its pixels come along.</p><button id="move">Move the drawing</button></section>
+</div>
+<p>Try 25%–400% zoom. CSS changes the display size; the stored bitmap keeps its pixels.</p>
+</main>
+<script>
+(function () {
+  var tiles=document.getElementById('tiles').getContext('2d');
+  var history=document.getElementById('history').getContext('2d');
+  var reset=document.getElementById('reset').getContext('2d');
+  var traveller=document.getElementById('traveller');
+  var travel=traveller.getContext('2d');
+  function mosaic(ctx, alternate) {
+    ctx.clearRect(0,0,400,160);
+    var colors=alternate?['#ecab55','#ad5846','#79679c']:['#3f8269','#67a49a','#e2b864'];
+    for(var y=0;y<4;y++) for(var x=0;x<10;x++) {
+      ctx.fillStyle=colors[(x+y)%3];ctx.fillRect(x*40+3,y*40+3,34,34);
+    }
+    ctx.clearRect(163,43,74,74);
+    ctx.save();ctx.globalAlpha=.45;ctx.fillStyle='white';ctx.fillRect(3,3,114,34);ctx.restore();
+  }
+  var alternate=false;mosaic(tiles,alternate);
+  document.getElementById('coat').onclick=function(){alternate=!alternate;mosaic(tiles,alternate);};
+  mosaic(history,false);var before=history.getImageData(0,0,400,160);
+  history.fillStyle='#ecab55';history.fillRect(100,30,200,100);history.clearRect(160,55,80,50);
+  var after=history.getImageData(0,0,400,160),undone=false;
+  document.getElementById('undo').onclick=function(){undone=!undone;history.putImageData(undone?before:after,0,0);};
+  mosaic(reset,true);var blank=false;
+  document.getElementById('clean').onclick=function(){blank=!blank;if(blank)reset.canvas.width=reset.canvas.width;else mosaic(reset,true);};
+  var data=travel.createImageData(400,80);
+  for(var y=0;y<80;y++)for(var x=0;x<400;x++){
+    var i=(y*400+x)*4;data.data[i]=40+x*.4;data.data[i+1]=105+y;data.data[i+2]=115;data.data[i+3]=255;
+  }
+  travel.putImageData(data,0,0);travel.clearRect(24,24,352,32);
+  var away=false;document.getElementById('move').onclick=function(){away=!away;document.getElementById(away?'right':'left').appendChild(traveller);};
+  document.getElementById('status').textContent='Four live canvases. Four buttons. No redraw script runs just because you zoom.';
+})();
+</script>

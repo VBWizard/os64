@@ -402,6 +402,7 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     }
     JS_SetClassProto(ctx, dom->collection_class, collection_prototype);
     if (d_static_list_install(dom, ctx) < 0 || d_mixin_install(dom, ctx) < 0) goto fail;
+    if (selected.modern) d_mutation_start(dom);
     if (selected.url != NULL) {
         size_t size = os64_strlen(selected.url) + 1;
         dom->url = d_alloc(dom, size);
@@ -463,6 +464,7 @@ void os64_dom_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
+    d_mutation_stop(dom);
     /* What the page changed in its storage and has not committed goes to
      * the store before the binding is gone: the last of its commits. */
     d_storage_drain(dom);
@@ -503,6 +505,7 @@ void os64_dom_free(os64_dom_t *dom)
         DValue *next = entry->next;
         d_event_free(dom, entry);
         d_attr_free(dom, entry);
+        d_canvas_free(entry);
         d_free(dom, entry->output_default);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);

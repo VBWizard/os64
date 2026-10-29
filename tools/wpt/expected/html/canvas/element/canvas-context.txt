@@ -1,0 +1,19 @@
+# WPT's html/canvas/element/canvas-context in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/canvas-context --update
+# rewrites [passing].
+[required]
+2d.canvas.context.extraargs.create.html	The 2D context doesn't throw with extra getContext arguments (new context)
+2d.canvas.context.unique.html	getContext('2d') returns the same object
+[excluded]
+[passing]
+2d.canvas.context.exists.html	The 2D context is implemented
+2d.canvas.context.extraargs.cache.html	The 2D context doesn't throw with extra getContext arguments (cached)
+2d.canvas.context.extraargs.create.html	The 2D context doesn't throw with extra getContext arguments (new context)
+2d.canvas.context.invalid.args.html	Calling getContext with invalid arguments.
+2d.canvas.context.prototype.html	checks CanvasRenderingContext2D prototype
+2d.canvas.context.shared.html	getContext('2d') returns objects which share canvas state
+2d.canvas.context.type.exists.html	The 2D context interface is a property of 'window'
+2d.canvas.context.type.extend.html	Interface methods can be added
+2d.canvas.context.type.replace.html	Interface methods can be overridden
+2d.canvas.context.unique.html	getContext('2d') returns the same object

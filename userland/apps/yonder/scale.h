@@ -9,6 +9,7 @@
 // (`image-rendering: pixelated`). Pure over pixels, so the host harness
 // checks them pixel by pixel.
 
+#include <draw2d/paint.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -19,6 +20,12 @@
 // packed. What is written is opaque.
 void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
                          bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh);
+
+// Same sampling, with explicit source stride/capacity and alpha convention.
+// Supports ARGB8 straight and premultiplied sources; rejects invalid views
+// before writing. Destination/clip retain the opaque surface contract above.
+bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
+                          bool smooth, const draw2d_surface_t *source);
 
 // A picture TILED across `area`: each copy scaled to `tile`'s size, laid
 // from `tile` in every direction — or, on an axis that does not repeat,

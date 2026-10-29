@@ -1795,3 +1795,17 @@ void yonder_scripts_storage_forget(yonder_scripts_t *s)
     if (s != NULL && s->dom != NULL)
         os64_dom_storage_forget(s->dom);
 }
+
+/* These presentation reads enter no script and create no runtime. */
+bool yonder_scripts_canvas_bitmap(yonder_scripts_t *s, const os64_html_node_t *node, canvas_bitmap_t *out)
+{
+    return s && os64_dom_canvas_bitmap(s->dom, node, out);
+}
+bool yonder_scripts_canvas_dirty(yonder_scripts_t *s, bool (*visible)(void *, const os64_html_node_t *), void *opaque)
+{
+    return s && os64_dom_canvas_dirty(s->dom, visible, opaque);
+}
+void yonder_scripts_canvas_painted(yonder_scripts_t *s, const os64_html_node_t *node)
+{
+    if (s) os64_dom_canvas_painted(s->dom, node);
+}

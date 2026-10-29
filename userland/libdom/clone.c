@@ -31,7 +31,7 @@
  * ordinary objects, each own enumerable string-keyed property read with
  * [[Get]], so a getter runs, in [[OwnPropertyKeys]] order, a key a getter
  * deleted first skipped; and the platform objects HTML makes serializable
- * that this browser has: Blob, File and DOMException. A value met twice
+ * that this browser has: Blob, File, DOMException and ImageData. A value met twice
  * is one value in the copy, cycles included.
  *
  * Everything else is a DataCloneError: a Symbol, a function, a Proxy, a
@@ -110,7 +110,7 @@ static const char *const kErrorNames[7] = {"Error", "EvalError", "RangeError", "
 
 enum {
     K_PRIMITIVE, K_REFERENCE, K_OBJECT, K_ARRAY, K_WRAPPER, K_DATE, K_REGEXP, K_BUFFER, K_VIEW, K_MAP, K_SET,
-    K_ERROR, K_BLOB, K_EXCEPTION
+    K_ERROR, K_BLOB, K_EXCEPTION, K_IMAGE_DATA
 };
 
 /* What a buffer, a blob, an exception or an error carries besides its
@@ -137,8 +137,8 @@ typedef struct {
     uint8_t sub;               /* a view's kind (d_view_kind); an error's name; a RegExp's flags */
     uint32_t id;               /* the object's number; a reference's target */
     uint64_t count;            /* an object's or array's properties; a map's or set's entries; an error's
-                                * cause (1) or none (0); a view's byte offset */
-    uint64_t size;             /* an array's length; a view's length, elements or a DataView's bytes */
+                                * cause (1) or none (0); a view's byte offset; ImageData's width */
+    uint64_t size;             /* an array's length; a view's length; ImageData's height */
     DData *data;
 } DItem;
 
@@ -818,6 +818,16 @@ static int write_value(DWriter *w, JSAtom key, JSValueConst value)
     const uint8_t *bytes;
     size_t length;
     const char *type, *message;
+    JSValue image_array;
+    uint32_t image_width, image_height;
+    if (d_image_data_parts(value, &image_array, &image_width, &image_height)) {
+        DItem *item = item_new(w, key, K_IMAGE_DATA);
+        if (!item) return -1;
+        item->count = image_width;
+        item->size = image_height;
+        int written = write_value(w, JS_ATOM_NULL, image_array);
+        return written < 0 ? -1 : number(w, value, index);
+    }
     if (d_blob_get(value, &bytes, &length, &type)) return write_blob(w, key, value, bytes, length, type);
     if (d_dom_exception_fields(value, &type, &message)) {
         DItem *item = item_new(w, key, K_EXCEPTION);
@@ -1046,7 +1056,7 @@ static int deliver(DReader *r, JSAtom key, JSValue value)
         result = JS_DefinePropertyValueStr(ctx, fill->container, "cause", value,
                                            JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ? -1 : 0;
         break;
-    case K_VIEW:
+    case K_VIEW: case K_IMAGE_DATA:
         fill->container = value;
         break;
     default:
@@ -1111,8 +1121,9 @@ static int settle(DReader *r)
         DFill fill = r->fills[--r->fill_count];
         const DItem *item = &r->in->items[fill.header];
         JSValue done = fill.container;
-        if (item->kind == K_VIEW) {
-            done = view_make(r, item, fill.container);
+        if (item->kind == K_VIEW || item->kind == K_IMAGE_DATA) {
+            done = item->kind == K_VIEW ? view_make(r, item, fill.container)
+                : d_image_data_from_array(ctx, fill.container, (uint32_t)item->count, (uint32_t)item->size);
             JS_FreeValue(ctx, fill.container);
             if (JS_IsException(done)) return -1;
             r->objects[item->id] = JS_DupValue(ctx, done);
@@ -1178,7 +1189,7 @@ static JSValue item_make(DReader *r, DItem *item, bool *container)
         return regexp;
     }
     case K_BUFFER: return buffer_make(r, item->data);
-    case K_VIEW: *container = true; return JS_UNDEFINED;
+    case K_VIEW: case K_IMAGE_DATA: *container = true; return JS_UNDEFINED;
     case K_MAP: case K_SET:
         *container = true;
         return JS_CallConstructor(ctx, dom->clone_held[item->kind == K_MAP ? H_MAP : H_SET]->value, 0, NULL);
@@ -1225,10 +1236,12 @@ static int read_items(DReader *r)
         bool container;
         JSValue value = item_make(r, item, &container);
         if (JS_IsException(value)) return -1;
-        if (item->kind != K_PRIMITIVE && item->kind != K_REFERENCE && item->kind != K_VIEW)
+        if (item->kind != K_PRIMITIVE && item->kind != K_REFERENCE && item->kind != K_VIEW &&
+            item->kind != K_IMAGE_DATA)
             r->objects[item->id] = JS_DupValue(r->ctx, value);
         if (container) {
-            uint64_t left = item->kind == K_VIEW ? 1 : item->kind == K_ERROR ? 1 : item->count;
+            uint64_t left = item->kind == K_VIEW || item->kind == K_IMAGE_DATA || item->kind == K_ERROR
+                                ? 1 : item->count;
             if (fill_push(r, i, value, left) < 0) return -1;
         } else if (deliver(r, item->key, value) < 0) return -1;
         if (settle(r) < 0) return -1;

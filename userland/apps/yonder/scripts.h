@@ -1,5 +1,6 @@
 #ifndef YONDER_SCRIPTS_H
 #define YONDER_SCRIPTS_H
+#include <dom/canvas.h>
 
 // A page's SCRIPT HOST (DOM_D7.md § The script host of a page): its runtime
 // and binding, made at the first script that runs, and the lists HTML's
@@ -20,6 +21,9 @@
 #include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
+bool yonder_scripts_canvas_bitmap(yonder_scripts_t *, const os64_html_node_t *, canvas_bitmap_t *);
+bool yonder_scripts_canvas_dirty(yonder_scripts_t *, bool (*visible)(void *, const os64_html_node_t *), void *);
+void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
 
 typedef struct {
     const char *url;                // the page's address: names, location, a src's base
