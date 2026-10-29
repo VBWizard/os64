@@ -849,6 +849,7 @@ typedef struct {
     FArena arena;
     const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
+    uint64_t count;              // boxes allocated, including anonymous boxes
     // Every containing block's entry, in tree order; and the out-of-flow
     // boxes of the initial containing block.
     FPos *positioned, *last_positioned;

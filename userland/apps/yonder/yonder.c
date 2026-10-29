@@ -77,6 +77,8 @@
 // that set none is white's dark counterpart, as the painter turns it.
 static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
+// --layout-profile enables phase clocks and the page record's layout totals.
+static bool s_layout_profile;
 
 // THE PERSON'S MOTION SETTINGS (yonder.conf): `motion = reduce` has pages
 // told `prefers-reduced-motion: reduce`, and `animations = off` hands no
@@ -1062,6 +1064,49 @@ static void layout_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
         mark_part(meet);
 }
 
+static int64_t layout_clock(void *opaque)
+{
+    (void)opaque;
+    return os64_micros();
+}
+static uint64_t layout_elapsed(int64_t from, uint64_t *errors)
+{
+    int64_t to = os64_micros();
+    if (from < 0 || to < from) { ++*errors; return 0; }
+    return (uint64_t)(to - from);
+}
+static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
+{
+    bool enabled = s_layout_profile && p->diag;
+    int64_t began = enabled ? os64_micros() : -1;
+    os64_page_t *model = os64_page_rebuild(old);
+    if (enabled) {
+        yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
+        sample.model_us = layout_elapsed(began, &sample.clock_errors);
+        yonder_diag_layout_add(p->diag, &sample);
+    }
+    return model;
+}
+static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
+{
+    bool enabled = s_layout_profile && p->diag;
+    flow_profile_t profile;
+    flow_tree_t *tree = enabled ?
+        flow_layout_profiled(page_doc(p), page_model(p), width, &s_env, &profile, layout_clock, NULL) :
+        flow_layout(page_doc(p), page_model(p), width, &s_env);
+    if (enabled) {
+        yonder_layout_stats_t sample = {
+            .style_us = profile.style_us, .boxes_us = profile.boxes_us,
+            .layout_us = profile.layout_us, .public_us = profile.public_us,
+            .elements = profile.elements, .boxes = profile.boxes,
+            .measures = profile.measures, .reused = profile.reused,
+            .clock_errors = profile.clock_errors, .layouts = 1,
+            .refusals = tree == NULL || flow_incomplete(tree)};
+        yonder_diag_layout_add(p->diag, &sample);
+    }
+    return tree;
+}
+
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     if (page_rebuild_owed(p))
@@ -1081,6 +1126,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
                                                   garb_cascade_env(cascade).device_width != view.device_width ||
                                                   garb_cascade_env(cascade).device_height != view.device_height ||
                                                   garb_cascade_env(cascade).resolution != view.resolution))) {
+        int64_t began = s_layout_profile && p->diag ? os64_micros() : -1;
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
         const os64_page_t *model = page_model(p);
@@ -1091,6 +1137,11 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         }
         // Inline style attributes also need a cascade when no sheet is linked.
         cascade = garb_cascade(in, n, page_doc(p), view);
+        if (s_layout_profile && p->diag) {
+            yonder_layout_stats_t sample = {.refusals = cascade == NULL};
+            sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
+            yonder_diag_layout_add(p->diag, &sample);
+        }
         if (cascade == NULL)
             return false;
         // A condition of the page, said once however many of its cascades
@@ -1120,7 +1171,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_env.now_ms = yonder_now_ms();
     geometry_layout_total++;
     webfonts_layout_begins(p);
-    flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+    flow_tree_t *fresh = profile_flow_layout(p, width);
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
     // engine's budget and its face limit — so a layout at new sizes (a
@@ -1139,7 +1190,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         }
         geometry_layout_total++;
         webfonts_layout_begins(p);
-        fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+        fresh = profile_flow_layout(p, width);
     }
     s_env.cascade = NULL;
     s_laying.cascade = NULL;
@@ -1706,9 +1757,9 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     else if (page_model(p) != NULL && p->model_version == version)
         model = os64_page_retain(page_model(p)) ? page_model(p) : NULL;
     else if (mine)
-        model = os64_page_rebuild(s_measured.model);
+        model = profile_model_rebuild(p, s_measured.model);
     else if (page_model(p) != NULL)
-        model = os64_page_rebuild(page_model(p));
+        model = profile_model_rebuild(p, page_model(p));
     else
         model = os64_page_build(doc, url, NULL, state);
     measured_forget(s_measured.doc);
@@ -7734,7 +7785,7 @@ static bool page_model_refresh(Page *p)
     uint64_t version = os64_html_version(page_doc(p));
     if (version == p->model_version)
         return true;
-    os64_page_t *model = os64_page_rebuild(page_model(p));
+    os64_page_t *model = profile_model_rebuild(p, page_model(p));
     if (model == NULL)
         return false;
     os64_page_t *old = page_model(p);
@@ -14089,7 +14140,12 @@ int main(int argc, char **argv)
     // The window is named after the page (title_follow). A FILE given on
     // the command line is read before the window exists, so the window is
     // born with that page's name rather than taking it a moment later.
-    s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
+    int address_arg = 1;
+    for (; address_arg < argc; ++address_arg) {
+        if (os64_streq(argv[address_arg], "--script-audit")) s_script_audit = true;
+        else if (os64_streq(argv[address_arg], "--layout-profile")) s_layout_profile = true;
+        else break;
+    }
     g.scripts_on = yonder_settings_saved_scripts();
     s_dark = yonder_settings_saved_dark();
     s_animations = yonder_settings_saved_animations();
@@ -14103,7 +14159,6 @@ int main(int argc, char **argv)
     s_storage = yonder_storage_new(profile);    // NULL keeps each page's storage for its own life
     s_preflight = way_preflight_new();          // NULL sends every preflight
     yonder_settings_on_clear_storage(storage_clear);
-    int address_arg = s_script_audit ? 2 : 1;
     const char *first = argc > address_arg ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
     if (first != NULL && first[0] == '/') {

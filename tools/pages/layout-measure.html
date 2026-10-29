@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>A Matter of Time — Yonder layout measurements</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#edf3f7;color:#183447;font-family:sans-serif;line-height:1.5}
+main{max-width:1000px;margin:0 auto;padding:28px}h1{font-size:40px;margin:6px 0}h2{margin:0 0 12px;font-size:22px}
+.eyebrow{color:#316d91;font-size:13px;font-weight:bold;letter-spacing:2px}.intro{max-width:760px;font-size:17px}
+.card{background:white;border:1px solid #c6d7e3;border-radius:14px;padding:22px;margin:20px 0}
+.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:center}label{display:block;font-size:14px}
+select,button{font:inherit;padding:10px 16px;border-radius:7px;border:1px solid #9ab6c9}button{background:#225e83;color:white;cursor:pointer}
+button:disabled{background:#8097a6;cursor:default}#stop{background:#fff;color:#225e83}#status{font-weight:bold;color:#316d91}
+table{border-collapse:collapse;width:100%;font-size:15px}th,td{text-align:left;border-bottom:1px solid #d6e2e9;padding:12px 8px}
+th{color:#316d91}td.number{text-align:right;font-family:monospace}.note{font-size:14px;color:#476779}
+#viewport{height:220px;overflow:auto;border:1px solid #a9c3d4;background:#f4f8fb;padding:10px}
+#rows p{margin:0;padding:3px 8px;border-bottom:1px solid #dce7ee;font-family:monospace;font-size:14px}
+#rows p:nth-child(even){background:#e6f0f6}#report{width:100%;max-height:220px;overflow:auto;white-space:pre-wrap;font:12px monospace;padding:12px;background:#f4f8fb;color:#183447;border:1px solid #c6d7e3}
+</style></head><body><main>
+<div class="eyebrow">YONDER · LAYOUT LAB</div><h1>A Matter of Time</h1>
+<p class="intro">One small change. One long page. How much work does the browser repeat? Run the same three experiments now, then compare them as layout reuse arrives.</p>
+<section class="card"><h2>Set the pace</h2><div class="controls">
+<label>Page size<br><select id="size"><option value="200">200 rows · quick check</option><option value="2000" selected>2,000 rows · hardware baseline</option></select></label>
+<label>Samples per experiment<br><select id="samples"><option value="3">3 · quick check</option><option value="20" selected>20 · baseline</option></select></label>
+<button id="run">Run measurements</button><button id="stop" disabled>Cancel</button></div>
+<p id="status">Ready. Keep the window size and zoom fixed during a run.</p>
+<p class="note">Five warm-up operations precede each experiment. Samples run one per timer turn so the window can respond. Times exclude that wait and include any layout forced by the geometry read.</p></section>
+<section class="card"><h2>The results</h2><table><thead><tr><th>Experiment</th><th>Median</th><th>Worst</th><th>Samples</th></tr></thead><tbody id="results"><tr><td colspan="4">Your first baseline is waiting.</td></tr></tbody></table>
+<p class="note">The read-only control should stay inexpensive. Paragraph and list changes currently rebuild broadly; these are the numbers future slices aim to reduce. No target speed is assumed.</p>
+<pre id="report" aria-label="Measurement report">The completed run will appear here as JSON, including its raw samples.</pre></section>
+<section class="card"><h2>The working page</h2><div id="viewport"><div id="rows"><p>Rows are created when you start a run.</p></div></div></section>
+<p class="note">For native phase totals, launch Yonder with <code>--layout-profile</code>. After completion, click ordinary page text and press <strong>d</strong> to save the corpus report. Use the same page size, sample count, window size and zoom for comparisons. A cancelled or failed run is not a baseline.</p>
+</main><script>
+(function(){
+'use strict';
+var run=document.getElementById('run'),stop=document.getElementById('stop');
+var size=document.getElementById('size'),samples=document.getElementById('samples');
+var rows=document.getElementById('rows'),status=document.getElementById('status');
+var results=document.getElementById('results'),report=document.getElementById('report');
+var token=0,active=false,phase=0,iteration=0,warm=5,wanted=20,rowCount=2000,anchor=null;
+var values=[],collected=[],sink=0,sequence=0,started='',width=0,height=0,ratio=1;
+var names=['Read unchanged geometry','Change one paragraph','Replace one list item'];
+function row(i){var p=document.createElement('p');p.textContent='Row '+i+' — a small piece of a much longer page.';return p;}
+function controls(running){active=running;run.disabled=running;stop.disabled=!running;size.disabled=running;samples.disabled=running;}
+function payload(state){return {format:'yonder-layout-5a-v1',state:state,started:started,rows:rowCount,samples:wanted,warmup:warm,
+ viewport:{width:width,height:height,devicePixelRatio:ratio},userAgent:navigator.userAgent,results:collected};}
+function finish(state,message){controls(false);status.textContent=message;report.textContent=JSON.stringify(payload(state),null,2);}
+function operation(){
+ if(phase===1){anchor.textContent=(sequence++%2?'Changed':'Updated')+' paragraph — the same-sized text, a fresh layout request.';}
+ if(phase===2){rows.removeChild(rows.firstChild);rows.appendChild(row(rowCount+sequence++));}
+ sink=rows.offsetHeight;
+}
+function step(id){
+ if(id!==token||!active)return;
+ try{
+  if(innerWidth!==width||innerHeight!==height||(devicePixelRatio||1)!==ratio){finish('invalid','Window size or zoom changed. Please run again.');return;}
+  var before=performance.now();operation();var elapsed=performance.now()-before;
+  if(!isFinite(elapsed)||elapsed<0){finish('invalid','The clock returned an invalid interval. Please run again.');return;}
+  if(iteration>=warm)values.push(elapsed);
+  iteration++;
+  if(iteration===warm+wanted){
+   var ordered=values.slice().sort(function(a,b){return a-b;});var middle=Math.floor(ordered.length/2);
+   var median=ordered.length%2?ordered[middle]:(ordered[middle-1]+ordered[middle])/2;
+   collected.push({experiment:names[phase],median_ms:median,worst_ms:ordered[ordered.length-1],samples_ms:values.slice()});
+   phase++;iteration=0;values=[];
+   if(phase===names.length){
+    var html='';collected.forEach(function(r){html+='<tr><td>'+r.experiment+'</td><td class="number">'+r.median_ms.toFixed(3)+' ms</td><td class="number">'+r.worst_ms.toFixed(3)+' ms</td><td class="number">'+r.samples_ms.length+'</td></tr>';});
+    results.innerHTML=html;finish('complete','Complete. Your baseline is ready.');return;
+   }
+  }
+  setTimeout(function(){step(id);},20);
+ }catch(error){finish('failed','Measurement stopped: '+String(error));}
+}
+run.addEventListener('click',function(){
+ token++;phase=0;iteration=0;values=[];collected=[];sequence=0;
+ rowCount=Number(size.value);wanted=Number(samples.value);started=new Date().toISOString();
+ controls(true);status.textContent='Measuring… please leave the window size and zoom unchanged.';report.textContent='Run in progress.';
+ try{
+  rows.textContent='';var fragment=document.createDocumentFragment();
+  for(var i=0;i<rowCount;i++)fragment.appendChild(row(i));rows.appendChild(fragment);
+  anchor=rows.children[Math.floor(rowCount/2)];sink=rows.offsetHeight;
+  width=innerWidth;height=innerHeight;ratio=devicePixelRatio||1;
+  var id=token;setTimeout(function(){step(id);},20);
+ }catch(error){finish('failed','Setup stopped: '+String(error));}
+});
+stop.addEventListener('click',function(){token++;finish('cancelled','Cancelled. Run again when you are ready.');});
+})();
+</script></body></html>

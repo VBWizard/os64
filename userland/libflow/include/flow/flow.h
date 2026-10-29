@@ -845,6 +845,16 @@ typedef struct {
 
 // ── What the face hands in ──────────────────────────────────────────────
 
+/* Optional measurements of one flow_layout call. Times are microseconds
+ * from the caller's monotonic clock, with invalid/backward reads counted.
+ * Counts come from stages that returned a result; a stage returning NULL
+ * has no count. Times include attempted stages, including refused builds.
+ * `reused` is zero for a full rebuild. No clock is read without a sink. */
+typedef struct {
+    uint64_t style_us, boxes_us, layout_us, public_us;
+    uint64_t elements, boxes, measures, reused, clock_errors;
+} flow_profile_t;
+
 typedef struct {
     void *ctx;
     // Fonts: the face's resolver; on the host, the fake backend. `families`
@@ -1102,6 +1112,13 @@ typedef struct flow_tree flow_tree_t;
 // model until free. Its cascade, fonts and text context outlive it.
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
                          int32_t width, const flow_env_t *env);
+/* The same layout with an optional output sink and injectable monotonic
+ * microsecond clock. Both are borrowed for this call, and the sink is cleared
+ * even on refusal. A missing/invalid clock is counted, not treated as timing
+ * evidence. The ordinary flow_layout entry reads no profiling clock. */
+flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_page_t *model,
+                                  int32_t width, const flow_env_t *env, flow_profile_t *profile,
+                                  int64_t (*clock)(void *), void *clock_ctx);
 void flow_free(flow_tree_t *tree);
 // Borrowed snapshot whose indices the boxes carry; NULL if built without one.
 const os64_page_t *flow_model(const flow_tree_t *tree);

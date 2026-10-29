@@ -6204,6 +6204,8 @@ static void classic_browser_cases(void)
 /* What reads the host's own files directly is the suite's alone: a unit
  * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
  * of it, so the replay runner's every file goes through its own door. */
+#include "test_yonder_layout_profile.inc"
+
 #ifndef YONDER_HOST_FAKES_ONLY
 /* Optional consumer proof reads locally downloaded primary scripts. Site
  * sources stay outside the repository; regular regressions are original. */
@@ -10770,6 +10772,7 @@ int main(void)
     inserted_frame_cases();
     stand_in_paint_cases();
     canvas_window_cases();
+    layout_profile_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();

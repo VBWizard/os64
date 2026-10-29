@@ -2631,6 +2631,8 @@ static void t_reclaim_rules(void)
     os64_html_document_free(doc);
     check(live == 0, "reclamation rules teardown");
 }
+#include "test_html_changes.inc"
+
 int main(int argc, char **argv)
 {
 #ifdef HTML_RECLAIM_TEST
@@ -2685,6 +2687,9 @@ int main(int argc, char **argv)
         t_observe_attributes();
         t_observe_parser();
         t_custom_state();
+        t_change_log();
+        t_change_log_loss();
+        t_change_log_parser();
     }
     static const char *const pages[] = {
         "<!doctype html><html><head><title>t</title></head><body><div id=a class=x><span>one</span></div>"

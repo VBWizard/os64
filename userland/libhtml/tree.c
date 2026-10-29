@@ -206,7 +206,7 @@ static bool attach(os64_html_parser_t *p, HNode *parent, HNode *before, HNode *n
     d_seen(d, parent, n, before, &seen);
     if (!d->disturbed) {
         h_attach(d, parent, before, n);
-        d_tell_placed(d, parent, n, before, NULL, &seen);
+        d_tell_placed(d, parent, n, before, NULL, &seen, true);
         return true;
     }
     uint64_t steps = 0;
@@ -215,7 +215,7 @@ static bool attach(os64_html_parser_t *p, HNode *parent, HNode *before, HNode *n
     if (verdict == OS64_HTML_TOO_DEEP)
         h_refuse(p, verdict);
     if (verdict == OS64_HTML_OK)
-        d_tell_placed(d, parent, n, before, NULL, &seen);
+        d_tell_placed(d, parent, n, before, NULL, &seen, true);
     return verdict == OS64_HTML_OK;
 }
 static void detach(os64_html_parser_t *p, HNode *n)
@@ -231,7 +231,7 @@ static void detach(os64_html_parser_t *p, HNode *n)
         d_unlink(d, n, &steps);
         h_work(p, steps);
     }
-    d_tell_removed(d, parent, n, prev, next);
+    d_tell_removed(d, parent, n, prev, next, true);
 }
 /* A node the parser moves from where it sits may end in another tree, once
  * a verb has made more than one for it to sit in. `rooted` is asked before
@@ -477,7 +477,7 @@ static void insert_character(os64_html_parser_t *p, uint32_t c)
     }
     size_t had = n->text_len;
     if (h_text_put(p, n, c))
-        d_tell_text(p->d, n, n->text, had);
+        d_tell_text(p->d, n, n->text, had, true);
 }
 static HNode *clone(os64_html_parser_t *p, HNode *old, bool insert)
 {
