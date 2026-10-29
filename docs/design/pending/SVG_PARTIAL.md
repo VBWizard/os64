@@ -72,7 +72,8 @@ keeps its unsupported foreignObject subtree out of the image. The postcard
 keeps its lighthouse without fetching its embedded picture. The fourth frame
 is empty with unsupported pattern paint and shows a rounded rectangle with
 solid paint. QEMU checks passed at 25%, 100% and 400%, including both
-button round trips. Hardware acceptance is pending.
+button round trips. Chris verified the gallery and both buttons on the P5 and approved
+the slice for shipment on 2026-10-29.
 
 [Results](../../svg-evidence/partial-results.json) and the
 [frozen delivery manifest](../../svg-evidence/partial-delivery.sha256) record
