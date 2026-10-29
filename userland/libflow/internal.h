@@ -530,6 +530,13 @@ const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
 // (detached, or in a template's contents), and on no memory.
 const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_page_t *model,
                               const os64_html_node_t *element);
+// CSSOM's SVG values use the same unit and calculation rules as layout.
+// font/root_font are zoomed 26.6 sizes; the result uses CSS pixels and
+// percentages, or a dimensionless number in px when number is true.
+typedef struct { double px, pct; bool number; } FNumeric;
+bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_font,
+                     const garb_val_t *value, FNumeric *out);
+uint32_t f_style_colour(garb_color_t color);
 void f_style_free(FStyles *styles);
 // The styles pass 1 made for a tree, which live as long as it does.
 const FStyles *f_tree_styles(const flow_tree_t *tree);

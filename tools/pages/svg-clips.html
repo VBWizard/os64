@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: cut to shape</title>
+<style>
+body { margin:24px; background:#edf2f8; color:#243952; font:16px sans-serif; }
+h1 { margin-bottom:8px; } h2 { font-size:20px; margin:0 0 10px; }
+p { max-width:720px; line-height:1.5; }
+.card { display:inline-block; vertical-align:top; width:300px; margin:0 16px 20px 0; padding:18px; background:white; border:1px solid #b8c9dd; border-radius:12px; }
+.card > svg { display:block; width:280px; height:168px; background:#f4f7fb; }
+button { padding:10px 18px; font:inherit; }
+</style></head><body>
+<h1>SVG: cut to shape</h1>
+<p>A drawing can now peek through a circle, a star, or a path with a hole. Move the shared window with scripts enabled; try 25% and 400% zoom.</p>
+<div class="card"><h2>1. Move the window</h2>
+<svg viewBox="0 0 140 84">
+<defs><clipPath id="shared-window"><circle id="aperture" cx="42" cy="42" r="30"/></clipPath></defs>
+<g clip-path="url(#shared-window)">
+<rect width="140" height="84" fill="#2091de"/><rect x="70" width="70" height="84" fill="#338363"/>
+<path d="M-20 0L120 84M10 0L150 84M40 0L180 84" stroke="#f4c55e" stroke-width="10"/>
+</g></svg><p>The artwork stays put. Only the round opening moves, revealing a different part of the stripes.</p>
+<button id="move">Move the window</button><p id="result">Window on the left.</p></div>
+<div class="card"><h2>2. A star-shaped view</h2>
+<svg viewBox="0 0 140 84">
+<clipPath id="star"><path d="M70 6L80 29L107 31L86 49L92 76L70 62L48 76L54 49L33 31L60 29Z"/></clipPath>
+<g clip-path="url(#star)"><rect width="140" height="84" fill="#e87925"/><rect y="42" width="140" height="42" fill="#f4c55e"/></g>
+</svg><p>A ten-cornered path cuts the two-color drawing into a star.</p></div>
+<div class="card"><h2>3. Leave a hole</h2>
+<svg viewBox="0 0 140 84">
+<clipPath id="ring" clip-rule="evenodd"><path d="M16 10H124V74H16ZM42 28H98V56H42Z"/></clipPath>
+<g clip-path="url(#ring)"><rect width="140" height="84" fill="#338363"/><rect x="70" width="70" height="84" fill="#2091de"/></g>
+</svg><p>The middle is transparent. The clip's even-odd rule makes the inner contour a hole.</p></div>
+<div class="card"><h2>4. Two windows at once</h2>
+<svg viewBox="0 0 140 84">
+<clipPath id="round"><circle cx="70" cy="42" r="32"/></clipPath>
+<clipPath id="band"><rect x="0" y="24" width="140" height="36"/></clipPath>
+<g clip-path="url(#round)"><g clip-path="url(#band)"><rect width="140" height="84" fill="#e87925"/><rect x="70" width="70" height="84" fill="#2091de"/></g></g>
+</svg><p>A circle and an ancestor's horizontal window intersect. Only their shared area shows.</p></div>
+<div class="card"><h2>5. Turn the silhouette</h2>
+<svg viewBox="0 0 140 84">
+<clipPath id="turned" transform="rotate(-18 70 42)"><rect x="24" y="18" width="92" height="48" rx="8"/></clipPath>
+<g clip-path="url(#turned)" opacity=".8"><rect width="140" height="84" fill="#2091de"/><path d="M0 0L140 84M-50 0L90 84M50 0L190 84" stroke="#f4c55e" stroke-width="14"/></g>
+</svg><p>The rounded opening rotates while the stripes keep their direction. Opacity applies to the clipped group.</p></div>
+<div class="card"><h2>6. A shared opening</h2>
+<svg viewBox="0 0 140 84">
+<g clip-path="url(#shared-window)"><rect width="140" height="84" fill="#e87925"/>
+<path d="M0 18H140M0 42H140M0 66H140" stroke="#243952" stroke-width="8"/></g>
+</svg><p>The first button moves this opening too. Both drawings share the clip, but keep their own colors.</p></div>
+<script>
+var moved = false;
+document.getElementById('move').addEventListener('click', function () {
+  moved = !moved;
+  document.getElementById('aperture').setAttribute('cx', moved ? '98' : '42');
+  document.getElementById('result').textContent = moved ? 'Window on the right.' : 'Window on the left.';
+});
+</script></body></html>

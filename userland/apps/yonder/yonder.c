@@ -125,7 +125,7 @@ static yonder_cookies_mode_t s_cookies_asked;
 #define STREAM_SLICE_BYTES (64u * 1024u)
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
-// one's whole sequence; past it a picture draws as its frame.
+// one's whole sequence, or an SVG's document/styles; past it a picture draws as its frame.
 #define PICTURES_KEPT_MAX ((size_t)256u << 20)
 
 // A page's pictures in the pool at once: half its workers. The pool admits
@@ -543,7 +543,10 @@ typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } Pi
 typedef struct {
     const char *url;
     PictureState state;
-    os64_image_t image;             // a still picture's pixels
+    yonder_picture_kind_t kind;
+    yonder_svg_document_t *svg;
+    uint32_t width, height;         // SVG default object size, in CSS pixels
+    os64_image_t image;             // a still raster picture's pixels
     os64_image_sequence_t *moving;  // or a moving one's, its frame on show
     uint64_t due;                   // when its next frame is, while it plays
     bool playing;                   // false once it stops: its loops done, or a frame failed
@@ -678,10 +681,10 @@ typedef struct Page {
     // pictures_settle).
     bool record_owed;
     size_t kept_bytes, picture_url_bytes;
-    // Synchronous SVG jobs and their destinations share this subdivision.
-    // They release it after each paint; retained document/cascade memory is
-    // accounted by those libraries separately.
+    // Synchronous SVG jobs, destinations and retained raster variants share
+    // this subdivision. Document/cascade memory is accounted separately.
     size_t svg_bytes, svg_peak;
+    yonder_svg_cache_t *svg_cache; // Created by window painting after page installation.
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
     os64_page_request_t sent;
@@ -732,9 +735,17 @@ static void webfonts_layout_begins(const Page *p);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
 
-// A shown picture's pixels: the still image, or the frame a moving one is on.
+// A shown picture's natural size and raster pixels. SVG returns no pixels:
+// it is rasterized at the object/tile dimensions by the window painter.
 static const uint32_t *picture_pixels(const Picture *pic, uint32_t *w, uint32_t *h)
 {
+    if (pic->kind == YONDER_PICTURE_SVG) {
+        if (yonder_svg_document_size(pic->svg, s_dark, s_reduce_motion, NULL, NULL, w, h) != SVG_OK) {
+            *w = pic->width;
+            *h = pic->height;
+        }
+        return NULL;
+    }
     if (pic->moving != NULL) {
         const os64_image_frame_t *f = os64_image_sequence_frame(pic->moving);
         *w = f->width;
@@ -819,7 +830,10 @@ static void page_clear(Page *p)
     yonder_scripts_free(p->scripts);
     p->scripts = NULL;
     diag_leave(p);
+    yonder_svg_cache_free(p->svg_cache);
+    p->svg_cache = NULL;
     for (int32_t i = 0; i < p->npics; i++) {
+        yonder_svg_document_free(p->pics[i].svg);
         os64_image_free(&p->pics[i].image);
         os64_image_sequence_free(p->pics[i].moving);
         os64_free((char *)p->pics[i].url);
@@ -2413,6 +2427,17 @@ static void diag_observe(Page *p, const char *when)
         diag_cascade(d, p->cascade);
     char v[128];
     yonder_diag_fact(d, "written", when);
+    if (p->svg_cache) {
+        yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(p->svg_cache);
+        os64_snprintf(v, sizeof(v), "%lu hits, %lu misses, %lu rasterizations, %lu bypasses",
+                      (unsigned long)stats.raster.hits, (unsigned long)stats.raster.misses,
+                      (unsigned long)stats.rasterizations, (unsigned long)stats.bypasses);
+        yonder_diag_fact(d, "svg raster cache", v);
+        os64_snprintf(v, sizeof(v), "%lu entries, %lu retained bytes, %lu evictions; %lu peak SVG bytes",
+                      (unsigned long)stats.raster.entries, (unsigned long)stats.owned_bytes,
+                      (unsigned long)stats.raster.evictions, (unsigned long)p->svg_peak);
+        yonder_diag_fact(d, "svg raster memory", v);
+    }
     if (p->tree != NULL && flow_incomplete(p->tree))
         yonder_diag_failed_seen(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
     // `still coming`: asked for and not yet in, which is what a page left
@@ -3886,6 +3911,9 @@ static void pictures_feed(Page *p)
         job->index = index;
         job->generation = g.page_serial;
         job->agent = g.way.agent;
+        job->svg_enabled = p->modern;
+        job->dark = s_dark;
+        job->reduced_motion = s_reduce_motion;
         os64_strcopy(job->url, sizeof(job->url), pic->url);
         job->hooks.jar = g.way.jar;
         job->hooks.cache = g.cache;
@@ -4604,7 +4632,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         return;
     }
     size_t bytes = product->cost;
-    if (g.page.kept_bytes + bytes > PICTURES_KEPT_MAX) {
+    if (bytes > PICTURES_KEPT_MAX - g.page.kept_bytes) {
         // Not a failure: what the page's pictures may cost is spent. Named
         // all the same, so every picture not shown is on the record.
         pic->state = PIC_NOT_KEPT;
@@ -4614,6 +4642,11 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         yonder_diag_fact(g.page.diag, key, "past the memory kept for the page's pictures");
         return;
     }
+    pic->kind = product->kind;
+    pic->svg = product->svg;
+    product->svg = NULL;
+    pic->width = product->width;
+    pic->height = product->height;
     pic->image = product->image;
     os64_memset(&product->image, 0, sizeof(product->image));
     pic->moving = product->sequence;
@@ -11127,6 +11160,89 @@ static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseli
                          0xff000000u | colour, flow_alpha(colour));
 }
 
+#define YONDER_SVG_MEMORY_MAX ((size_t)64 * 1024 * 1024)
+static os64_geometry_status_t svg_allocate(void *ctx, size_t bytes, void **out)
+{
+    Page *p = ctx;
+    *out = NULL;
+    if (bytes > YONDER_SVG_MEMORY_MAX - p->svg_bytes)
+        yonder_svg_cache_trim(p->svg_cache);
+    if (bytes > YONDER_SVG_MEMORY_MAX - p->svg_bytes)
+        return OS64_GEOMETRY_LIMIT;
+    *out = os64_malloc(bytes);
+    if (!*out) {
+        yonder_svg_cache_trim(p->svg_cache);
+        *out = os64_malloc(bytes);
+    }
+    if (!*out)
+        return OS64_GEOMETRY_NO_MEMORY;
+    p->svg_bytes += bytes;
+    if (p->svg_bytes > p->svg_peak)
+        p->svg_peak = p->svg_bytes;
+    return OS64_GEOMETRY_OK;
+}
+static void svg_free(void *ctx, void *bytes, size_t size)
+{
+    Page *p = ctx;
+    os64_free(bytes);
+    p->svg_bytes -= size;
+}
+
+// Eight MiB of variants stays inside the shared 64 MiB geometry ledger.
+static yonder_svg_cache_t *svg_window_cache(void)
+{
+    if (!g.page.svg_cache) {
+        os64_geometry_memory_t memory = {&g.page, svg_allocate, svg_free};
+        g.page.svg_cache = yonder_svg_cache_create(&memory, 8u << 20, 32, 256u << 10);
+    }
+    return g.page.svg_cache;
+}
+
+// SVG CSS work is serialized on the window, separate from the worker pool
+// and retained-picture account. Document cascades cap state/read arenas and
+// retained attribute parses; geometry/output share the 64 MiB ledger above.
+// The 512 MiB working allowance includes those caps plus parser/match scratch.
+#define YONDER_SVG_WINDOW_RESERVE ((size_t)512u << 20)
+_Static_assert(YONDER_SVG_CASCADE_BYTES + YONDER_SVG_READ_BYTES +
+               (size_t)YONDER_SVG_ATTRIBUTES * YONDER_SVG_ATTRIBUTE_BYTES +
+               YONDER_SVG_ATTRIBUTE_BYTES + YONDER_SVG_MEMORY_MAX < YONDER_SVG_WINDOW_RESERVE,
+               "SVG window allowance must leave room for CSS scratch");
+// A repaint is not another omission. Keep the largest count seen in one
+// successful root/image render; this is not a page-wide subtree census.
+static void svg_partial_diagnostic(const yonder_svg_pixels_t *pixels, bool image)
+{
+    if (pixels->omitted_subtrees)
+        yonder_diag_missing_seen(g.page.diag, image ? "svg image" : "svg",
+            "unsupported drawing subtrees omitted (maximum per render)", pixels->omitted_subtrees);
+}
+static bool svg_picture_pixels(const Picture *pic, os64_gui_rect_t at, yonder_svg_pixels_t *out)
+{
+    *out = (yonder_svg_pixels_t){0};
+    if (!g.page.modern || at.w <= 0 || at.h <= 0)
+        return false;
+    uint32_t zoom = g.page.laid_zoom ? g.page.laid_zoom : 1000;
+    yonder_svg_image_view_t view = {
+        .width = (double)at.w * 1000 / zoom, .height = (double)at.h * 1000 / zoom,
+        .pixel_width = (uint32_t)at.w, .pixel_height = (uint32_t)at.h,
+        .dark = s_dark, .reduced_motion = s_reduce_motion, .cache = svg_window_cache()};
+    os64_geometry_memory_t memory = {&g.page, svg_allocate, svg_free};
+    svg_status_t status = yonder_svg_document_render(pic->svg, &view, &memory,
+                                                     os64_freetype_geometry_v1(), out);
+    if (status != SVG_OK)
+        yonder_diag_failed_seen(g.page.diag, "svg image",
+            status == SVG_UNSUPPORTED ? "SVG image uses an unsupported feature" :
+            status == SVG_MALFORMED ? "SVG image contains malformed geometry" :
+                                     "SVG image rendering failed or exceeded its limits");
+    else
+        svg_partial_diagnostic(out, true);
+    return status == SVG_OK;
+}
+static void svg_picture_pixels_free(yonder_svg_pixels_t *out)
+{
+    os64_geometry_memory_t memory = {&g.page, svg_allocate, svg_free};
+    yonder_svg_pixels_free(&memory, out);
+}
+
 // A picture behind a box: the box's sheets, or else libpage's list, say
 // whether there is one, and one that has arrived is tiled across `area`
 // over what is under it — sheet layer `layer`'s at the size, position and
@@ -11168,6 +11284,14 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     yonder_tile_t tile = {{ox, oy, (int32_t)zw, (int32_t)zh}, true, true};
     if (layer >= 0 && !yonder_background_tile(&l, origin, zw, zh, &tile))
         return true;
+    yonder_svg_pixels_t vector_pixels = {0};
+    if (p->pics[k].kind == YONDER_PICTURE_SVG) {
+        if (!svg_picture_pixels(&p->pics[k], tile.at, &vector_pixels))
+            return true;
+        px = vector_pixels.pixels;
+        w = (uint32_t)vector_pixels.rect.w;
+        h = (uint32_t)vector_pixels.rect.h;
+    }
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);
     tile.at.x += gl->dx;
@@ -11175,6 +11299,7 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     if (cut.w > 0 && cut.h > 0)
         yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, cut, on, tile.at, tile.repeat_x,
                             tile.repeat_y, !b->style->pixelated, px, w, h);
+    svg_picture_pixels_free(&vector_pixels);
     return true;
 }
 
@@ -11200,10 +11325,20 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
         if (!os64_rect_intersect(cut, content, &cut))
             return;
+        yonder_svg_pixels_t vector_pixels = {0};
+        if (p->pics[p->pic_of[i]].kind == YONDER_PICTURE_SVG) {
+            if (!svg_picture_pixels(&p->pics[p->pic_of[i]], at, &vector_pixels))
+                goto frame;
+            px = vector_pixels.pixels;
+            w = (uint32_t)vector_pixels.rect.w;
+            h = (uint32_t)vector_pixels.rect.h;
+        }
         yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated,
                             px, w, h);
+        svg_picture_pixels_free(&vector_pixels);
         return;
     }
+frame:
     // The frame of one still coming, cut the same way.
     Glass narrow = *gl;
     narrow.clip = cut;
@@ -11484,28 +11619,6 @@ static void pane_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baselin
         glass_text(gp->now[k], b, x, baseline, clip, colour);
 }
 
-#define YONDER_SVG_MEMORY_MAX ((size_t)64 * 1024 * 1024)
-static os64_geometry_status_t svg_allocate(void *ctx, size_t bytes, void **out)
-{
-    Page *p = ctx;
-    *out = NULL;
-    if (bytes > YONDER_SVG_MEMORY_MAX - p->svg_bytes)
-        return OS64_GEOMETRY_LIMIT;
-    *out = os64_malloc(bytes);
-    if (!*out)
-        return OS64_GEOMETRY_NO_MEMORY;
-    p->svg_bytes += bytes;
-    if (p->svg_bytes > p->svg_peak)
-        p->svg_peak = p->svg_bytes;
-    return OS64_GEOMETRY_OK;
-}
-static void svg_free(void *ctx, void *bytes, size_t size)
-{
-    Page *p = ctx;
-    os64_free(bytes);
-    p->svg_bytes -= size;
-}
-
 static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     GlassPane *gp = ctx;
@@ -11514,8 +11627,10 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
         yonder_svg_pixels_t pixels;
         svg_status_t status =
             yonder_svg_render(page_doc(&g.page), g.page.cascade, b, c, clip, g.page.laid_zoom,
-                              s_env.ink ^ 0xff000000u, &memory, os64_freetype_geometry_v1(), &pixels);
+                              s_env.ink ^ 0xff000000u, &memory, os64_freetype_geometry_v1(),
+                              svg_window_cache(), &pixels);
         if (status == SVG_OK) {
+            svg_partial_diagnostic(&pixels, false);
             if (pixels.pixels)
                 for (int32_t k = 0; k < gp->n; ++k)
                     glass_pixels(gp->now[k], pixels.rect, pixels.pixels);

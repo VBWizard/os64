@@ -113,7 +113,7 @@ static svg_status_t draw_fixture(Fixture *f, SvgLedger *l, yonder_svg_pixels_t *
 {
     os64_geometry_memory_t m = {l, svg_alloc_test, svg_free_test};
     return yonder_svg_render(f->doc, f->cascade, f->box, f->box->rect, clip, (uint32_t)f->env.zoom,
-                             f->env.ink ^ 0xff000000u, &m, os64_freetype_geometry_v1(), pixels);
+                             f->env.ink ^ 0xff000000u, &m, os64_freetype_geometry_v1(), NULL, pixels);
 }
 static void pixels_free(SvgLedger *l, yonder_svg_pixels_t *p)
 {
@@ -284,12 +284,13 @@ static void svg_cases(const char *dir)
                      "<path style='opacity:inherit' fill=red d='M0 0H32V32H0Z'/></svg>");
     assert(draw_fixture(&f, &l, &p, f.box->rect) == SVG_UNSUPPORTED && !p.pixels && !l.live);
     fixture_free(&f);
-    const char *bad[] = {"<use href='#unknown'/>",
-                         "<rect width=20 height=20 style='x:calc(2px)'/>",
-                         "<rect width=20 height=20 stroke=red stroke-dasharray='2 2'/>",
-                         "<path style='transform:translateX(20px)' d='M0 0H20V20Z'/>",
-                         "<path fill='url(#gradient)' d='M0 0H20V20Z'/>",
-                         "<path fill=none stroke=red stroke-dasharray='2 2' d='M0 0L20 20'/>"};
+    const char *bad[] = {
+        "<use href='external.svg#unknown'/>",
+        "<rect width=20 height=20 style='x:calc(2px)'/>",
+        "<rect width=20 height=20 stroke=red stroke-dasharray='2 2' pathLength='100'/>",
+        "<path style='transform:translateX(20px)' d='M0 0H20V20Z'/>",
+        "<pattern id='gradient'/><path fill='url(#gradient)' d='M0 0H20V20Z'/>",
+        "<path fill=none stroke=red stroke-dasharray='2em 2em' d='M0 0L20 20'/>"};
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         char page[1024];
         snprintf(page, sizeof(page), "<!doctype html><svg id=art width=64 height=64>%s</svg>",
@@ -412,6 +413,156 @@ static void shape_cases(const char *dir)
            sizeof(cases) / sizeof(cases[0]), count);
 }
 
+static void stroke_cases(const char *dir)
+{
+    /* Explicit solid paths independently specify dash boundaries and joins.
+     * Curved cases also go to the browser comparator, which measures pixels. */
+    static const struct {
+        const char *actual, *reference;
+        bool exact;
+    } cases[] = {
+        {"<path d='M4 16H60' stroke-dasharray='8 4'/>",
+         "<path d='M4 16H12M16 16H24M28 16H36M40 16H48M52 16H60'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='8 4' stroke-dashoffset='4'/>",
+         "<path d='M4 16H8M12 16H20M24 16H32M36 16H44M48 16H56'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='8 4' stroke-dashoffset='-4'/>",
+         "<path d='M8 16H16M20 16H28M32 16H40M44 16H52M56 16H60'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='8 4 2'/>",
+         "<path d='M4 16H12M16 16H18M26 16H30M32 16H40M44 16H46M54 16H58'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='0 0 0' pathLength='1'/>", "<path d='M4 16H60'/>",
+         true},
+        {"<path d='M8 56V8H56' stroke-dasharray='48 0'/>", "<path d='M8 56V8 M8 8H56'/>", true},
+        {"<path d='M8 8H56V56H8Z' stroke-dasharray='40 20' stroke-dashoffset='10'/>",
+         "<path d='M8 30V8H38 M56 10V50 M42 56H8V50'/>", true},
+        {"<path d='M4 16H24M4 40H24' stroke-dasharray='8 4'/>",
+         "<path d='M4 16H12M16 16H24M4 40H12M16 40H24'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='0 12' stroke-linecap='round'/>",
+         "<path d='M4 16h0M16 16h0M28 16h0M40 16h0M52 16h0' stroke-linecap='round'/>", true},
+        {"<path d='M16 16L16 16M44 44Z' stroke-linecap='round'/>",
+         "<g fill='#2091de' stroke='none'><circle cx=16 cy=16 r='2'/><circle cx=44 cy=44 "
+         "r='2'/></g>",
+         true},
+        {"<path d='M8 32H56M32 32h0' stroke-linecap='round' opacity='.5'/>",
+         "<path d='M8 32H56' stroke-linecap='round' opacity='.5'/>", true},
+        {"<path d='M56 32H8M32 32h0' stroke-linecap='round' opacity='.5'/>",
+         "<path d='M56 32H8' stroke-linecap='round' opacity='.5'/>", true},
+        {"<path d='M8 8H56V56H8Z M32 8h0' stroke-linecap='round' opacity='.5'/>",
+         "<path d='M8 8H56V56H8Z' stroke-linecap='round' opacity='.5'/>", true},
+        {"<path d='M4 16C4 16 4 16 60 16' stroke-dasharray='8 4'/>",
+         "<path d='M4 16H12M16 16H24M28 16H36M40 16H48M52 16H60'/>", false},
+        {"<path transform='matrix(1.5 .3 .2 .6 4 6)' d='M4 16H60' stroke-dasharray='8 4'/>",
+         "<path transform='matrix(1.5 .3 .2 .6 4 6)' d='M4 16H12M16 16H24M28 16H36M40 16H48M52 "
+         "16H60'/>",
+         true},
+        {"<path transform='matrix(2 .5 .4 1 0 0)' d='M20 20h0' stroke-linecap='square'/>",
+         "<path transform='matrix(2 .5 .4 1 0 0)' fill='#2091de' stroke='none' d='M18 "
+         "18H22V22H18Z'/>",
+         false},
+        {"<path d='M8 8L56 56' stroke-dasharray='0 12' stroke-linecap='square'/>", NULL, false},
+        {"<path d='M4 60C4 4 60 4 60 60' stroke-dasharray='8 4' stroke-linecap='round'/>", NULL,
+         false},
+        {"<path d='M4 60Q32 4 60 60' stroke-dasharray='8 4' stroke-dashoffset='-3'/>", NULL, false},
+        {"<circle cx=32 cy=32 r=24 stroke-dasharray='8 4' stroke-linecap='round'/>", NULL, false},
+        {"<rect x=8 y=8 width=48 height=48 rx=8 stroke-dasharray='8 4' stroke-dashoffset='7'/>",
+         NULL, false},
+        {"<path d='M8 32H56' stroke-dasharray='0 2' stroke-linecap='round' opacity='.5'/>", NULL,
+         false},
+        {"<g stroke-dasharray='8 4' stroke-dashoffset='4'><path d='M4 16H60'/></g>",
+         "<path d='M4 16H8M12 16H20M24 16H32M36 16H44M48 16H56'/>", true},
+        {"<g stroke-dasharray='8 4' stroke-dashoffset='4'><path d='M4 16H60' "
+         "style='stroke-dasharray:none'/></g>",
+         "<path d='M4 16H60'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='6.25% 3.125%' stroke-dashoffset='3.125%'/>",
+         "<path d='M4 16H8M12 16H20M24 16H32M36 16H44M48 16H56'/>", true},
+        {"<path d='M16 16h0M44 44Z' stroke-linecap='butt'/>", "", true},
+        {"<path d='M16 16' stroke-linecap='round'/>", "", true},
+        {"<path d='M8 8H56V56H8Z' stroke-dasharray='500 10'/>", "<path d='M8 8H56V56H8Z'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='-8 4'/>", "<path d='M4 16H60'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='8 4' stroke-dashoffset='28'/>",
+         "<path d='M4 16H8M12 16H20M24 16H32M36 16H44M48 16H56'/>", true},
+        {"<path transform='matrix(1.6 .2 .3 .7 0 4)' d='M4 60C4 4 60 4 60 60' stroke-dasharray='8 4' stroke-linecap='round'/>", NULL, false},
+        {"<path d='M8 32C56 32 56 32 8 32' stroke-dasharray='8 4'/>", "<path d='M8 32H44'/>", false},
+        {"<path d='M4 16H60' stroke-dasharray='0 14' stroke-linecap='round'/>",
+         "<path d='M4 16h0M18 16h0M32 16h0M46 16h0' stroke-linecap='round'/>", true},
+        {"<path d='M4 16H60' stroke-dasharray='14 14' stroke-dashoffset='14' stroke-linecap='round'/>",
+         "<path d='M18 16H32M46 16H60' stroke-linecap='round'/>", true},
+        {"<path d='M16 16h0' stroke-dasharray='8 0 8 4' stroke-dashoffset='8' stroke-linecap='round'/>",
+         "<path d='M16 16h0' stroke-linecap='round'/>", true},
+    };
+    SvgLedger l = {.cap = 32u << 20};
+    size_t exact = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        yonder_svg_pixels_t images[2];
+        Fixture fixtures[2];
+        for (int j = 0; j < 2; ++j) {
+            char html[4096], filename[1024];
+            snprintf(html, sizeof(html),
+                     "<!doctype html><body style='margin:0'>"
+                     "<svg id=art width=128 height=128 viewBox='0 0 128 128'>"
+                     "<g fill='none' stroke='#2091de' stroke-width='4'>%s</g></svg>",
+                     j && cases[i].reference ? cases[i].reference : cases[i].actual);
+            snprintf(filename, sizeof(filename), "%s/stroke-%02zu-%s.html", dir, i,
+                     j ? "reference" : "actual");
+            FILE *file = fopen(filename, "wb");
+            assert(file && fputs(html, file) >= 0 && fclose(file) == 0);
+            fixtures[j] = fixture_make(html);
+            svg_status_t status = draw_fixture(&fixtures[j], &l, &images[j], fixtures[j].box->rect);
+            if (status != SVG_OK)
+                fprintf(stderr, "stroke %zu side %d status %d\n", i, j, status);
+            assert(status == SVG_OK);
+        }
+        if (cases[i].exact) {
+            if (memcmp(images[0].pixels, images[1].pixels, images[0].bytes))
+                fprintf(stderr, "stroke %zu differs from explicit solid reference\n", i);
+            assert(images[0].bytes == images[1].bytes &&
+                   !memcmp(images[0].pixels, images[1].pixels, images[0].bytes));
+            ++exact;
+        }
+        char name[64];
+        snprintf(name, sizeof(name), "stroke-%02zu", i);
+        save_ppm(dir, name, &images[0]);
+        os64_geometry_memory_t m = {&l, svg_alloc_test, svg_free_test};
+        for (int j = 0; j < 2; ++j) {
+            yonder_svg_pixels_free(&m, &images[j]);
+            fixture_free(&fixtures[j]);
+        }
+        assert(!l.live);
+    }
+    Fixture f = fixture_make("<!doctype html><svg id=art width=128 height=128>"
+                             "<path id=dash fill=none stroke=red stroke-width=4 "
+                             "stroke-linecap=round stroke-dasharray='0 8 12 4' "
+                             "d='M8 40Q32 8 56 40M80 40h0'/></svg>");
+    yonder_svg_pixels_t p;
+    size_t start = l.calls;
+    assert(draw_fixture(&f, &l, &p, f.box->rect) == SVG_OK);
+    size_t cuts = l.calls - start;
+    pixels_free(&l, &p);
+    for (size_t i = 1; i <= cuts; ++i)
+        for (int admission = 0; admission < 2; ++admission) {
+            l.fail = l.calls + i;
+            l.admission = admission;
+            assert(draw_fixture(&f, &l, &p, f.box->rect) ==
+                   (admission ? SVG_LIMIT : SVG_NO_MEMORY));
+            assert(!p.pixels && !l.live);
+            l.fail = 0;
+        }
+    fixture_free(&f);
+    printf(
+        "SVG strokes: %zu cases, %zu exact solid references, %zu allocation cuts in both modes\n",
+        sizeof(cases) / sizeof(cases[0]), exact, cuts);
+}
+
+
+#include "test_yonder_svg_use.inc"
+#include "test_yonder_svg_viewports.inc"
+#include "test_yonder_svg_clips.inc"
+#include "test_yonder_svg_bounds.inc"
+#include "test_yonder_svg_document.inc"
+#include "test_yonder_svg_gradients.inc"
+#include "test_yonder_svg_radial.inc"
+#include "test_yonder_svg_cache.inc"
+#include "test_yonder_svg_partial.inc"
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -421,6 +572,19 @@ int main(int argc, char **argv)
     assert(os64_text_create(&o, &s_text) == OS64_FONT_OK);
     kEnv.text = s_text;
     size_t base = live;
+    partial_element_cases();
+    partial_element_contracts();
+    svg_cache_adapter_contracts();
+    clip_cases(argv[1]);
+    bounds_cases(argv[1]);
+    gradient_cases(argv[1]);
+    radial_cases(argv[1]);
+    document_cases(argv[1]);
+    document_contracts();
+    image_route_contracts(argv[1]);
+    viewport_cases(argv[1]);
+    use_cases(argv[1]);
+    stroke_cases(argv[1]);
     shape_cases(argv[1]);
     svg_dimension_cases();
     svg_cases(argv[1]);

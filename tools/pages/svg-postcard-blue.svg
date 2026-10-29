@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="140" height="84" viewBox="0 0 140 84">
+<style>.sky{fill:#d8edf4}.water{fill:#2786be}.sun{fill:#e6a13b}</style>
+<rect class="sky" width="140" height="84" rx="8"/>
+<circle class="sun" cx="105" cy="24" r="13"/>
+<path d="M0 60L36 20L72 60Z" fill="#547e6a"/>
+<path d="M20 60L65 32L100 60Z" fill="#84a58b"/>
+<path d="M26 31L36 20L46 31Z" fill="#fffaf0"/>
+<path class="water" d="M0 60Q35 50 70 60T140 60V84H0Z"/>
+<path d="M20 69H45M66 74H104M107 66H125" fill="none" stroke="#fffaf0" stroke-width="2" stroke-linecap="round"/>
+</svg>

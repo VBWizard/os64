@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" onload="document.getElementById('shield').setAttribute('fill','red')">
+<style>@import url(https://example.invalid/should-not-fetch.css);</style>
+<script><![CDATA[document.getElementById('shield').setAttribute('fill','red');]]></script>
+<path id="shield" d="M60 8L100 24V57Q100 88 60 110Q20 88 20 57V24Z" fill="#386b54"><set attributeName="fill" to="red" begin="0s"/></path>
+<path d="M39 58L54 73L83 43" fill="none" stroke="#fffaf0" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -3,7 +3,9 @@
 Status: slice 6a design, 2026-10-25. Quinn, following Chris's standalone
 in-house parser ruling and Fable's events-only boundary in
 [SVG_REVIEW.md](SVG_REVIEW.md). The standalone foundation and native shared-tree adapter are implemented; the
-as-built sections below record their contracts and verification. [SVG.md](SVG.md) defines the first consuming feature.
+as-built sections below record their contracts and verification. The first
+browser-owned consumer is the [standalone SVG adapter](SVG_DOCUMENTS.md);
+picture-job integration is tracked separately.
 
 ## Purpose and boundary
 
@@ -183,7 +185,8 @@ statuses. `userland/libxml/xml.c` implements it without libc calls or a document
 tree. `make -C userland xml-library` builds the prelinked `libxml.so`; the
 cross-built object has no undefined symbols or `DT_NEEDED` dependencies.
 Root/userland build membership and the GDB symbol list include the library.
-There is no browser consumer or new script-visible API in this change.
+The event-parser increment exposes no script-visible API. The later
+[standalone SVG adapter](SVG_DOCUMENTS.md) consumes its shared-tree output.
 
 Start/end element events carry expanded names; namespace declarations are
 separate from attributes. The element stack retains scope, not child nodes.
@@ -314,8 +317,8 @@ The existing HTML serializer retains qualified element spelling and emits
 PI nodes according to its HTML contract. It does not perform XML namespace
 fixup or XML serialization. HTML fragment parsing refuses XML documents and
 unknown/no-namespace contexts; there is no XML fragment parser or general
-namespace-aware creation API. DOMParser, responseXML, script bindings and
-SVG image jobs do not consume this native builder. These boundaries are
+namespace-aware creation API. [SVG image jobs](SVG_IMAGES.md) consume the
+native builder; DOMParser, responseXML and script bindings do not. These boundaries are
 recorded in DEBTS.md rather than treated as completed browser features.
 
 **Verification.** `tools/test_xml_tree_host.sh` checks whole-buffer, one-byte
@@ -332,9 +335,11 @@ document.
 The new suite and the existing HTML, DOM, libgarb, libpage, libflow, libway,
 libwend, Yonder painter and scripted-page suites pass with ASan/UBSan and
 LeakSanitizer enabled outside the sandbox. Cross-built `libhtml.so` links
-`libxml.so` and `libos64.so`. No P5 or QEMU feature test applies yet: no browser
-consumer calls the builder. WPT/browser conformance and mutant campaigns
-were not run; this is native tree evidence, not a script API claim.
+`libxml.so` and `libos64.so`. This tree increment had no P5/QEMU feature
+checkpoint. The later [standalone SVG adapter](SVG_DOCUMENTS.md) records its
+browser-consumer evidence separately. WPT/browser conformance and mutant
+campaigns were not run for the tree increment; this is native tree evidence,
+not a script API claim.
 
 
 A single independent Codex cold reader (Opus was unavailable) found XHTML

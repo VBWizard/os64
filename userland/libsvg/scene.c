@@ -2,8 +2,8 @@
 
 svg_style_t svg_initial_style(void)
 {
-    return (svg_style_t){.fill = {SVG_PAINT_COLOR, 0xff000000},
-                         .stroke = {SVG_PAINT_NONE, 0},
+    return (svg_style_t){.fill = {.kind = SVG_PAINT_COLOR, .argb = 0xff000000},
+                         .stroke = {.kind = SVG_PAINT_NONE},
                          .fill_opacity = 1,
                          .stroke_opacity = 1,
                          .opacity = 1,
@@ -24,9 +24,35 @@ static Status style_status(const svg_style_t *s)
         s->stroke_style.miter_limit < 1 || s->stroke_style.cap < OS64_GEOMETRY_BUTT ||
         s->stroke_style.cap > OS64_GEOMETRY_SQUARE || s->stroke_style.join < OS64_GEOMETRY_MITER ||
         s->stroke_style.join > OS64_GEOMETRY_ARCS || s->fill.kind < SVG_PAINT_NONE ||
-        s->fill.kind > SVG_PAINT_UNSUPPORTED || s->stroke.kind < SVG_PAINT_NONE ||
-        s->stroke.kind > SVG_PAINT_UNSUPPORTED)
+        s->fill.kind > SVG_PAINT_RADIAL || s->stroke.kind < SVG_PAINT_NONE ||
+        s->stroke.kind > SVG_PAINT_RADIAL)
         return SVG_PROVIDER_ERROR;
+    if (s->viewport.active &&
+        (!isfinite(s->viewport.width) || !isfinite(s->viewport.height) || s->viewport.width < 0 ||
+         s->viewport.height < 0 || !svg_map_valid(&s->viewport.content_transform)))
+        return SVG_PROVIDER_ERROR;
+    if (s->dash.count > SVG_DASH_MAX)
+        return SVG_LIMIT;
+    if ((s->dash.count && !s->dash.values) || !isfinite(s->dash.offset))
+        return SVG_PROVIDER_ERROR;
+    for (size_t i = 0; i < s->dash.count; ++i)
+        if (!isfinite(s->dash.values[i]) || s->dash.values[i] < 0)
+            return SVG_PROVIDER_ERROR;
+    const svg_paint_t *paints[] = {&s->fill, &s->stroke};
+    for (unsigned i = 0; i < 2; ++i) {
+        if (paints[i]->kind != SVG_PAINT_LINEAR && paints[i]->kind != SVG_PAINT_RADIAL)
+            continue;
+        Map identity = {1, 0, 0, 1, 0, 0};
+        svg_bounds_t box = {.max_x = 1, .max_y = 1};
+        svg_linear_sampler_t sampler;
+        svg_radial_sampler_t radial;
+        Status status =
+            paints[i]->kind == SVG_PAINT_LINEAR
+                ? svg_linear_gradient_prepare(paints[i]->linear, &identity, &box, &sampler)
+                : svg_radial_gradient_prepare(paints[i]->radial, &identity, &box, &radial);
+        if (status != SVG_OK)
+            return status == SVG_BAD_ARGUMENT ? SVG_PROVIDER_ERROR : status;
+    }
     if (s->fill.kind == SVG_PAINT_UNSUPPORTED || s->stroke.kind == SVG_PAINT_UNSUPPORTED)
         return SVG_UNSUPPORTED;
     return SVG_OK;
@@ -53,8 +79,15 @@ static Status provider_status(Status s)
 }
 static void free_scene(Context *c, svg_scene_t *scene)
 {
-    for (size_t i = 0; i < scene->count; ++i)
+    for (size_t i = 0; i < scene->count; ++i) {
         svg_free_path(c, (svg_path_t *)scene->items[i].path);
+        svg_free_path(c, (svg_path_t *)scene->items[i].clip.path);
+        svg_free(c, (void *)scene->items[i].style.dash.values);
+        svg_free(c, (void *)scene->items[i].style.fill.linear);
+        svg_free(c, (void *)scene->items[i].style.stroke.linear);
+        svg_free(c, (void *)scene->items[i].style.fill.radial);
+        svg_free(c, (void *)scene->items[i].style.stroke.radial);
+    }
     svg_free(c, scene->items);
     if (scene->pinned)
         scene->provider.release(scene->provider.context, scene->snapshot);
@@ -63,6 +96,7 @@ static void free_scene(Context *c, svg_scene_t *scene)
 typedef struct {
     uint64_t next;
     size_t parent;
+    bool reference;
 } Frame;
 
 Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t mode,
@@ -81,8 +115,10 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
     svg_scene_t *scene = svg_alloc(c, sizeof(*scene));
     if (!scene)
         return svg_leave(c, c->why);
-    *scene = (svg_scene_t){.owner = c, .provider = *provider};
+    *scene = (svg_scene_t){.owner = c, .provider = *provider, .mode = mode};
     Frame *stack = NULL;
+    double *pending_dash = NULL;
+    void *pending_gradient[2] = {0};
     size_t capacity = 0, depth = 0, visits = 0;
     uint64_t root = 0;
     if (!svg_spend(c, 1)) {
@@ -102,7 +138,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         status = c->why;
         goto done;
     }
-    stack[depth++] = (Frame){root, SIZE_MAX};
+    stack[depth++] = (Frame){root, SIZE_MAX, false};
     while (depth) {
         Frame *frame = &stack[depth - 1];
         if (!frame->next) {
@@ -120,23 +156,33 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         ++visits;
         uint64_t source = frame->next;
         size_t parent = frame->parent;
-        /* Check the active ancestry, not a document-global visited set: the
-         * same source can legitimately occur in distinct future use instances. */
-        for (size_t i = 1; i < depth; ++i) {
+        /* Classify the whole loop, not just its closing edge. A use expansion
+         * can close through a source child; a reference above a malformed
+         * child-only loop does not make that loop valid. */
+        bool reference_on_path = false, cycle = false;
+        for (size_t i = depth; i-- > 1;) {
             if (!svg_spend(c, 1)) {
                 status = c->why;
                 goto done;
             }
+            reference_on_path |= stack[i].reference;
             if (scene->items[stack[i].parent].source == source) {
-                status = SVG_PROVIDER_ERROR;
-                goto done;
+                if (!reference_on_path) {
+                    status = SVG_PROVIDER_ERROR;
+                    goto done;
+                }
+                cycle = true;
+                break;
             }
         }
         svg_node_t node = {0};
         status = provider_status(provider->node(provider->context, scene->snapshot, source, &node));
         if (status != SVG_OK)
             break;
-        frame->next = parent == SIZE_MAX ? 0 : node.next_sibling;
+        frame->next = parent == SIZE_MAX || frame->reference ? 0 : node.next_sibling;
+        // Empty the repeated occurrence, preserving its ordinary siblings.
+        if (cycle)
+            continue;
         svg_style_request_t request = {
             .source = source,
             .instance = visits,
@@ -163,7 +209,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         if (status != SVG_OK)
             break;
         if (node.kind != SVG_NODE_GROUP && node.kind != SVG_NODE_PATH &&
-            node.kind != SVG_NODE_SHAPE) {
+            node.kind != SVG_NODE_SHAPE && node.kind != SVG_NODE_USE) {
             status = node.kind == SVG_NODE_UNSUPPORTED ? SVG_UNSUPPORTED : SVG_PROVIDER_ERROR;
             break;
         }
@@ -171,13 +217,65 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
             status = SVG_UNSUPPORTED;
             break;
         }
-        item.user_to_viewport =
-            compose(parent == SIZE_MAX ? *viewport : scene->items[parent].user_to_viewport,
-                    item.style.transform);
+        if (item.style.viewport.active) {
+            if (node.kind != SVG_NODE_GROUP && node.kind != SVG_NODE_USE) {
+                status = SVG_PROVIDER_ERROR;
+                break;
+            }
+            if (!item.style.viewport.width || !item.style.viewport.height)
+                continue;
+        }
+        Map inherited = parent == SIZE_MAX ? *viewport : scene->items[parent].user_to_viewport;
+        if (parent != SIZE_MAX && scene->items[parent].style.viewport.active)
+            inherited = compose(inherited, scene->items[parent].style.viewport.content_transform);
+        item.user_to_viewport = compose(inherited, item.style.transform);
         if (!svg_map_valid(&item.user_to_viewport)) {
             status = SVG_LIMIT;
             break;
         }
+        svg_paint_t *paints[] = {&item.style.fill, &item.style.stroke};
+        for (unsigned part = 0; part < 2; ++part) {
+            const svg_linear_gradient_t *linear = paints[part]->linear;
+            const svg_radial_gradient_t *radial = paints[part]->radial;
+            paints[part]->linear = NULL;
+            paints[part]->radial = NULL;
+            bool is_radial = paints[part]->kind == SVG_PAINT_RADIAL;
+            if (paints[part]->kind != SVG_PAINT_LINEAR && !is_radial)
+                continue;
+            size_t count = is_radial ? radial->count : linear->count;
+            size_t descriptor = is_radial ? sizeof(*radial) : sizeof(*linear);
+            const svg_gradient_stop_t *source = is_radial ? radial->stops : linear->stops;
+            void *copy = svg_alloc(c, descriptor + count * sizeof(*source));
+            pending_gradient[part] = copy;
+            if (!copy || !svg_spend(c, count)) {
+                status = c->why;
+                goto done;
+            }
+            svg_gradient_stop_t *stops = (void *)((unsigned char *)copy + descriptor);
+            for (size_t i = 0; i < count; ++i)
+                stops[i] = source[i];
+            if (is_radial) {
+                svg_radial_gradient_t *g = copy;
+                *g = *radial;
+                g->stops = stops;
+                paints[part]->radial = g;
+            } else {
+                svg_linear_gradient_t *g = copy;
+                *g = *linear;
+                g->stops = stops;
+                paints[part]->linear = g;
+            }
+        }
+        if (item.style.dash.count) {
+            pending_dash = svg_alloc(c, item.style.dash.count * sizeof(*pending_dash));
+            if (!pending_dash) {
+                status = c->why;
+                break;
+            }
+            for (size_t i = 0; i < item.style.dash.count; ++i)
+                pending_dash[i] = item.style.dash.values[i];
+        }
+        item.style.dash.values = pending_dash;
         scene->items = svg_grow(c, scene->items, &scene->capacity, scene->count,
                                 sizeof(*scene->items), c->options.limits.scene_nodes);
         if (c->why != SVG_OK) {
@@ -214,16 +312,68 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         }
         size_t index = scene->count;
         scene->items[scene->count++] = item;
-        if (node.first_child) {
+        pending_dash = NULL;
+        pending_gradient[0] = pending_gradient[1] = NULL;
+        if (provider->clip) {
+            svg_clip_source_t clip = {0};
+            request.parent_style = parent == SIZE_MAX ? NULL : &scene->items[parent].style;
+            if (!svg_spend(c, 1)) {
+                status = c->why;
+                break;
+            }
+            status = provider_status(
+                provider->clip(provider->context, scene->snapshot, &request, &clip));
+            if (status != SVG_OK)
+                break;
+            if (clip.active) {
+                if (!svg_map_valid(&clip.transform) ||
+                    (clip.object_bbox && !svg_map_valid(&clip.outer_transform)) ||
+                    (clip.kind != SVG_NODE_PATH && clip.kind != SVG_NODE_SHAPE)) {
+                    status = SVG_PROVIDER_ERROR;
+                    break;
+                }
+                svg_path_t *path = NULL;
+                svg_parse_result_t result;
+                status = clip.kind == SVG_NODE_PATH
+                             ? svg_parse(c, clip.d, &path, &result)
+                             : svg_make_shape(c, &clip.shape, &path, &result);
+                if (status != SVG_OK && status != SVG_MALFORMED)
+                    break;
+                path->in_scene = true;
+                scene->items[index].clip = (svg_clip_t){true, clip.even_odd, clip.transform, path,
+                                                       clip.object_bbox, clip.outer_transform};
+                status = SVG_OK;
+            }
+        }
+        uint64_t child = node.first_child;
+        if (node.kind == SVG_NODE_USE) {
+            if (!provider->reference) {
+                status = SVG_PROVIDER_ERROR;
+                break;
+            }
+            if (!svg_spend(c, 1)) {
+                status = c->why;
+                break;
+            }
+            request.parent_style = parent == SIZE_MAX ? NULL : &scene->items[parent].style;
+            status = provider_status(
+                provider->reference(provider->context, scene->snapshot, &request, &child));
+            if (status != SVG_OK)
+                break;
+        }
+        if (child) {
             stack = svg_grow(c, stack, &capacity, depth, sizeof(*stack), c->options.limits.depth);
             if (c->why != SVG_OK) {
                 status = c->why;
                 break;
             }
-            stack[depth++] = (Frame){node.first_child, index};
+            stack[depth++] = (Frame){child, index, node.kind == SVG_NODE_USE};
         }
     }
 done:
+    svg_free(c, pending_dash);
+    svg_free(c, pending_gradient[0]);
+    svg_free(c, pending_gradient[1]);
     svg_free(c, stack);
     if (status == SVG_OK) {
         ++c->stats.scenes;

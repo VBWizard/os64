@@ -1,9 +1,14 @@
 # SVG rendering design
 
-Status: implementation design, 2026-10-25. Quinn, building on Fable's
+Status: Part 1 implemented through the accepted 6a–6c profile; integration
+candidate verified on 2026-10-29. [The Part 1 closeout](../completed/SVG_PART1.md)
+records its scope, evidence and deferred work. The broader arc remains open.
+Original design: 2026-10-25. Quinn, building on Fable's
 2026-10-21 SVG proposal. Source baseline: `userland` at `d922229c`.
 This is the revised slice 6 design for [MODERN_WEB.md](MODERN_WEB.md).
-The stages below are proposed implementation cuts, not completed features.
+The stages below describe the arc; their broad deliverables are not a claim
+that every listed capability is complete. Component documents record the
+implemented subsets and limits.
 Quinn owns slice 6. The disposition of Fable's review is in
 [SVG_REVIEW.md](SVG_REVIEW.md#quinns-disposition).
 
@@ -28,8 +33,26 @@ and [comparison harness](SVG_REFTESTS.md) record their implemented contracts,
 measured limits and remaining gates. The first [6b core increment](SVG_CORE.md)
 adds reusable paths and group/path scene preparation. The
 [solid painter](SVG_PAINT.md) adds fills, ordinary strokes and isolated opacity;
-the [Yonder connection](SVG_YONDER.md) paints a bounded inline path/group/basic-shape profile;
-[SVG_SHAPES.md](SVG_SHAPES.md) records the geometry increment. This design does not establish
+the [Yonder connection](SVG_YONDER.md) paints a bounded inline path/group/basic-shape/use profile;
+[SVG_SHAPES.md](SVG_SHAPES.md) records the geometry increment and
+[SVG_STROKES.md](SVG_STROKES.md) adds dash patterns, offsets and exact zero-length caps.
+[SVG_INSTANCES.md](SVG_INSTANCES.md) adds bounded fragment reuse with instance ancestry.
+[SVG_VIEWPORTS.md](SVG_VIEWPORTS.md) adds symbol/nested viewport sizing and rectangular clips.
+[SVG_CLIPS.md](SVG_CLIPS.md) adds one-silhouette clip resources and ancestor intersections.
+[SVG_BOUNDS.md](SVG_BOUNDS.md) adds geometric bounds and object-coordinate clips,
+with shared-consumer boundaries for gradients and Canvas 2D through 6c.
+[SVG_DOCUMENTS.md](SVG_DOCUMENTS.md) adds independently owned XML image documents,
+isolated embedded styles and secure-static rendering. [SVG_IMAGES.md](SVG_IMAGES.md)
+connects picture jobs, default object sizing, `<img>` and background painting.
+[SVG_GRADIENTS.md](SVG_GRADIENTS.md) adds linear paint servers and a numeric
+sampler shared with future non-markup callers. [SVG_RADIAL.md](SVG_RADIAL.md)
+adds radial paint and a separate numeric circle-position query.
+[SVG_CACHE.md](SVG_CACHE.md) adds owned raster keys and bounded cache storage;
+[SVG_CACHE_YONDER.md](SVG_CACHE_YONDER.md) records its browser adoption.
+[SVG_PARTIAL.md](SVG_PARTIAL.md) records unsupported-drawing omission and
+partial-support diagnostics. The computed-style repair and architectural
+review disposition are in [SVG_INTEGRATION_REVIEW.md](SVG_INTEGRATION_REVIEW.md).
+This design does not establish
 performance or compatibility percentages.
 
 ## Library boundaries
@@ -38,12 +61,12 @@ performance or compatibility percentages.
 |---|---|
 | `libhtml` and its document adapters | Inline SVG nodes, namespaced attributes, document identity, mutation and lifetime |
 | `libxml` | Standalone XML byte-to-event parser; `libhtml` consumes its events to build the shared tree |
-| `libgarb` | Selectors, presentation attributes, cascade and SVG computed styles |
-| `libflow` | The outer SVG's participation in CSS layout and sizing negotiation |
+| `libgarb` | Selectors, presentation attributes and cascade winners |
+| `libflow` | The outer SVG's CSS layout and sizing negotiation; CSSOM resolved-value serialization |
 | `libsvg` | SVG scene construction, paths, viewports, instances, paint servers, clipping and compositing |
 | FreeType port | Outline rasterization, stroke expansion and later glyph-outline export |
 | `libimage` | Raster decoding and its existing owned pixel representation |
-| Yonder | Fetching, processing mode, style/text providers, caches, work scheduling, diagnostics and display |
+| Yonder | Fetching, processing mode, SVG style computation/providers, caches, work scheduling, diagnostics and display |
 
 SVG belongs in its own library. Its inputs include a viewport and document
 state, and its result can change without new encoded bytes. Do not make
@@ -472,10 +495,13 @@ report distinguishes supported passes/failures from unsupported-profile cases;
 rejecting a valid out-of-profile file is not a conformance pass.
 
 Keep `UNSUPPORTED`, malformed input, `LIMIT`, allocation failure, pending resource
-and cancellation separate. Optional-feature omission reports a diagnostic and
-partial capability; it must not masquerade as fully supported SVG. Legal invalid
-elements follow the specification's local error behavior; a resource-budget
-failure aborts the unpublished result. Count scene builds, rasterizations,
+and cancellation separate. Yonder omits unsupported drawing subtrees and reports
+partial capability; supported siblings remain visible. Unsupported paints,
+recognized unsupported effects on supported elements, and unsupported referenced
+clip/paint content still refuse the root. The adapter makes this policy decision;
+libsvg retains its strict provider contract. See [SVG_PARTIAL.md](SVG_PARTIAL.md).
+Legal invalid elements follow the specification's local error behavior; a
+resource-budget failure aborts the unpublished result. Count scene builds, rasterizations,
 cache hits, peak bytes, work-limit refusals and elapsed time.
 
 ## Alternatives and reasons
@@ -493,6 +519,14 @@ The library observations are source-level evidence accessed 2026-10-25, not
 measured performance or a complete audit. If 6a shows that precision, port
 maintenance or responsiveness make the selected backend unattractive, compare
 alternatives against the same fixtures before expanding implementation scope.
+
+## Yonder raster-cache integration — 2026-10-28
+
+[SVG_CACHE_YONDER.md](SVG_CACHE_YONDER.md) connects the owned value-key cache
+to inline SVG, image and background painting. Matching resolved scenes reuse
+pixels, with cache retention inside the existing shared geometry/output ledger.
+Preparation remains synchronous and fresh. Corpus-led latency/fidelity gates
+remain in 6c; this does not add a frame loop or broaden the graphics profile.
 
 ## Related design and implementation references
 

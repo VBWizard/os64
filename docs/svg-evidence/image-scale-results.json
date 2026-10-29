@@ -1,0 +1,38 @@
+{
+  "base": "4caaa757",
+  "change": "Scale fixed root dimensions without viewBox into the host image rectangle",
+  "regression": {
+    "before": "case 0 fails at pixel 60,30",
+    "after": "9 cases at 25%, 100%, 400% pass"
+  },
+  "native_adapter_suite": "pass",
+  "window_checks": 10991,
+  "window_failures": 0,
+  "sanitizers": [
+    "ASan",
+    "UBSan",
+    "LeakSanitizer"
+  ],
+  "freestanding_build": "pass",
+  "reference": {
+    "browser": "Chromium 140.0.7339.16",
+    "playwright": "1.55.0",
+    "rust_logo_mean_absolute_channel_difference": 1.1778125,
+    "note": "Different edge antialiasing; complete gear rendered at 80x80",
+    "additional_checks": [
+      "root translation in host coordinates",
+      "root scaling about viewport center",
+      "percentage geometry in drawing space",
+      "media queries at host dimensions"
+    ]
+  },
+  "delivery": {
+    "files": 39,
+    "changed_from_cache_integration": [
+      "bin/yonder"
+    ],
+    "reused_shared_libraries": "Source and build configuration unchanged from tested cache integration cohort"
+  },
+  "hardware_acceptance": "P5: Rust logo displays after installing the branch build (2026-10-28)",
+  "source_sha256": "4ddf873cccf72ef7c9cbdcc09c0069c33792de57a89490f02924fd5dce41ebe5"
+}

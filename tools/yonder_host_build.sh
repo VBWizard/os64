@@ -26,7 +26,7 @@ yonder_host_build() {
     host_flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
         -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns
         -fno-stack-protector -DOS64_JS_TARGET
-        -Iuserland/libsvg/include -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
+        -Iuserland/libxml/include -Iuserland/libsvg/include -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
         -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
         -Iuserland/libflow/include -Iuserland/libgarb/include -Iuserland/libway/include
         -Iuserland/libfetch/include -Iuserland/libimage/include -Iuserland/libwebp/include -Iuserland/libgzip/include
@@ -34,15 +34,23 @@ yonder_host_build() {
         -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iuserland/libos64
         -Iabi/include -Itools -Itools/fonts
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
+    # Match the production SVG library membership as geometry modules grow.
+    local svg_sources=()
+    mapfile -t svg_sources < <(python3 -c '
+from pathlib import Path
+text = Path("userland/libsvg/library.mk").read_text().replace(chr(92) + chr(10), " ")
+for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
+    print("userland/" + name)
+')
     local objects=() source object private
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets}.c \
-        userland/apps/yonder/{scripts,modules,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg}.c \
-        userland/libsvg/{core,path,geometry,scene,paint}.c \
+        userland/apps/yonder/{scripts,modules,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture}.c \
+        "${svg_sources[@]}" \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
-        userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
+        userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
         userland/libpage/upstream/ryu/ryu/d2s.c \
         userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow,computed}.c \

@@ -33,7 +33,19 @@ struct svg_scene {
     svg_scene_item_t *items;
     size_t count, capacity;
     bool pinned;
+    svg_mode_t mode;
 };
+struct svg_raster_key {
+    Context *owner;
+    const os64_geometry_backend_t *backend;
+    size_t size;
+    uint64_t digest;
+    double origin_x, origin_y;
+    uint32_t width, height;
+    unsigned char data[];
+};
+size_t svg_allocation_cost(size_t);
+Status svg_render_validate(const svg_render_options_t *, const svg_render_target_t *);
 bool svg_spend(Context *, uint64_t);
 Status svg_enter(Context *);
 Status svg_leave(Context *, Status);
@@ -47,6 +59,15 @@ bool svg_point_valid(Point);
 Status svg_parse(Context *, svg_string_t, svg_path_t **, svg_parse_result_t *);
 Status svg_make_shape(Context *, const svg_shape_t *, svg_path_t **, svg_parse_result_t *);
 void svg_free_path(Context *, svg_path_t *);
+typedef struct {
+    Point center, u, v;
+    double angle, sweep, numerical_error;
+} SvgArc;
+bool svg_arc_center(Context *, Point, const svg_command_t *, SvgArc *);
+Status svg_geometric_bounds(Context *, const svg_path_t *, const Map *, svg_bounds_t *);
+Status svg_object_bounds(Context *, const svg_scene_t *, size_t, svg_bounds_t *);
 Status svg_lower(Context *, const svg_path_t *, const Map *, double, svg_geometry_t **);
 void svg_free_geometry(Context *, svg_geometry_t *);
+Status svg_stroke_geometry(Context *, const svg_geometry_t *, const Map *, double,
+                           const svg_style_t *, svg_geometry_t **centerline, svg_geometry_t **caps);
 #endif

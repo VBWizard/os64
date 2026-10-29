@@ -12,9 +12,14 @@ typedef struct {
 } Layer;
 typedef struct {
     bool active, paint[2];
+    svg_linear_sampler_t gradient[2];
+    svg_radial_sampler_t radial[2];
     Map map;
     Rect box, ink[2];
-    os64_geometry_outline_t *outline[2];
+    os64_geometry_outline_t *outline[2], *clip[2];
+    Map clip_map[2];
+    Rect clip_box[2];
+    bool clips[2], clip_even_odd[2];
 } Item;
 typedef struct {
     size_t index;
@@ -61,6 +66,12 @@ static Rect unite(Rect a, Rect b)
         return a;
     return (Rect){a.x0 < b.x0 ? a.x0 : b.x0, a.y0 < b.y0 ? a.y0 : b.y0, a.x1 > b.x1 ? a.x1 : b.x1,
                   a.y1 > b.y1 ? a.y1 : b.y1};
+}
+static Rect intersect(Rect a, Rect b)
+{
+    Rect r = {a.x0 > b.x0 ? a.x0 : b.x0, a.y0 > b.y0 ? a.y0 : b.y0, a.x1 < b.x1 ? a.x1 : b.x1,
+              a.y1 < b.y1 ? a.y1 : b.y1};
+    return r.x1 <= r.x0 || r.y1 <= r.y0 ? (Rect){0} : r;
 }
 static Map compose(Map a, Map b)
 {
@@ -129,6 +140,35 @@ static Status clip_bounds(Render *r, os64_geometry_bounds_t b, Rect *out)
     *out = (Rect){(uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1};
     return SVG_OK;
 }
+static Status stroke_outline(Render *r, const svg_geometry_t *geometry, const svg_style_t *style,
+                             const Map *map, os64_geometry_outline_t **out)
+{
+    svg_geometry_t *center = NULL, *caps = NULL;
+    Status status =
+        svg_stroke_geometry(r->c, geometry, map, r->options->arc_error, style, &center, &caps);
+    if (status == SVG_OK && (center->count || caps->count)) {
+        os64_geometry_status_t result;
+        if (caps->count) {
+            if (r->backend->struct_size < sizeof(*r->backend) || !r->backend->stroke_with_caps) {
+                status = SVG_UNSUPPORTED;
+                goto done;
+            }
+            result = r->backend->stroke_with_caps(
+                r->engine, center->commands, center->count, caps->commands, caps->count, map,
+                r->options->quantization_error, &style->stroke_style, out);
+        } else {
+            result = r->backend->stroke(r->engine, center->commands, center->count, map,
+                                        r->options->quantization_error, &style->stroke_style, out);
+        }
+        status = operation(r, result);
+        if (status == SVG_OK && !*out)
+            status = SVG_ENGINE_ERROR;
+    }
+done:
+    svg_free_geometry(r->c, center);
+    svg_free_geometry(r->c, caps);
+    return status;
+}
 static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
 {
     size_t paints = 0;
@@ -138,15 +178,60 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         const svg_scene_item_t *s = &scene->items[i];
         Item *p = &items[i];
         p->active = s->style.opacity > 0 && (s->parent == SIZE_MAX || items[s->parent].active);
-        if (!p->active || (s->kind != SVG_NODE_PATH && s->kind != SVG_NODE_SHAPE) || !s->style.visible || !s->path->count)
+        if (!p->active)
             continue;
         p->map = compose(r->options->viewport_to_device, s->user_to_viewport);
         if (!svg_map_valid(&p->map))
             return SVG_LIMIT;
-        p->paint[0] = s->style.fill.kind == SVG_PAINT_COLOR && (s->style.fill.argb >> 24) &&
-                      s->style.fill_opacity > 0;
-        p->paint[1] = s->style.stroke.kind == SVG_PAINT_COLOR && (s->style.stroke.argb >> 24) &&
-                      s->style.stroke_opacity > 0 && s->style.stroke_style.width > 0;
+        p->clips[0] = s->style.viewport.active && s->style.viewport.clip;
+        p->clips[1] = s->clip.active;
+        p->clip_map[1] = s->clip.transform;
+        if (p->clips[1] && s->clip.object_bbox) {
+            svg_bounds_t box;
+            Status status = svg_object_bounds(r->c, scene, i, &box);
+            if (status != SVG_OK)
+                return status;
+            /* SVG object-box effects are ignored for zero geometric extent,
+             * even when a stroke gives that geometry visible thickness. */
+            if (box.empty || box.min_x == box.max_x || box.min_y == box.max_y) {
+                p->clips[1] = false;
+            } else {
+                Map units = {box.max_x - box.min_x, 0, 0, box.max_y - box.min_y,
+                             box.min_x, box.min_y};
+                p->clip_map[1] = compose(s->clip.outer_transform, compose(units, s->clip.transform));
+                if (!svg_map_valid(&units) || !svg_map_valid(&p->clip_map[1]))
+                    return SVG_LIMIT;
+            }
+        }
+        if (paints > (UINT64_MAX - 1) / 3 - 3)
+            return SVG_LIMIT;
+        paints += p->clips[0] + p->clips[1];
+        if ((s->kind != SVG_NODE_PATH && s->kind != SVG_NODE_SHAPE) || !s->style.visible ||
+            !s->path->count)
+            continue;
+        const svg_paint_t *paints_for_item[] = {&s->style.fill, &s->style.stroke};
+        for (unsigned part = 0; part < 2; ++part) {
+            const svg_paint_t *paint = paints_for_item[part];
+            bool ink = paint->kind == SVG_PAINT_COLOR && (paint->argb >> 24);
+            if (paint->kind == SVG_PAINT_LINEAR || paint->kind == SVG_PAINT_RADIAL) {
+                svg_bounds_t box = {0};
+                Status status = SVG_OK;
+                bool radial = paint->kind == SVG_PAINT_RADIAL;
+                if (radial ? paint->radial->object_bbox : paint->linear->object_bbox)
+                    status = svg_object_bounds(r->c, scene, i, &box);
+                if (status == SVG_OK)
+                    status = radial ? svg_radial_gradient_prepare(paint->radial, &p->map, &box,
+                                                                  &p->radial[part])
+                                    : svg_linear_gradient_prepare(paint->linear, &p->map, &box,
+                                                                  &p->gradient[part]);
+                if (status != SVG_OK)
+                    return status;
+                ink = (radial ? p->radial[part].count : p->gradient[part].count) != 0;
+            }
+            p->paint[part] =
+                ink && (part ? s->style.stroke_opacity > 0 && s->style.stroke_style.width > 0
+                             : s->style.fill_opacity > 0);
+        }
         if (paints > (UINT64_MAX - 1) / 3 - 2)
             return SVG_LIMIT;
         paints += p->paint[0] + p->paint[1];
@@ -154,7 +239,7 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
     if (!paints)
         return SVG_OK;
     /* The backend's work cap is per call. Reserve an equal quota for create
-     * plus build/bounds/raster for each paint, before any backend work starts.
+     * plus build/bounds/raster for each paint or clip mask, before work starts.
      * Calls may leave quota unused; they cannot collectively exceed the render
      * budget. This deliberately conservative division can refuse uneven jobs. */
     r->quota = r->options->max_geometry_work / (1 + 3 * (uint64_t)paints);
@@ -175,9 +260,61 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         if (!svg_spend(r->c, 1))
             return r->c->why;
         Item *p = &items[i];
+        const svg_scene_item_t *s = &scene->items[i];
+        if (p->clips[0]) {
+            p->clip_map[0] = p->map;
+            double w = s->style.viewport.width, h = s->style.viewport.height;
+            os64_geometry_command_t rectangle[] = {{OS64_GEOMETRY_MOVE, {{0, 0}}},
+                                                   {OS64_GEOMETRY_LINE, {{w, 0}}},
+                                                   {OS64_GEOMETRY_LINE, {{w, h}}},
+                                                   {OS64_GEOMETRY_LINE, {{0, h}}},
+                                                   {OS64_GEOMETRY_CLOSE, {{0, 0}}}};
+            status = operation(r, r->backend->path(r->engine, rectangle, 5, &p->map,
+                                                   r->options->quantization_error, &p->clip[0]));
+            if (status != SVG_OK)
+                return status;
+            if (!p->clip[0])
+                return SVG_ENGINE_ERROR;
+            os64_geometry_bounds_t bounds;
+            status =
+                operation(r, r->backend->bounds(r->engine, p->clip[0], &p->map, r->target->origin_x,
+                                                r->target->origin_y, &bounds));
+            if (status != SVG_OK)
+                return status;
+            status = clip_bounds(r, bounds, &p->clip_box[0]);
+            if (status != SVG_OK)
+                return status;
+        }
+        if (p->clips[1] && s->clip.path->count) {
+            Map base = p->map;
+            if (s->style.viewport.active)
+                base = compose(base, s->style.viewport.content_transform);
+            p->clip_map[1] = compose(base, p->clip_map[1]);
+            if (!svg_map_valid(&p->clip_map[1]))
+                return SVG_LIMIT;
+            p->clip_even_odd[1] = s->clip.even_odd;
+            svg_geometry_t *g = NULL;
+            status = svg_lower(r->c, s->clip.path, &p->clip_map[1], r->options->arc_error, &g);
+            if (status == SVG_OK)
+                status =
+                    operation(r, r->backend->path(r->engine, g->commands, g->count, &p->clip_map[1],
+                                                  r->options->quantization_error, &p->clip[1]));
+            svg_free_geometry(r->c, g);
+            if (status != SVG_OK)
+                return status;
+            if (!p->clip[1])
+                return SVG_ENGINE_ERROR;
+            os64_geometry_bounds_t bounds;
+            status =
+                operation(r, r->backend->bounds(r->engine, p->clip[1], &p->clip_map[1],
+                                                r->target->origin_x, r->target->origin_y, &bounds));
+            if (status == SVG_OK)
+                status = clip_bounds(r, bounds, &p->clip_box[1]);
+            if (status != SVG_OK)
+                return status;
+        }
         if (!p->paint[0] && !p->paint[1])
             continue;
-        const svg_scene_item_t *s = &scene->items[i];
         svg_geometry_t *g = NULL;
         status = svg_lower(r->c, s->path, &p->map, r->options->arc_error, &g);
         if (status != SVG_OK)
@@ -185,19 +322,19 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         for (unsigned part = 0; part < 2; ++part) {
             if (!p->paint[part])
                 continue;
-            os64_geometry_status_t result =
-                part ? r->backend->stroke(r->engine, g->commands, g->count, &p->map,
-                                          r->options->quantization_error, &s->style.stroke_style,
-                                          &p->outline[part])
-                     : r->backend->path(r->engine, g->commands, g->count, &p->map,
-                                        r->options->quantization_error, &p->outline[part]);
-            status = operation(r, result);
+            if (part) {
+                status = stroke_outline(r, g, &s->style, &p->map, &p->outline[part]);
+            } else {
+                status = operation(r, r->backend->path(r->engine, g->commands, g->count, &p->map,
+                                                       r->options->quantization_error,
+                                                       &p->outline[part]));
+                if (status == SVG_OK && !p->outline[part])
+                    status = SVG_ENGINE_ERROR;
+            }
             if (status != SVG_OK)
                 break;
-            if (!p->outline[part]) {
-                status = SVG_ENGINE_ERROR;
-                break;
-            }
+            if (!p->outline[part])
+                continue; // Empty dash results and move-only strokes have no ink.
             os64_geometry_bounds_t bounds;
             status =
                 operation(r, r->backend->bounds(r->engine, p->outline[part], &p->map,
@@ -216,9 +353,23 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
     for (size_t i = scene->count; i-- > 0;) {
         if (!svg_spend(r->c, 1))
             return r->c->why;
+        for (unsigned mask = 0; mask < 2; ++mask)
+            if (items[i].clips[mask])
+                items[i].box = intersect(items[i].box, items[i].clip_box[mask]);
         size_t parent = scene->items[i].parent;
         if (parent != SIZE_MAX)
             items[parent].box = unite(items[parent].box, items[i].box);
+    }
+    // Descendants must fit the ancestor layer before any pixel writes. The
+    // rectangle bounds only reduce allocation; the raster mask clips the edges.
+    for (size_t i = 0; i < scene->count; ++i) {
+        if (!svg_spend(r->c, 1))
+            return r->c->why;
+        size_t parent = scene->items[i].parent;
+        if (parent != SIZE_MAX)
+            items[i].box = intersect(items[i].box, items[parent].box);
+        for (unsigned part = 0; part < 2; ++part)
+            items[i].ink[part] = intersect(items[i].ink[part], items[i].box);
     }
     return SVG_OK;
 }
@@ -288,6 +439,50 @@ static Status composite(Render *r, Layer *dest, Layer *source, uint16_t opacity)
     }
     return SVG_OK;
 }
+static Status clip_one(Render *r, const Item *p, unsigned mask_index, Layer *layer)
+{
+    Rect b = layer->box;
+    if (!p->clips[mask_index] || empty(b))
+        return SVG_OK;
+    uint8_t *coverage = svg_alloc(r->c, area(b));
+    if (!coverage)
+        return r->c->why;
+    os64_geometry_target_t target = {.origin_x = r->target->origin_x + b.x0,
+                                     .origin_y = r->target->origin_y + b.y0,
+                                     .width = b.x1 - b.x0,
+                                     .height = b.y1 - b.y0,
+                                     .stride = b.x1 - b.x0,
+                                     .capacity = area(b),
+                                     .pixels = coverage,
+                                     .even_odd = p->clip_even_odd[mask_index]};
+    Status status = SVG_OK;
+    if (!raster_work(r, area(b)))
+        status = r->c->why;
+    if (status == SVG_OK)
+        status = operation(r, r->backend->raster(r->engine, p->clip[mask_index],
+                                                 &p->clip_map[mask_index], &target));
+    if (status == SVG_OK)
+        for (uint32_t y = b.y0; y < b.y1; ++y) {
+            if (!raster_work(r, b.x1 - b.x0)) {
+                status = r->c->why;
+                break;
+            }
+            Pixel *dest = at(layer, b.x0, y);
+            const uint8_t *mask = coverage + (size_t)(y - b.y0) * (b.x1 - b.x0);
+            for (uint32_t x = b.x0; x < b.x1; ++x, ++dest, ++mask) {
+                uint16_t a = (uint16_t)(*mask * 257);
+                *dest = (Pixel){multiply(dest->a, a), multiply(dest->r, a), multiply(dest->g, a),
+                                multiply(dest->b, a)};
+            }
+        }
+    svg_free(r->c, coverage);
+    return status;
+}
+static Status clip_layer(Render *r, const Item *p, Layer *layer)
+{
+    Status status = clip_one(r, p, 0, layer);
+    return status == SVG_OK ? clip_one(r, p, 1, layer) : status;
+}
 static Status paint_path(Render *r, const svg_scene_item_t *s, Item *p, Layer *surface)
 {
     for (unsigned part = 0; part < 2; ++part) {
@@ -315,20 +510,26 @@ static Status paint_path(Render *r, const svg_scene_item_t *s, Item *p, Layer *s
             svg_free(r->c, coverage);
             return status;
         }
-        uint32_t color = part ? s->style.stroke.argb : s->style.fill.argb;
+        const svg_paint_t *paint = part ? &s->style.stroke : &s->style.fill;
         uint16_t opacity = alpha(part ? s->style.stroke_opacity : s->style.fill_opacity);
-        uint16_t a = multiply((uint16_t)((color >> 24) * 257), opacity);
-        uint16_t red = (uint16_t)(((color >> 16) & 255) * 257);
-        uint16_t green = (uint16_t)(((color >> 8) & 255) * 257),
-                 blue = (uint16_t)((color & 255) * 257);
+        bool gradient = paint->kind == SVG_PAINT_LINEAR || paint->kind == SVG_PAINT_RADIAL;
+        bool radial = paint->kind == SVG_PAINT_RADIAL;
         for (uint32_t y = b.y0; y < b.y1; ++y) {
-            if (!raster_work(r, b.x1 - b.x0)) {
+            if (!raster_work(r, (uint64_t)(b.x1 - b.x0) * (radial ? 32 : gradient ? 12 : 1))) {
                 status = r->c->why;
                 break;
             }
             Pixel *dest = at(surface, b.x0, y);
             uint8_t *mask = coverage + (size_t)(y - b.y0) * (b.x1 - b.x0);
             for (uint32_t x = b.x0; x < b.x1; ++x, ++dest, ++mask) {
+                double sx = r->target->origin_x + x + .5, sy = r->target->origin_y + y + .5;
+                uint32_t color = radial     ? svg_radial_gradient_sample(&p->radial[part], sx, sy)
+                                 : gradient ? svg_linear_gradient_sample(&p->gradient[part], sx, sy)
+                                            : paint->argb;
+                uint16_t a = multiply((uint16_t)((color >> 24) * 257), opacity);
+                uint16_t red = (uint16_t)(((color >> 16) & 255) * 257);
+                uint16_t green = (uint16_t)(((color >> 8) & 255) * 257);
+                uint16_t blue = (uint16_t)((color & 255) * 257);
                 uint16_t sa = multiply(a, (uint16_t)(*mask * 257));
                 Pixel source = {sa, multiply(red, sa), multiply(green, sa), multiply(blue, sa)};
                 *dest = over(source, *dest);
@@ -363,7 +564,7 @@ static Status export_pixels(Render *r, Layer *root)
     }
     return SVG_OK;
 }
-static Status validate(const svg_render_options_t *o, const svg_render_target_t *t)
+Status svg_render_validate(const svg_render_options_t *o, const svg_render_target_t *t)
 {
     if (!o || !t || !t->pixels || (uintptr_t)t->pixels % _Alignof(uint32_t) || !t->width ||
         !t->height || !isfinite(t->origin_x) || !isfinite(t->origin_y) ||
@@ -384,7 +585,8 @@ static Status validate(const svg_render_options_t *o, const svg_render_target_t 
         t->width > o->max_pixels / t->height)
         return SVG_LIMIT;
     const os64_geometry_backend_t *b = o->geometry;
-    if (!b || b->revision != OS64_GEOMETRY_BACKEND_REVISION || b->struct_size < sizeof(*b))
+    if (!b || b->revision != OS64_GEOMETRY_BACKEND_REVISION ||
+        b->struct_size < offsetof(os64_geometry_backend_t, stroke_with_caps))
         return SVG_UNSUPPORTED;
     if (!b->create || !b->destroy || !b->stats || !b->path || !b->stroke || !b->release ||
         !b->raster || !b->bounds)
@@ -398,7 +600,7 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
         *stats = (svg_render_stats_t){0};
     if (!c || !scene || scene->owner != c)
         return SVG_BAD_ARGUMENT;
-    Status status = validate(o, target);
+    Status status = svg_render_validate(o, target);
     if (status != SVG_OK)
         return status;
     status = svg_enter(c);
@@ -453,7 +655,9 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
                 Frame *frame = &frames[depth - 1];
                 if (frame->owns) {
                     Layer *dest = depth > 1 ? frames[depth - 2].surface : &root;
-                    status = composite(&r, dest, &frame->layer, frame->opacity);
+                    status = clip_layer(&r, &items[frame->index], &frame->layer);
+                    if (status == SVG_OK)
+                        status = composite(&r, dest, &frame->layer, frame->opacity);
                     if (status != SVG_OK)
                         goto done;
                     free_layer(&r, &frame->layer);
@@ -464,7 +668,7 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
                 break;
             const svg_scene_item_t *s = &scene->items[i];
             Layer *surface = depth ? frames[depth - 1].surface : &root;
-            if (s->kind == SVG_NODE_GROUP) {
+            if (s->kind == SVG_NODE_GROUP || s->kind == SVG_NODE_USE) {
                 if (depth == capacity) {
                     status = SVG_LIMIT;
                     goto done;
@@ -472,7 +676,8 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
                 Frame *frame = &frames[depth];
                 *frame =
                     (Frame){.index = i, .surface = surface, .opacity = alpha(s->style.opacity)};
-                if (s->style.opacity < 1 && !empty(items[i].box)) {
+                if ((s->style.opacity < 1 || items[i].clips[0] || items[i].clips[1]) &&
+                    !empty(items[i].box)) {
                     status = new_layer(&r, items[i].box, &frame->layer);
                     if (status != SVG_OK)
                         goto done;
@@ -482,13 +687,15 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
                 ++depth;
             } else if (!empty(items[i].box)) {
                 Layer element = {0};
-                bool isolate = s->style.opacity < 1;
+                bool isolate = s->style.opacity < 1 || items[i].clips[1];
                 if (isolate) {
                     status = new_layer(&r, items[i].box, &element);
                     if (status != SVG_OK)
                         goto done;
                 }
                 status = paint_path(&r, s, &items[i], isolate ? &element : surface);
+                if (status == SVG_OK && isolate)
+                    status = clip_layer(&r, &items[i], &element);
                 if (status == SVG_OK && isolate)
                     status = composite(&r, surface, &element, alpha(s->style.opacity));
                 free_layer(&r, &element);
@@ -504,11 +711,16 @@ done:
             free_layer(&r, &frames[i].layer);
     free_layer(&r, &root);
     if (items)
-        for (size_t i = 0; i < scene->count; ++i)
+        for (size_t i = 0; i < scene->count; ++i) {
             for (unsigned part = 0; part < 2; ++part)
                 if (items[i].outline[part] &&
                     r.backend->release(r.engine, items[i].outline[part]) != OS64_GEOMETRY_OK)
                     status = SVG_ENGINE_ERROR;
+            for (unsigned mask = 0; mask < 2; ++mask)
+                if (items[i].clip[mask] &&
+                    r.backend->release(r.engine, items[i].clip[mask]) != OS64_GEOMETRY_OK)
+                    status = SVG_ENGINE_ERROR;
+        }
     if (r.engine && r.backend->destroy(r.engine) != OS64_GEOMETRY_OK)
         status = SVG_ENGINE_ERROR;
     svg_free(c, frames);

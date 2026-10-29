@@ -139,6 +139,16 @@ typedef struct {
     os64_geometry_status_t (*bounds)(os64_geometry_context_t *, const os64_geometry_outline_t *,
                                      const os64_geometry_map_t *, double origin_x, double origin_y,
                                      os64_geometry_bounds_t *);
+    /* Optional v1 tail: stroke the centerline and add caller-supplied filled
+     * cap contours to the same nonzero-winding outline. Caps are clockwise in
+     * x-right/y-down user coordinates, without holes. They share normalization,
+     * allocation and rasterization with the stroke, so overlapping dots paint
+     * once. Either command stream may be empty, but not both. */
+    os64_geometry_status_t (*stroke_with_caps)(
+        os64_geometry_context_t *, const os64_geometry_command_t *, size_t count,
+        const os64_geometry_command_t *caps, size_t cap_count,
+        const os64_geometry_map_t *planned_map, double quantization_error,
+        const os64_geometry_stroke_t *, os64_geometry_outline_t **);
 } os64_geometry_backend_t;
 
 /* Width zero produces an empty outline. ARCS joins and non-butt degenerate

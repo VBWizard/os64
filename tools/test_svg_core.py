@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     profile = parser.add_mutually_exclusive_group()
-    profile.add_argument('--paint', action='store_true', help='run solid painting tests and write fixtures')
+    profile.add_argument('--paint', action='store_true', help='run scene painting tests and write fixtures')
     profile.add_argument('--yonder', action='store_true', help='run the real HTML/CSS/layout SVG adapter')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -37,7 +37,7 @@ def main():
     if args.yonder:
         includes += ['-I'+str(ROOT/d) for d in ('abi/include', 'tools', 'userland',
             'userland/libflow/include', 'userland/libflow', 'userland/apps/yonder',
-            'userland/libhtml/include', 'userland/libpage/include', 'userland/libpage/upstream/ryu',
+            'userland/libhtml/include', 'userland/libxml/include', 'userland/libpage/include', 'userland/libpage/upstream/ryu',
             'userland/libgarb/include', 'userland/libfetch/include', 'userland/libgzip/include',
             'userland/libtls/include', 'userland/libway/include')]
     entries = []
@@ -64,7 +64,8 @@ def main():
     if args.yonder:
         membership = (ROOT/'tools/test_yonder_host.sh').read_text().split('host_sources=(',1)[1].split(')',1)[0]
         entries += [(ROOT/p, includes) for p in shlex.split(membership) if p != 'tools/test_yonder_host.c']
-        entries += [(ROOT/'userland/apps/yonder/svg.c', includes)]
+        entries += [(ROOT/p, includes) for p in ('userland/apps/yonder/svg.c',
+            'userland/apps/yonder/svg_document.c', 'userland/libhtml/xml.c', 'userland/libxml/xml.c')]
     harness = 'test_yonder_svg.c' if args.yonder else 'test_svg_paint.c' if args.paint else 'test_svg_core.c'
     entries.append((ROOT/'tools'/harness, includes))
 
@@ -83,10 +84,15 @@ def main():
     binary = build/('svg-yonder' if args.yonder else 'svg-paint' if args.paint else 'svg-core')
     subprocess.run([cc, *common, *map(str, objects), '-o', str(binary)], check=True)
     inputs = {p for p, _ in entries}
+    inputs.update([ROOT/'tools/test_svg_gradient_sampler.inc', ROOT/'tools/test_svg_radial_sampler.inc'])
+    if args.paint:
+        inputs.add(ROOT/'tools/test_svg_cache.inc')
     if args.yonder:
-        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh'])
+        inputs.add(ROOT/'tools/test_yonder_svg_cache.inc')
+        inputs.add(ROOT/'tools/test_yonder_svg_partial.inc')
+        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc', ROOT/'tools/test_yonder_svg_clips.inc', ROOT/'tools/test_yonder_svg_bounds.inc', ROOT/'tools/test_yonder_svg_document.inc', ROOT/'tools/test_yonder_svg_gradients.inc', ROOT/'tools/test_yonder_svg_radial.inc', ROOT/'tools/test_svg_gradient_sampler.inc'])
         for directory in ('abi/include', 'tools', 'userland/apps/yonder',
-                          'userland/libflow', 'userland/libhtml', 'userland/libpage',
+                          'userland/libflow', 'userland/libhtml', 'userland/libxml', 'userland/libpage',
                           'userland/libgarb', 'userland/libfetch/include',
                           'userland/libgzip/include', 'userland/libtls/include',
                           'userland/libway/include'):

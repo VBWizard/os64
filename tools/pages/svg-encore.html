@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: an encore</title>
+<style>
+body{margin:24px;background:#edf3ef;color:#263f38;font:16px sans-serif}
+h1{margin-bottom:8px}h2{font-size:20px;margin:0 0 12px}p{max-width:760px;line-height:1.5}
+.card{display:inline-block;vertical-align:top;width:300px;margin:0 16px 20px 0;padding:18px;background:white;border:1px solid #b5cbbd;border-radius:12px}
+svg,img{display:inline-block;vertical-align:top}button{padding:10px 18px;font:inherit}
+@media(prefers-color-scheme:dark){body{background:#162d2b;color:#edf3ef}.card{background:#27413e;border-color:#56766b}}
+</style></head><body>
+<h1>SVG: an encore</h1>
+<p>A little garden worth coming back to. Change the flowers, explore the page, and return. The private postcard keeps its own season.</p>
+<div class="card"><h2>1. A shared garden</h2>
+<svg width="280" height="200" viewBox="0 0 280 200">
+<defs>
+<radialGradient id="petal" fx=".35" fy=".3"><stop id="light" stop-color="#fff0ad"/><stop id="shade" offset="1" stop-color="#df815b"/></radialGradient>
+<linearGradient id="leaf" x2="1" y2="1"><stop stop-color="#8fc69a"/><stop offset="1" stop-color="#245b55"/></linearGradient>
+<g id="flower"><path d="M0 0C-26-38-35-8 0 0C-12-48 23-43 0 0C37-29 42 6 0 0C45 12 15 42 0 0C-10 44-39 20 0 0Z" fill="url(#petal)"/><circle r="7" fill="#775544"/></g>
+<g id="garden"><rect width="280" height="200" rx="12" fill="#e5eee2"/><path d="M55 170Q80 100 70 65M140 176Q135 115 150 54M225 170Q205 110 219 80" fill="none" stroke="#477962" stroke-width="5" stroke-linecap="round"/><path d="M63 135Q25 90 31 136Q48 158 63 135M140 132Q180 90 175 135Q157 154 140 132M218 135Q250 112 252 141Q234 160 218 135" fill="url(#leaf)"/><use href="#flower" x="70" y="65"/><use href="#flower" x="150" y="54"/><use href="#flower" x="219" y="80"/></g>
+</defs><use href="#garden"/>
+</svg><p>The flowers share their colors with the garden next door.</p>
+<button id="season">Change the flowers</button><p id="result">Apricot afternoon.</p></div>
+<div class="card"><h2>2. Once more, together</h2>
+<svg width="280" height="200" viewBox="0 0 280 200"><use href="#garden"/></svg>
+<p>The same drawing, at the same size. Both gardens should change and return together.</p></div>
+<div class="card"><h2>3. Small companions</h2>
+<svg width="140" height="100" viewBox="0 0 280 200"><use href="#garden"/></svg><svg width="140" height="100" viewBox="0 0 280 200"><use href="#garden"/></svg>
+<p>Two smaller views of the shared garden. Try 25%, 100% and 400%, then come back to your favorite size.</p></div>
+<div class="card"><h2>4. A private postcard</h2>
+<img src="svg-encore-postcard.svg" width="280" height="200" alt="An apricot garden postcard">
+<p>This separate SVG image keeps its apricot flowers when the page changes. Its sky follows light and dark pages.</p></div>
+<script>
+var evening=false;
+document.getElementById('season').addEventListener('click',function(){
+ evening=!evening;
+ document.getElementById('light').setAttribute('stop-color',evening?'#d8e7ff':'#fff0ad');
+ document.getElementById('shade').setAttribute('stop-color',evening?'#706bb4':'#df815b');
+ document.getElementById('result').textContent=evening?'Lavender evening.':'Apricot afternoon.';
+});
+</script></body></html>
