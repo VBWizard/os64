@@ -2,8 +2,11 @@
 
 C4 adds HTML canvas/image sources, transformed and cropped drawImage, smoothing,
 origin-clean enforcement, and PNG data-URL export. The gallery is
-`tools/pages/canvas-images.html`; enable Scripts and Modern Web. P5 acceptance
-is pending. This is the supported C4 profile, not complete Canvas conformance.
+`tools/pages/canvas-images.html`; enable Scripts and Modern Web. Chris accepted
+all four samples on the P5 at every tested zoom level (25%–400%), including
+rapid clicks on the magnifier. The self-copy sample intentionally discards
+pixels that move beyond its right edge; it does not wrap. This is the supported
+C4 profile, not complete Canvas conformance.
 
 ## Automated checks
 
