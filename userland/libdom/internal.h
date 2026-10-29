@@ -529,6 +529,9 @@ struct os64_dom {
     /* 0f's P8: each UI event interface's prototype (event.c), indexed by
      * D_UI_*; all NULL with the switch off. */
     DValue *ui_prototypes[D_UI_KINDS];
+    /* Custom elements (custom.c): the registry, its definitions, the
+     * reactions waiting and their queues; NULL with the switch off. */
+    struct DCustomState *custom;
 };
 #define D_NO_SCRIPT UINT32_MAX
 /* d_callback_script's answer when the runtime must stop: the exception is
@@ -1400,4 +1403,30 @@ bool d_prefix_valid(const char *text, size_t length);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;
+/* ── Custom elements (custom.c; docs/design/pending/CUSTOM_ELEMENTS.md) ──
+ * The row: CustomElementRegistry, window.customElements and the document's
+ * listener. HTMLElement's constructor, which the interfaces row makes and
+ * which answers Illegal constructor until a definition names its
+ * new.target. */
+int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+JSValue d_html_element_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);
+/* [CEReactions] for a member written in C: push an element queue before
+ * it acts, pop it after, which runs what it queued, before it returns and
+ * though it threw. Both do nothing with the switch off; -1 with an
+ * exception pending. */
+int d_reactions_push(os64_dom_t *dom, JSContext *ctx);
+int d_reactions_pop(os64_dom_t *dom, JSContext *ctx);
+/* createElement's synchronous construction: 0 when `name` has no
+ * definition in `document`'s registry, else 1 with *out the element (an
+ * HTMLUnknownElement in the failed state when the constructor failed,
+ * which is reported) or JS_EXCEPTION. */
+int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, const char *name,
+                    JSValue *out);
+/* A clone's elements with a definition, upgraded before the clone is
+ * handed back. 0, or -1 with an exception pending. */
+int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *copy);
+/* Teardown: the listener taken away with the engine's values; the
+ * records and definitions' memory after the engine. */
+void d_custom_drain(os64_dom_t *dom);
+void d_custom_free(os64_dom_t *dom);
 #endif

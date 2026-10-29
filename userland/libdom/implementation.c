@@ -434,6 +434,19 @@ static JSValue create_element_ns(JSContext *ctx, JSValueConst self, int argc, JS
         result = JS_ThrowTypeError(ctx, "createElementNS requires a document");
     os64_html_ns_t space = OS64_HTML_NS_HTML;
     if (JS_IsUndefined(result)) result = element_namespace(ctx, has_ns, &ns, &name, &space);
+    /* An HTML element with a definition is constructed (custom.c), inside
+     * [CEReactions]: what its constructor queued runs before this returns. */
+    if (JS_IsUndefined(result) && space == OS64_HTML_NS_HTML && os64_strchr(name.data, ':') == NULL) {
+        JSValue made;
+        if (d_reactions_push(dom, ctx) < 0) result = JS_EXCEPTION;
+        else {
+            if (d_custom_create(dom, ctx, document, name.data, &made) != 0) result = made;
+            if (d_reactions_pop(dom, ctx) < 0 && !JS_IsException(result)) {
+                JS_FreeValue(ctx, result);
+                result = JS_EXCEPTION;
+            }
+        }
+    }
     if (JS_IsUndefined(result)) {
         int64_t status = OS64_HTML_OK;
         os64_html_node_t *element = os64_html_create_element(dom->document, space, name.data, &status);

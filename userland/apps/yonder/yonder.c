@@ -2174,15 +2174,17 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
 // whole: the tally is taken again at every write and holds the most any
 // look saw. A custom element its definition constructed is drawn as any
 // element is; one whose constructor failed is the page's failure, by
-// name. A canvas where scripting is on is also the page's failure, one
+// name and with what its constructor threw first, so the next wall a page
+// meets (shadow DOM's attachShadow) reads as a reason and not as a count.
+// A canvas where scripting is on is also the page's failure, one
 // FAILED line however many it has (libflow lays out its fallback where
 // scripting is off). Enabled inline SVG reports individual render refusals
 // at the paint boundary instead of declaring every SVG missing. A frame
 // is not a failure here: its stand-in takes a click to
 // its document.
 #define DIAG_CUSTOM_MAX 64
-static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, bool scripting,
-                          bool svg)
+static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, const yonder_scripts_t *scripts,
+                          bool scripting, bool svg)
 {
     // A frame's document is not loaded into its box (it is offered as a
     // link instead), and an embed makes no box: both are asked for and not
@@ -2230,10 +2232,14 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, boo
     if (scripting && canvases != 0)
         yonder_diag_failed_seen(d, "unsupported", "canvas");
     for (int32_t c = 0; c < ncustom; c++) {
-        if (custom[c].failed)
-            yonder_diag_failed_most(d, "element", custom[c].name, custom[c].n);
-        else
+        char why[256], line[sizeof(why) + 80];
+        if (!custom[c].failed)
             yonder_diag_missing_seen(d, "element", custom[c].name, custom[c].n);
+        else if (yonder_scripts_custom_failure(scripts, custom[c].name, why, sizeof(why))) {
+            os64_snprintf(line, sizeof(line), "%s: %s", custom[c].name, why);
+            yonder_diag_failed_most(d, "element", line, custom[c].n);
+        } else
+            yonder_diag_failed_most(d, "element", custom[c].name, custom[c].n);
     }
 }
 
@@ -2447,7 +2453,7 @@ static void diag_paint(Page *p);
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
-    diag_elements(d, page_doc(p), p->scripting, p->modern);
+    diag_elements(d, page_doc(p), p->scripts, p->scripting, p->modern);
     if (p->cascade != NULL)
         diag_cascade(d, p->cascade);
     char v[128];
@@ -10694,6 +10700,22 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
     return yonder_scripts_parser_stop(g.stream.scripts, script);
 }
 
+// The custom element reactions a parser call left owed (an element it
+// inserted, upgraded), run as their own task now: after every parser call,
+// and so before the script a parse stopped at, which then finds the
+// elements above it upgraded (CUSTOM_ELEMENTS.md, decision 6). What they
+// ask for (a navigation) waits for the turn's next task to perform.
+static void stream_reactions(void)
+{
+    yonder_scripts_t *host = g.stream.scripts;
+    if (!yonder_scripts_reactions_owed(host))
+        return;
+    os64_js_outcome_t out;
+    int64_t began = task_begin(host);
+    if (yonder_scripts_reactions_run(host, &out))
+        task_said(host, true, "custom element reactions", &out, began);
+}
+
 // A parser call's answer, acted on: a stop at a script the page does not
 // run is resumed at once, as D4 resumed every stop; one it runs leaves the
 // stream STOPPED, for this turn or a later one to run.
@@ -10703,10 +10725,12 @@ static int64_t stream_parsed(int64_t r)
         if (stream_stop(os64_html_parser_script(g.stream.parser)) != YONDER_STOP_RESUME) {
             g.stream.stopped = true;
             stream_sheets();
+            stream_reactions();
             return r;
         }
         r = os64_html_parser_resume(g.stream.parser);
     }
+    stream_reactions();
     return r;
 }
 

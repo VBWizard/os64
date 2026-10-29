@@ -471,6 +471,8 @@ void os64_dom_drain(os64_dom_t *dom)
     d_timer_drain(dom);
     d_message_drain(dom);
     d_idle_drain(dom);
+    /* The document may outlive the binding: its listener goes now. */
+    d_custom_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -499,6 +501,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_storage_free(dom);
     d_attr_table_free(dom);
     d_report_free(dom);
+    d_custom_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);

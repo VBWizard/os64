@@ -237,7 +237,9 @@ as a reason, not as a count.
   Because `define` is `[CEReactions]`, they are constructed before it
   returns.
 - Last, a pending `whenDefined` promise for the name resolves with the
-  constructor.
+  constructor. That is before the upgrades run, which happens as `define`
+  returns, so the promise's handlers come before anything a constructor
+  queued.
 - The candidate walk covers the whole document for each name. A hundred
   defines over 10,000 nodes is a million visits, which is milliseconds.
   The page record carries the walk's total, so this is measured and not
@@ -401,6 +403,43 @@ compare over the list. GitHub defines about a hundred.
 - **Teardown.** Queues, definitions and their holds go in libdom's
   teardown, before the engine, in D8's order.
 
+## An element's life, in one table
+
+What each state is made of: the node's `ce`, whether a `DCustom` record
+exists (it holds the node while it does), and the wrapper's prototype.
+An element that never had a valid custom name stays in the first row for
+good, and costs nothing.
+
+| State | `ce` | `DCustom` | Wrapper's prototype |
+|---|---|---|---|
+| no valid custom name | PLAIN | none | its kind's |
+| valid name, no definition | PLAIN | none | `HTMLElement`'s |
+| upgrade queued | PLAIN | yes: an upgrade in its queue | `HTMLElement`'s |
+| upgrading (its constructor running) | FAILED | yes: on the construction stack | `HTMLElement`'s, until `super()` sets the definition's |
+| custom, idle | CUSTOM | none | the definition's |
+| custom, callbacks queued | CUSTOM | yes: the callbacks | the definition's |
+| failed | FAILED | none | `HTMLElement`'s after an upgrade, `HTMLUnknownElement`'s after `createElement` |
+
+And what moves an element between them:
+
+| Event | From | To |
+|---|---|---|
+| `define(name)`, or an insertion connecting it to the window's document, with a definition for its name | valid name, no definition | upgrade queued |
+| `createElement` with a definition, the constructor succeeding | (new) | custom, idle |
+| `createElement` with a definition, the constructor failing | (new) | failed |
+| `new C()` for a defined `C` | (new) | custom, idle |
+| a clone of an element with a definition | (new copy) | upgrade queued |
+| the queued upgrade runs | upgrade queued | upgrading |
+| its constructor returns the element | upgrading | custom (callbacks queued if any were) |
+| its constructor throws or returns something else | upgrading | failed: its queue emptied |
+| connected, disconnected, an observed attribute changed, adopted | custom, idle | custom, callbacks queued |
+| its queue drained | custom, callbacks queued | custom, idle |
+| `upgrade(root)` | valid name with a definition | upgrade queued (only an element with a definition is tried) |
+
+A `DCustom` is freed when its queue is empty and no element queue and no
+construction stack names it. Nothing else holds a node for custom
+elements' sake.
+
 ## MutationObserver (the third cut)
 
 RELAYOUT.md § "MutationObserver reads the log" is the design, unchanged
@@ -420,7 +459,8 @@ What 5a then holds is the change log, its readers, and the instrument.
 | Cut | Builds | Oracle | Size |
 |---|---|---|---|
 | a | libhtml: `os64_html_observe` with the record above, and the `STATE` kind; the document parser's reports on both attach paths and the text append; `ce` and `os64_html_set_ce`; `os64_html_custom_name`. libgarb: `:defined`, honest with the switch on. yonder's census. | libhtml host: one fixture per verb, asserting the records by shape (a move is two, a fragment drained is two, a replace is one and a replace by itself two, an attribute set to its own value is one), the parser's attachments on both paths and its text appends, and a fragment parse reporting nothing; `set_ce` moves the version and reaches no listener; a clone is PLAIN. libgarb host: `:defined` against each state, switch on and off. Mutants. | S |
-| b | libdom `custom.c`: the registry, the `HTMLElement` constructor, `createElement`'s and clone's construction, the reactions, the trampoline and `ce_reactions.inc`, `os64_dom_reactions_run` and yonder's calls to it, the timer backstop, the row. | WPT `custom-elements/` (added to the sparse checkout): its expected file, and the required lines the cut earns. DOM host: the cases above, and the wrapped-member list with the exotic paths named. Scripted-page host: a classic page that defines in `<head>` and calls a method in `<body>`, and a streamed page. Mutants. P5: GitHub's record. | L |
+| b1 | libdom `custom.c`: the registry, the `HTMLElement` constructor, `createElement`'s and clone's construction, upgrades, the reactions and their queues, the listener, `os64_dom_reactions_run` and yonder's calls to it, the timer backstop, the row, and the constructor's message on the census line. libjs: whether a job queued now will be drained. The members libdom does not yet wrap still work: their reactions run at the next microtask checkpoint, the standard's own path for a change made outside any `[CEReactions]` member. | WPT `custom-elements/` (added to the sparse checkout): its expected file, and the required lines the cut earns. DOM host: the cases above. Scripted-page host: a classic page that defines in `<head>` and calls a method in `<body>`, and a streamed page. Mutants. P5: GitHub's record. | M |
+| b2 | `tools/ce_reactions.py` and `ce_reactions.inc`, the trampoline, the wrapping at install, so a `[CEReactions]` member's reactions run before it returns. | WPT `custom-elements/reactions/`. DOM host: the wrapped-member list with the exotic paths named; the trampoline's cost on the scripted-page host's mutation fixtures. Mutants. | M |
 | c | libdom `MutationObserver`, `MutationRecord`. | WPT `dom/nodes/MutationObserver-*` (17 files). DOM host. P5: GitHub's record past catalyst. | M |
 
 Each cut is a PR, stacked on the one before. Codex reads each. Fable
@@ -457,8 +497,8 @@ records the standard names.
 - **`ElementInternals` and form-associated elements:** a DEBTS row. The
   census names neither yet.
 - **Scoped registries, `connectedMoveCallback` and `moveBefore`:**
-  `define` reads the callback in the standard's order but never calls
-  it, and `moveBefore` does not exist.
+  `moveBefore` does not exist, so `define` does not read
+  `connectedMoveCallback`, as WPT at the pin expects.
 - **The parser's synchronous construction:** decision 6, a DEBTS row. A
   parser-made element is upgraded, not constructed bare. A constructor
   that reads its own attributes in its body sees them present, and

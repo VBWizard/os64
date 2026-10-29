@@ -206,6 +206,13 @@ void yonder_scripts_set_note(yonder_scripts_t *scripts, const char *line);
 const char *yonder_scripts_note(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// Custom element reactions the parser's insertions left owed
+// (os64_dom_reactions_run): whether any are, and running them as one task,
+// true when it ran. The first failure of the constructor `name` defines,
+// for the census (os64_dom_custom_failure).
+bool yonder_scripts_reactions_owed(const yonder_scripts_t *scripts);
+bool yonder_scripts_reactions_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+bool yonder_scripts_custom_failure(const yonder_scripts_t *scripts, const char *name, char *out, size_t cap);
 // The page's posted messages (os64_dom_message_next/_fire): when the oldest
 // was posted, on yonder_now_ms' clock (UINT64_MAX for none), and the oldest
 // run as one task. False when nothing ran.

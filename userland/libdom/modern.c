@@ -139,6 +139,9 @@ static const DModernRow kModern[] = {
     /* 0f's P1b: last, since every interface whose prototype inherits
      * EventTarget.prototype is made to inherit EventTarget. */
     {(const char *const[]){"EventTarget", "Window", NULL}, d_targets_install},
+    /* Custom elements (CUSTOM_ELEMENTS.md): the registry and the document's
+     * listener. The interfaces row's HTMLElement is its constructor. */
+    {(const char *const[]){"customElements", "CustomElementRegistry", NULL}, d_custom_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

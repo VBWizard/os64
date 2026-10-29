@@ -568,6 +568,11 @@ JS_PUBLIC JSClassID os64_js_class_id(JSClassID *slot)
     return id;
 }
 
+JS_PUBLIC bool os64_js_turn_open(const os64_js_runtime_t *runtime)
+{
+    return runtime != NULL && (runtime->active || runtime->turn);
+}
+
 /* Both buffer and file entry points own an accounted, terminated source here.
  * Loading and source copying finish before the execution deadline starts. */
 static os64_js_status_t evaluate(os64_js_runtime_t *runtime, const char *source,

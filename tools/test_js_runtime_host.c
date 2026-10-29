@@ -1005,10 +1005,12 @@ static os64_js_runtime_t *task_fixture(const os64_js_config_t *config, const cha
     return runtime;
 }
 static os64_js_status_t nested_call, nested_begin;
+static bool nested_turn_open;
 static JSValue native_task_nested(JSContext *context, JSValueConst self, int argc, JSValueConst *argv)
 {
     (void)self;
     os64_js_outcome_t outcome;
+    nested_turn_open = os64_js_turn_open(fixture_runtime);
     nested_call = os64_js_call(fixture_runtime, OS64_JS_ABI_ID, argv[0], JS_UNDEFINED, 0, NULL, NULL, &outcome);
     nested_begin = os64_js_task_begin(fixture_runtime, OS64_JS_ABI_ID, "nested", &outcome);
     /* A binding's own dispatch nests with the raw call, inside the task. */
@@ -1037,7 +1039,10 @@ static void task_cases(void)
           "checkpoint and task end are refused outside a task");
     check(os64_js_task_begin(runtime, "other-abi", "abi", &outcome) == OS64_JS_ABI_MISMATCH,
           "task begin checks the caller's ABI");
+    check(!os64_js_turn_open(runtime) && !os64_js_turn_open(NULL),
+          "no turn is open between tasks: a job queued now would be drained by nobody");
     check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "task.js", &outcome) == OS64_JS_OK, "task opens");
+    check(os64_js_turn_open(runtime), "an open task is a turn its jobs are drained in");
     check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "second", &outcome) == OS64_JS_BUSY &&
           os64_js_eval(runtime, "true", 4, "inside", &outcome) == OS64_JS_BUSY &&
           os64_js_drain_jobs(runtime, 1, &outcome) == OS64_JS_BUSY,
@@ -1073,8 +1078,10 @@ static void task_cases(void)
           nested_call == OS64_JS_BUSY && nested_begin == OS64_JS_BUSY,
           "call and task begin are refused from inside a callback");
     check(task_call(runtime, "reject", NULL, &outcome) == OS64_JS_OK, "rejection left for the end");
+    check(nested_turn_open, "a callback runs inside the turn");
     check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_UNHANDLED_REJECTION,
           "task end is a final checkpoint");
+    check(!os64_js_turn_open(runtime), "a closed task's turn is over");
     check(execute_fixture(runtime, "if(log.join()!=='ok,job,job two,native after,ok')throw Error(log.join())", &outcome) == OS64_JS_OK,
           "a closed task accepts evaluation and every call ran once");
     check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "jobs", &outcome) == OS64_JS_OK, "job cap task opens");

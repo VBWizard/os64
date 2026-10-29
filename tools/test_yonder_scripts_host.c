@@ -6463,6 +6463,31 @@ static void custom_census_cases(void) {
           "census: one name, one waiting and one failed, is counted on each line");
     probe_drop();
 }
+/* CUSTOM ELEMENTS AND THE PARSER (CUSTOM_ELEMENTS.md, decision 6): a classic
+ * page defines an element in its head and calls a method of one in its
+ * body. The parser inserted the element with no task open, which left its
+ * upgrade owed; it ran after that parser call, before the script after it.
+ * And a constructor that fails is the census's FAILED line, with what it
+ * threw. */
+static void custom_element_parse_case(void) {
+    fake_reset();
+    loop_page("<script>class Hi extends HTMLElement{hi(){return 'upgraded'}}customElements.define('x-hi',Hi);"
+        "class Bad extends HTMLElement{constructor(){super();throw Error('no shadow')}}"
+        "customElements.define('x-bad',Bad)</script>"
+        "<x-hi id=h></x-hi><x-bad></x-bad><p id=out>start</p>"
+        "<script>document.getElementById('out').textContent=document.getElementById('h').hi()</script>");
+    check(loop_settle() && probe_text_is("out","upgraded"),
+          "custom: a classic script finds the element above it upgraded");
+    bool own=g.page.diag==NULL;
+    if(own) g.page.diag=yonder_diag_new("https://fixture.test/custom-parse",1,0);
+    diag_observe(&g.page,"when asked");
+    char record[4096];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"FAILED element: x-bad: Error: no shadow (1)")!=NULL && strstr(record,"x-hi")==NULL,
+          "custom: the census names a failed constructor with what it threw, and not one that ran");
+    if(own) { yonder_diag_free(g.page.diag); g.page.diag=NULL; }
+    loop_drop();
+}
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
     yonder_diag_t *d=yonder_diag_new(url,seq,0);
     if(d!=NULL && s_diag.dir[0]!='\0') yonder_diag_claim(d,s_diag.dir,false);
@@ -10698,6 +10723,7 @@ int main(void)
     svg_radial_window_cases();
     svg_partial_window_cases();
     custom_census_cases();
+    custom_element_parse_case();
     svg_cache_window_cases();
     svg_window_cases();
     picture_svg_window_cases();

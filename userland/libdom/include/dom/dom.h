@@ -721,9 +721,32 @@ uint64_t os64_dom_handler_bit(const char *type);
  * time, or UINT64_MAX with none. fire runs AT MOST ONE timer due at or before
  * now, as one task, and answers whether it ran one (outcome filled). An
  * interval is re-armed before its callback, so a callback that clears it
- * wins. */
+ * wins. Custom element reactions owed (below) come first: next answers 0
+ * while any are, and fire runs them as its one task. */
 uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+
+/* CUSTOM ELEMENT REACTIONS OWED (docs/design/pending/CUSTOM_ELEMENTS.md,
+ * decision 6). A change made between tasks, which is the parser's, can
+ * queue reactions (an element it inserts, upgraded) with no microtask
+ * checkpoint coming to run them. They are OWED until the host runs them:
+ * os64_dom_reactions_run runs them as one task named "custom element
+ * reactions" and answers whether it ran one (outcome filled), false when
+ * none were owed. The host calls it after every parser call and before a
+ * parser-blocking script runs, so a classic script sees the elements above
+ * it upgraded. While any are owed, os64_dom_timer_next answers 0 and
+ * os64_dom_timer_fire runs them as its task: the backstop for a change no
+ * parser call made. Owner thread, between tasks. */
+bool os64_dom_reactions_owed(const os64_dom_t *dom);
+bool os64_dom_reactions_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
+/* The first failure of the constructor `name` defines (its exception's
+ * name and message, as the page's record says it), into out; false when
+ * that name has no definition or its constructor has not failed. For the
+ * host's census of FAILED elements. */
+bool os64_dom_custom_failure(const os64_dom_t *dom, const char *name, char *out, size_t cap);
+/* How many nodes define's searches for elements to upgrade have visited,
+ * so the page's record says what defining cost. */
+uint64_t os64_dom_custom_visits(const os64_dom_t *dom);
 
 /* POSTED MESSAGES (HTML § 9.3.3; MODERN_WEB.md § P2b): what the page's
  * window.postMessage queued, one task each, oldest first. next answers
