@@ -298,7 +298,7 @@ message should name the door that exists.
   polish cut.
 - **A download is the window's, not the page's**: a job on the window's
   work pool, so the window keeps answering, and it survives a move to
-  another page. Closing yonder cancels it and removes its `.part`. A few
+  another page. Closing yonder cancels it and removes what it staged. A few
   run at once at most, so a big file can never take the workers a page's
   pictures need.
 - **The save dialog is modal to yonder's window** while it is open (the
@@ -320,8 +320,11 @@ asked from (the jar, the Referer, the preset's lines and a navigation's
 Fetch Metadata), asks for the bytes as the server keeps them (`identity`,
 so a `.tar.gz` does not arrive unzipped), refuses a reply that is not 2xx
 (an error's body is not the file), streams 64 KB at a time to
-`<path>.part`, syncs, and renames with `NOREPLACE` unless the dialog had
-consent to replace. Every way out but success removes the `.part`, and
+a staging file it creates exclusively (`<path>.part`, or `<path>.<n>.part`
+when that is taken, so nothing already there is truncated or removed),
+syncs, looks once more for a cancel, and renames with `NOREPLACE` unless
+the dialog had consent to replace. Every way out but success removes the
+job's own staging file, a pool that fails marks its downloads failed, and
 closing yonder cancels through the pool's destroy. Progress is two 64-bit
 words the worker stores and the window reads, and a bell (`BELL_DOWNLOAD`,
 at most every 200 ms) to repaint the meter. Three run at once; the list

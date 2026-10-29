@@ -2,10 +2,11 @@
 #define YONDER_DOWNLOAD_JOB_H
 
 // A download's job on the work pool (YONDER_HONEY_DO.md § 6): the stream
-// libfetch runs for pages, aimed at a file. The bytes go to `<path>.part`
-// and are renamed to `path` when the last one is written, so a name that
-// exists on disk is always a whole file; a failure or a cancellation
-// removes the `.part` and keeps nothing.
+// libfetch runs for pages, aimed at a file. The bytes go to a staging file
+// the job creates for itself (`<path>.part`, or `<path>.<n>.part` when that
+// is taken) and are renamed to `path` when the last one is written, so a
+// name that exists on disk is always a whole file; a failure or a
+// cancellation removes the job's own staging file and keeps nothing.
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -31,7 +32,7 @@ typedef struct {
     uint32_t bell;
     char url[OS64_FETCH_URL_MAX];
     char path[OS64_PATH_MAX];
-    char part[OS64_PATH_MAX];       // `path` and ".part"
+    char part[OS64_PATH_MAX];       // the run's staging file, named by the run
     // The person agreed to replace a file named `path` (the Save dialog's
     // answer): without it the rename refuses one that has appeared since.
     bool replace;

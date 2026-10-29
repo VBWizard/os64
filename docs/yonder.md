@@ -100,7 +100,8 @@ show (a zip, a program, a PDF) opens the same dialog instead of leaving
 the page. While the dialog is up, yonder's window takes no clicks or keys;
 a click on it brings the dialog forward.
 
-The file is written as `<name>.part` and renamed when the last byte is in,
+The file is written as `<name>.part` (or `<name>.1.part` when that is
+taken) and renamed when the last byte is in,
 so a name in the folder is always a whole file; one that fails or is
 cancelled leaves nothing behind. Downloads go on while you move to other
 pages, three at a time (the rest wait their turn), and stop when yonder

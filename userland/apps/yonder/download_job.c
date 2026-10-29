@@ -41,6 +41,38 @@ static bool write_all(int32_t h, const uint8_t *buf, size_t len)
     return true;
 }
 
+// How many staging names a download tries before it gives up on the folder.
+#define STAGING_TRIES 100
+
+// A staging file of this job's own, created for writing beside `path`:
+// `<path>.part`, else `<path>.1.part`, `<path>.2.part`... Each is created
+// exclusively, so a file already there (another download of the same name,
+// or something of the person's) is never truncated and never removed; the
+// name taken is left in `j->part`. A handle, or -1 with `j->why` saying why.
+static int64_t staging_open(yonder_download_job_t *j)
+{
+    for (int32_t k = 0; k < STAGING_TRIES; k++) {
+        char name[sizeof(j->part)];
+        int n = k == 0 ? os64_snprintf(name, sizeof(name), "%s.part", j->path)
+                       : os64_snprintf(name, sizeof(name), "%s.%d.part", j->path, (int)k);
+        if (n < 0 || (size_t)n >= sizeof(name)) {
+            fail(j, "its name is too long");
+            return -1;
+        }
+        int64_t h = os64_open(name, "x");
+        if (h >= 0) {
+            os64_strcopy(j->part, sizeof(j->part), name);
+            return h;
+        }
+        // A refusal for anything but the name being taken is the folder's.
+        os64_dirent_t e;
+        if (os64_stat(name, &e) < 0)
+            break;
+    }
+    fail(j, "the folder would not take a new file");
+    return -1;
+}
+
 int64_t yonder_download_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
     yonder_download_job_t *j = job;
@@ -70,9 +102,10 @@ int64_t yonder_download_run(void *job, bool (*cancelled)(void *ctx), void *ctx, 
     }
     __atomic_store_n(&j->total, head->has_length ? head->length : 0, __ATOMIC_RELAXED);
     uint8_t *buf = os64_malloc(YONDER_DOWNLOAD_CHUNK);
-    int64_t h = buf != NULL ? os64_open(j->part, "w") : -1;
+    if (buf == NULL)
+        fail(j, "out of memory");
+    int64_t h = buf != NULL ? staging_open(j) : -1;
     if (h < 0) {
-        fail(j, buf == NULL ? "out of memory" : "the folder would not take a new file");
         os64_free(buf);
         os64_fetch_close(f);
         return 0;
@@ -105,6 +138,12 @@ int64_t yonder_download_run(void *job, bool (*cancelled)(void *ctx), void *ctx, 
         whole = false;
         fail(j, "the disk would not take it (is it full?)");
     }
+    // The sync and the close are disk work, long enough for a cancel to
+    // land in; the row already says cancelled, so the file must not appear.
+    if (whole && cancelled(ctx)) {
+        whole = false;
+        stopped = true;
+    }
     if (whole) {
         int64_t rc = j->replace ? os64_rename(j->part, j->path)
                                 : os64_rename_with_flags(j->part, j->path, OS64_RENAME_NOREPLACE);
@@ -125,6 +164,6 @@ void yonder_download_release(void *job, void *product)
 {
     (void)product;
     // Nothing to remove: a run cancelled before it began wrote nothing, and
-    // one that ran published or removed its own `.part` before returning.
+    // one that ran published or removed its own staging file before returning.
     os64_free(job);
 }

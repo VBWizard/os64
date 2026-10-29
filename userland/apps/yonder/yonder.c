@@ -2987,6 +2987,7 @@ static void follow_link(int32_t link);
 static void download_ask(const char *url, const char *referrer, const char *disposition);
 static void download_arrived(os64_work_id_t id, yonder_download_job_t *job);
 static void downloads_follow(void);
+static void downloads_orphaned(void);
 static bool script_rebuild(void);
 static void stream_drop(void);
 static void stream_sheets(void);
@@ -11148,6 +11149,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
             g.pool = NULL;
             pictures_orphaned(&g.page);
             webfonts_orphaned();
+            downloads_orphaned();
             buttons_follow();
             status_rest("The background workers stopped; restart yonder to fetch pages.");
         }
@@ -12671,9 +12673,9 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
 //
 // YONDER_HONEY_DO.md § 6. A download is asked for (a Save verb, or a click
 // on something that is no page), named in the Save dialog, and fetched by
-// a job on the window's pool into `<name>.part`, renamed whole at the end
-// (download_job.h). It is the WINDOW's: it goes on across pages, and
-// closing yonder cancels it, its run removing the `.part`. The downloads
+// a job on the window's pool into a staging file of its own, renamed whole
+// at the end (download_job.h). It is the WINDOW's: it goes on across pages,
+// and closing yonder cancels it, its run removing what it staged. The downloads
 // button at the address row's right end is the meter, and a click on it
 // lists them; nothing about a download goes on the status line but a
 // refusal to start one.
@@ -12818,10 +12820,8 @@ static void downloads_feed(void)
         job->window = g.win;
         job->bell = BELL_DOWNLOAD;
         job->replace = d->replace;
-        int n = os64_snprintf(job->part, sizeof(job->part), "%s.part", d->path);
         if (os64_strcopy(job->url, sizeof(job->url), d->url) >= sizeof(job->url) ||
-            os64_strcopy(job->path, sizeof(job->path), d->path) >= sizeof(job->path) || n < 0 ||
-            (size_t)n >= sizeof(job->part)) {
+            os64_strcopy(job->path, sizeof(job->path), d->path) >= sizeof(job->path)) {
             os64_free(job);
             download_failed(d, "its address or its name is too long");
             continue;
@@ -12961,6 +12961,22 @@ static void download_cancel(Download *d)
     }
     if (d->state == DL_RUNNING || d->state == DL_WAITING)
         d->state = DL_CANCELLED;
+    downloads_feed();
+}
+
+// The workers stopped (g.pool is gone), and destroying the pool released
+// every job still out: each running download lets go of its job and is
+// named as failed, and each still waiting goes through downloads_feed, which
+// names it too, since none of them will arrive now.
+static void downloads_orphaned(void)
+{
+    for (int32_t i = 0; i < s_ndownloads; i++) {
+        Download *d = &s_downloads[i];
+        if (d->state != DL_RUNNING)
+            continue;
+        d->job = NULL;
+        download_failed(d, "the workers stopped");
+    }
     downloads_feed();
 }
 
