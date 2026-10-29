@@ -64,6 +64,7 @@ VALUE_C = 'userland/libpage/value.c'
 RANGE_C = 'userland/libpage/range.c'
 ELEMENTS_C = 'userland/libdom/elements.c'
 TABLES_C = 'userland/libdom/tables.c'
+COMPARE_C = 'userland/libdom/compare.c'
 INTERNAL_H = 'userland/libdom/internal.h'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
@@ -854,6 +855,46 @@ mutants = [
     ('go-takes-one', WINDOW_C, '        {"go", H_GO, 0, false, false},', '        {"go", H_GO, 1, false, false},', (DOM,)),
     ('undefined-a-type-error', TABLES_C, '    if (!JS_IsNull(value) && !JS_IsUndefined(value)) {',
      '    if (!JS_IsNull(value)) {', (DOM,)),
+    # Node's comparisons and normalize
+    ('equal-ignores-attributes', COMPARE_C, 'os64_strcmp(a->name, b->name) == 0 && same_attributes(a, b);',
+     'os64_strcmp(a->name, b->name) == 0 && (same_attributes(a, b) || true);', (DOM,)),
+    ('equal-ignores-attribute-value', COMPARE_C, '                              os64_strcmp(x->value, y->value) == 0))',
+     '                              true))', (DOM,)),
+    ('equal-ignores-children', COMPARE_C,
+     '        if (!alike(a, b) || (a->first_child == NULL) != (b->first_child == NULL)) return false;',
+     '        if (!alike(a, b)) return false;', (DOM,)),
+    ('equal-ignores-a-sibling-more', COMPARE_C, '            if (b->next != NULL) return false;\n',
+     '', (DOM,)),
+    ('equal-ignores-attr-value', COMPARE_C, ' && a->length == b->length &&\n           os64_memcmp(a->value, b->value, a->length) == 0;',
+     ';', (DOM,)),
+    ('equal-ignores-name', COMPARE_C, '&& os64_strcmp(a->name, b->name) == 0 && same_attributes(a, b);',
+     '&& same_attributes(a, b);', (DOM,)),
+    ('equal-ignores-namespace', COMPARE_C,
+     '        return same_name(os64_html_namespace_uri(a), os64_html_namespace_uri(b)) &&\n',
+     '        return (same_name(os64_html_namespace_uri(a), os64_html_namespace_uri(b)) || true) &&\n', (DOM,)),
+    ('equal-ignores-attribute-namespace', COMPARE_C, '        while (y != NULL && !(same_name(x->ns, y->ns) && ',
+     '        while (y != NULL && !((same_name(x->ns, y->ns) || true) && ', (DOM,)),
+    ('equal-ignores-attr-namespace', COMPARE_C, '    return same_name(a->ns, b->ns) && os64_strcmp(a->local, b->local) == 0',
+     '    return (same_name(a->ns, b->ns) || true) && os64_strcmp(a->local, b->local) == 0', (DOM,)),
+    ('attrs-in-reverse', COMPARE_C, '                return POSITION_IMPLEMENTATION_SPECIFIC | POSITION_PRECEDING;',
+     '                return POSITION_IMPLEMENTATION_SPECIFIC | POSITION_FOLLOWING;', (DOM,)),
+    ('disconnected-one-way', COMPARE_C, '(key1 < key2 ? POSITION_PRECEDING : POSITION_FOLLOWING)',
+     '(key1 == key2 ? POSITION_FOLLOWING : POSITION_PRECEDING)', (DOM,)),
+    ('attr-not-contained', COMPARE_C, '    if ((attr2 == NULL && is_ancestor(node2, node1)) || (attr1 != NULL && node1 == node2))',
+     '    if (attr2 == NULL && is_ancestor(node2, node1))', (DOM,)),
+    ('ancestor-follows', COMPARE_C, '    if (a == b) return a_shallower;', '    if (a == b) return !a_shallower;', (DOM,)),
+    ('siblings-backwards', COMPARE_C, '    for (const os64_html_node_t *at = a->next; at != NULL; at = at->next)',
+     '    for (const os64_html_node_t *at = a->prev; at != NULL; at = at->prev)', (DOM,)),
+    ('position-takes-null', COMPARE_C, '    if (magic != C_POSITION && (JS_IsNull(argv[0])',
+     '    if ((JS_IsNull(argv[0])', (DOM,)),
+    ('attr-shadow-short', COMPARE_C, '    static const int kOn[] = {D_PROTO_NODE, D_PROTO_ATTR};',
+     '    static const int kOn[] = {D_PROTO_NODE};', (DOM,)),
+    ('normalize-keeps-empties', MIXIN_C, '        if (at->text_len == 0) {\n            const os64_html_node_t *next',
+     '        if (false) {\n            const os64_html_node_t *next', (DOM,)),
+    ('normalize-joins-nothing', MIXIN_C, '        if (total != at->text_len) {\n            char *whole',
+     '        if (false) {\n            char *whole', (DOM,)),
+    ('normalize-children-only', MIXIN_C, '            at = d_walk_next(self, at);\n            continue;',
+     '            at = at->next;\n            continue;', (DOM,)),
 ]
 
 caught, missed, unbuilt = [], [], []

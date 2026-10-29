@@ -281,7 +281,9 @@ page's script can see them.
   the member does for any node with no children. Every `attr.x` is
   answered by `Attr.prototype`, which shadows each of Node's members with
   the standard's answer (LIBDOM.md § Attributes as nodes); the shared
-  member takes a tree node, which an Attr is not.
+  member takes a tree node, which an Attr is not. The comparisons
+  (`isSameNode`, `isEqualNode`, `compareDocumentPosition`) are the
+  exception: Node's and Attr's are one function, which takes either.
 - **`window.close()` never closes the window.** HTML lets a script close a
   top-level window whose session history holds a single entry (a page
   opened in a new window, or the first page of one). In yonder the window

@@ -433,8 +433,7 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
     }
 }
 
-static const os64_html_node_t *walk_next(const os64_html_node_t *root,
-                                         const os64_html_node_t *node)
+const os64_html_node_t *d_walk_next(const os64_html_node_t *root, const os64_html_node_t *node)
 {
     if (node->first_child != NULL) return node->first_child;
     while (node != root) {
@@ -564,7 +563,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         JSValue result = JS_NULL;
         if (magic == D_GET_TAG) result = d_collection(dom, ctx, node, true, true, string.data);
         else if (string.length != 0) {
-            for (const os64_html_node_t *at = node->first_child; at != NULL; at = walk_next(node, at)) {
+            for (const os64_html_node_t *at = node->first_child; at != NULL; at = d_walk_next(node, at)) {
                 const os64_html_attr_t *id = os64_html_attr(at, "id");
                 if (at->kind == OS64_HTML_ELEMENT && id != NULL && os64_strcmp(id->value, string.data) == 0) {
                     result = d_wrap(dom, ctx, at);

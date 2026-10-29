@@ -346,6 +346,47 @@ int d_root_options(JSContext *ctx, int argc, JSValueConst *argv)
     return truth < 0 ? -1 : 0;
 }
 
+/* normalize() (DOM § 4.4): among the node's descendants, an empty text
+ * node is removed, and each run of adjacent text nodes becomes its first,
+ * given the run's data. That node's data is set before the rest of its run
+ * is removed, so a failure part way loses no text; at worst some of it is
+ * there twice. */
+static JSValue normalize(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
+{
+    const os64_html_node_t *at = self->first_child;
+    while (at != NULL) {
+        if (at->kind != OS64_HTML_TEXT) {
+            at = d_walk_next(self, at);
+            continue;
+        }
+        if (at->text_len == 0) {
+            const os64_html_node_t *next = d_walk_next(self, at);
+            if (d_tree_change(dom, ctx, D_REMOVE, at->parent, at, NULL) < 0) return JS_EXCEPTION;
+            at = next;
+            continue;
+        }
+        size_t total = 0;
+        for (const os64_html_node_t *n = at; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next)
+            total += n->text_len;
+        if (total != at->text_len) {
+            char *whole = d_alloc(dom, total + 1);
+            if (whole == NULL) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
+            size_t used = 0;
+            for (const os64_html_node_t *n = at; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next) {
+                os64_memcpy(whole + used, n->text, n->text_len);
+                used += n->text_len;
+            }
+            int64_t status = os64_page_node_set_text(dom->state, (os64_html_node_t *)at, whole, total);
+            d_free(dom, whole);
+            if (status < 0) return d_html_error(ctx, status);
+        }
+        while (at->next != NULL && at->next->kind == OS64_HTML_TEXT)
+            if (d_tree_change(dom, ctx, D_REMOVE, at->parent, at->next, NULL) < 0) return JS_EXCEPTION;
+        at = d_walk_next(self, at);
+    }
+    return JS_UNDEFINED;
+}
+
 static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
                             JSValueConst *argv, int magic, JSValue *data)
 {
@@ -377,6 +418,7 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
         while (root->parent != NULL) root = root->parent;
         return d_wrap(dom, ctx, root);
     }
+    case D_NORMALIZE: return normalize(dom, ctx, self);
     default:
         if (!is_element(self)) return JS_ThrowTypeError(ctx, "Element method requires an element");
         return element_method(dom, ctx, self, magic, argc, argv);
@@ -1254,18 +1296,19 @@ static JSValue base_uri(JSContext *ctx, JSValueConst this_value, int argc, JSVal
     return self != NULL ? d_base_uri(dom, ctx, self) : JS_EXCEPTION;
 }
 
-/* 0f's P1a, the Modern Web table's node row (INTERFACES_FORMS.md):
- * getRootNode on Node's prototype, which Vue's v-model asks, and on Attr's,
- * whose shadow answers every Node member for an Attr; Text's own
- * `wholeText` and `splitText`; a template's `content`; an element's
- * `localName`, `namespaceURI` and `prefix`; and Node's `baseURI`. Members
- * of prototypes, so the row names nothing on window; the DOM host's chain
- * shape holds them (tools/test_dom_modern.inc). */
+/* 0f's P1a, the Modern Web table's node row (INTERFACES_FORMS.md): Node's
+ * getRootNode, which Vue's v-model asks, `normalize` and `baseURI`, and an
+ * Attr's answer to each on Attr's prototype, whose shadow answers every
+ * Node member for an Attr; Text's own `wholeText` and `splitText`; a
+ * template's `content`; and an element's `localName`, `namespaceURI` and
+ * `prefix`. Members of prototypes, so the row names nothing on window; the
+ * DOM host's chain shape holds them (tools/test_dom_modern.inc). */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     (void)global;
     JSValueConst text = dom->prototypes[D_PROTO_TEXT]->value;
     if (d_method(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, "getRootNode", mixin_method, 0, D_ROOT_NODE) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, "normalize", mixin_method, 0, D_NORMALIZE) < 0 ||
         d_accessor(dom, ctx, text, "wholeText", text_member, T_WHOLE_TEXT, false) < 0 ||
         d_method(dom, ctx, text, "splitText", text_member, 1, T_SPLIT_TEXT) < 0 ||
         d_accessor(dom, ctx, dom->prototypes[D_PROTO_TEMPLATE]->value, "content", template_content, 0, false) < 0)
@@ -1279,5 +1322,5 @@ int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
             return -1;
     if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, "baseURI", base_uri, 0, false) < 0)
         return -1;
-    return d_attr_root_install(dom, ctx);
+    return d_attr_nodes_install(dom, ctx);
 }

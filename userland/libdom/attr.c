@@ -113,9 +113,7 @@ static bool ns_equal(const char *a, const char *b)
     return a == NULL || b == NULL ? a == b : os64_strcmp(a, b) == 0;
 }
 
-/* A name's local part (DOM § 4.9.2): after the first colon of a name in a
- * namespace; the whole name of one in none, colons and all. */
-static const char *local_of(const char *name, const char *ns)
+const char *d_attr_local(const char *name, const char *ns)
 {
     const char *colon = ns != NULL ? os64_strchr(name, ':') : NULL;
     return colon != NULL ? colon + 1 : name;
@@ -139,7 +137,7 @@ static bool folds(const os64_html_node_t *element)
 static const os64_html_attr_t *attr_ns(const os64_html_node_t *element, const char *ns, const char *local)
 {
     for (const os64_html_attr_t *a = element->attrs; a != NULL; a = a->next)
-        if (ns_equal(a->ns, ns) && os64_strcmp(local_of(a->name, a->ns), local) == 0) return a;
+        if (ns_equal(a->ns, ns) && os64_strcmp(d_attr_local(a->name, a->ns), local) == 0) return a;
     return NULL;
 }
 
@@ -329,6 +327,23 @@ static DAttr *attr_receiver(JSContext *ctx, JSValueConst self)
     return entry->attr;
 }
 
+int d_attr_view(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DAttrView *view)
+{
+    if (!d_is_attr(dom, value)) return 0;
+    DAttr *rec = attr_receiver(ctx, value);
+    if (rec == NULL) return -1;
+    const os64_html_node_t *element = rec->entry->target;
+    view->entry = rec->entry;
+    view->element = element;
+    view->name = rec->name;
+    view->ns = rec->ns;
+    view->local = d_attr_local(rec->name, rec->ns);
+    view->value = element != NULL ? os64_html_attr(element, rec->name)->value :
+                  rec->value != NULL ? rec->value : "";
+    view->length = element != NULL ? os64_strlen(view->value) : rec->length;
+    return 1;
+}
+
 /* Its value: the element's, read by name, while attached. */
 static JSValue attr_value(JSContext *ctx, const DAttr *rec)
 {
@@ -371,7 +386,7 @@ enum {
     A_NAME, A_LOCAL_NAME, A_PREFIX, A_NAMESPACE, A_VALUE, A_OWNER_ELEMENT, A_SPECIFIED,
     A_NODE_TYPE, A_NODE_VALUE, A_TEXT_CONTENT, A_NO_NODE, A_OWNER_DOCUMENT, A_CHILD_NODES,
     A_CONNECTED, A_APPEND, A_INSERT, A_REPLACE, A_REMOVE_CHILD, A_CLONE, A_HAS_CHILDREN, A_CONTAINS,
-    A_ROOT, A_BASE_URI
+    A_ROOT, A_BASE_URI, A_NORMALIZE
 };
 
 static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
@@ -441,9 +456,9 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     const os64_html_node_t *element = rec->entry->target;
     switch (magic) {
     case A_NAME: return JS_NewString(ctx, rec->name);
-    case A_LOCAL_NAME: return JS_NewString(ctx, local_of(rec->name, rec->ns));
+    case A_LOCAL_NAME: return JS_NewString(ctx, d_attr_local(rec->name, rec->ns));
     case A_PREFIX: {
-        const char *local = local_of(rec->name, rec->ns);
+        const char *local = d_attr_local(rec->name, rec->ns);
         return local == rec->name ? JS_NULL : JS_NewStringLen(ctx, rec->name, (size_t)(local - rec->name) - 1);
     }
     case A_NAMESPACE: return rec->ns != NULL ? JS_NewString(ctx, rec->ns) : JS_NULL;
@@ -460,6 +475,8 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
                                     rec->document != NULL ? rec->document : window_document(dom));
     case A_CHILD_NODES: return empty_child_nodes(dom, ctx, rec);
     case A_CONNECTED: case A_HAS_CHILDREN: return JS_FALSE;
+    /* No children, so no text to join. */
+    case A_NORMALIZE: return JS_UNDEFINED;
     case A_APPEND: case A_INSERT: case A_REPLACE:
         /* DOM's pre-insert and replace refuse an Attr as the parent before
          * looking at anything else; the arguments are WebIDL's Nodes. */
@@ -564,7 +581,7 @@ static JSValue set_attribute_node(os64_dom_t *dom, JSContext *ctx, const os64_ht
      * libhtml's verb sets the one of its qualified name, keeping that one's
      * namespace or giving a new one none. Unless those agree, the tree would
      * hold the attribute under another name or namespace than the Attr's. */
-    const os64_html_attr_t *old = attr_ns(element, rec->ns, local_of(rec->name, rec->ns));
+    const os64_html_attr_t *old = attr_ns(element, rec->ns, d_attr_local(rec->name, rec->ns));
     if (old != os64_html_attr(element, rec->name) || (old == NULL && rec->ns != NULL))
         return d_error(ctx, "NotSupportedError",
                        "This element cannot hold that Attr under both its name and its namespace");
@@ -1118,10 +1135,11 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
     return d_accessor(dom, ctx, element, "attributes", node_verb, M_ATTRIBUTES, false);
 }
 
-int d_attr_root_install(os64_dom_t *dom, JSContext *ctx)
+int d_attr_nodes_install(os64_dom_t *dom, JSContext *ctx)
 {
     JSValueConst attr = dom->prototypes[D_PROTO_ATTR]->value;
     return d_method(dom, ctx, attr, "getRootNode", attr_member, 0, A_ROOT) < 0 ||
+           d_method(dom, ctx, attr, "normalize", attr_member, 0, A_NORMALIZE) < 0 ||
            d_accessor(dom, ctx, attr, "baseURI", attr_member, A_BASE_URI, false) < 0 ? -1 : 0;
 }
 

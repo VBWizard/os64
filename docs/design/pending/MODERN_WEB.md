@@ -4554,6 +4554,57 @@ P7 group): 10, each caught — the location's unforgeability, members left
 on the objects, the level without the switch, the three brand checks,
 the own valueOf, the names, enumerable operations, and go's length.
 
+### Node's members, as built — 2026-10-28
+
+A bridge between P7 and P8, for two corpus pages: one whose head
+react-helmet keeps, comparing its tags with `isEqualNode`, which threw
+there, and a sign-in page whose script stopped at
+`compareDocumentPosition`. Node's
+`isSameNode`, `isEqualNode`, `compareDocumentPosition` and `normalize`,
+which DEBTS.md had booked together.
+
+- **One function answers each comparison on Node's prototype and on
+  Attr's** (`compare.c`, its own row), since either side may be an Attr,
+  which libhtml holds as a name and value on its element: an operand is a
+  tree node or an Attr's view (`d_attr_view`), the element standing in
+  the tree for it. Attr's prototype keeps shadowing Node's whole.
+- **Equality** is DOM's: names, namespace, prefix, attributes in any
+  order, data, a doctype's IDs, then the children, walked side by side
+  without recursion. A template's contents are not its children, so
+  they are not compared.
+- **compareDocumentPosition's one choice the standard leaves open**: two
+  trees are ordered by their roots' addresses (a detached Attr's own
+  entry standing for a root), consistent both ways round. Two Attrs of
+  one element are in the order of its attribute list, as DOM's steps
+  walk it.
+- **normalize** (the node row, `mixin.c`; an Attr's does nothing) sets a
+  run's first text node's data before removing the rest, through
+  `d_tree_change`, so a failure part way loses no text.
+- **Booked** (DEBTS.md): the row narrows to Node's three namespace
+  lookups, and the CDATA section, processing instruction and Document
+  constructor that WPT's `dom/common.js` needs before the
+  compareDocumentPosition page runs at all.
+
+**Numbers.** WPT `dom/nodes` +15 (Node-isEqualNode 6, Node-isSameNode
+6, Node-normalize 3), each `[required]`, failing with the switch off;
+every other directory unmoved (`css/cssom`'s serialize-all-longhands loss
+predates this and is kept on record). Hosts, 0 failed: DOM 20,092 and
+126,892; yonder's scripted pages 8,927; userland builds. Mutants
+(`tools/test_interfaces_mutants.py`, its group for these members): 19,
+each caught — equality's names, namespaces, attributes and their
+namespaces and values, the children, a sibling more, an Attr's namespace
+and value; the attribute list's order, the
+disconnected order, an element containing its Attr, an ancestor first,
+siblings' order, a null compareDocumentPosition argument, the Attr
+shadow; and normalize's empties, its joins and its descent. An element's
+prefix is compared and has no case: only an XML document's elements have
+one, a script's having its whole name instead (DEBTS.md, a prefixed name).
+Read cold once: no code defect; the order of two Attrs claimed as the
+implementation's choice where DOM's steps fix it, the Attr-receiver
+divergence not naming the comparisons, and equality's names and
+namespaces untested; all fixed. The sign-in page's replay no longer
+stops at compareDocumentPosition.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

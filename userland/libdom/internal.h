@@ -740,6 +740,9 @@ bool d_attribute_name_valid(const char *text);
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before);
 int64_t d_remove(os64_dom_t *dom, os64_html_node_t *node);
+/* The node after `node` in tree order among `root`'s descendants, NULL
+ * past the last (node.c). */
+const os64_html_node_t *d_walk_next(const os64_html_node_t *root, const os64_html_node_t *node);
 int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                    os64_html_node_t *old);
 int64_t d_replace_content(os64_dom_t *dom, os64_html_node_t *parent,
@@ -767,7 +770,7 @@ enum {
     D_ADJACENT_HTML, D_ADJACENT_ELEMENT, D_ADJACENT_TEXT,
     D_ATTRIBUTE_NAMES, D_TOGGLE_ATTR, D_HAS_ATTRS,
     /* The node row's (mixin.c d_nodes_install, behind the modern switch). */
-    D_ROOT_NODE
+    D_ROOT_NODE, D_NORMALIZE
 };
 /* OPTIONS and SELECTED_OPTIONS are a select's list of options (libpage's
  * walk, os64_page_option_next) and the ones of it that are selected; the
@@ -1157,11 +1160,11 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
 int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* ── The node row (0f's P1a and after; INTERFACES_FORMS.md): Node's
- * getRootNode and baseURI, Text's own members and Element's names
- * (mixin.c), and Attr's getRootNode and baseURI beside them (attr.c), whose
- * shadow covers Node.prototype whole. ── */
+ * getRootNode, baseURI and normalize, Text's own members and Element's
+ * names (mixin.c), and Attr's answers to Node's three beside them
+ * (attr.c), whose shadow covers Node.prototype whole. ── */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
-int d_attr_root_install(os64_dom_t *dom, JSContext *ctx);
+int d_attr_nodes_install(os64_dom_t *dom, JSContext *ctx);
 /* Node's `baseURI` for a node of a document (mixin.c): that document's base
  * URL, about:blank for one with no window. */
 JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
@@ -1186,6 +1189,9 @@ int d_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The tables' tree verbs and collections, and a map's areas (tables.c,
  * 0f's P6b). */
 int d_tables_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* Node's comparisons, isSameNode, isEqualNode and compareDocumentPosition,
+ * on Node's prototype and Attr's (compare.c). */
+int d_compare_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its
  * `for` names, when the first element of its tree with that ID is one;
  * without `for`, its first labelable descendant. NULL for none, or for a
@@ -1332,6 +1338,22 @@ int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *na
                    const char *value, size_t length, bool remove);
 /* Whether a value is an Attr of this binding. */
 bool d_is_attr(os64_dom_t *dom, JSValueConst value);
+/* An Attr as Node's comparisons read it: the entry that is its identity,
+ * its element (NULL while detached), its qualified name, namespace (NULL:
+ * none) and local name, and its value, `length` bytes. Read at the call,
+ * so good until page code runs. */
+typedef struct {
+    const DValue *entry;
+    const os64_html_node_t *element;
+    const char *name, *ns, *local, *value;
+    size_t length;
+} DAttrView;
+/* 1 with *view filled when `value` is an Attr, 0 when it is not, -1 with
+ * the exception thrown. */
+int d_attr_view(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DAttrView *view);
+/* A name's local part (DOM § 4.9.2): after the first colon of a name in a
+ * namespace; the whole name of one in none, colons and all. */
+const char *d_attr_local(const char *name, const char *ns);
 /* Element.attributes, the Attr members and the attribute-node methods of
  * Document and Element: the classic surface, on every page. */
 int d_attr_classic(os64_dom_t *dom, JSContext *ctx);
