@@ -105,6 +105,13 @@ bool yonder_settings_saved_keep_pages(void);
 #define YONDER_PROFILE_DEFAULT "/home/yogi/.yonder"
 const char *yonder_settings_saved_profile(char *out, size_t cap);
 
+// THE DOWNLOADS FOLDER, by the profile's rules: `downloads = <dir>`, where
+// the Save dialog opens. The profile's sibling and not its child: a
+// download is something the person asked for and will look for. Made when
+// the first download is asked for.
+#define YONDER_DOWNLOADS_DEFAULT "/home/yogi/downloads"
+const char *yonder_settings_saved_downloads(char *out, size_t cap);
+
 // The agent yonder.conf saves, into `out` (YONDER_AGENT_MAX bytes): true
 // when there is one and it is valid.
 bool yonder_settings_saved_agent(char *out, size_t cap);

@@ -23,6 +23,7 @@
 #include "agent.h"
 #include "fetch/http.h"
 #include "bar.h"
+#include "download.h"
 #include "mail.h"
 #include "paint.h"
 #include "paint_cache.h"
@@ -1319,6 +1320,120 @@ static void background_size_cases(void)
            content.x == 15 && content.y == 25 && content.w == 90 && content.h == 70, NULL);
     expect("edge: the border box is the box",
            border.x == 10 && border.y == 20 && border.w == 100 && border.h == 80, NULL);
+}
+
+// ── A download's name (download.h) ───────────────────────────────────────
+
+static void expect_text(const char *name, const char *got, const char *want);
+
+static const char *download_name(const char *disposition, const char *url)
+{
+    static char out[YONDER_DOWNLOAD_NAME_MAX];
+    yonder_download_name(disposition, url, out, sizeof(out));
+    return out;
+}
+
+// Taken: the names in a NULL-ended list.
+static bool download_taken(void *ctx, const char *name)
+{
+    for (const char *const *t = ctx; *t != NULL; t++)
+        if (strcmp(*t, name) == 0)
+            return true;
+    return false;
+}
+
+static void download_cases(void)
+{
+    expect_text("download: the address's last segment", download_name(NULL, "https://a.example/files/tool.zip"),
+                "tool.zip");
+    expect_text("download: the query and fragment are not the name",
+                download_name("", "https://a.example/get/report.pdf?id=7#page=2"), "report.pdf");
+    expect_text("download: the segment percent-decoded", download_name(NULL, "http://a.example/my%20notes.txt"),
+                "my notes.txt");
+    expect_text("download: an address ending in / is download", download_name(NULL, "http://a.example/dir/"),
+                "download");
+    expect_text("download: an address with no path is download", download_name(NULL, "http://a.example"),
+                "download");
+    expect_text("download: an address with no authority is download",
+                download_name(NULL, "data:application/zip;base64,AAAA"), "download");
+    expect_text("download: Content-Disposition's quoted filename wins",
+                download_name("attachment; filename=\"Q3 report.pdf\"", "https://a.example/dl?id=9"),
+                "Q3 report.pdf");
+    expect_text("download: a token filename, the parameter name in any case",
+                download_name("attachment; FileName=data.csv ; size=10", "https://a.example/x"), "data.csv");
+    expect_text("download: a quoted-string's backslash escapes",
+                download_name("attachment; filename=\"a\\\"b.txt\"", NULL), "a\"b.txt");
+    expect_text("download: filename* in UTF-8 wins over filename",
+                download_name("attachment; filename=\"plain.txt\"; filename*=UTF-8''na%C3%AFve.txt", NULL),
+                "na\xC3\xAFve.txt");
+    expect_text("download: filename* in another charset is passed over",
+                download_name("attachment; filename*=iso-8859-1''caf%E9.txt; filename=cafe.txt", NULL), "cafe.txt");
+    expect_text("download: a parameter that only ends in filename is not it",
+                download_name("attachment; xfilename=no.txt", "https://a.example/yes.txt"), "yes.txt");
+    expect_text("download: a path in the name is stripped to its last part",
+                download_name("attachment; filename=\"../../etc/passwd\"", NULL), "passwd");
+    expect_text("download: a Windows path too", download_name("attachment; filename=\"C:\\\\tmp\\\\a.exe\"", NULL),
+                "a.exe");
+    expect_text("download: leading dots go", download_name("attachment; filename=\".bashrc\"", NULL), "bashrc");
+    expect_text("download: trailing dots and spaces go", download_name("attachment; filename=\"a.txt. . \"", NULL),
+                "a.txt");
+    expect_text("download: a control byte becomes _", download_name(NULL, "http://a.example/a%0Ab%00c.txt"),
+                "a_b_c.txt");
+    expect_text("download: a name of only dots falls back to the address",
+                download_name("attachment; filename=\"...\"", "http://a.example/real.bin"), "real.bin");
+    char long_name[300], want[YONDER_DOWNLOAD_NAME_MAX];
+    memset(long_name, 'a', 200);
+    strcpy(long_name + 200, ".tar");
+    char url[400];
+    snprintf(url, sizeof(url), "http://a.example/%s", long_name);
+    memset(want, 'a', YONDER_DOWNLOAD_NAME_MAX - 1 - 4);
+    strcpy(want + YONDER_DOWNLOAD_NAME_MAX - 1 - 4, ".tar");
+    expect_text("download: too long is cut, its extension kept", download_name(NULL, url), want);
+    // 0xC3 0xA9 is one character. 121 b's, two of them and .bin is 130
+    // bytes; 127 fit, so the cut falls after the first: whole, it stays.
+    memset(long_name, 'b', 121);
+    strcpy(long_name + 121, "%C3%A9%C3%A9.bin");
+    snprintf(url, sizeof(url), "http://a.example/%s", long_name);
+    memset(want, 'b', 121);
+    strcpy(want + 121, "\xC3\xA9.bin");
+    expect_text("download: a cut keeps a UTF-8 sequence that fits whole", download_name(NULL, url), want);
+    // 122 b's: the cut would fall between 0xC3 and 0xA9, so the character goes.
+    memset(long_name, 'b', 122);
+    strcpy(long_name + 122, "%C3%A9%C3%A9.bin");
+    snprintf(url, sizeof(url), "http://a.example/%s", long_name);
+    memset(want, 'b', 122);
+    strcpy(want + 122, ".bin");
+    expect_text("download: a cut never splits a UTF-8 sequence", download_name(NULL, url), want);
+
+    char out[YONDER_DOWNLOAD_NAME_MAX];
+    const char *none[] = {NULL};
+    expect("download: a free name stands",
+           yonder_download_free_name("a.zip", download_taken, none, out, sizeof(out)) && strcmp(out, "a.zip") == 0,
+           out);
+    const char *two[] = {"a.tar.gz", "a-1.tar.gz", NULL};
+    expect("download: taken names count up before the first dot",
+           yonder_download_free_name("a.tar.gz", download_taken, two, out, sizeof(out)) &&
+               strcmp(out, "a-2.tar.gz") == 0,
+           out);
+    const char *dotless[] = {"README", NULL};
+    expect("download: a name with no dot is numbered at its end",
+           yonder_download_free_name("README", download_taken, dotless, out, sizeof(out)) &&
+               strcmp(out, "README-1") == 0,
+           out);
+    char size[32];
+    yonder_download_size(1, size, sizeof(size));
+    expect_text("download: one byte is 1 KB, never 0", size, "1 KB");
+    yonder_download_size(1024 * 1024 - 1, size, sizeof(size));
+    expect_text("download: under a megabyte is kilobytes", size, "1024 KB");
+    yonder_download_size(1024 * 1024 * 3 + 1024 * 1024 / 2, size, sizeof(size));
+    expect_text("download: megabytes to a tenth", size, "3.5 MB");
+    yonder_download_size((uint64_t)1024 * 1024 * 1024 * 2 - 1, size, sizeof(size));
+    expect_text("download: cut, never rounded up past what there is", size, "1.9 GB");
+    char tiny[8];
+    expect("download: a numbered name that will not fit is refused",
+           !yonder_download_free_name("abcde.z", download_taken, (const char *[]){"abcde.z", NULL}, tiny,
+                                      sizeof(tiny)),
+           NULL);
 }
 
 // ── The question bar: no click made before a question may answer it ─────
@@ -2663,6 +2778,7 @@ int main(int argc, char **argv)
         scale_cases();
         background_size_cases();
         bar_cases();
+        download_cases();
         mail_cases();
         cost_cases();
         agent_cases();

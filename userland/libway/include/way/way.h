@@ -34,6 +34,10 @@
 #pragma GCC visibility push(default)
 
 #define WAY_SENTENCE_MAX 512
+// A Content-Disposition line kept for a download's name (way_leg_t.offer):
+// a name and its parameters fit with room; one longer is not kept at all,
+// since a cut one could name a different file.
+#define WAY_DISPOSITION_MAX 512
 // Oldest dropped past this: somebody sixty-four pages in wants the
 // sixty-fifth more than the first.
 #define WAY_HISTORY_MAX 64
@@ -154,6 +158,15 @@ typedef struct {
     way_jar_t *jar;
 } way_session_t;
 
+// A reply that was no page (way_leg_t.offer): the address it came from
+// after its redirects, its type, and the final head's Content-Disposition
+// as the server sent it ("" for none, or one too long to keep whole).
+typedef struct {
+    char url[OS64_FETCH_URL_MAX];
+    char type[HTTP_TYPE_MAX];
+    char disposition[WAY_DISPOSITION_MAX];
+} way_offer_t;
+
 // ONE LOAD'S WORTH OF THE SESSION. A load reads the browser's name and
 // accept list (set before the first load and never changed while one
 // runs), sends the agent its leg carries, writes only to its own leg (its
@@ -205,6 +218,10 @@ typedef struct {
     // The cookies this load's hops left out for want of room (jar.h), for
     // the face's record of the page.
     way_cookies_short_t cookies_short;
+    // A REPLY THAT IS NO PAGE, kept for a face that offers to save it:
+    // way_open fills it when it refuses a GET's reply as not a page, and
+    // empties it (`url` "") at every other outcome.
+    way_offer_t offer;
 } way_leg_t;
 
 // A leg for `session`, with the session's own face, an empty sentence, and

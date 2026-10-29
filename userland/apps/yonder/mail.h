@@ -30,12 +30,15 @@ typedef struct yonder_mail yonder_mail_t;
 #define YONDER_STREAM_CHUNKS 16
 
 // How a fetch ended. `page` false means there never was one: `reason` is
-// then the sentence to show (libway's), and no head was posted.
+// then libway's sentence, and no head was posted; `offer.url` set means it
+// was a reply that is no page, which the window offers to save instead of
+// showing the sentence.
 typedef struct {
     bool page;
     os64_fetch_status_t fetch;
     char reason[WAY_SENTENCE_MAX];
     way_cookies_short_t cookies_short;      // the leg's (way.h), for the page's record
+    way_offer_t offer;                      // the leg's: a reply that was no page, to save
 } yonder_verdict_t;
 
 // A mailbox for navigation `generation`, held once by the caller. NULL on

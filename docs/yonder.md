@@ -29,7 +29,7 @@ works in the address field too.
 
 ```
 +------------------------------------------------------------------+
-| [Back] [Forward] [Reload] [Stop]  [ address                    ] |
+| [Back] [Forward] [Reload] [Stop]  [ address        ] [Downloads] |
 +------------------------------------------------------------------+
 |                                                                  |
 |   the page                                                       |
@@ -57,6 +57,9 @@ works in the address field too.
 - **The status line** says what yonder is doing, where a link goes when
   the pointer is over it, and how long the last layout took. When a page
   is incomplete - cut off, too big, missing pictures - it says so there.
+- **Downloads**, at the address row's right end, is lit while its list
+  has anything in it, and a bar along its foot shows how far the
+  downloads running have got (below).
 - **The title bar's Settings icon** (at its right) opens Settings.
 
 ## Moving around a page
@@ -76,9 +79,10 @@ works in the address field too.
 Resizing the window lays the page out again and keeps your place.
 
 **The right-click menu** opens over a link, a picture, or a picture that is
-a link, and offers what fits: **Open Link in New Window** and **Copy Link
-Address** for the link, **Open Picture in New Window** and **Copy Picture
-Address** for the picture, all four for a picture that is a link. Over
+a link, and offers what fits: **Open Link in New Window**, **Save Link
+As...** and **Copy Link Address** for the link, **Open Picture in New
+Window**, **Save Picture As...** and **Copy Picture Address** for the
+picture, all six for a picture that is a link. Over
 anything else nothing opens. A copied address goes to the system clipboard,
 so it pastes into a gterm or any field (Ctrl+V). A new window is another
 yonder, with its own history; it shares the cookies through their file
@@ -86,6 +90,30 @@ yonder, with its own history; it shares the cookies through their file
 logged in there too. A link that runs a
 script (`javascript:`) can be copied but not opened in a new window, which
 has no page for it to run in.
+
+**Saving a file.** *Save Link As...* and *Save Picture As...* ask where it
+goes in the Save dialog, which opens on the `downloads` folder with a name
+filled in: the one the server gives (its `Content-Disposition`), else the
+last part of the address, else `download`, numbered (`tool-1.zip`) when
+the folder already has one. A click on a link to something yonder cannot
+show (a zip, a program, a PDF) opens the same dialog instead of leaving
+the page. While the dialog is up, yonder's window takes no clicks or keys;
+a click on it brings the dialog forward.
+
+The file is written as `<name>.part` (or `<name>.1.part` when that is
+taken) and renamed when the last byte is in,
+so a name in the folder is always a whole file; one that fails or is
+cancelled leaves nothing behind. Downloads go on while you move to other
+pages, three at a time (the rest wait their turn), and stop when yonder
+closes. Nothing about them goes on the status line: **Downloads**' bar
+fills as they arrive (a short band moves along it when a server does not
+say how big the file is), and turns red when one fails, until you open
+the list. Click
+**Downloads** for the list, newest first: each file's name and how far it
+got, or why it failed. Pick a row for **Cancel Download** or **Show in
+Roam**; **Clear finished** at the foot empties the list of the ones that
+are over. The list shows what was true when it opened; open it again to
+see it move.
 
 **`p` shows a page with positioning off**: every box in document order,
 nothing fixed or stacked over anything else. With no scripts, a
@@ -261,11 +289,12 @@ cache_dir = /var/cache/yonder
 | `diagnostics` | a directory to write a file about each page into, an absolute path | none |
 | `modern` | `on` or `off`: the Modern Web surface | `on` |
 | `profile` | the folder for your own files (page storage, the cookie file), an absolute path; made when first needed | `/home/yogi/.yonder` |
+| `downloads` | the folder the Save dialog opens on, an absolute path; made when first needed | `/home/yogi/downloads` |
 | `cookies` | `on`, `session` or `off`: whether cookies are kept in the profile's `cookies` file, only while the window is open, or not at all | `on` |
 
 A value yonder cannot use is ignored and the default used; a bad `agent`,
 `cache_mb`, `zoom`, `script_seconds` or `diagnostics` also says so in the
-log, and a bad `modern`, `profile` or `cookies` on the status line.
+log, and a bad `modern`, `profile`, `downloads` or `cookies` on the status line.
 
 ## Fonts
 
@@ -279,8 +308,6 @@ explains them.
 - **JavaScript.** Menus, galleries, chat boxes and anything a script fills
   in stay as the HTML left them.
 - **Selecting and copying text.**
-- **Downloads.** An address that is not a page (a zip, a program) is not
-  shown; the status line names the `os64get` command that saves it.
 - **Several tabs or windows sharing one session.** Each yonder is its own
   browser, with its own history; the cache is shared, and so are the
   cookies, through their file (unless `cookies` is `session` or `off`).

@@ -37,6 +37,7 @@
 #include "os64/ui.h"
 #include "os64/ui_dispatcher.h"
 #include "os64/ui_menu.h"
+#include "os64/ui_file_dialog.h"
 #include "os64/work.h"
 #include "agent.h"
 #include "bar.h"
@@ -57,6 +58,8 @@
 #include "events.h"
 #include "ticker.h"
 #include "trip.h"
+#include "download.h"
+#include "download_job.h"
 
 // The largest file yonder reads: libhtml refuses by size beyond its own
 // budget anyway, and says so; this only keeps a stray path from reading a
@@ -159,6 +162,7 @@ static yonder_cookies_mode_t s_cookies_asked;
 #define BELL_WORK (1u << 0)
 #define BELL_MAIL (1u << 1)
 #define BELL_TICK (1u << 2)       // a moving picture's next frame is due
+#define BELL_DOWNLOAD (1u << 3)   // a download's bytes arrived: its meter moves
 #define BELL_SCRIPTS (1u << 4)    // a page has another script or timer to run
 #define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
 
@@ -1310,10 +1314,14 @@ typedef struct {
 
 #define INPUTS_MAX 32
 
-// The right-click menu's verbs, and its models: what it offers depends on
-// what is under the pointer (§ The right-click menu).
-enum { ACT_OPEN_LINK = 1, ACT_COPY_LINK, ACT_OPEN_PICTURE, ACT_COPY_PICTURE };
-enum { CONTEXT_LINK, CONTEXT_PICTURE, CONTEXT_BOTH, CONTEXT_MENUS };
+// The window's menu verbs, and its models: what the right-click menu offers
+// depends on what is under the pointer (§ The right-click menu); a
+// download's row offers its own (§ Downloads).
+enum {
+    ACT_OPEN_LINK = 1, ACT_SAVE_LINK, ACT_COPY_LINK, ACT_OPEN_PICTURE, ACT_SAVE_PICTURE, ACT_COPY_PICTURE,
+    ACT_DOWNLOAD_CANCEL, ACT_DOWNLOAD_SHOW,
+};
+enum { CONTEXT_LINK, CONTEXT_PICTURE, CONTEXT_BOTH, CONTEXT_DOWNLOAD, CONTEXT_MENUS };
 
 static struct {
     int64_t win;
@@ -1337,6 +1345,8 @@ static struct {
     // Programs this window spawned and has not collected (children_turn).
     uint32_t children;
     os64_ui_widget_t root, status, view, back, forward, reload, stop;
+    // The downloads button, at the address row's right end (§ Downloads).
+    os64_ui_widget_t downloads;
     // The badge at the right of the status bar: the shown page's MISSING
     // and FAILED counts, the file's own tokens, present only when nonzero.
     os64_ui_widget_t badge;
@@ -2974,6 +2984,10 @@ static void click_reload(os64_ui_widget_t *w, void *user);
 static void reload_as(way_initiator_t by);
 static void follow_link_asked(int32_t link, way_ask_t ask, way_initiator_t by);
 static void follow_link(int32_t link);
+static void download_ask(const char *url, const char *referrer, const char *disposition);
+static void download_arrived(os64_work_id_t id, yonder_download_job_t *job);
+static void downloads_follow(void);
+static void downloads_orphaned(void);
 static bool script_rebuild(void);
 static void stream_drop(void);
 static void stream_sheets(void);
@@ -10318,6 +10332,11 @@ static void reaped(os64_work_id_t id, void *job, void *product)
         yonder_fetch_release(job, product);
         return;
     }
+    if (*(const uint32_t *)job == YONDER_JOB_DOWNLOAD) {
+        download_arrived(id, job);
+        yonder_download_release(job, product);
+        return;
+    }
     // A fetch is done. Everything it had to say went down the mailbox
     // before it returned, and the stream reads that at its own pace; here
     // the job is let go.
@@ -11020,13 +11039,27 @@ static bool stream_turn(void)
         return true;                    // chunks remain: next turn
     if (!g.stream.verdict.page) {
         // There never was a page: a head that did not come, or one that was
-        // not a page. libway's sentence says which.
+        // not a page. libway's sentence says which. One that was not a page,
+        // and was asked for by a GET, is offered to save (§ Downloads)
+        // instead of said: the page on screen stays, and the Save dialog
+        // asks where it goes. It is fetched again for the download.
         char line[WAY_SENTENCE_MAX];
         os64_strcopy(line, sizeof(line), g.stream.verdict.reason);
         stream_failed(trim(line));
+        way_offer_t offer = g.stream.verdict.offer;
+        char referrer[OS64_FETCH_URL_MAX];
+        os64_strcopy(referrer, sizeof(referrer), g.stream.referrer);
         stream_drop();
         buttons_follow();
-        status_rest(trim(line));
+        if (offer.url[0] != '\0') {
+            if (g.page.tree != NULL)
+                say_laid_out(g.laid_ms);    // the page's own line again, not the fetch's
+            else
+                status_rest("");
+            download_ask(offer.url, referrer, offer.disposition);
+        } else {
+            status_rest(trim(line));
+        }
         return false;
     }
     if (!g.stream.has_head)
@@ -11087,6 +11120,8 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         // The head, the body and the verdict are the stream's: the loop
         // feeds a slice after the events (stream_turn, in main).
     }
+    if (mask & BELL_DOWNLOAD)
+        downloads_follow();
     if (mask & BELL_TICK) {
         s_cost.bells++;
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
@@ -11114,6 +11149,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
             g.pool = NULL;
             pictures_orphaned(&g.page);
             webfonts_orphaned();
+            downloads_orphaned();
             buttons_follow();
             status_rest("The background workers stopped; restart yonder to fetch pages.");
         }
@@ -12633,6 +12669,483 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
     }
 }
 
+// ── Downloads ───────────────────────────────────────────────────────────
+//
+// YONDER_HONEY_DO.md § 6. A download is asked for (a Save verb, or a click
+// on something that is no page), named in the Save dialog, and fetched by
+// a job on the window's pool into a staging file of its own, renamed whole
+// at the end (download_job.h). It is the WINDOW's: it goes on across pages,
+// and closing yonder cancels it, its run removing what it staged. The downloads
+// button at the address row's right end is the meter, and a click on it
+// lists them; nothing about a download goes on the status line but a
+// refusal to start one.
+//
+// THE SAVE DIALOG IS MODAL TO THIS WINDOW: libui's dialog is a window of
+// its own with no owner lock, so while it is up this window takes no
+// press, key, wheel or Settings (window_event), and any of them brings the
+// dialog forward instead. The page goes on painting and the downloads on
+// running.
+
+#define DOWNLOADS_MAX 32        // rows kept; the oldest finished one makes room
+#define DOWNLOADS_AT_ONCE 3     // running at once: the rest wait, and a page keeps its workers
+
+typedef enum { DL_WAITING, DL_RUNNING, DL_DONE, DL_FAILED, DL_CANCELLED } DownloadState;
+
+typedef struct {
+    DownloadState state;
+    uint32_t serial;            // which download, for a verb picked from its row
+    char *url, *referrer;       // os64_malloc'd
+    char path[OS64_PATH_MAX];
+    bool replace;               // the dialog's consent to replace a file of that name
+    os64_work_id_t id;
+    // RUNNING: the pool's job, read for the meter, until it is reaped or
+    // cancelled (a cancelled job is the pool's to free, so it goes NULL
+    // before the cancel).
+    yonder_download_job_t *job;
+    uint64_t got, total;        // the last the job said; a finished one's size
+    char why[160];
+} Download;
+
+static Download s_downloads[DOWNLOADS_MAX];     // oldest first
+static int32_t s_ndownloads;
+static uint32_t s_download_serial;
+static uint32_t s_download_chosen;              // the row the row menu acts on
+static bool s_download_failed_unseen;           // a failure the list has not shown yet
+// The button's class, with the meter painted over what the button's own
+// paint draws. Both are taken from the widget os64_ui_button made, never by
+// the library's name for the class: an executable that names a library's
+// data gets a copy relocation, which the kernel's linker does not perform.
+static os64_ui_class_t s_downloads_class;
+static void (*s_button_paint)(os64_ui_widget_t *, os64_draw_ctx_t *, const os64_ui_theme_t *);
+
+// The question the Save dialog is asked, one at a time: `url` NULL when
+// nothing is asked. The dialog opens between turns (downloads_turn).
+static struct {
+    char *url, *referrer;       // os64_malloc'd
+    char dir[OS64_PATH_MAX];
+    char name[YONDER_DOWNLOAD_NAME_MAX];
+} s_ask;
+static os64_ui_file_dialog_t s_save;
+static bool s_save_cleanup;     // a failed open left a window to close
+
+static bool downloadable(const char *url)
+{
+    return (os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
+           (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0);
+}
+
+static bool download_taken(void *ctx, const char *name)
+{
+    char path[OS64_PATH_MAX];
+    os64_dirent_t entry;
+    int n = os64_snprintf(path, sizeof(path), "%s/%s", (const char *)ctx, name);
+    return n < 0 || (size_t)n >= sizeof(path) || os64_stat(path, &entry) == 0;
+}
+
+// Asks where a download of `url` goes, asked from the page at `referrer`
+// ("" for none), named from `disposition` (a Content-Disposition line, NULL
+// for none) or the address. A question already up is brought forward
+// instead: one dialog at a time.
+static void download_ask(const char *url, const char *referrer, const char *disposition)
+{
+    if (s_ask.url != NULL) {
+        if (s_save.window > 0)
+            (void)os64_gui_window_focus(s_save.window);
+        return;
+    }
+    if (!downloadable(url)) {
+        status_rest("Only an http or https address can be saved.");
+        return;
+    }
+    const char *said = yonder_settings_saved_downloads(s_ask.dir, sizeof(s_ask.dir));
+    if (!yonder_profile_make_dirs(s_ask.dir)) {
+        status_rest("The downloads folder cannot be made; nothing was saved.");
+        return;
+    }
+    if (said != NULL)
+        status_rest(said);
+    char proposed[YONDER_DOWNLOAD_NAME_MAX];
+    yonder_download_name(disposition, url, proposed, sizeof(proposed));
+    // A hundred taken: the name as it is, and the dialog asks before
+    // replacing it.
+    if (!yonder_download_free_name(proposed, download_taken, s_ask.dir, s_ask.name, sizeof(s_ask.name)))
+        os64_strcopy(s_ask.name, sizeof(s_ask.name), proposed);
+    s_ask.url = copy_text(url);
+    s_ask.referrer = copy_text(referrer != NULL ? referrer : "");
+    if (s_ask.url == NULL || s_ask.referrer == NULL) {
+        os64_free(s_ask.url);
+        os64_free(s_ask.referrer);
+        s_ask.url = s_ask.referrer = NULL;
+        status_rest("Out of memory; nothing was saved.");
+    }
+}
+
+static int32_t downloads_running(void)
+{
+    int32_t n = 0;
+    for (int32_t i = 0; i < s_ndownloads; i++)
+        n += s_downloads[i].state == DL_RUNNING;
+    return n;
+}
+
+static void downloads_follow(void)
+{
+    os64_ui_set_enabled(&g.ui, &g.downloads, s_ndownloads > 0);
+    os64_ui_mark_dirty(&g.ui, &g.downloads);
+}
+
+static void download_failed(Download *d, const char *why)
+{
+    d->state = DL_FAILED;
+    os64_strcopy(d->why, sizeof(d->why), why);
+    s_download_failed_unseen = true;
+}
+
+// Hands the pool the waiting downloads, oldest first, while fewer than
+// DOWNLOADS_AT_ONCE run.
+static void downloads_feed(void)
+{
+    int32_t running = downloads_running();
+    for (int32_t i = 0; i < s_ndownloads && running < DOWNLOADS_AT_ONCE; i++) {
+        Download *d = &s_downloads[i];
+        if (d->state != DL_WAITING)
+            continue;
+        yonder_download_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+        if (job == NULL) {
+            download_failed(d, g.pool == NULL ? "no worker to fetch it" : "out of memory");
+            continue;
+        }
+        job->kind = YONDER_JOB_DOWNLOAD;
+        job->agent = g.way.agent;
+        job->window = g.win;
+        job->bell = BELL_DOWNLOAD;
+        job->replace = d->replace;
+        if (os64_strcopy(job->url, sizeof(job->url), d->url) >= sizeof(job->url) ||
+            os64_strcopy(job->path, sizeof(job->path), d->path) >= sizeof(job->path)) {
+            os64_free(job);
+            download_failed(d, "its address or its name is too long");
+            continue;
+        }
+        job->hooks.jar = g.way.jar;
+        job->hooks.identity = g.way.identity;
+        os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), d->referrer);
+        way_origin_t from;
+        way_origin_of(d->referrer, 0, &from);
+        way_metadata_navigation(&job->hooks.metadata, d->referrer[0] != '\0' ? WAY_BY_PERSON : WAY_BY_BROWSER,
+                                &from);
+        os64_work_t work = {yonder_download_run, yonder_download_release, job, YONDER_DOWNLOAD_RESERVE};
+        d->id = os64_work_submit(g.pool, &work);
+        if (d->id == 0) {
+            os64_free(job);
+            download_failed(d, "the workers would not take it");
+            continue;
+        }
+        d->job = job;
+        d->state = DL_RUNNING;
+        running++;
+    }
+    downloads_follow();
+}
+
+static bool download_finished(const Download *d)
+{
+    return d->state == DL_DONE || d->state == DL_FAILED || d->state == DL_CANCELLED;
+}
+
+static void download_forget(int32_t i)
+{
+    os64_free(s_downloads[i].url);
+    os64_free(s_downloads[i].referrer);
+    os64_memmove(&s_downloads[i], &s_downloads[i + 1], (size_t)(s_ndownloads - i - 1) * sizeof(s_downloads[0]));
+    s_ndownloads--;
+}
+
+// A download the dialog said yes to: `url` and `referrer` are taken.
+static void download_start(char *url, char *referrer, const char *path, bool replace)
+{
+    if (s_ndownloads == DOWNLOADS_MAX) {
+        for (int32_t i = 0; i < s_ndownloads; i++)
+            if (download_finished(&s_downloads[i])) {
+                download_forget(i);
+                break;
+            }
+    }
+    if (s_ndownloads == DOWNLOADS_MAX) {
+        os64_free(url);
+        os64_free(referrer);
+        status_rest("Too many downloads at once; this one was not started.");
+        return;
+    }
+    Download *d = &s_downloads[s_ndownloads++];
+    os64_memset(d, 0, sizeof(*d));
+    d->state = DL_WAITING;
+    d->serial = ++s_download_serial;
+    d->url = url;
+    d->referrer = referrer;
+    d->replace = replace;
+    if (os64_strcopy(d->path, sizeof(d->path), path) >= sizeof(d->path))
+        download_failed(d, "its name is too long");
+    downloads_feed();
+}
+
+// Between turns: the dialog opened when it can be (menus finish retiring
+// their windows first), and its answer taken once it has one.
+static void downloads_turn(void)
+{
+    os64_ui_file_dialog_t *dialog = &s_save;
+    if (s_ask.url == NULL && !s_save_cleanup)
+        return;
+    if (dialog->window <= 0 && !s_save_cleanup) {
+        if (!os64_ui_dispatcher_can_create(&g.dispatcher) || (g.menus != NULL && os64_ui_menu_active(g.menus)))
+            return;
+        os64_ui_file_options_t options = {
+            .mode = OS64_UI_FILE_SAVE,
+            .title = "Save As - yonder",
+            .directory = s_ask.dir,
+            .filename = s_ask.name,
+        };
+        if (os64_ui_file_dialog_open(dialog, &g.dispatcher, g.win, &options) == OS64_UI_OK)
+            return;
+        // A failed open can keep a window when its cleanup is refused.
+        s_save_cleanup = true;
+        status_rest("The Save dialog would not open; nothing was saved.");
+    }
+    if (!s_save_cleanup && dialog->result == OS64_UI_FILE_PENDING)
+        return;
+    bool accepted = !s_save_cleanup && dialog->result == OS64_UI_FILE_ACCEPTED;
+    bool replace = dialog->replace_existing;
+    char path[OS64_DIRECTORY_PATH];
+    os64_strcopy(path, sizeof(path), dialog->path);
+    if (os64_ui_file_dialog_close(dialog) != OS64_UI_OK)
+        return;                         // asked again next turn
+    s_save_cleanup = false;
+    // The keys come back here, where they were before the dialog, or the
+    // next click on the window would go to giving it them.
+    (void)os64_gui_window_focus(g.win);
+    char *url = s_ask.url, *referrer = s_ask.referrer;
+    s_ask.url = s_ask.referrer = NULL;
+    if (accepted && url != NULL) {
+        download_start(url, referrer, path, replace);
+    } else {
+        os64_free(url);
+        os64_free(referrer);
+    }
+}
+
+// A download's job came back from the pool: whole, or why not.
+static void download_arrived(os64_work_id_t id, yonder_download_job_t *job)
+{
+    for (int32_t i = 0; i < s_ndownloads; i++) {
+        Download *d = &s_downloads[i];
+        if (d->state != DL_RUNNING || d->id != id || d->job != job)
+            continue;
+        d->job = NULL;
+        d->got = job->got;
+        d->total = job->total;
+        if (job->whole)
+            d->state = DL_DONE;
+        else
+            download_failed(d, job->why[0] != '\0' ? job->why : "it stopped");
+        break;
+    }
+    downloads_feed();
+}
+
+static void download_cancel(Download *d)
+{
+    if (d->state == DL_RUNNING) {
+        d->got = __atomic_load_n(&d->job->got, __ATOMIC_RELAXED);
+        d->job = NULL;                  // the pool's to free from here
+        if (g.pool != NULL)
+            os64_work_cancel(g.pool, d->id);
+    }
+    if (d->state == DL_RUNNING || d->state == DL_WAITING)
+        d->state = DL_CANCELLED;
+    downloads_feed();
+}
+
+// The workers stopped (g.pool is gone), and destroying the pool released
+// every job still out: each running download lets go of its job and is
+// named as failed, and each still waiting goes through downloads_feed, which
+// names it too, since none of them will arrive now.
+static void downloads_orphaned(void)
+{
+    for (int32_t i = 0; i < s_ndownloads; i++) {
+        Download *d = &s_downloads[i];
+        if (d->state != DL_RUNNING)
+            continue;
+        d->job = NULL;
+        download_failed(d, "the workers stopped");
+    }
+    downloads_feed();
+}
+
+// The bytes so far and how many there will be, over the running downloads
+// whose servers said; `unknown` when one running did not say.
+static void downloads_progress(uint64_t *got, uint64_t *total, bool *unknown)
+{
+    *got = *total = 0;
+    *unknown = false;
+    for (int32_t i = 0; i < s_ndownloads; i++) {
+        Download *d = &s_downloads[i];
+        if (d->state != DL_RUNNING || d->job == NULL)
+            continue;
+        d->got = __atomic_load_n(&d->job->got, __ATOMIC_RELAXED);
+        d->total = __atomic_load_n(&d->job->total, __ATOMIC_RELAXED);
+        *got += d->got;
+        if (d->total == 0)
+            *unknown = true;
+        else
+            *total += d->total;
+    }
+}
+
+// The button, and its meter along its foot: the share that has arrived
+// while every running download's size is known, a band that moves with the
+// bytes while one's is not, red across after a failure the list has not
+// shown yet.
+static void downloads_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
+{
+    s_button_paint(w, ctx, t);
+    os64_gui_rect_t b = w->bounds;
+    os64_gui_rect_t lane = {b.x + 3, b.y + b.h - 5, b.w - 6, 3};
+    if (lane.w <= 0)
+        return;
+    uint64_t got, total;
+    bool unknown;
+    downloads_progress(&got, &total, &unknown);
+    if (downloads_running() > 0) {
+        os64_gui_rect_t fill = lane;
+        if (unknown || total == 0) {
+            // A third of the lane, stepping along a twelfth for each 64 KB.
+            int32_t step = lane.w / 12 > 0 ? lane.w / 12 : 1;
+            fill.w = lane.w / 3;
+            fill.x = lane.x + (int32_t)((got / YONDER_DOWNLOAD_CHUNK) % 9) * step;
+        } else {
+            fill.w = (int32_t)((uint64_t)lane.w * (got < total ? got : total) / total);
+        }
+        os64_draw_fill_rect(&ctx->surf, fill, os64_ui_widget_enabled(w) ? t->button_fg : t->disabled_fg);
+    } else if (s_download_failed_unseen) {
+        os64_draw_fill_rect(&ctx->surf, lane, 0xffc83232u);
+    }
+}
+
+// One row of the list: the file's name, and how far it got or why not.
+static void download_row(const Download *d, char *out, size_t cap)
+{
+    const char *slash = os64_strrchr(d->path, '/');
+    const char *name = slash != NULL ? slash + 1 : d->path;
+    char got[32], total[32];
+    yonder_download_size(d->got, got, sizeof(got));
+    yonder_download_size(d->total, total, sizeof(total));
+    switch (d->state) {
+    case DL_WAITING: os64_snprintf(out, cap, "%s - waiting", name); break;
+    case DL_RUNNING:
+        if (d->total != 0)
+            os64_snprintf(out, cap, "%s - %s of %s", name, got, total);
+        else
+            os64_snprintf(out, cap, "%s - %s", name, got);
+        break;
+    case DL_DONE: os64_snprintf(out, cap, "%s - %s, done", name, got); break;
+    case DL_FAILED: os64_snprintf(out, cap, "%s - failed: %s", name, d->why); break;
+    case DL_CANCELLED: os64_snprintf(out, cap, "%s - cancelled", name); break;
+    }
+}
+
+static void downloads_picked(void *user, size_t row);
+
+// The list, newest first, and "Clear finished" at its foot. Read afresh
+// each time it opens: it shows what was true then.
+static void click_downloads(os64_ui_widget_t *w, void *user)
+{
+    (void)user;
+    if (g.menus == NULL || s_ndownloads == 0)
+        return;
+    static char rows[DOWNLOADS_MAX + 1][224];
+    const char *labels[DOWNLOADS_MAX + 1];
+    bool enabled[DOWNLOADS_MAX + 1];
+    uint64_t got, total;
+    bool unknown;
+    downloads_progress(&got, &total, &unknown);
+    bool finished = false;
+    for (int32_t i = 0; i < s_ndownloads; i++) {
+        const Download *d = &s_downloads[s_ndownloads - 1 - i];
+        download_row(d, rows[i], sizeof(rows[i]));
+        labels[i] = rows[i];
+        enabled[i] = true;
+        finished |= download_finished(d);
+    }
+    labels[s_ndownloads] = "Clear finished";
+    enabled[s_ndownloads] = finished;
+    s_download_failed_unseen = false;
+    os64_ui_mark_dirty(&g.ui, w);
+    os64_ui_menu_list_t list = {
+        .labels = labels, .enabled = enabled, .count = (size_t)s_ndownloads + 1,
+        .selected = (size_t)s_ndownloads + 1, .min_width = w->bounds.w, .widget = w,
+        .pick = downloads_picked, .user = NULL,
+    };
+    if (os64_ui_menu_open_list(g.menus, &list, w->bounds) != OS64_UI_OK)
+        status_rest("The downloads list would not open.");
+}
+
+static Download *download_chosen(void)
+{
+    for (int32_t i = 0; i < s_ndownloads; i++)
+        if (s_downloads[i].serial == s_download_chosen)
+            return &s_downloads[i];
+    return NULL;
+}
+
+// A row: its verbs, in a menu of its own at the button; the foot: the
+// finished rows go.
+static void downloads_picked(void *user, size_t row)
+{
+    (void)user;
+    if (row >= (size_t)s_ndownloads) {
+        for (int32_t i = s_ndownloads - 1; i >= 0; i--)
+            if (download_finished(&s_downloads[i]))
+                download_forget(i);
+        downloads_follow();
+        return;
+    }
+    s_download_chosen = s_downloads[s_ndownloads - 1 - (int32_t)row].serial;
+    if (g.action_view == NULL || g.context_menus[CONTEXT_DOWNLOAD] == NULL)
+        return;
+    (void)os64_ui_actions_refresh(g.action_view);
+    os64_ui_status_code_t rc = os64_ui_menu_open(g.menus, g.context_menus[CONTEXT_DOWNLOAD], g.action_view,
+                                                 g.downloads.bounds, OS64_UI_MENU_CONTEXT);
+    if (rc != OS64_UI_OK && rc != OS64_UI_BUSY)
+        status_rest("The menu would not open.");
+}
+
+// Roam on the folder a finished download went to.
+static void download_show(const Download *d)
+{
+    char folder[OS64_PATH_MAX];
+    os64_strcopy(folder, sizeof(folder), d->path);
+    char *slash = os64_strrchr(folder, '/');
+    if (slash != NULL)
+        slash[slash == folder ? 1 : 0] = '\0';
+    char *argv[] = {"/bin/roam", folder, NULL};
+    int64_t pid = os64_spawn(argv[0], argv);
+    if (pid > 0)
+        g.children++;
+    else
+        status_rest("Roam would not start.");
+}
+
+// As yonder leaves, after the pool: its destroy cancelled the running ones.
+static void downloads_drop(void)
+{
+    if (s_save.window > 0 || s_save_cleanup)
+        (void)os64_ui_file_dialog_close(&s_save);
+    os64_free(s_ask.url);
+    os64_free(s_ask.referrer);
+    s_ask.url = s_ask.referrer = NULL;
+    while (s_ndownloads > 0)
+        download_forget(s_ndownloads - 1);
+}
+
 // ── The right-click menu ────────────────────────────────────────────────
 //
 // One popup over the page, opened on the right button (or Shift+F10 while
@@ -12702,11 +13215,16 @@ static void context_query(void *app, const os64_ui_action_context_t *ctx, uint32
     (void)app;
     (void)ctx;
     out->checked = false;
+    const Download *d = download_chosen();
     switch (id) {
     case ACT_OPEN_LINK: out->enabled = context_openable(g.context_link); break;
+    case ACT_SAVE_LINK: out->enabled = downloadable(g.context_link); break;
     case ACT_COPY_LINK: out->enabled = g.context_link[0] != '\0'; break;
     case ACT_OPEN_PICTURE: out->enabled = context_openable(g.context_picture); break;
+    case ACT_SAVE_PICTURE: out->enabled = downloadable(g.context_picture); break;
     case ACT_COPY_PICTURE: out->enabled = g.context_picture[0] != '\0'; break;
+    case ACT_DOWNLOAD_CANCEL: out->enabled = d != NULL && (d->state == DL_WAITING || d->state == DL_RUNNING); break;
+    case ACT_DOWNLOAD_SHOW: out->enabled = d != NULL && d->state == DL_DONE; break;
     default: out->enabled = false; break;
     }
 }
@@ -12751,9 +13269,13 @@ static os64_ui_action_result_t context_invoke(void *app, const os64_ui_action_co
         return (os64_ui_action_result_t){OS64_UI_REFUSED, 0};
     switch (id) {
     case ACT_OPEN_LINK: context_open(g.context_link); break;
+    case ACT_SAVE_LINK: download_ask(g.context_link, g.page.way.url, NULL); break;
     case ACT_COPY_LINK: context_copy(g.context_link, "Link address copied."); break;
     case ACT_OPEN_PICTURE: context_open(g.context_picture); break;
+    case ACT_SAVE_PICTURE: download_ask(g.context_picture, g.page.way.url, NULL); break;
     case ACT_COPY_PICTURE: context_copy(g.context_picture, "Picture address copied."); break;
+    case ACT_DOWNLOAD_CANCEL: download_cancel(download_chosen()); break;
+    case ACT_DOWNLOAD_SHOW: download_show(download_chosen()); break;
     default: return (os64_ui_action_result_t){OS64_UI_REFUSED, 0};
     }
     return (os64_ui_action_result_t){OS64_UI_OK, 0};
@@ -12764,19 +13286,27 @@ static bool context_retain(void *cookie, uint64_t generation) { (void)cookie; re
 static void context_release(void *cookie, uint64_t generation) { (void)cookie; (void)generation; }
 static bool context_valid(void *cookie, uint64_t generation) { (void)cookie; return generation == 1; }
 
-// The registry, its view and the three models; false leaves whatever was
-// made for context_menus_drop, and no menu opens.
+// The registry, its view and the models; false leaves whatever was made
+// for context_menus_drop, and no menu opens.
 static bool context_menus_make(void)
 {
     static const os64_ui_action_spec_t specs[] = {
         {ACT_OPEN_LINK, OS64_UI_ACTION_COMMAND, 0, "Open Link in New Window",
          "Open the link in a window of its own", NULL, 'w', {0, 0}},
+        {ACT_SAVE_LINK, OS64_UI_ACTION_COMMAND, 0, "Save Link As...",
+         "Save what the link names to a file", NULL, 'k', {0, 0}},
         {ACT_COPY_LINK, OS64_UI_ACTION_COMMAND, 0, "Copy Link Address",
          "Copy the link's address to the clipboard", NULL, 'l', {0, 0}},
         {ACT_OPEN_PICTURE, OS64_UI_ACTION_COMMAND, 0, "Open Picture in New Window",
          "Show the picture in a window of its own", NULL, 'i', {0, 0}},
+        {ACT_SAVE_PICTURE, OS64_UI_ACTION_COMMAND, 0, "Save Picture As...",
+         "Save the picture to a file", NULL, 'v', {0, 0}},
         {ACT_COPY_PICTURE, OS64_UI_ACTION_COMMAND, 0, "Copy Picture Address",
          "Copy the picture's address to the clipboard", NULL, 'a', {0, 0}},
+        {ACT_DOWNLOAD_CANCEL, OS64_UI_ACTION_COMMAND, 0, "Cancel Download",
+         "Stop it and keep nothing", NULL, 'c', {0, 0}},
+        {ACT_DOWNLOAD_SHOW, OS64_UI_ACTION_COMMAND, 0, "Show in Roam",
+         "Open its folder in Roam", NULL, 'r', {0, 0}},
     };
     const os64_ui_action_callbacks_t callbacks = {context_query, context_invoke};
     if (os64_ui_actions_create(specs, sizeof(specs) / sizeof(*specs), &callbacks, NULL, &g.actions) != OS64_UI_OK)
@@ -12784,14 +13314,19 @@ static bool context_menus_make(void)
     os64_ui_action_context_t ctx = {NULL, 1, context_retain, context_release, context_valid};
     if (os64_ui_action_view_create(g.actions, &ctx, &g.action_view) != OS64_UI_OK)
         return false;
-    const os64_ui_menu_entry_t link[] = {{.action = ACT_OPEN_LINK}, {.action = ACT_COPY_LINK}};
-    const os64_ui_menu_entry_t picture[] = {{.action = ACT_OPEN_PICTURE}, {.action = ACT_COPY_PICTURE}};
-    const os64_ui_menu_entry_t both[] = {{.action = ACT_OPEN_LINK}, {.action = ACT_COPY_LINK},
-                                         {.kind = OS64_UI_MENU_SEPARATOR},
-                                         {.action = ACT_OPEN_PICTURE}, {.action = ACT_COPY_PICTURE}};
-    return os64_ui_menu_model_create(g.actions, link, 2, &g.context_menus[CONTEXT_LINK]) == OS64_UI_OK &&
-           os64_ui_menu_model_create(g.actions, picture, 2, &g.context_menus[CONTEXT_PICTURE]) == OS64_UI_OK &&
-           os64_ui_menu_model_create(g.actions, both, 5, &g.context_menus[CONTEXT_BOTH]) == OS64_UI_OK;
+    const os64_ui_menu_entry_t link[] = {{.action = ACT_OPEN_LINK}, {.action = ACT_SAVE_LINK},
+                                         {.action = ACT_COPY_LINK}};
+    const os64_ui_menu_entry_t picture[] = {{.action = ACT_OPEN_PICTURE}, {.action = ACT_SAVE_PICTURE},
+                                            {.action = ACT_COPY_PICTURE}};
+    const os64_ui_menu_entry_t both[] = {{.action = ACT_OPEN_LINK}, {.action = ACT_SAVE_LINK},
+                                         {.action = ACT_COPY_LINK}, {.kind = OS64_UI_MENU_SEPARATOR},
+                                         {.action = ACT_OPEN_PICTURE}, {.action = ACT_SAVE_PICTURE},
+                                         {.action = ACT_COPY_PICTURE}};
+    const os64_ui_menu_entry_t download[] = {{.action = ACT_DOWNLOAD_CANCEL}, {.action = ACT_DOWNLOAD_SHOW}};
+    return os64_ui_menu_model_create(g.actions, link, 3, &g.context_menus[CONTEXT_LINK]) == OS64_UI_OK &&
+           os64_ui_menu_model_create(g.actions, picture, 3, &g.context_menus[CONTEXT_PICTURE]) == OS64_UI_OK &&
+           os64_ui_menu_model_create(g.actions, both, 7, &g.context_menus[CONTEXT_BOTH]) == OS64_UI_OK &&
+           os64_ui_menu_model_create(g.actions, download, 2, &g.context_menus[CONTEXT_DOWNLOAD]) == OS64_UI_OK;
 }
 
 // After the popup controller is disposed of, which borrows the view.
@@ -12813,7 +13348,7 @@ static bool view_context(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *
 {
     (void)w;
     (void)user;
-    if (g.menus == NULL || g.context_menus[CONTEXT_BOTH] == NULL)
+    if (g.menus == NULL || g.context_menus[CONTEXT_MENUS - 1] == NULL)   // the last made: all were
         return false;
     bool keyboard = ev->type == OS64_GUI_EVENT_KEY_DOWN;
     int32_t x = keyboard ? g.pointer_x : ev->mouse.x, y = keyboard ? g.pointer_y : ev->mouse.y;
@@ -13029,13 +13564,16 @@ static os64_font_status_t layout_window(bool staged)
         layout_place(tools[i], (os64_gui_rect_t){x, pad, bw, bh}, staged);
         x += bw + gap;
     }
-    layout_place(&g.field.w, (os64_gui_rect_t){x, pad, area.w - pad - x, bh}, staged);
+    // The downloads button takes the row's right end; the field has the rest.
+    int32_t dw = button_width(g.downloads.text);
+    layout_place(&g.downloads, (os64_gui_rect_t){area.w - pad - dw, pad, dw, bh}, staged);
+    layout_place(&g.field.w, (os64_gui_rect_t){x, pad, area.w - pad - dw - gap - x, bh}, staged);
     int32_t top = pad + bh + pad;
     int32_t bottom = area.h - pad - bh;
     int32_t bar_h = g.bar.up ? bh + gap : 0;
     int32_t vh = bottom - pad - sw - top - bar_h, vw = area.w - 2 * pad - sw;
     // A font that leaves no usable address field or page area cannot fit.
-    if (staged && (area.w - pad - x < bh || vh < 1 || vw < 1))
+    if (staged && (area.w - pad - dw - gap - x < bh || vh < 1 || vw < 1))
         return OS64_FONT_LIMIT;
     if (vh < 1)
         vh = 1;
@@ -13374,6 +13912,15 @@ static void window_event(void *user, const os64_gui_event_t *event)
     if (!g.running || g.ui.quit)
         return;
     const os64_gui_event_t ev = *event;
+    // The Save dialog is modal (§ Downloads): a press, a key, the wheel or
+    // Settings brings it forward instead. A release still goes through, so
+    // a press that began before the dialog finishes where it began.
+    if (s_save.window > 0 &&
+        (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || ev.type == OS64_GUI_EVENT_KEY_DOWN ||
+         ev.type == OS64_GUI_EVENT_MOUSE_WHEEL || ev.type == OS64_GUI_EVENT_SETTINGS)) {
+        (void)os64_gui_window_focus(s_save.window);
+        return;
+    }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
         input_lost();
     if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
@@ -13490,6 +14037,12 @@ int main(int argc, char **argv)
     os64_ui_button(&g.forward, "Forward", click_forward, NULL);
     os64_ui_button(&g.reload, "Reload", click_reload, NULL);
     os64_ui_button(&g.stop, "Stop", click_stop, NULL);
+    os64_ui_button(&g.downloads, "Downloads", click_downloads, NULL);
+    s_downloads_class = *g.downloads.cls;
+    s_button_paint = s_downloads_class.paint;
+    s_downloads_class.name = "downloads";
+    s_downloads_class.paint = downloads_paint;
+    g.downloads.cls = &s_downloads_class;
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf), field_submit, field_cancel, NULL);
     os64_ui_label(&g.status, g.status_text);
     os64_ui_label(&g.badge, g.badge_text);
@@ -13503,7 +14056,7 @@ int main(int argc, char **argv)
     os64_ui_label(&g.qlabel, g.qtext);
     os64_ui_button(&g.qyes, "Yes", NULL, NULL);
     os64_ui_button(&g.qno, "No", NULL, NULL);
-    os64_ui_widget_t *kids[] = {&g.back, &g.forward, &g.reload, &g.stop, &g.field.w, &g.view,
+    os64_ui_widget_t *kids[] = {&g.back, &g.forward, &g.reload, &g.stop, &g.field.w, &g.downloads, &g.view,
                                 &g.vbar.w, &g.hbar.w, &g.qpanel, &g.qlabel, &g.qyes, &g.qno,
                                 &g.badge, &g.status};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
@@ -13522,6 +14075,7 @@ int main(int argc, char **argv)
     bar_show(false);
     layout();
     interface_font_finish();
+    downloads_follow();
 
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET, g.win, BELL_WORK);
     g.settle_due = YONDER_NEVER;
@@ -13629,6 +14183,7 @@ int main(int argc, char **argv)
         storage_turn();
         cookies_turn();
         children_turn();
+        downloads_turn();
         pictures_settle();
         title_follow();
         before_paint();
@@ -13664,6 +14219,7 @@ int main(int argc, char **argv)
     // what they held, before anything they could touch goes away.
     os64_work_pool_destroy(g.pool);
     g.pool = NULL;                      // and no teardown below cancels through it
+    downloads_drop();
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
     page_departs();
