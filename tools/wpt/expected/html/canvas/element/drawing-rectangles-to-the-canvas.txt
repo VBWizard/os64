@@ -1,0 +1,20 @@
+# WPT's html/canvas/element/drawing-rectangles-to-the-canvas in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/drawing-rectangles-to-the-canvas --update
+# rewrites [passing].
+[required]
+2d.clearRect.basic.html	clearRect clears to transparent black
+2d.fillRect.basic.html	fillRect works
+[excluded]
+[passing]
+2d.clearRect.basic.html	clearRect clears to transparent black
+2d.clearRect.globalalpha.html	clearRect is not affected by globalAlpha
+2d.clearRect.globalcomposite.html	clearRect is not affected by globalCompositeOperation
+2d.clearRect.negative.html	clearRect of negative sizes works
+2d.clearRect.nonfinite.html	clearRect() with Infinity/NaN is ignored
+2d.clearRect.shadow.html	clearRect does not draw shadows
+2d.clearRect.zero.html	clearRect of zero pixels has no effect
+2d.fillRect.basic.html	fillRect works
+2d.fillRect.negative.html	fillRect of negative sizes works
+2d.fillRect.nonfinite.html	fillRect() with Infinity/NaN is ignored
+2d.fillRect.zero.html	fillRect of zero pixels has no effect

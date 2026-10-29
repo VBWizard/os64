@@ -38,7 +38,7 @@ LIBDOM_SRCS += libdom/forms.c
 LIBDOM_SRCS += libdom/validity.c
 # Node's comparisons: isSameNode, isEqualNode, compareDocumentPosition.
 LIBDOM_SRCS += libdom/compare.c
-LIBDOM_SRCS += libdom/sheets.c libdom/image_data.c
+LIBDOM_SRCS += libdom/sheets.c libdom/image_data.c libdom/canvas.c libdom/mutation.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
@@ -48,11 +48,11 @@ LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libcanvas/
 
 # libway for one copy of the origin and CORS rules (way/origin.h), which a
 # script's Headers and Request ask as the fetch job does.
-$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBOS64_SO) \
+$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBMATH_SO) $(LIBOS64_SO) \
     link/lib.ld GNUmakefile libdom/library.mk tools/app_bases.py
 	$(LD) --defsym LIB_BASE=$(LIBDOM_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libdom.so --no-undefined --no-as-needed \
-	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBOS64_SO)
+	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBMATH_SO) $(LIBOS64_SO)
 
 $(OBJ)/pic/libdom/%.c.o: libdom/%.c $(LIBJS_GENERATED)/.prepared libdom/library.mk GNUmakefile
 	@mkdir -p "$(@D)"

@@ -5688,6 +5688,7 @@ static uint32_t *stand_in_shot(void) {
     return screen.surf.pixels;
 }
 #include "test_yonder_svg_images.inc"
+#include "test_yonder_canvas.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -6050,6 +6051,7 @@ static void svg_window_cases(void)
  * label says, that a canvas has no paper, and what laying labels out costs. */
 static void stand_in_paint_cases(void)
 {
+    probe_modern_off=true;
     /* A full-viewport canvas over the page, as confetti and snow are: the
      * page shows through, and only the outline and the corner label are
      * the stand-in's. */
@@ -6098,6 +6100,7 @@ static void stand_in_paint_cases(void)
     px=stand_in_shot();
     check(s_stand_in_labels-before==1,"stand-in: two thousand canvases in view cost one label a paint");
     os64_free(px); probe_drop();
+    probe_modern_off=false;
 }
 
 static void inserted_frame_cases(void)
@@ -7293,7 +7296,7 @@ static void diag_page_cases(void) {
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING script importmap") && !has(text,"MISSING script module") &&
-        has(text,"MISSING element canvas (2)\n") &&
+        !has(text,"MISSING element canvas") &&
         has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
         has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
         has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
@@ -7302,7 +7305,7 @@ static void diag_page_cases(void) {
         "drawn, are not");
     loop_drop();
     text=diag_file("/tmp/diag",name);
-    check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");
+    check(!has(text,"MISSING element canvas"),"diag: supported canvases remain absent from missing elements at departure");
 
     /* A frame's document is not loaded into it, and an embed makes no box:
      * both are recorded. An object shows its fallback and is not. */
@@ -7316,9 +7319,10 @@ static void diag_page_cases(void) {
     check(!has(text,"unsupported"),"diag: a frame, whose stand-in takes a click to its document, is never unsupported");
     loop_drop();
 
-    /* A canvas is the page's failure, one line for the kind however many
+    /* With Modern Web off a canvas is the page's failure, one line however many
      * there are, a script's own among them; with scripts off it is its
      * fallback, and no failure. */
+    loop_modern_off=true;
     loop_page("<canvas></canvas><canvas width=10 height=10></canvas>"
         "<script>document.body.appendChild(document.createElement('canvas'))</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with canvases arrives");
@@ -7347,6 +7351,8 @@ static void diag_page_cases(void) {
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"unsupported"),"diag: an svg's canvas is no HTML canvas, and no failure");
     loop_drop();
+
+    loop_modern_off=false;
 
     /* An address that spells a token keeps it out of the plain lines. */
     stream_window(); g.scripts_on=true;
@@ -10694,6 +10700,7 @@ int main(void)
     interface_font_cases();
     inserted_frame_cases();
     stand_in_paint_cases();
+    canvas_window_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();

@@ -504,7 +504,7 @@ static yonder_verbs_t verbs_of(Rec *rec)
     return (yonder_verbs_t){rec,          rec_fill,     rec_text,       rec_image,
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
                             rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
-                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close};
+                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close, NULL};
 }
 
 // The oracle's caches: the suite's, which every page painted before fills,
@@ -1065,6 +1065,17 @@ static void dark_cases(void)
 
 static void scale_cases(void)
 {
+    uint32_t premul[] = {0x80800000, 0, 0xdeadbeef, 0xff00ff00, 0xff0000ff};
+    draw2d_surface_t surface = {premul, 2, 2, 12, sizeof(premul), DRAW2D_ARGB8_PREMULTIPLIED};
+    uint32_t result[4] = {0xffffffff,0xffffffff,0xffffffff,0xffffffff};
+    expect("surface: premultiplied alpha and padded rows",
+        yonder_draw_surface(result,2,(os64_gui_rect_t){0,0,2,2},(os64_gui_rect_t){0,0,2,2},false,&surface) &&
+        result[0]==0xffff7f7f && result[1]==0xffffffff && result[2]==0xff00ff00 && result[3]==0xff0000ff,NULL);
+    surface.capacity--;
+    expect("surface: truncated final row is refused before writing",
+        !yonder_draw_surface(result,2,(os64_gui_rect_t){0,0,2,2},(os64_gui_rect_t){0,0,2,2},false,&surface) &&
+        result[0]==0xffff7f7f,NULL);
+
     const uint32_t A = 0xff112233u, B = 0xff445566u, C = 0xff778899u;
     uint32_t dst[16] = {0};
     const uint32_t two[4] = {A, B, C, A};

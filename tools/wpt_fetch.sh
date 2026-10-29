@@ -54,6 +54,8 @@ WPT_DIRS=(
     css/support
     html/browsers/the-window-object
     html/dom
+    html/canvas/element
+    html/canvas/resources
     html/webappapis/microtask-queuing
     html/webappapis/scripting
     secure-contexts

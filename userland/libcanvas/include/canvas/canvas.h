@@ -19,6 +19,7 @@ typedef struct {
 typedef struct {
     uint32_t fill_argb; /* Straight-alpha sRGB. */
     double global_alpha;
+    double fill_alpha; /* Unquantized source alpha for state serialization. */
 } canvas_state_t;
 typedef struct {
     const uint32_t *pixels; /* Borrowed premultiplied 0xAARRGGBB, sRGB. */
@@ -51,6 +52,9 @@ canvas_status_t canvas_reset(canvas_context_t *, uint32_t width, uint32_t height
 canvas_status_t canvas_save(canvas_context_t *);
 canvas_status_t canvas_restore(canvas_context_t *); /* Empty stack is a no-op. */
 canvas_status_t canvas_set_fill(canvas_context_t *, uint32_t straight_argb);
+/* RGB is straight sRGB in the low 24 bits; retain the finite [0,1] alpha
+ * in state and quantize it at the ARGB8 paint boundary. */
+canvas_status_t canvas_set_fill_rgb_alpha(canvas_context_t *, uint32_t rgb, double alpha);
 /* Nonfinite/out-of-range values are ignored, matching Canvas assignment. */
 canvas_status_t canvas_set_alpha(canvas_context_t *, double);
 /* Axis-aligned bitmap-space rectangles; transform/path support is tracked in

@@ -1,0 +1,55 @@
+# WPT's html/canvas/element/canvas-host in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/canvas-host --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+2d.canvas.host.initial.color.html	Initial state is transparent black
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets fillStyle
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets globalAlpha
+2d.canvas.host.initial.reset.different.html	Changing size resets canvas to transparent black
+2d.canvas.host.initial.reset.same.html	Setting size (not changing the value) resets canvas to transparent black
+2d.canvas.host.readonly.html	Canvas objects are readonly
+2d.canvas.host.reference.html	canvas refers back to its canvas
+2d.canvas.host.size.attributes.default.html	Default width/height when attributes are missing
+2d.canvas.host.size.attributes.idl.html	Getting/setting width/height IDL attributes
+2d.canvas.host.size.attributes.idl.set.zero.html	Setting width/height IDL attributes to 0
+2d.canvas.host.size.attributes.parse.decimal.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.em.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.empty.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.exp.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.hex.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.junk.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.minus.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.octal.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.onlyspace.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.percent.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.plus.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.space.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.trailingjunk.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.whitespace.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.parse.zero.html	Parsing of non-negative integers
+2d.canvas.host.size.attributes.reflect.setcontent.html	Setting content attributes updates IDL and content attributes
+2d.canvas.host.size.attributes.reflect.setidl.html	Setting IDL attributes updates IDL and content attributes
+2d.canvas.host.size.attributes.reflect.setidlzero.html	Setting IDL attributes to 0 updates IDL and content attributes
+2d.canvas.host.size.attributes.removed.html	Removing content attributes reverts to default size
+2d.canvas.host.size.attributes.setAttribute.decimal.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.em.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.empty.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.exp.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.hex.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.junk.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.minus.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.octal.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.onlyspace.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.percent.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.plus.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.space.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.trailingjunk.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.whitespace.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.attributes.setAttribute.zero.html	Parsing of non-negative integers in setAttribute
+2d.canvas.host.size.invalid.attributes.idl.html	Getting/setting width/height IDL attributes
+2d.canvas.host.size.large.html	Canvas test: 2d.canvas.host.size.large
+2d.canvas.host.type.delete.html	window.HTMLCanvasElement interface object is [[Configurable]]
+2d.canvas.host.type.name.html	HTMLCanvasElement type and toString

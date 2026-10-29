@@ -57,6 +57,11 @@ static void basics(void)
     OK(canvas_create(&opts, 4, 3, &c));
     CHECK(state(c).fill_argb == 0xff000000 && state(c).global_alpha == 1);
     for (unsigned i = 0; i < 12; ++i) CHECK(bitmap(c).pixels[i] == 0);
+    OK(canvas_set_fill_rgb_alpha(c, 0xffffff, .5));
+    CHECK(state(c).fill_alpha == .5 && state(c).fill_argb == 0x80ffffff);
+    OK(canvas_save(c)); OK(canvas_set_fill(c, 0xff000000)); OK(canvas_restore(c));
+    CHECK(state(c).fill_alpha == .5);
+    CHECK(canvas_set_fill_rgb_alpha(c, 0, NAN) == CANVAS_BAD_ARGUMENT && state(c).fill_alpha == .5);
     OK(canvas_ack_damage(c));
     OK(canvas_set_fill(c, 0xffff0000));
     OK(canvas_fill_rect(c, 3, 2, -2, -1));

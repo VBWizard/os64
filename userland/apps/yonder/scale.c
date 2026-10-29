@@ -19,7 +19,7 @@ static uint32_t over(uint32_t s, uint32_t d, uint32_t a)
 }
 
 // One source pixel onto one destination pixel, by its alpha.
-static void put(uint32_t *out, uint32_t p)
+static void put(uint32_t *out, uint32_t p, bool premultiplied)
 {
     uint32_t a = p >> 24;
     if (a == 0)
@@ -29,6 +29,13 @@ static void put(uint32_t *out, uint32_t p)
         return;
     }
     uint32_t d = *out;
+    if (premultiplied) {
+        *out = 0xff000000u |
+            ((((p >> 16) & 255) + (((d >> 16) & 255) * (255-a) + 127) / 255) << 16) |
+            ((((p >> 8) & 255) + (((d >> 8) & 255) * (255-a) + 127) / 255) << 8) |
+            ((p & 255) + ((d & 255) * (255-a) + 127) / 255);
+        return;
+    }
     *out = 0xff000000u | over((p >> 16) & 0xff, (d >> 16) & 0xff, a) << 16 |
            over((p >> 8) & 0xff, (d >> 8) & 0xff, a) << 8 | over(p & 0xff, d & 0xff, a);
 }
@@ -71,27 +78,32 @@ static void between(uint32_t u, uint32_t n, int32_t size, uint32_t *i, uint32_t 
 
 // The picture at (u, v) of a copy `tw` x `th`, mixed from the four source
 // pixels round it by how near each is — their colours weighed by their
-// alphas, so a transparent neighbour lends no colour — as 0xAARRGGBB.
+// alphas for a straight source, or directly for a premultiplied source.
+// The result retains the source alpha convention.
 static uint32_t smooth_at(const uint32_t *src, uint32_t sw, uint32_t sh, uint32_t u, int32_t tw,
-                          uint32_t v, int32_t th)
+                          uint32_t v, int32_t th, size_t stride, bool premultiplied)
 {
     uint32_t x, fx, y, fy;
     between(u, sw, tw, &x, &fx);
     between(v, sh, th, &y, &fy);
     uint32_t x1 = x + 1 < sw ? x + 1 : x, y1 = y + 1 < sh ? y + 1 : y;
-    const uint32_t p[4] = {src[(uint64_t)y * sw + x], src[(uint64_t)y * sw + x1],
-                           src[(uint64_t)y1 * sw + x], src[(uint64_t)y1 * sw + x1]};
+    const uint32_t p[4] = {src[(uint64_t)y * stride + x], src[(uint64_t)y * stride + x1],
+                           src[(uint64_t)y1 * stride + x], src[(uint64_t)y1 * stride + x1]};
     const uint32_t w[4] = {(256 - fx) * (256 - fy), fx * (256 - fy), (256 - fx) * fy, fx * fy};
     uint64_t a = 0, r = 0, g = 0, b = 0;
     for (int k = 0; k < 4; k++) {
         uint64_t wa = (uint64_t)w[k] * (p[k] >> 24);
         a += wa;
-        r += wa * ((p[k] >> 16) & 0xff);
-        g += wa * ((p[k] >> 8) & 0xff);
-        b += wa * (p[k] & 0xff);
+        uint64_t wc = premultiplied ? w[k] : wa;
+        r += wc * ((p[k] >> 16) & 0xff);
+        g += wc * ((p[k] >> 8) & 0xff);
+        b += wc * (p[k] & 0xff);
     }
     if (a == 0)
         return 0;
+    if (premultiplied)
+        return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((r + 32768) >> 16) << 16 |
+               (uint32_t)((g + 32768) >> 16) << 8 | (uint32_t)((b + 32768) >> 16);
     return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((r + a / 2) / a) << 16 |
            (uint32_t)((g + a / 2) / a) << 8 | (uint32_t)((b + a / 2) / a);
 }
@@ -127,19 +139,25 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
         uint32_t *out = dst + (uint64_t)y * pitch;
         uint32_t u = x0 < x1 ? wrap((int64_t)x0 - tile.x, (uint32_t)tile.w) : 0;
         for (int32_t x = x0; x < x1; x++) {
-            put(&out[x], smooth ? smooth_at(src, sw, sh, u, tile.w, v, tile.h)
-                                : row[own ? u : source_at(u, sw, tile.w)]);
+            put(&out[x], smooth ? smooth_at(src, sw, sh, u, tile.w, v, tile.h, sw, false)
+                                : row[own ? u : source_at(u, sw, tile.w)], false);
             if (++u == (uint32_t)tile.w)
                 u = 0;
         }
     }
 }
 
-void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
-                         bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh)
+bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
+                          bool smooth, const draw2d_surface_t *source)
 {
+    if (!source || (source->format != DRAW2D_ARGB8_PREMULTIPLIED && source->format != DRAW2D_ARGB8_STRAIGHT) ||
+        draw2d_surface_validate(source) != DRAW2D_OK) return false;
+    const uint32_t *src = source->pixels;
+    uint32_t sw = source->width, sh = source->height;
+    size_t stride = source->stride / sizeof(uint32_t);
+    bool premultiplied = source->format == DRAW2D_ARGB8_PREMULTIPLIED;
     if (box.w <= 0 || box.h <= 0 || sw == 0 || sh == 0)
-        return;
+        return true;
     smooth = smooth && !((uint32_t)box.w == sw && (uint32_t)box.h == sh);
     // Edges are added in 64 bits: a picture may be as wide as an int32_t
     // says (a width of 1000000% three tables deep), and its box need not
@@ -150,17 +168,27 @@ void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
     for (int32_t y = y0; y < y1; y++) {
         // The source row whose span covers the middle of this one:
         // floor((y - box.y + 1/2) * sh / box.h), in integers.
-        uint32_t sy = (uint32_t)(((int64_t)(y - box.y) * 2 + 1) * sh / ((int64_t)box.h * 2));
-        const uint32_t *row = src + (uint64_t)sy * sw;
+        uint32_t sy = (uint32_t)((((int64_t)y - box.y) * 2 + 1) * sh / ((int64_t)box.h * 2));
+        const uint32_t *row = src + (uint64_t)sy * stride;
         uint32_t *out = dst + (uint64_t)y * pitch;
         for (int32_t x = x0; x < x1; x++) {
             if (smooth) {
                 put(&out[x], smooth_at(src, sw, sh, (uint32_t)((int64_t)x - box.x), box.w,
-                                       (uint32_t)((int64_t)y - box.y), box.h));
+                                       (uint32_t)((int64_t)y - box.y), box.h, stride, premultiplied), premultiplied);
                 continue;
             }
-            uint32_t sx = (uint32_t)(((int64_t)(x - box.x) * 2 + 1) * sw / ((int64_t)box.w * 2));
-            put(&out[x], row[sx]);
+            uint32_t sx = (uint32_t)((((int64_t)x - box.x) * 2 + 1) * sw / ((int64_t)box.w * 2));
+            put(&out[x], row[sx], premultiplied);
         }
     }
+    return true;
+}
+
+void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
+                         bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh)
+{
+    if ((uint64_t)sw * sh > SIZE_MAX / sizeof(uint32_t)) return;
+    draw2d_surface_t source = {(void *)src, sw, sh, (size_t)sw * 4, (size_t)sw * sh * 4,
+                                DRAW2D_ARGB8_STRAIGHT};
+    (void)yonder_draw_surface(dst, pitch, clip, box, smooth, &source);
 }

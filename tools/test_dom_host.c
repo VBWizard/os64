@@ -410,6 +410,7 @@ static void dom_global_miss_cases(void)
 
 int main(int argc, char **argv)
 {
+    if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--implementation")){dom_implementation_cases();implementation_allocation_cases();printf("DOM implementation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -421,14 +422,14 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_classic_cases();
     dom_modern_cases();
     dom_view_cases();
     dom_storage_cases();
     dom_base64_cases();
-    dom_encoding_cases();dom_image_data_cases();
+    dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_refusals();
     dom_screen_cases();
     dom_performance_cases();
     dom_url_cases();

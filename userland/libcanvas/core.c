@@ -14,7 +14,7 @@ struct canvas_context {
     Saved *saved;
     bool busy;
 };
-static canvas_state_t defaults(void) { return (canvas_state_t){0xff000000, 1}; }
+static canvas_state_t defaults(void) { return (canvas_state_t){0xff000000, 1, 1}; }
 canvas_options_t canvas_options_default(os64_geometry_memory_t memory)
 {
     return (canvas_options_t){.memory = memory, .max_dimension = 16384,
@@ -171,9 +171,15 @@ canvas_status_t canvas_restore(canvas_context_t *c)
 }
 canvas_status_t canvas_set_fill(canvas_context_t *c, uint32_t argb)
 {
+    return canvas_set_fill_rgb_alpha(c, argb & 0xffffffu, (double)(argb >> 24) / 255);
+}
+canvas_status_t canvas_set_fill_rgb_alpha(canvas_context_t *c, uint32_t rgb, double alpha)
+{
     canvas_status_t status = enter(c);
     if (status != CANVAS_OK) return status;
-    c->state.fill_argb = argb;
+    if (!isfinite(alpha) || alpha < 0 || alpha > 1) return leave(c, CANVAS_BAD_ARGUMENT);
+    c->state.fill_argb = ((uint32_t)(alpha * 255 + .5) << 24) | (rgb & 0xffffffu);
+    c->state.fill_alpha = alpha;
     return leave(c, CANVAS_OK);
 }
 canvas_status_t canvas_set_alpha(canvas_context_t *c, double a)

@@ -124,7 +124,7 @@ static bool same_folded(const char *a, const char *b, size_t n)
  * whitespace, a sign, digits. A value past INT32_MAX is answered as
  * INT32_MAX + 1, which every reader takes for out of range. -1 when there
  * is no integer or it is negative ("-0" is 0). */
-static int64_t non_negative(const char *text)
+int64_t d_non_negative(const char *text)
 {
     while (is_space(*text)) text++;
     bool negative = *text == '-';
@@ -200,7 +200,7 @@ JSValue d_reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
         return JS_NewString(ctx, row->invalid);
     }
     case K_LIMITED_LONG: {
-        int64_t value = attr != NULL ? non_negative(attr->value) : -1;
+        int64_t value = attr != NULL ? d_non_negative(attr->value) : -1;
         return JS_NewInt32(ctx, value >= 0 && value <= INT32_MAX ? (int32_t)value : -1);
     }
     case K_LONG: {
@@ -209,14 +209,14 @@ JSValue d_reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
         return JS_NewInt32(ctx, value);
     }
     case K_UNSIGNED: case K_LIMITED_UNSIGNED: case K_UNSIGNED_FALLBACK: {
-        int64_t value = attr != NULL ? non_negative(attr->value) : -1;
+        int64_t value = attr != NULL ? d_non_negative(attr->value) : -1;
         int64_t least = row->kind == K_UNSIGNED ? 0 : 1;
         return JS_NewUint32(ctx, value >= least && value <= INT32_MAX ? (uint32_t)value : row->number);
     }
     case K_SPAN: case K_ROW_SPAN: {
         /* Clamped to the range: a number below or past it is its end, one
          * that does not parse the default. */
-        int64_t value = attr != NULL ? non_negative(attr->value) : -1;
+        int64_t value = attr != NULL ? d_non_negative(attr->value) : -1;
         int64_t least = row->kind == K_SPAN ? 1 : 0, most = row->kind == K_SPAN ? 1000 : 65534;
         if (value < 0) return JS_NewUint32(ctx, row->number);
         return JS_NewUint32(ctx, (uint32_t)(value < least ? least : value > most ? most : value));

@@ -11,7 +11,7 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
     forms validity compare \
-    sheets image_data; do
+    sheets image_data canvas mutation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 # THE ONE DOOR (attr.c): libdom sets and removes attributes through d_set_attr
@@ -40,7 +40,7 @@ for source in userland/libjs/runtime/runtime.c userland/libos64/str.c userland/l
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \
     userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
-    userland/libway/origin.c; do
+    userland/libway/origin.c userland/libcanvas/core.c userland/libdraw2d/paint.c; do
     object="$work/${source//\//_}.o"
     cc "${flags[@]}" -c "$source" -o "$object"
     if [ "$source" = userland/libos64/str.c ]; then
@@ -57,7 +57,7 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
     forms validity compare \
-    sheets image_data; do
+    sheets image_data canvas mutation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \

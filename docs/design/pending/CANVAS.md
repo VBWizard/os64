@@ -304,7 +304,7 @@ and moves `libpage`; a partial installation must therefore include the rebuilt
 frozen delivery must check the complete dependency cohort and prelink ranges,
 including libraries whose source code did not change.
 
-## C2 pixel-transfer checkpoint
+## C2 pixel transfer
 
 The native pixel interface reads straight RGBA8 into caller-owned storage and
 writes source-coordinate dirty rectangles by replacement, ignoring drawing
@@ -321,12 +321,63 @@ aliases with other references to that same array and buffer. This profile
 supports sRGB RGBA8; requests for the other recognized color/pixel formats are
 refused explicitly rather than labeled as supported.
 
-This checkpoint does not expose `getContext` or replace Yonder's Canvas
-stand-in. The remaining C2 work connects native contexts to element wrappers,
-consumes the shared mutation callback, adds the paint-only rendering path and
-validates the visible gallery. The callback is being implemented in
-custom-elements cut a; integrate its reviewed commit rather than copying the
-active mutation-core edits. Reset notification must remain allocation-free:
-record a pending reset in the callback, and apply it before the next Canvas
-state/pixel operation or paint reads the bitmap. Same-value assignments must
-reach this path even when the document version does not move.
+## C2 browser and presentation implementation
+
+C2 integrates custom-elements cut a (#403) through `libdom/mutation.c`.
+The binding installs the document listener at creation with Modern Web on,
+removes it at drain, and owns an embedded list of C consumers. Canvas's
+consumer marks a retained element entry for reset on a width/height record
+in no namespace. It allocates nothing and enters no script. Drawing, state
+reads and host bitmap access synchronize that reset after argument conversion;
+a script getter can therefore resize the canvas without leaving a stale
+pixel pointer in the operation. No additional document listener is installed.
+Custom-elements consumers can join this dispatcher through
+`d_mutation_register` when their binding cut lands.
+
+`DValue` owns the bitmap and the retained context identity. Detached canvases
+remain drawable; moving or relaying out their boxes does not reset pixels.
+A 128 MiB page bitmap ledger includes allocation headers and resize peaks;
+each context retains C1's dimension, pixel, work and save-stack caps. The
+allocator preserves max_align_t alignment. A failed resize destroys the old
+bitmap, so old-size pixels cannot masquerade as a successful DOM resize.
+The context identity remains, `isContextLost()` reports the loss, and a later
+dimension assignment can restore a blank context. Event delivery for loss and
+restoration is explicitly recorded in DEBTS.md.
+
+The exposed profile comprises `getContext("2d")`, `canvas`, solid
+`fillStyle`, `globalAlpha`, `save`, `restore`, `reset`, `fillRect`, `clearRect`,
+`createImageData`, `getImageData`, `putImageData` and `isContextLost`.
+ImageData retains its Uint8ClampedArray identity and participates in
+structured clone, including shared cloned references and buffer transfer.
+Pixel methods use EnforceRange long coordinates, normalize negative extents,
+reacquire byte views after conversions, ignore drawing state and reject
+detached storage. CSS colors use libgarb; currentColor uses the existing
+computed-style provider. Source alpha remains unquantized in drawing state
+for serialization and save/restore, while retained pixels remain ARGB8.
+Creation profiles and later methods are tracked in DEBTS.md and the slice
+schedule; a visible gallery is not a claim that arbitrary canvas games work.
+
+`dom/canvas.h` lends an existing bitmap to the host without entering script.
+Yonder's scaler accepts explicit source stride, capacity and alpha convention;
+its existing straight-alpha image behavior remains under the painter suite,
+and Canvas uses the premultiplied path. Object-fit, content clipping, CSS
+transforms and opacity use the existing painter routes. Dark-page presentation
+does not alter the retained bitmap.
+
+After a script turn, pending visible Canvas damage invalidates a conservative
+viewport through the existing paint queue. The document version does not move
+for pixel writes, so `script_rebuild` preserves the layout tree. When a DOM
+change also requires layout, it publishes fresh boxes first. Detached and
+unlaid canvases do not schedule visible damage; their pixels remain available
+when they become visible. Successful synchronous canvas sampling acknowledges
+its damage without an intervening script call; refused sampling leaves it
+pending. The initial viewport bound is deliberately conservative for transforms
+and effects. Tighter per-box damage is an optimization, not a new frame loop.
+
+The gallery is `tools/pages/canvas-pixels.html`. Its four interactions exercise
+palette repaint, ImageData undo/redo, same-value width reset, and moving one
+retained canvas between containers. Host tests separately assert that
+pixel-only updates keep the same layout tree, overlapping content remains
+painted above the canvas, and simultaneous CSS/pixel changes use fresh boxes.
+Pinned upstream expectations under `tools/wpt/expected/html/canvas/element/`
+record both this profile's passes and the broader families awaiting C3–C6.

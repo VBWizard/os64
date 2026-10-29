@@ -1,0 +1,72 @@
+# WPT's html/canvas/element/pixel-manipulation in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/pixel-manipulation --update
+# rewrites [passing].
+[required]
+2d.imageData.create1.basic.html	createImageData(imgdata) exists and returns something
+2d.imageData.get.basic.html	getImageData() exists and returns something
+2d.imageData.put.basic.html	putImageData() puts image data from getImageData() onto the canvas
+2d.imageData.put.dirty.rect1.html	putImageData() only modifies areas inside the dirty rectangle, using width and height
+[excluded]
+[passing]
+2d.imageData.create.and.resize.html	Verify no crash when resizing an image bitmap to zero.
+2d.imageData.create1.basic.html	createImageData(imgdata) exists and returns something
+2d.imageData.create1.initial.html	createImageData(imgdata) returns transparent black data of the right size
+2d.imageData.create1.this.html	createImageData(imgdata) should throw when called with the wrong |this|
+2d.imageData.create1.type.html	createImageData(imgdata) returns an ImageData object containing a Uint8ClampedArray object
+2d.imageData.create1.zero.html	createImageData(null) throws TypeError
+2d.imageData.create2.basic.html	createImageData(sw, sh) exists and returns something
+2d.imageData.create2.double.html	createImageData(w, h) double is converted to long
+2d.imageData.create2.initial.html	createImageData(sw, sh) returns transparent black data of the right size
+2d.imageData.create2.large.html	createImageData(sw, sh) works for sizes much larger than the canvas
+2d.imageData.create2.negative.html	createImageData(sw, sh) takes the absolute magnitude of the size arguments
+2d.imageData.create2.nonfinite.html	createImageData() throws TypeError if arguments are not finite
+2d.imageData.create2.round.html	createImageData(w, h) is rounded the same as getImageData(0, 0, w, h)
+2d.imageData.create2.this.html	createImageData(sw, sh) should throw when called with the wrong |this|
+2d.imageData.create2.type.html	createImageData(sw, sh) returns an ImageData object containing a Uint8ClampedArray object
+2d.imageData.create2.zero.html	createImageData(sw, sh) throws INDEX_SIZE_ERR if size is zero
+2d.imageData.get.basic.html	getImageData() exists and returns something
+2d.imageData.get.clamp.html	getImageData() clamps colors to the range [0, 255]
+2d.imageData.get.double.html	createImageData(w, h) double is converted to long
+2d.imageData.get.invalid.html	Verify getImageData() behavior in invalid cases.
+2d.imageData.get.large.crash.html	Test that canvas crash when image data cannot be allocated.
+2d.imageData.get.length.html	getImageData() returns a correctly-sized Uint8ClampedArray
+2d.imageData.get.nonfinite.html	getImageData() throws TypeError if arguments are not finite
+2d.imageData.get.nonpremul.html	getImageData() returns non-premultiplied colors
+2d.imageData.get.order.alpha.html	getImageData() returns A in the fourth component
+2d.imageData.get.order.cols.html	getImageData() returns leftmost columns first
+2d.imageData.get.order.rgb.html	getImageData() returns R then G then B
+2d.imageData.get.order.rows.html	getImageData() returns topmost rows first
+2d.imageData.get.range.html	getImageData() returns values in the range [0, 255]
+2d.imageData.get.rounding.html	Test the handling of non-integer source coordinates in getImageData().
+2d.imageData.get.source.negative.html	getImageData() works with negative width and height, and returns top-to-bottom left-to-right
+2d.imageData.get.source.outside.html	getImageData() returns transparent black outside the canvas
+2d.imageData.get.source.size.html	getImageData() returns bigger ImageData for bigger source rectangle
+2d.imageData.get.type.html	getImageData() returns an ImageData object containing a Uint8ClampedArray object
+2d.imageData.get.zero.html	getImageData() throws INDEX_SIZE_ERR if size is zero
+2d.imageData.object.clamp.html	ImageData.data clamps numbers to [0, 255]
+2d.imageData.object.ctor.array.bounds.html	ImageData has a usable constructor
+2d.imageData.object.ctor.array.html	ImageData has a usable constructor
+2d.imageData.object.ctor.size.bounds.html	ImageData has a usable constructor
+2d.imageData.object.ctor.size.html	ImageData has a usable constructor
+2d.imageData.object.nan.html	ImageData.data converts NaN to 0
+2d.imageData.object.properties.html	ImageData objects have the right properties
+2d.imageData.object.readonly.html	ImageData objects properties are read-only
+2d.imageData.object.round.html	ImageData.data rounds numbers with round-to-zero
+2d.imageData.object.set.html	ImageData.data can be modified
+2d.imageData.object.string.html	ImageData.data converts strings to numbers with ToNumber
+2d.imageData.object.undefined.html	ImageData.data converts undefined to 0
+2d.imageData.put.alpha.html	putImageData() puts non-solid image data correctly
+2d.imageData.put.basic.html	putImageData() puts image data from getImageData() onto the canvas
+2d.imageData.put.created.html	putImageData() puts image data from createImageData() onto the canvas
+2d.imageData.put.cross.html	putImageData() accepts image data got from a different canvas
+2d.imageData.put.dirty.negative.html	putImageData() handles negative-sized dirty rectangles correctly
+2d.imageData.put.dirty.outside.html	putImageData() handles dirty rectangles outside the canvas correctly
+2d.imageData.put.dirty.rect1.html	putImageData() only modifies areas inside the dirty rectangle, using width and height
+2d.imageData.put.dirty.rect2.html	putImageData() only modifies areas inside the dirty rectangle, using x and y
+2d.imageData.put.dirty.zero.html	putImageData() with zero-sized dirty rectangle puts nothing
+2d.imageData.put.modified.html	putImageData() puts modified image data correctly
+2d.imageData.put.nonfinite.html	putImageData() throws TypeError if arguments are not finite
+2d.imageData.put.null.html	putImageData() with null imagedata throws TypeError
+2d.imageData.put.unchanged.html	putImageData(getImageData(...), ...) has no effect
+2d.imageData.put.wrongtype.html	putImageData() does not accept non-ImageData objects
