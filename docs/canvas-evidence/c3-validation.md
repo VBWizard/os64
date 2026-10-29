@@ -4,7 +4,8 @@ C3 adds current paths, transforms, strokes/dashes, immutable saved clips and
 Porter–Duff compositing. It extracts SVG's dash cutter into libdraw2d and
 uses the production FreeType geometry backend from both callers. The gallery
 is `tools/pages/canvas-paths.html`; enable Scripts and Modern Web.
-P5 validation is pending. `c3-bundle.sha256` identifies the delivery cohort.
+Chris accepted the gallery on the P5, reporting that rapid button clicks produce
+visible motion in two samples. `c3-bundle.sha256` identifies the tested cohort.
 
 ## Automated checks
 
