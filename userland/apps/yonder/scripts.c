@@ -1510,6 +1510,30 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcom
     return true;
 }
 
+bool yonder_scripts_reactions_owed(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && os64_dom_reactions_owed(s->dom);
+}
+
+bool yonder_scripts_reactions_run(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (!yonder_scripts_reactions_owed(s))
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    s->task_us = -1;
+    if (!os64_dom_reactions_run(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_custom_failure(const yonder_scripts_t *s, const char *name, char *out, size_t cap)
+{
+    return s != NULL && !s->dead && os64_dom_custom_failure(s->dom, name, out, cap);
+}
+
 uint64_t yonder_scripts_message_next(const yonder_scripts_t *s)
 {
     return s != NULL && !s->dead ? os64_dom_message_next(s->dom) : UINT64_MAX;

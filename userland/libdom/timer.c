@@ -178,8 +178,12 @@ int d_timer_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     return d_method(dom, ctx, global, "clearInterval", timer_method, 1, T_CLEAR);
 }
 
+/* Custom element reactions owed between tasks are due now, ahead of any
+ * timer (os64_dom_reactions_run): the backstop for a change no parser call
+ * made. */
 uint64_t os64_dom_timer_next(const os64_dom_t *dom)
 {
+    if (os64_dom_reactions_owed(dom)) return 0;
     return dom != NULL && !dom->closed && dom->timers != NULL ? dom->timers->due : UINT64_MAX;
 }
 
@@ -193,6 +197,7 @@ static void fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
 
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome)
 {
+    if (os64_dom_reactions_run(dom, outcome)) return true;
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
     if (outcome == NULL || dom == NULL || dom->closed || dom->timers == NULL || dom->timers->due > now)
         return false;
