@@ -336,6 +336,12 @@ take engine values:
   the task.
 - `os64_js_set_execution_ms(runtime, ms, outcome)` replaces the execution
   limit for tasks and turns started from then on.
+- `os64_js_turn_open(runtime)` answers whether a job queued now would be
+  drained by the turn under way: inside a call, an eval or a run, or while
+  a task is open. A binding a host tells of a change between tasks (custom
+  element reactions, told by the parser) asks it before queueing a job:
+  a job queued outside every turn is drained by nobody, and makes the next
+  `task_begin` BUSY.
 
 The rules:
 

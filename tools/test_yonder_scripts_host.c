@@ -131,6 +131,12 @@ int64_t os64_rename(const char *from, const char *to) {
     fake_writes++;
     return 0;
 }
+/* The safe-publish rename a download makes: NOREPLACE refuses a name that
+ * is there, as the kernel's does. */
+int64_t os64_rename_with_flags(const char *from, const char *to, uint64_t flags) {
+    if((flags&OS64_RENAME_NOREPLACE) && fake_file(to)>=0) return -1;
+    return os64_rename(from,to);
+}
 int64_t os64_sync(int32_t h) {
     (void)h;
     void (*hook)(void)=fake_sync_hook;
@@ -553,6 +559,8 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     os64_strcopy(out->content_type,sizeof(out->content_type),picture_http_type ? picture_http_type : "");
     return true;
 }
+/* A download's fetch rides the fake network, which reads no hooks. */
+void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *options) { (void)hooks; (void)options; }
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
     if(len>=8&&bytes[0]==137&&!memcmp(bytes+1,"PNG",3)) {
@@ -6473,6 +6481,31 @@ static void custom_census_cases(void) {
           "census: one name, one waiting and one failed, is counted on each line");
     probe_drop();
 }
+/* CUSTOM ELEMENTS AND THE PARSER (CUSTOM_ELEMENTS.md, decision 6): a classic
+ * page defines an element in its head and calls a method of one in its
+ * body. The parser inserted the element with no task open, which left its
+ * upgrade owed; it ran after that parser call, before the script after it.
+ * And a constructor that fails is the census's FAILED line, with what it
+ * threw. */
+static void custom_element_parse_case(void) {
+    fake_reset();
+    loop_page("<script>class Hi extends HTMLElement{hi(){return 'upgraded'}}customElements.define('x-hi',Hi);"
+        "class Bad extends HTMLElement{constructor(){super();throw Error('no shadow')}}"
+        "customElements.define('x-bad',Bad)</script>"
+        "<x-hi id=h></x-hi><x-bad></x-bad><p id=out>start</p>"
+        "<script>document.getElementById('out').textContent=document.getElementById('h').hi()</script>");
+    check(loop_settle() && probe_text_is("out","upgraded"),
+          "custom: a classic script finds the element above it upgraded");
+    bool own=g.page.diag==NULL;
+    if(own) g.page.diag=yonder_diag_new("https://fixture.test/custom-parse",1,0);
+    diag_observe(&g.page,"when asked");
+    char record[4096];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"FAILED element: x-bad: Error: no shadow (1)")!=NULL && strstr(record,"x-hi")==NULL,
+          "custom: the census names a failed constructor with what it threw, and not one that ran");
+    if(own) { yonder_diag_free(g.page.diag); g.page.diag=NULL; }
+    loop_drop();
+}
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
     yonder_diag_t *d=yonder_diag_new(url,seq,0);
     if(d!=NULL && s_diag.dir[0]!='\0') yonder_diag_claim(d,s_diag.dir,false);
@@ -10741,6 +10774,7 @@ int main(void)
     svg_radial_window_cases();
     svg_partial_window_cases();
     custom_census_cases();
+    custom_element_parse_case();
     svg_cache_window_cases();
     svg_window_cases();
     picture_svg_window_cases();

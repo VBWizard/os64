@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "settings.h"
+#include "download.h"
 #include "agent.h"
 #include "os64/conf.h"
 #include "os64/fmt.h"
@@ -29,6 +30,7 @@
 #define CONF_MOTION "motion"
 #define CONF_MODERN "modern"
 #define CONF_PROFILE "profile"
+#define CONF_DOWNLOADS "downloads"
 #define CONF_COOKIES "cookies"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
@@ -237,32 +239,51 @@ bool yonder_settings_saved_diagnostics(char *out, size_t cap)
     return true;
 }
 
-const char *yonder_settings_saved_profile(char *out, size_t cap)
+// A folder setting: `key`'s full path into `out` without a trailing slash,
+// or `fallback` when it is absent, unreadable, too long or not a full path.
+// NULL when the setting stands as written or is absent; else the sentence
+// saying what was used instead, written into `said`.
+static const char *folder_setting(const char *key, const char *fallback, char *out, size_t cap,
+                                  char *said, size_t said_cap)
 {
-    int64_t rc = os64_conf_get(CONF_NAME, CONF_PROFILE, out, cap);
+    int64_t rc = os64_conf_get(CONF_NAME, key, out, cap);
     if (rc == OS64_CONF_NO_FILE || rc == OS64_CONF_NO_KEY) {
-        os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
+        os64_strcopy(out, cap, fallback);
         return NULL;
     }
     if (rc != 0) {
-        static const char kLong[] = "yonder.conf's profile is too long for a path; using " YONDER_PROFILE_DEFAULT ".";
-        static const char kUnread[] = "yonder.conf could not be read for its profile; using " YONDER_PROFILE_DEFAULT
-                                      ".";
-        os64_debug_log(rc == OS64_CONF_TRUNCATED ? kLong : kUnread);
-        os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
-        return rc == OS64_CONF_TRUNCATED ? kLong : kUnread;
+        if (rc == OS64_CONF_TRUNCATED)
+            os64_snprintf(said, said_cap, "yonder.conf's %s is too long for a path; using %s.", key, fallback);
+        else
+            os64_snprintf(said, said_cap, "yonder.conf could not be read for its %s; using %s.", key, fallback);
+        os64_debug_log(said);
+        os64_strcopy(out, cap, fallback);
+        return said;
     }
     size_t n = os64_strlen(out);
     while (n > 1 && out[n - 1] == '/')
         out[--n] = '\0';
     if (n == 0 || out[0] != '/') {
-        static const char kRefused[] = "yonder.conf's profile is not a folder's full path; using "
-                                       YONDER_PROFILE_DEFAULT ".";
-        os64_debug_log("yonder: yonder.conf's profile is not a folder's full path; using " YONDER_PROFILE_DEFAULT);
-        os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
-        return kRefused;
+        os64_snprintf(said, said_cap, "yonder.conf's %s is not a folder's full path; using %s.", key, fallback);
+        char logged[160];
+        os64_snprintf(logged, sizeof(logged), "yonder: %s", said);
+        os64_debug_log(logged);
+        os64_strcopy(out, cap, fallback);
+        return said;
     }
     return NULL;
+}
+
+const char *yonder_settings_saved_profile(char *out, size_t cap)
+{
+    static char said[160];
+    return folder_setting(CONF_PROFILE, YONDER_PROFILE_DEFAULT, out, cap, said, sizeof(said));
+}
+
+const char *yonder_settings_saved_downloads(char *out, size_t cap)
+{
+    static char said[160];
+    return folder_setting(CONF_DOWNLOADS, YONDER_DOWNLOADS_DEFAULT, out, cap, said, sizeof(said));
 }
 
 yonder_cookies_mode_t yonder_settings_saved_cookies(const char **refused)
@@ -330,15 +351,8 @@ static void holds_say(void)
         os64_snprintf(line, sizeof(line), "The cache cannot be kept: %s cannot be made or written.",
                       way_cache_dir(s.cache));
     } else {
-        // Under a megabyte it is counted in kilobytes, or it reads as 0.0.
         char size[32];
-        if (st.bytes < 1024 * 1024) {
-            os64_snprintf(size, sizeof(size), "%lu KB", (unsigned long)((st.bytes + 1023) / 1024));
-        } else {
-            uint64_t tenths = st.bytes * 10 / (1024 * 1024);
-            os64_snprintf(size, sizeof(size), "%lu.%lu MB", (unsigned long)(tenths / 10),
-                          (unsigned long)(tenths % 10));
-        }
+        yonder_download_size(st.bytes, size, sizeof(size));
         os64_snprintf(line, sizeof(line),
                       "The cache holds %d files, %s of %lu MB; this window took %lu from it.",
                       (int)st.entries, size, (unsigned long)(st.cap / (1024 * 1024)),
