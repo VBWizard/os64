@@ -1,0 +1,162 @@
+/* Run C1/C2 ownership tests against the enlarged state before path checks. */
+#define main canvas_baseline_main
+#include "test_canvas_core.c"
+#undef main
+
+static canvas_context_t *drawing(Owner *o)
+{
+    canvas_options_t opts=options(o);opts.geometry=os64_freetype_geometry_v1();
+    canvas_context_t *c;OK(canvas_create(&opts,32,32,&c));return c;
+}
+static void move(canvas_context_t *c,double x,double y)
+{ /* Commands deliberately use the public ABI. */
+    os64_geometry_command_t v={.verb=OS64_GEOMETRY_MOVE,.p={{x,y}}};OK(canvas_path_command(c,&v));
+}
+static void line(canvas_context_t *c,double x,double y)
+{ os64_geometry_command_t v={.verb=OS64_GEOMETRY_LINE,.p={{x,y}}};OK(canvas_path_command(c,&v)); }
+static void paths(void)
+{
+    Owner o={0};canvas_context_t *c=drawing(&o);
+    move(c,2,2);line(c,12,2);
+    os64_geometry_map_t m={1,0,0,1,0,10};OK(canvas_transform(c,&m,true));
+    line(c,12,2);line(c,2,2);OK(canvas_fill(c,false));
+    pixel(c,5,5,0xff000000);pixel(c,5,15,0);
+    OK(canvas_save(c));OK(canvas_begin_path(c));OK(canvas_path_rect(c,0,0,4,4));OK(canvas_restore(c));
+    OK(canvas_set_fill(c,0xffff0000));OK(canvas_fill(c,false));pixel(c,1,11,0xffff0000);
+    /* Restore did not replace the current path; fill did not transform it twice. */
+    OK(canvas_reset(c,32,32));
+    move(c,4,16);line(c,20,16);
+    m=(os64_geometry_map_t){4,0,0,1,0,0};OK(canvas_transform(c,&m,true));
+    os64_geometry_stroke_t pen={4,10,OS64_GEOMETRY_ROUND_CAP,OS64_GEOMETRY_MITER};
+    OK(canvas_set_line(c,&pen));OK(canvas_stroke(c));
+    pixel(c,0,16,0xff000000);pixel(c,24,16,0xff000000);pixel(c,10,20,0);
+    OK(canvas_reset(c,32,32));
+    OK(canvas_path_rect(c,2,2,20,20));OK(canvas_path_rect(c,6,6,8,8));
+    OK(canvas_fill(c,true));pixel(c,3,3,0xff000000);pixel(c,8,8,0);
+    OK(canvas_reset(c,32,32));
+    OK(canvas_ellipse(c,16,16,10,6,0,0,6.283185307179586,false));OK(canvas_fill(c,false));
+    pixel(c,16,16,0xff000000);pixel(c,16,8,0);pixel(c,4,16,0);
+    OK(canvas_begin_path(c));pen.width=4;OK(canvas_set_line(c,&pen));move(c,2,2);OK(canvas_arc_to(c,20,2,20,20,4));
+    OK(canvas_set_stroke(c,0xff0000,1));OK(canvas_stroke(c));
+    pixel(c,10,2,0xffff0000);
+    OK(canvas_reset(c,32,32));
+    OK(canvas_ellipse(c,16,16,10,10,0,0,6.283185307179586,true));OK(canvas_fill(c,false));
+    pixel(c,16,16,0xff000000);
+    OK(canvas_reset(c,32,32));pen=(os64_geometry_stroke_t){40,10,OS64_GEOMETRY_ROUND_CAP,OS64_GEOMETRY_MITER};
+    OK(canvas_set_line(c,&pen));OK(canvas_stroke_rect(c,20,16,10,0));pixel(c,5,16,0);
+    pen.cap=OS64_GEOMETRY_BUTT;pen.join=OS64_GEOMETRY_ROUND_JOIN;OK(canvas_set_line(c,&pen));
+    OK(canvas_stroke_rect(c,20,16,10,0));pixel(c,5,16,0xff000000);
+    OK(canvas_reset(c,32,32));move(c,16,16);
+    os64_geometry_command_t zero={.verb=OS64_GEOMETRY_CUBIC,.p={{16,16},{16,16},{16,16}}};
+    OK(canvas_path_command(c,&zero));pen.cap=OS64_GEOMETRY_ROUND_CAP;OK(canvas_set_line(c,&pen));
+    OK(canvas_stroke(c));pixel(c,16,16,0);
+    OK(canvas_destroy(c));CHECK(!o.live);
+}
+static void clips(void)
+{
+    Owner o={0};canvas_context_t *c=drawing(&o);
+    OK(canvas_path_rect(c,2,2,20,20));OK(canvas_clip(c,false));
+    OK(canvas_save(c));OK(canvas_begin_path(c));OK(canvas_path_rect(c,8,8,20,20));OK(canvas_clip(c,false));
+    OK(canvas_fill_rect(c,0,0,32,32));pixel(c,10,10,0xff000000);pixel(c,4,4,0);pixel(c,24,24,0);
+    OK(canvas_restore(c));OK(canvas_set_fill(c,0xffff0000));OK(canvas_fill_rect(c,0,0,32,32));
+    pixel(c,4,4,0xffff0000);pixel(c,24,24,0);
+    OK(canvas_set_alpha(c,0));OK(canvas_set_composite(c,DRAW2D_DESTINATION_IN));
+    OK(canvas_clear_rect(c,3,3,2,2));pixel(c,3,3,0);pixel(c,6,6,0xffff0000);
+    OK(canvas_reset(c,32,32));OK(canvas_fill_rect(c,0,0,32,32));pixel(c,24,24,0xff000000);
+    OK(canvas_begin_path(c));OK(canvas_clip(c,false));OK(canvas_clear_rect(c,0,0,32,32));pixel(c,24,24,0xff000000);
+    OK(canvas_destroy(c));CHECK(!o.live);
+}
+static void composite_oracles(void)
+{
+    /* Independent Porter-Duff factors in floating point. The implementation
+     * uses 16-bit integer intermediates and rounds at the ARGB8 boundary. */
+    for(unsigned op=DRAW2D_SOURCE_OVER;op<=DRAW2D_LIGHTER;++op)for(unsigned cv=0;cv<256;cv+=51) {
+        uint32_t pixel_value=0x80402010;
+        draw2d_surface_t surface={&pixel_value,1,1,4,4,DRAW2D_ARGB8_PREMULTIPLIED};
+        uint8_t coverage=cv,clip=173;
+        CHECK(draw2d_paint_mask(&surface,&coverage,&clip,1,(draw2d_solid_t){0x80804020},
+            (draw2d_composite_t){op,32768},1,NULL)==DRAW2D_OK);
+        double sa=(128.0/255)*(32768.0/65535)*(cv/255.0),da=128.0/255,fs=1,fd=1;
+        switch(op) {
+        case DRAW2D_SOURCE_OVER:fd=1-sa;break;
+        case DRAW2D_CLEAR:fs=0;fd=1-cv/255.0;break;
+        case DRAW2D_DESTINATION_OUT:fs=0;fd=1-sa;break;
+        case DRAW2D_SOURCE_IN:fs=da;fd=0;break;
+        case DRAW2D_SOURCE_OUT:fs=1-da;fd=0;break;
+        case DRAW2D_SOURCE_ATOP:fs=da;fd=1-sa;break;
+        case DRAW2D_DESTINATION_OVER:fs=1-da;break;
+        case DRAW2D_DESTINATION_IN:fs=0;fd=sa;break;
+        case DRAW2D_DESTINATION_ATOP:fs=1-da;fd=sa;break;
+        case DRAW2D_COPY:fd=0;break;
+        case DRAW2D_XOR:fs=1-da;fd=1-sa;break;
+        default:break;
+        }
+        double source[]={sa,sa*128/255,sa*64/255,sa*32/255};
+        double dest[]={128.0/255,64.0/255,32.0/255,16.0/255};
+        for(unsigned i=0;i<4;++i) {
+            double blended=fmin(1,source[i]*fs+dest[i]*fd);
+            int expected=(int)floor((blended*173/255+dest[i]*(1-173.0/255))*255+.5);
+            int actual=(pixel_value>>(24-8*i))&255;
+            CHECK(abs(expected-actual)<=1);
+        }
+    }
+    Owner o={0};canvas_context_t *c=drawing(&o);
+    OK(canvas_fill_rect(c,0,0,32,32));OK(canvas_set_composite(c,DRAW2D_DESTINATION_OUT));
+    OK(canvas_set_alpha(c,.5));OK(canvas_fill_rect(c,4,4,8,8));
+    pixel(c,6,6,0x7f000000);pixel(c,1,1,0xff000000);
+    OK(canvas_set_alpha(c,1));OK(canvas_set_composite(c,DRAW2D_COPY));
+    OK(canvas_set_fill(c,0xffff0000));OK(canvas_fill_rect(c,4,4,8,8));
+    pixel(c,6,6,0xffff0000);pixel(c,1,1,0);
+    OK(canvas_destroy(c));CHECK(!o.live);
+}
+static void refusal(void)
+{
+    size_t cuts=0;
+    for(unsigned mode=0;mode<2;++mode) {
+        for(size_t cut=1;cut<=512;++cut) {
+            Owner o={0};canvas_context_t *c=drawing(&o);
+            move(c,2,16);line(c,28,16);
+            double dash[]={2,2};OK(canvas_set_dash(c,dash,2));
+            os64_geometry_stroke_t pen={4,10,OS64_GEOMETRY_ROUND_CAP,OS64_GEOMETRY_ROUND_JOIN};
+            OK(canvas_set_line(c,&pen));OK(canvas_ack_damage(c));
+            o.limit=mode;o.fail_at=o.calls+cut;
+            canvas_status_t s=canvas_stroke(c);
+            if(s!=CANVAS_OK) {
+                CHECK(s==CANVAS_NO_MEMORY||s==CANVAS_LIMIT);
+                for(unsigned i=0;i<1024;++i)CHECK(bitmap(c).pixels[i]==0);
+                draw2d_damage_t d;OK(canvas_damage(c,&d));CHECK(d.x1==0);
+            }
+            o.fail_at=0;
+            OK(canvas_destroy(c));CHECK(!o.live);
+            if(s==CANVAS_OK){cuts=cut-1;break;}
+        }
+    }
+    CHECK(cuts>10);printf("Canvas path allocation cuts: %zu per refusal mode\n",cuts);
+}
+static void clip_refusal(void)
+{
+    for(unsigned mode=0;mode<2;++mode)for(size_t cut=1;cut<128;++cut) {
+        Owner o={0};canvas_context_t *c=drawing(&o);
+        OK(canvas_path_rect(c,0,0,16,16));OK(canvas_clip(c,false));OK(canvas_save(c));
+        OK(canvas_begin_path(c));OK(canvas_path_rect(c,8,8,20,20));
+        o.limit=mode;o.fail_at=o.calls+cut;
+        canvas_status_t s=canvas_clip(c,false);o.fail_at=0;
+        CHECK(s==CANVAS_OK||s==CANVAS_NO_MEMORY||s==CANVAS_LIMIT);
+        OK(canvas_fill_rect(c,0,0,32,32));
+        pixel(c,4,4,s==CANVAS_OK?0:0xff000000);pixel(c,12,12,0xff000000);pixel(c,24,24,0);
+        OK(canvas_restore(c));OK(canvas_set_fill(c,0xffff0000));OK(canvas_fill_rect(c,0,0,32,32));
+        pixel(c,4,4,0xffff0000);OK(canvas_destroy(c));CHECK(!o.live);
+        if(s==CANVAS_OK)break;
+        CHECK(cut<127);
+    }
+    Owner o={0};canvas_options_t opts=options(&o);opts.geometry=os64_freetype_geometry_v1();opts.max_commands=3;
+    canvas_context_t *c;OK(canvas_create(&opts,32,32,&c));move(c,4,16);line(c,28,16);
+    CHECK(canvas_path_rect(c,0,0,32,32)==CANVAS_LIMIT);
+    os64_geometry_stroke_t pen={4,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER};OK(canvas_set_line(c,&pen));
+    OK(canvas_stroke(c));pixel(c,16,16,0xff000000);pixel(c,16,4,0);OK(canvas_destroy(c));CHECK(!o.live);
+}
+int main(void)
+{
+    canvas_baseline_main();paths();clips();composite_oracles();refusal();clip_refusal();
+    printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
+}

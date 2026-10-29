@@ -8,13 +8,32 @@
 [excluded]
 [passing]
 2d.clearRect.basic.html	clearRect clears to transparent black
+2d.clearRect.clip.html	clearRect is affected by clipping regions
 2d.clearRect.globalalpha.html	clearRect is not affected by globalAlpha
 2d.clearRect.globalcomposite.html	clearRect is not affected by globalCompositeOperation
 2d.clearRect.negative.html	clearRect of negative sizes works
 2d.clearRect.nonfinite.html	clearRect() with Infinity/NaN is ignored
+2d.clearRect.path.html	clearRect does not affect the current path
 2d.clearRect.shadow.html	clearRect does not draw shadows
+2d.clearRect.transform.html	clearRect is affected by transforms
 2d.clearRect.zero.html	clearRect of zero pixels has no effect
 2d.fillRect.basic.html	fillRect works
+2d.fillRect.clip.html	fillRect is affected by clipping regions
 2d.fillRect.negative.html	fillRect of negative sizes works
 2d.fillRect.nonfinite.html	fillRect() with Infinity/NaN is ignored
+2d.fillRect.path.html	fillRect does not affect the current path
+2d.fillRect.transform.html	fillRect is affected by transforms
 2d.fillRect.zero.html	fillRect of zero pixels has no effect
+2d.strokeRect.basic.html	strokeRect works
+2d.strokeRect.clip.html	strokeRect is affected by clipping regions
+2d.strokeRect.globalalpha.html	strokeRect is affected by globalAlpha
+2d.strokeRect.globalcomposite.html	strokeRect is not affected by globalCompositeOperation
+2d.strokeRect.negative.html	strokeRect of negative sizes works
+2d.strokeRect.nonfinite.html	strokeRect() with Infinity/NaN is ignored
+2d.strokeRect.path.html	strokeRect does not affect the current path
+2d.strokeRect.transform.html	fillRect is affected by transforms
+2d.strokeRect.zero.1.html	strokeRect of 0x0 pixels draws nothing
+2d.strokeRect.zero.2.html	strokeRect of 0x0 pixels draws nothing, including caps and joins
+2d.strokeRect.zero.3.html	strokeRect of Nx0 pixels draws a straight line
+2d.strokeRect.zero.4.html	strokeRect of Nx0 pixels draws a closed line with no caps
+2d.strokeRect.zero.5.html	strokeRect of Nx0 pixels draws a closed line with joins

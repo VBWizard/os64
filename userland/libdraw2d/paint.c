@@ -87,3 +87,56 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *s, double x, double y,
         *damage = (draw2d_damage_t){x0, y0, x1, y1};
     return DRAW2D_OK;
 }
+
+static uint16_t add(uint16_t a, uint16_t b)
+{ uint32_t n=(uint32_t)a+b; return n>65535?65535:(uint16_t)n; }
+static draw2d_pixel_t sum(draw2d_pixel_t a, draw2d_pixel_t b)
+{ return (draw2d_pixel_t){add(a.a,b.a),add(a.r,b.r),add(a.g,b.g),add(a.b,b.b)}; }
+static draw2d_pixel_t composite_pixel(draw2d_pixel_t s, draw2d_pixel_t d, draw2d_operator_t op)
+{
+    uint16_t fs=65535,fd=65535;
+    switch(op) {
+    case DRAW2D_SOURCE_OVER: return draw2d_over(s,d);
+    case DRAW2D_DESTINATION_OUT: fs=0;fd=65535-s.a;break;
+    case DRAW2D_SOURCE_IN: fs=d.a;fd=0;break;
+    case DRAW2D_SOURCE_OUT: fs=65535-d.a;fd=0;break;
+    case DRAW2D_SOURCE_ATOP: fs=d.a;fd=65535-s.a;break;
+    case DRAW2D_DESTINATION_OVER: fs=65535-d.a;break;
+    case DRAW2D_DESTINATION_IN: fs=0;fd=s.a;break;
+    case DRAW2D_DESTINATION_ATOP: fs=65535-d.a;fd=s.a;break;
+    case DRAW2D_COPY: fd=0;break;
+    case DRAW2D_XOR: fs=65535-d.a;fd=65535-s.a;break;
+    case DRAW2D_LIGHTER: break;
+    default: return d;
+    }
+    return sum(draw2d_scale(s,fs),draw2d_scale(d,fd));
+}
+draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *s,const uint8_t *coverage,
+    const uint8_t *clip,size_t length,draw2d_solid_t source,draw2d_composite_t op,
+    uint64_t max_pixels,draw2d_damage_t *damage)
+{
+    if(damage)*damage=(draw2d_damage_t){0};
+    draw2d_status_t status=draw2d_surface_validate(s);
+    if(status!=DRAW2D_OK)return status;
+    if(s->format==DRAW2D_ARGB8_STRAIGHT || op.operation<DRAW2D_SOURCE_OVER || op.operation>DRAW2D_LIGHTER)
+        return DRAW2D_UNSUPPORTED;
+    uint64_t count=(uint64_t)s->width*s->height;
+    if(count>length || count>max_pixels)return DRAW2D_LIMIT;
+    if(count && !coverage)return DRAW2D_BAD_ARGUMENT;
+    for(uint32_t y=0;y<s->height;++y) {
+        unsigned char *row=(unsigned char *)s->pixels+(size_t)y*s->stride;
+        for(uint32_t x=0;x<s->width;++x) {
+            size_t at=(size_t)y*s->width+x;
+            uint16_t cv=(uint16_t)coverage[at]*257,cl=clip?(uint16_t)clip[at]*257:65535;
+            if(!cl)continue;
+            draw2d_pixel_t d=s->format==DRAW2D_ARGB16_PREMULTIPLIED?((draw2d_pixel_t *)row)[x]:draw2d_unpack(((uint32_t *)row)[x]);
+            draw2d_pixel_t r=op.operation==DRAW2D_CLEAR?draw2d_scale(d,65535-cv):
+                composite_pixel(draw2d_color(source.argb,op.opacity,cv),d,op.operation);
+            if(cl!=65535)r=sum(draw2d_scale(r,cl),draw2d_scale(d,65535-cl));
+            if(s->format==DRAW2D_ARGB16_PREMULTIPLIED)((draw2d_pixel_t *)row)[x]=r;
+            else ((uint32_t *)row)[x]=draw2d_pack(r);
+        }
+    }
+    if(damage && count)*damage=(draw2d_damage_t){0,0,s->width,s->height};
+    return DRAW2D_OK;
+}

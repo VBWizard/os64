@@ -30,6 +30,10 @@ int d_canvas_install(os64_dom_t *, JSContext *, JSValueConst);
 
 typedef struct DValue DValue;
 void d_canvas_free(DValue *);
+void d_canvas_sync(DValue *);
+JSValue d_canvas_result(JSContext *,canvas_status_t);
+int d_canvas_paths_install(os64_dom_t *,JSContext *,JSValueConst);
+int d_double_sequence(os64_dom_t *,JSContext *,JSValueConst,size_t,JSValue **,size_t *);
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;

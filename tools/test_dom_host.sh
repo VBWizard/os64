@@ -11,7 +11,7 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
     forms validity compare \
-    sheets image_data canvas mutation; do
+    sheets image_data canvas canvas_path mutation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 # THE ONE DOOR (attr.c): libdom sets and removes attributes through d_set_attr
@@ -40,7 +40,7 @@ for source in userland/libjs/runtime/runtime.c userland/libos64/str.c userland/l
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \
     userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
-    userland/libway/origin.c userland/libcanvas/core.c userland/libdraw2d/paint.c; do
+    userland/libway/origin.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c; do
     object="$work/${source//\//_}.o"
     cc "${flags[@]}" -c "$source" -o "$object"
     if [ "$source" = userland/libos64/str.c ]; then
@@ -57,11 +57,26 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
     forms validity compare \
-    sheets image_data canvas mutation; do
+    sheets image_data canvas canvas_path mutation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \
         -Dos64_malloc_size=dom_host_malloc_size -c "userland/libdom/$name.c" -o "$object"
+    objects+=("$object")
+done
+mapfile -t ft_sources < <(python3 -c '
+import sys
+sys.path.insert(0,"tools")
+import test_freetype_host as ft
+for p in sum(ft.sources(),[]):
+    if p != ft.LIB/"port/backend.c": print(p.relative_to(ft.REPO))
+')
+for source in "${ft_sources[@]}"; do
+    object="$work/${source//\//_}.o"
+    cc "${flags[@]}" -DOS64_FREETYPE_HOSTED -DFT2_BUILD_LIBRARY \
+        -Iuserland/libfreetype/port -Iuserland/libfreetype/upstream/include \
+        -Wno-unused-variable -Wno-unused-but-set-variable -fcf-protection=none \
+        -fno-fast-math -ffp-contract=off -c "$source" -o "$object"
     objects+=("$object")
 done
 mapfile -t maths < <(make -s -C userland math-host-flags | python3 -c '

@@ -59,7 +59,12 @@ typedef struct {
 } draw2d_surface_t;
 typedef struct { uint32_t x0, y0, x1, y1; } draw2d_damage_t;
 typedef struct { uint32_t argb; } draw2d_solid_t; /* Straight-alpha sRGB source. */
-typedef enum { DRAW2D_SOURCE_OVER, DRAW2D_CLEAR } draw2d_operator_t;
+typedef enum {
+    DRAW2D_SOURCE_OVER, DRAW2D_CLEAR, DRAW2D_DESTINATION_OUT,
+    DRAW2D_SOURCE_IN, DRAW2D_SOURCE_OUT, DRAW2D_SOURCE_ATOP,
+    DRAW2D_DESTINATION_OVER, DRAW2D_DESTINATION_IN, DRAW2D_DESTINATION_ATOP,
+    DRAW2D_COPY, DRAW2D_XOR, DRAW2D_LIGHTER
+} draw2d_operator_t;
 typedef struct {
     draw2d_operator_t operation;
     uint16_t opacity;
@@ -81,5 +86,15 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *, double x, double y,
                                  double width, double height, draw2d_solid_t,
                                  draw2d_composite_t, uint64_t max_pixels,
                                  draw2d_damage_t *damage);
+/* Full-bitmap byte coverage and optional clip coverage, tightly packed.
+ * Length must cover width*height. Both buffers are borrowed, must not alias
+ * writable destination storage, and remain immutable. A transparent source
+ * still participates in operators such as COPY and DESTINATION_IN.
+ * Clip coverage interpolates the completed composite with the old pixel.
+ * CLEAR ignores source/opacity and removes shape coverage inside the clip.
+ * Validates inputs/work before any write; output damage is conservative. */
+draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *coverage,
+    const uint8_t *clip, size_t length, draw2d_solid_t, draw2d_composite_t,
+    uint64_t max_pixels, draw2d_damage_t *);
 #pragma GCC visibility pop
 #endif

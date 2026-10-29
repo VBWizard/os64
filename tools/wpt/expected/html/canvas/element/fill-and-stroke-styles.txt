@@ -133,8 +133,10 @@
 2d.fillStyle.parse.svg-2.html	Canvas test: 2d.fillStyle.parse.svg-2
 2d.fillStyle.parse.transparent-1.html	Canvas test: 2d.fillStyle.parse.transparent-1
 2d.fillStyle.parse.transparent-2.html	Canvas test: 2d.fillStyle.parse.transparent-2
+2d.fillStyle.toStringFunctionCallback.html	Passing a function in to ctx.fillStyle or ctx.strokeStyle with a toString callback works as specified
 2d.gradient.linear.nonfinite.html	createLinearGradient() throws TypeError if arguments are not finite
 2d.gradient.radial.nonfinite.html	createRadialGradient() throws TypeError if arguments are not finite
 2d.pattern.image.null.html	Canvas test: 2d.pattern.image.null
 2d.pattern.image.string.html	Canvas test: 2d.pattern.image.string
 2d.pattern.image.undefined.html	Canvas test: 2d.pattern.image.undefined
+2d.strokeStyle.default.html	Canvas test: 2d.strokeStyle.default

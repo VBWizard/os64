@@ -1,0 +1,60 @@
+# WPT's html/canvas/element/compositing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/compositing --update
+# rewrites [passing].
+[required]
+2d.composite.clip.destination-out.html	fill() does not affect pixels outside the clip region.
+2d.composite.uncovered.fill.copy.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
+[excluded]
+[passing]
+2d.composite.clip.clear.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.copy.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.destination-atop.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.destination-in.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.destination-out.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.destination-over.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.lighter.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.source-atop.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.source-in.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.source-out.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.source-over.html	fill() does not affect pixels outside the clip region.
+2d.composite.clip.xor.html	fill() does not affect pixels outside the clip region.
+2d.composite.globalAlpha.default.html	Canvas test: 2d.composite.globalAlpha.default
+2d.composite.globalAlpha.fill.html	Canvas test: 2d.composite.globalAlpha.fill
+2d.composite.globalAlpha.invalid.html	Canvas test: 2d.composite.globalAlpha.invalid
+2d.composite.globalAlpha.range.html	Canvas test: 2d.composite.globalAlpha.range
+2d.composite.operation.casesensitive.html	Canvas test: 2d.composite.operation.casesensitive
+2d.composite.operation.darker.html	Canvas test: 2d.composite.operation.darker
+2d.composite.operation.default.html	Canvas test: 2d.composite.operation.default
+2d.composite.operation.get.html	Canvas test: 2d.composite.operation.get
+2d.composite.operation.highlight.html	Canvas test: 2d.composite.operation.highlight
+2d.composite.operation.nullsuffix.html	Canvas test: 2d.composite.operation.nullsuffix
+2d.composite.operation.over.html	Canvas test: 2d.composite.operation.over
+2d.composite.operation.unrecognised.html	Canvas test: 2d.composite.operation.unrecognised
+2d.composite.solid.copy.html	Canvas test: 2d.composite.solid.copy
+2d.composite.solid.destination-atop.html	Canvas test: 2d.composite.solid.destination-atop
+2d.composite.solid.destination-in.html	Canvas test: 2d.composite.solid.destination-in
+2d.composite.solid.destination-out.html	Canvas test: 2d.composite.solid.destination-out
+2d.composite.solid.destination-over.html	Canvas test: 2d.composite.solid.destination-over
+2d.composite.solid.lighter.html	Canvas test: 2d.composite.solid.lighter
+2d.composite.solid.source-atop.html	Canvas test: 2d.composite.solid.source-atop
+2d.composite.solid.source-in.html	Canvas test: 2d.composite.solid.source-in
+2d.composite.solid.source-out.html	Canvas test: 2d.composite.solid.source-out
+2d.composite.solid.source-over.html	Canvas test: 2d.composite.solid.source-over
+2d.composite.solid.xor.html	Canvas test: 2d.composite.solid.xor
+2d.composite.transparent.copy.html	Canvas test: 2d.composite.transparent.copy
+2d.composite.transparent.destination-atop.html	Canvas test: 2d.composite.transparent.destination-atop
+2d.composite.transparent.destination-in.html	Canvas test: 2d.composite.transparent.destination-in
+2d.composite.transparent.destination-out.html	Canvas test: 2d.composite.transparent.destination-out
+2d.composite.transparent.destination-over.html	Canvas test: 2d.composite.transparent.destination-over
+2d.composite.transparent.lighter.html	Canvas test: 2d.composite.transparent.lighter
+2d.composite.transparent.source-atop.html	Canvas test: 2d.composite.transparent.source-atop
+2d.composite.transparent.source-in.html	Canvas test: 2d.composite.transparent.source-in
+2d.composite.transparent.source-out.html	Canvas test: 2d.composite.transparent.source-out
+2d.composite.transparent.source-over.html	Canvas test: 2d.composite.transparent.source-over
+2d.composite.transparent.xor.html	Canvas test: 2d.composite.transparent.xor
+2d.composite.uncovered.fill.copy.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.fill.destination-atop.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.fill.destination-in.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.fill.source-in.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.
+2d.composite.uncovered.fill.source-out.html	fill() draws pixels not covered by the source object as (0,0,0,0), and does not leave the pixels unchanged.

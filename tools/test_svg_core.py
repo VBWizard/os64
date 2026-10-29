@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build native SVG, production FreeType and pinned libmath under sanitizers."""
+"""Test native SVG or Canvas against production FreeType and pinned libmath under sanitizers."""
 import argparse
 import concurrent.futures
 import hashlib
@@ -19,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     profile = parser.add_mutually_exclusive_group()
+    profile.add_argument('--canvas', action='store_true', help='run native Canvas paths against production geometry')
     profile.add_argument('--paint', action='store_true', help='run scene painting tests and write fixtures')
     profile.add_argument('--yonder', action='store_true', help='run the real HTML/CSS/layout SVG adapter')
     args = parser.parse_args()
@@ -35,13 +36,17 @@ def main():
                 '-I'+str(ROOT/'userland/libsvg/include'),
                 '-I'+str(ROOT/'userland/libmath/include'),
                 '-I'+str(ROOT/'userland/libos64/include')]
+    if args.canvas:
+        includes += ['-I'+str(ROOT/'userland/libcanvas/include')]
     if args.yonder:
         includes += ['-I'+str(ROOT/d) for d in ('abi/include', 'tools', 'userland',
             'userland/libflow/include', 'userland/libflow', 'userland/apps/yonder',
             'userland/libhtml/include', 'userland/libxml/include', 'userland/libpage/include', 'userland/libpage/upstream/ryu',
             'userland/libgarb/include', 'userland/libfetch/include', 'userland/libgzip/include',
             'userland/libtls/include', 'userland/libway/include')]
-    entries = [(ROOT/'userland/libdraw2d/paint.c', includes)]
+    entries = [(ROOT/'userland/libdraw2d'/name, includes) for name in ('paint.c', 'stroke.c')]
+    if args.canvas:
+        entries += [(ROOT/'userland/libcanvas'/name, includes) for name in ('core.c', 'path.c')]
     # Read production membership; new source files cannot silently miss the harness.
     membership = (ROOT/'userland/libsvg/library.mk').read_text().replace('\\\n', ' ')
     membership = membership.split('LIBSVG_SRCS := ', 1)[1].splitlines()[0]
@@ -67,7 +72,7 @@ def main():
         entries += [(ROOT/p, includes) for p in shlex.split(membership) if p != 'tools/test_yonder_host.c']
         entries += [(ROOT/p, includes) for p in ('userland/apps/yonder/svg.c',
             'userland/apps/yonder/svg_document.c', 'userland/libhtml/xml.c', 'userland/libxml/xml.c')]
-    harness = 'test_yonder_svg.c' if args.yonder else 'test_svg_paint.c' if args.paint else 'test_svg_core.c'
+    harness = 'test_canvas_paths.c' if args.canvas else 'test_yonder_svg.c' if args.yonder else 'test_svg_paint.c' if args.paint else 'test_svg_core.c'
     entries.append((ROOT/'tools'/harness, includes))
 
     def compile_one(entry):
@@ -82,9 +87,11 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as workers:
         objects = list(workers.map(compile_one, entries))
-    binary = build/('svg-yonder' if args.yonder else 'svg-paint' if args.paint else 'svg-core')
+    binary = build/('canvas-paths' if args.canvas else 'svg-yonder' if args.yonder else 'svg-paint' if args.paint else 'svg-core')
     subprocess.run([cc, *common, *map(str, objects), '-o', str(binary)], check=True)
     inputs = {p for p, _ in entries}
+    if args.canvas:
+        inputs.update([ROOT/'tools/test_canvas_core.c', ROOT/'userland/libcanvas/include/canvas/canvas.h', ROOT/'userland/libcanvas/internal.h'])
     inputs.update([ROOT/'tools/test_svg_gradient_sampler.inc', ROOT/'tools/test_svg_radial_sampler.inc'])
     if args.paint:
         inputs.add(ROOT/'tools/test_svg_cache.inc')

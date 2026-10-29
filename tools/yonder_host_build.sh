@@ -46,9 +46,9 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
-        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,image_data,canvas,mutation}.c \
+        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,image_data,canvas,canvas_path,mutation}.c \
         userland/apps/yonder/{scripts,modules,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture}.c \
-        "${svg_sources[@]}" userland/libdraw2d/paint.c userland/libcanvas/core.c \
+        "${svg_sources[@]}" userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libcanvas/core.c userland/libcanvas/path.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \

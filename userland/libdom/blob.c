@@ -65,7 +65,7 @@ static void iterator_close(JSContext *ctx, JSValueConst iterator)
     JS_Throw(ctx, pending);
 }
 
-int d_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count)
+static int sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count, bool numbers)
 {
     *out = NULL;
     *count = 0;
@@ -119,6 +119,13 @@ int d_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, 
         JSValue item = JS_GetPropertyStr(ctx, step, "value");
         JS_FreeValue(ctx, step);
         if (JS_IsException(item)) { result = -1; break; }
+        if (numbers) {
+            double number;
+            int converted = JS_ToFloat64(ctx, &number, item);
+            JS_FreeValue(ctx, item);
+            if (converted < 0) { iterator_close(ctx, iterator); result = -1; break; }
+            item = JS_NewFloat64(ctx, number);
+        }
         if (n == max) {
             JS_FreeValue(ctx, item);
             JS_ThrowTypeError(ctx, "The sequence is longer than this browser takes");
@@ -149,6 +156,13 @@ int d_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, 
     *count = n;
     return 0;
 }
+int d_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count)
+{ return sequence(dom,ctx,value,max,out,count,false); }
+/* WebIDL numeric sequences convert each yielded value before requesting the
+ * next item, including iterator closing when that conversion throws. */
+int d_double_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count)
+{ return sequence(dom,ctx,value,max,out,count,true); }
+
 
 void d_bytes_free(JSContext *ctx, DBytes *b)
 {

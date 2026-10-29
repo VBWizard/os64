@@ -1,0 +1,30 @@
+{
+  "route": {
+    "mean_rgba_error": 0.28290625,
+    "max_rgba_error": 128,
+    "different_pixels": 2560,
+    "mean_premultiplied_error": 0.25150694444444444,
+    "max_premultiplied_error": 97
+  },
+  "turn": {
+    "mean_rgba_error": 0.33708333333333335,
+    "max_rgba_error": 255,
+    "different_pixels": 3376,
+    "mean_premultiplied_error": 0.26143055555555555,
+    "max_premultiplied_error": 71
+  },
+  "stencil": {
+    "mean_rgba_error": 0.18749305555555557,
+    "max_rgba_error": 255,
+    "different_pixels": 2914,
+    "mean_premultiplied_error": 0.12701736111111112,
+    "max_premultiplied_error": 68
+  },
+  "scratch": {
+    "mean_rgba_error": 0.15809722222222222,
+    "max_rgba_error": 3,
+    "different_pixels": 11953,
+    "mean_premultiplied_error": 0.15809722222222222,
+    "max_premultiplied_error": 3
+  }
+}

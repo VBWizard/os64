@@ -43,6 +43,7 @@
 2d.imageData.get.source.outside.html	getImageData() returns transparent black outside the canvas
 2d.imageData.get.source.size.html	getImageData() returns bigger ImageData for bigger source rectangle
 2d.imageData.get.type.html	getImageData() returns an ImageData object containing a Uint8ClampedArray object
+2d.imageData.get.unaffected.html	getImageData() is not affected by context state
 2d.imageData.get.zero.html	getImageData() throws INDEX_SIZE_ERR if size is zero
 2d.imageData.object.clamp.html	ImageData.data clamps numbers to [0, 255]
 2d.imageData.object.ctor.array.bounds.html	ImageData has a usable constructor
@@ -58,6 +59,7 @@
 2d.imageData.object.undefined.html	ImageData.data converts undefined to 0
 2d.imageData.put.alpha.html	putImageData() puts non-solid image data correctly
 2d.imageData.put.basic.html	putImageData() puts image data from getImageData() onto the canvas
+2d.imageData.put.clip.html	putImageData() is not affected by clipping regions
 2d.imageData.put.created.html	putImageData() puts image data from createImageData() onto the canvas
 2d.imageData.put.cross.html	putImageData() accepts image data got from a different canvas
 2d.imageData.put.dirty.negative.html	putImageData() handles negative-sized dirty rectangles correctly
@@ -68,5 +70,7 @@
 2d.imageData.put.modified.html	putImageData() puts modified image data correctly
 2d.imageData.put.nonfinite.html	putImageData() throws TypeError if arguments are not finite
 2d.imageData.put.null.html	putImageData() with null imagedata throws TypeError
+2d.imageData.put.path.html	putImageData() does not affect the current path
+2d.imageData.put.unaffected.html	putImageData() is not affected by context state
 2d.imageData.put.unchanged.html	putImageData(getImageData(...), ...) has no effect
 2d.imageData.put.wrongtype.html	putImageData() does not accept non-ImageData objects
