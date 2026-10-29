@@ -383,3 +383,120 @@ static void computed_round2_cases(void)
     flow_free(tree);
     sheeted_close(&p);
 }
+
+
+// SVG properties are CSSOM properties on HTML elements too. The expected
+// initial values and inheritance follow SVG 2; Chromium is a second oracle
+// for the resolved strings (including a currentColor inherited symbolically).
+static bool computed_svg_url(void *ctx, const char *written, uint32_t len, int32_t sheet,
+                              char *out, size_t cap)
+{
+    *(int32_t *)ctx = sheet;
+    return computed_url(NULL, written, len, sheet, out, cap);
+}
+
+static void computed_svg_cases(void)
+{
+    static const struct { int32_t prop; const char *value; } initial[] = {
+        {GARB_COLOR_INTERPOLATION, "srgb"}, {GARB_CX, "0px"}, {GARB_CY, "0px"},
+        {GARB_FILL, "rgb(0, 0, 0)"}, {GARB_FILL_OPACITY, "1"}, {GARB_FILL_RULE, "nonzero"},
+        {GARB_R, "0px"}, {GARB_RX, "auto"}, {GARB_RY, "auto"}, {GARB_STROKE, "none"},
+        {GARB_STROKE_DASHARRAY, "none"}, {GARB_STROKE_DASHOFFSET, "0px"},
+        {GARB_STROKE_LINECAP, "butt"}, {GARB_STROKE_LINEJOIN, "miter"},
+        {GARB_STROKE_MITERLIMIT, "4"}, {GARB_STROKE_OPACITY, "1"}, {GARB_STROKE_WIDTH, "1px"},
+        {GARB_VECTOR_EFFECT, "none"}, {GARB_X, "0px"}, {GARB_Y, "0px"},
+        {GARB_CLIP_PATH, "none"}, {GARB_CLIP_RULE, "nonzero"},
+        {GARB_STOP_COLOR, "rgb(0, 0, 0)"}, {GARB_STOP_OPACITY, "1"},
+    };
+    static const char html[] =
+        "<!doctype html><style>html{font-size:10px}"
+        "#p{font-size:20px;color:red;fill:currentColor;stroke-width:2em;"
+        "stroke-dasharray:1em,20%,3;stop-color:currentColor;cx:2em;stroke:url(p.svg#p)}"
+        "#c{font-size:30px;color:blue;stop-color:inherit;cx:inherit}"
+        "#reset{fill:initial;stroke:initial;stroke-width:initial;stroke-dasharray:initial}"
+        "#unset{fill:unset;cx:unset}#revert{fill:revert}"
+        "#hidden{display:none}"
+        "#units{font-size:20px;x:2em;y:3rem;cx:10vw;cy:10vh;rx:10%;ry:auto;"
+        "stroke-width:calc(2em + 10%);stroke-dasharray:1em 2 3%;stroke-dashoffset:-2em}"
+        "#paint{color:rgb(1,2,3);fill:url(g.svg#g) currentColor;stroke:rgba(4,5,6,.5);"
+        "clip-path:url(clip.svg#c);fill-opacity:150%;stroke-opacity:-1;"
+        "stroke-miterlimit:calc(.5);color-interpolation:linearRGB;stop-opacity:25%;stop-color:currentColor}"
+        "#calc{x:calc(2em + 5px);y:calc(10% + 2px);font-size:20px;"
+        "stroke-dasharray:calc(2 + 3),calc(1em + 2px);fill-opacity:calc(20% + 30%)}"
+        "</style><div id=p><div id=c></div><div id=reset></div><div id=unset></div>"
+        "<div id=revert></div><div id=hidden><div id=deep></div></div></div>"
+        "<div id=units></div><div id=paint></div><div id=calc></div><div id=plain></div>"
+        "<svg><g style='font-size:20px;color:red;stroke-width:2em;fill:currentColor'>"
+        "<path id=svgchild style='font-size:30px;color:blue'/>"
+        "<g display='none'><path id=svghidden style='font-size:30px;color:blue'/></g></g></svg>"
+        "<div id=inline style='fill:url(i.svg#i)'></div>"
+        "<div id=extra style='font-size:20px;fill:url(#g) none;stroke-width:min(2em,20%);"
+        "x:calc(0% + 2em);y:calc(10% - 10%);rx:calc(-2px)'></div>";
+    for (int zoom = 1000; zoom <= 4000; zoom *= 2) {
+        Sheeted p;
+        sheeted_open(&p, html, 800, 600);
+        p.env.svg = true;
+        p.env.zoom = zoom;
+        flow_tree_t *tree = flow_layout(p.doc, p.page, 800 * zoom / 1000, &p.env);
+        expect("computed SVG: layout", tree != NULL, NULL);
+        if (tree == NULL) { sheeted_close(&p); continue; }
+        int32_t url_sheet = -2;
+        flow_computed_options_t resolve = {computed_svg_url, &url_sheet};
+        const os64_html_node_t *root = p.doc->document;
+        const char *ids[] = {"reset", "plain"};
+        for (size_t j = 0; j < sizeof(ids) / sizeof(ids[0]); j++) {
+            flow_computed_t *c = flow_computed_new(tree, &p.env, computed_find(root, ids[j]), &resolve);
+            for (size_t i = 0; i < sizeof(initial) / sizeof(initial[0]); i++)
+                computed_is(c, "computed SVG: initial value", initial[i].prop, initial[i].value);
+            flow_computed_free(c);
+        }
+        static const struct { const char *id; int32_t prop; const char *value; } cases[] = {
+            {"c", GARB_FILL, "rgb(0, 0, 255)"}, {"c", GARB_STOP_COLOR, "rgb(0, 0, 255)"},
+            {"c", GARB_STROKE_WIDTH, "40px"}, {"c", GARB_CX, "40px"},
+            {"c", GARB_STROKE, "url(\"http://host/dir/p.svg#p\")"},
+            {"inline", GARB_FILL, "url(\"http://host/dir/i.svg#i\")"},
+            {"c", GARB_STROKE_DASHARRAY, "20px, 20%, 3px"},
+            {"unset", GARB_FILL, "rgb(255, 0, 0)"}, {"unset", GARB_CX, "0px"},
+            {"revert", GARB_FILL, "rgb(255, 0, 0)"},
+            {"deep", GARB_STROKE_WIDTH, "40px"}, {"deep", GARB_FILL, "rgb(255, 0, 0)"},
+            {"units", GARB_X, "40px"}, {"units", GARB_Y, "30px"},
+            {"units", GARB_CX, "80px"}, {"units", GARB_CY, "60px"},
+            {"units", GARB_RX, "10%"}, {"units", GARB_RY, "auto"},
+            {"units", GARB_STROKE_WIDTH, "calc(10% + 40px)"},
+            {"units", GARB_STROKE_DASHARRAY, "20px, 2px, 3%"},
+            {"units", GARB_STROKE_DASHOFFSET, "-40px"},
+            {"paint", GARB_FILL, "url(\"http://host/dir/g.svg#g\") rgb(1, 2, 3)"},
+            {"paint", GARB_STROKE, "rgba(4, 5, 6, 0.5)"},
+            {"paint", GARB_CLIP_PATH, "url(\"http://host/dir/clip.svg#c\")"},
+            {"paint", GARB_FILL_OPACITY, "1"}, {"paint", GARB_STROKE_OPACITY, "0"},
+            {"paint", GARB_STOP_OPACITY, "0.25"}, {"paint", GARB_STROKE_MITERLIMIT, "0.5"},
+            {"paint", GARB_COLOR_INTERPOLATION, "linearrgb"},
+            {"paint", GARB_STOP_COLOR, "rgb(1, 2, 3)"},
+            {"calc", GARB_X, "45px"}, {"calc", GARB_Y, "calc(10% + 2px)"},
+            {"calc", GARB_STROKE_DASHARRAY, "calc(5px), 22px"},
+            {"calc", GARB_FILL_OPACITY, "0.5"},
+            {"svgchild", GARB_FILL, "rgb(0, 0, 255)"},
+            {"svgchild", GARB_STROKE_WIDTH, "40px"},
+            {"svghidden", GARB_FILL, "rgb(0, 0, 255)"},
+            {"svghidden", GARB_STROKE_WIDTH, "40px"},
+            {"extra", GARB_FILL, "url(\"#g\") none"},
+            {"extra", GARB_STROKE_WIDTH, "min(40px, 20%)"},
+            {"extra", GARB_X, "calc(0% + 40px)"}, {"extra", GARB_Y, "0%"},
+            {"extra", GARB_RX, "0px"},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            flow_computed_t *c = flow_computed_new(tree, &p.env, computed_find(root, cases[i].id), &resolve);
+            url_sheet = -2;
+            computed_is(c, "computed SVG: resolved value", cases[i].prop, cases[i].value);
+            if (strcmp(cases[i].id, "inline") == 0)
+                expect("computed SVG: inline URL origin", url_sheet == -1, NULL);
+            if (strcmp(cases[i].id, "c") == 0 && cases[i].prop == GARB_STROKE)
+                expect("computed SVG: inherited URL keeps its declaring sheet", url_sheet == 0, NULL);
+            if (strcmp(cases[i].id, "extra") == 0 && cases[i].prop == GARB_FILL)
+                expect("computed SVG: local URL needs no base", url_sheet == -2, NULL);
+            flow_computed_free(c);
+        }
+        flow_free(tree);
+        sheeted_close(&p);
+    }
+}

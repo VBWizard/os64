@@ -26,15 +26,10 @@ static bool simple(Context *c, svg_geometry_t *g, os64_geometry_verb_t verb, Poi
     os64_geometry_command_t cmd = {.verb = verb, .p = {p}};
     return emit(c, g, cmd);
 }
-typedef struct {
-    Point center, u, v;
-    double angle, sweep, numerical_error;
-} Arc;
-
 /* SVG endpoint-to-center conversion in a normalized, translated frame. Ratios
  * whose binary64 evaluation loses range return LIMIT; no coordinate clamps.
  * hypot avoids squaring overflowing radii or underflowing endpoint offsets. */
-static bool center_arc(Context *c, Point from, const svg_command_t *cmd, Arc *arc)
+bool svg_arc_center(Context *c, Point from, const svg_command_t *cmd, SvgArc *arc)
 {
     Point to = cmd->p[0];
     double dx = from.x / 2 - to.x / 2, dy = from.y / 2 - to.y / 2;
@@ -92,13 +87,13 @@ range:
     c->why = SVG_LIMIT;
     return false;
 }
-static Point arc_point(const Arc *a, double theta)
+static Point arc_point(const SvgArc *a, double theta)
 {
     double cs = cos(theta), sn = sin(theta);
     return (Point){a->center.x + a->u.x * cs + a->v.x * sn,
                    a->center.y + a->u.y * cs + a->v.y * sn};
 }
-static Point arc_derivative(const Arc *a, double theta)
+static Point arc_derivative(const SvgArc *a, double theta)
 {
     double cs = cos(theta), sn = sin(theta);
     return (Point){-a->u.x * sn + a->v.x * cs, -a->u.y * sn + a->v.y * cs};
@@ -106,8 +101,8 @@ static Point arc_derivative(const Arc *a, double theta)
 static bool lower_arc(Context *c, svg_geometry_t *g, Point from, const svg_command_t *cmd,
                       const Map *map, double tolerance)
 {
-    Arc arc;
-    if (!center_arc(c, from, cmd, &arc))
+    SvgArc arc;
+    if (!svg_arc_center(c, from, cmd, &arc))
         return false;
     /* For each device axis, the fourth derivative of an ellipse coordinate
      * is bounded by |mapped u|+|mapped v|. Cubic Hermite interpolation has

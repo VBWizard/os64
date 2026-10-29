@@ -4,6 +4,10 @@ typedef union {
     max_align_t alignment;
     size_t bytes;
 } Block;
+size_t svg_allocation_cost(size_t bytes)
+{
+    return bytes > SIZE_MAX - sizeof(Block) ? SIZE_MAX : bytes + sizeof(Block);
+}
 
 svg_limits_t svg_default_limits(void)
 {
@@ -134,7 +138,8 @@ Status svg_destroy(Context *c)
 {
     if (!c)
         return SVG_BAD_ARGUMENT;
-    if (c->busy || c->stats.paths || c->stats.geometries || c->stats.scenes)
+    if (c->busy || c->stats.paths || c->stats.geometries || c->stats.scenes ||
+        c->stats.raster_keys || c->stats.raster_caches)
         return SVG_BUSY;
     c->busy = true;
     svg_free(c, c);

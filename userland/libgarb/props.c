@@ -28,15 +28,20 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_R] = {"r", false, true},
     [GARB_RX] = {"rx", false, true},
     [GARB_RY] = {"ry", false, true},
+    [GARB_STOP_COLOR] = {"stop-color", false, true},
+    [GARB_STOP_OPACITY] = {"stop-opacity", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
     [GARB_STROKE_OPACITY] = {"stroke-opacity", true, true},
+    [GARB_CLIP_PATH] = {"clip-path", false, true},
+    [GARB_CLIP_RULE] = {"clip-rule", true, true},
     [GARB_FILL_RULE] = {"fill-rule", true, true},
     [GARB_STROKE_WIDTH] = {"stroke-width", true, true},
     [GARB_STROKE_LINECAP] = {"stroke-linecap", true, true},
     [GARB_STROKE_LINEJOIN] = {"stroke-linejoin", true, true},
     [GARB_STROKE_MITERLIMIT] = {"stroke-miterlimit", true, true},
+    [GARB_STROKE_DASHOFFSET] = {"stroke-dashoffset", true, true},
     [GARB_STROKE_DASHARRAY] = {"stroke-dasharray", true, true},
     [GARB_VECTOR_EFFECT] = {"vector-effect", false, true},
     [GARB_COLOR_INTERPOLATION] = {"color-interpolation", true, true},
@@ -1966,7 +1971,7 @@ static bool list_style(Sets *s, VCur *c)
 
 typedef enum {
     G_KEYWORDS,             // one keyword from `words`
-    G_SVG_POSITION, G_SVG_RADIUS, G_SVG_PAINT, G_SVG_LENGTH, G_SVG_MITER, G_SVG_DASHES,
+    G_SVG_CLIP, G_SVG_POSITION, G_SVG_RADIUS, G_SVG_PAINT, G_SVG_LENGTH, G_SVG_MITER, G_SVG_DASHES,
     G_COLOR,
     G_MARGIN, G_PADDING, G_BWIDTH, G_BSTYLE, G_BCOLOR,
     G_SIZE,                 // width, height, min-*: auto | lp >= 0 | the content words
@@ -2036,15 +2041,20 @@ static const Longhand kLonghands[] = {
     {GARB_R, G_SVG_LENGTH, NULL},
     {GARB_RX, G_SVG_RADIUS, NULL},
     {GARB_RY, G_SVG_RADIUS, NULL},
+    {GARB_STOP_COLOR, G_COLOR, NULL},
+    {GARB_STOP_OPACITY, G_ALPHA, NULL},
     {GARB_FILL, G_SVG_PAINT, NULL},
     {GARB_STROKE, G_SVG_PAINT, NULL},
     {GARB_FILL_OPACITY, G_ALPHA, NULL},
     {GARB_STROKE_OPACITY, G_ALPHA, NULL},
+    {GARB_CLIP_PATH, G_SVG_CLIP, NULL},
+    {GARB_CLIP_RULE, G_KEYWORDS, kSvgRule},
     {GARB_FILL_RULE, G_KEYWORDS, kSvgRule},
     {GARB_STROKE_WIDTH, G_SVG_LENGTH, NULL},
     {GARB_STROKE_LINECAP, G_KEYWORDS, kSvgCap},
     {GARB_STROKE_LINEJOIN, G_KEYWORDS, kSvgJoin},
     {GARB_STROKE_MITERLIMIT, G_SVG_MITER, NULL},
+    {GARB_STROKE_DASHOFFSET, G_SVG_POSITION, NULL},
     {GARB_STROKE_DASHARRAY, G_SVG_DASHES, NULL},
     {GARB_VECTOR_EFFECT, G_KEYWORDS, kSvgVector},
     {GARB_COLOR_INTERPOLATION, G_KEYWORDS, kSvgColor},
@@ -2982,6 +2992,11 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         if ((k = vc_keyword(c, l->words)) == NULL)
             return false;
         *out = kw(k);
+        return true;
+    case G_SVG_CLIP:
+        if (vc_url(c, out)) return true;
+        if (vc_keyword(c, kNone) == NULL) return false;
+        *out = kw("none");
         return true;
     case G_SVG_PAINT:
         if (vc_url(c, out)) {

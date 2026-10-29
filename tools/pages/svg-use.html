@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: made to be reused</title>
+<style>
+body { margin:24px; background:#edf3ef; color:#183c32; font:16px sans-serif; }
+h1 { margin-bottom:8px; } h2 { font-size:20px; margin:0 0 10px; }
+p { max-width:720px; line-height:1.5; }
+.card { display:inline-block; vertical-align:top; width:300px; margin:0 16px 20px 0; padding:18px; background:white; border:1px solid #b8cec2; border-radius:12px; }
+.card svg { display:block; width:280px; height:168px; background:#f1f7f3; }
+button { padding:10px 18px; font:inherit; }
+</style></head><body>
+<h1>SVG: made to be reused</h1>
+<p>One drawing can have many lives. These copies share their artwork while keeping their own colors and transforms. Try 400% zoom; enable scripts for the button.</p>
+<div class="card"><h2>1. One edit, three copies</h2>
+<svg viewBox="0 0 140 84">
+<defs color="#ff0000"><path id="shared-mark" fill="currentColor" d="M0 -20L18 0L0 20L-18 0Z"/></defs>
+<use href="#shared-mark" x="26" y="42" color="#2091de"/>
+<use href="#shared-mark" x="70" y="42" color="#e87925"/>
+<use href="#shared-mark" x="114" y="42" color="#338363"/>
+</svg><p>Blue, orange and green, all from one definition. Changing that definition updates every copy.</p>
+<button id="change">Change the shared drawing</button><p id="result">Three diamonds. Look for their cousins in card 5.</p></div>
+<div class="card"><h2>2. A group travels together</h2>
+<svg viewBox="0 0 140 84">
+<defs><g id="badge"><rect x="-16" y="-20" width="32" height="40" rx="6"/><path d="M-9 0L-2 7L10 -8" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g></defs>
+<use href="#badge" x="26" y="42" fill="#2091de"/>
+<use href="#badge" x="70" y="42" fill="#e87925"/>
+<use href="#badge" x="114" y="42" fill="#338363"/>
+</svg><p>The colored tile inherits from its copy. The checkmark keeps its own white stroke.</p></div>
+<div class="card"><h2>3. Copies within copies</h2>
+<svg viewBox="0 0 140 84">
+<defs><rect id="tile" x="-6" y="-6" width="12" height="12" rx="2"/>
+<g id="cluster"><use href="#tile" x="-9" y="-9"/><use href="#tile" x="9" y="-9"/><use href="#tile" x="-9" y="9"/><use href="#tile" x="9" y="9"/></g></defs>
+<use href="#cluster" x="26" y="42" fill="#2091de"/>
+<use href="#cluster" x="70" y="42" fill="#e87925"/>
+<use href="#cluster" x="114" y="42" fill="#338363"/>
+</svg><p>One tile makes a cluster. One cluster makes three colored families. Each level keeps its own place.</p></div>
+<div class="card"><h2>4. Same path, different rhythm</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke-width="5">
+<defs><path id="route" d="M0 0H104"/></defs>
+<use href="#route" x="18" y="18" stroke="#2091de" stroke-dasharray="10 6"/>
+<use href="#route" x="18" y="42" stroke="#e87925" stroke-linecap="round" stroke-dasharray="0 10"/>
+<use href="#route" x="9" y="66" transform="scale(1.15 1)" stroke="#338363" stroke-linecap="square" stroke-dasharray="8 6"/>
+</svg><p>Each copy chooses its own color, dash pattern and cap. The green copy also stretches horizontally.</p></div>
+<div class="card"><h2>5. Across the page</h2>
+<svg viewBox="0 0 140 84">
+<circle cx="36" cy="42" r="28" fill="#dcecf8"/><circle cx="104" cy="42" r="28" fill="#fbe9da"/>
+<use href="#shared-mark" x="36" y="42" color="#2091de"/>
+<use href="#shared-mark" x="104" y="42" color="#e87925"/>
+</svg><p>These cousins borrow card 1's drawing, even though they live in a different SVG. The same button changes them too.</p></div>
+<div class="card"><h2>6. A translucent pair</h2>
+<svg viewBox="0 0 140 84">
+<defs><g id="overlap"><rect x="-20" y="-20" width="28" height="28"/><rect x="-8" y="-8" width="28" height="28"/></g></defs>
+<use href="#overlap" x="36" y="42" fill="#2091de" opacity=".55"/>
+<use href="#overlap" x="104" y="42" fill="#e87925" opacity=".55"/>
+</svg><p>Each overlapping pair fades as a group. Its middle stays the same color as its outer corners.</p></div>
+<script>
+var changed = false;
+document.getElementById('change').addEventListener('click', function () {
+    changed = !changed;
+    document.getElementById('shared-mark').setAttribute('d', changed ?
+        'M-18 0L-6 12L20 -14L14 -20L-6 0L-12 -6Z' : 'M0 -20L18 0L0 20L-18 0Z');
+    document.getElementById('result').textContent = changed ?
+        'Five checkmarks, including card 5. Click again for diamonds.' :
+        'Diamonds restored, here and in card 5.';
+});
+</script></body></html>

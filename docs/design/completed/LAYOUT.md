@@ -1059,7 +1059,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Dotted underlines (`abbr[title]`) | drawn as a plain underline; the line's style is a cascade property | the cascade |
 | `iframe` content | a document inside a document is a second fetch and a second tree; drawn as a link to its `src`, `wend`'s frame rule | a page whose meaning is in the frame |
 | `object`/`embed`/`video`/`audio`/`canvas` | nothing plays or scripts them; fallback content is shown | media, after JS |
-| SVG beyond the inline path/group/basic-shape subset | Yonder supplies its own renderer for enabled replaced SVG viewports; other faces keep foreign-content fallback | remaining SVG profile work; SVG_YONDER.md |
+| SVG beyond the inline path/group/basic-shape/use/viewport/silhouette-clip subset | Yonder supplies its own renderer for enabled replaced SVG viewports; other faces keep foreign-content fallback | remaining SVG profile work; SVG_YONDER.md |
 
 ## Review tier
 

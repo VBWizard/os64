@@ -107,6 +107,13 @@ round/square zero-length cap. SVG must construct those caps, and resolve its
 join fallback policy, above this boundary. Dashing and non-scaling-stroke
 coordinate selection also belong above it.
 
+The optional `stroke_with_caps` table tail accepts a second command stream of
+clockwise filled cap contours. It plans the frame jointly, combines their
+winding with the expanded stroke, and returns one outline for nonzero-rule
+rasterization. [SVG stroke construction](SVG_STROKES.md) uses this to avoid
+double compositing overlapping dots. The aggregate command limit applies to
+both streams; ordinary `stroke` retains the degeneracy contract above.
+
 ## Work and cancellation
 
 Work charges command/point visits, allocation and copied bytes, output bytes

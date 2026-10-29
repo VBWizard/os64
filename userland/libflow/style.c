@@ -1521,6 +1521,29 @@ static bool calc(const Author *a, const garb_calc_t *k, double font, Lp *out)
     return false;
 }
 
+bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_font,
+                     const garb_val_t *value, FNumeric *out)
+{
+    Ctx c = {.env = env, .root_font = root_font,
+             .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
+    Author a = {.c = &c, .font = font, .view = garb_cascade_env(env->cascade)};
+    Lp r = {0};
+    switch (value->kind) {
+    case GARB_V_NUMBER: r = (Lp){value->number, 0, true}; break;
+    case GARB_V_PERCENTAGE: r.pct = value->number; break;
+    case GARB_V_LENGTH: r.px = length_px(&a, value, font); break;
+    case GARB_V_CALC:
+        if (!calc(&a, value->calc, font, &r))
+            return false;
+        break;
+    default: return false;
+    }
+    double scale = r.number ? 1 : FLOW_UNITS_PER_PX * c.zoom;
+    *out = (FNumeric){garb_hold(r.px / scale, GARB_TRANSFORM_NUMBER_MAX),
+                     garb_hold(r.pct, GARB_TRANSFORM_NUMBER_MAX * 100), r.number};
+    return true;
+}
+
 // A length as an int32_t: held, and a NaN — calc(1e400px - 1e400px), its
 // leaves past a double — 0, as Values 4 censors a calculation's NaN.
 static int32_t round_i32(double v)
@@ -1578,6 +1601,11 @@ static uint32_t colour_of(garb_color_t k)
     double al = k.a < 0 ? 0 : k.a > 1 ? 1 : k.a;
     return (uint32_t)(255 - channel(al * 255)) << 24 | (uint32_t)channel(k.r) << 16 |
            (uint32_t)channel(k.g) << 8 | (uint32_t)channel(k.b);
+}
+
+uint32_t f_style_colour(garb_color_t color)
+{
+    return colour_of(color);
 }
 
 // One keyword of a table, by index; -1 when `v` is none of them.
@@ -4250,8 +4278,14 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     FMotion *motion = NULL;
     bool svg_root = c->env->svg && flow_svg_root(n);
     if (n->ns != OS64_HTML_NS_HTML && !svg_root) {
-        // Foreign descendants have no HTML box of their own. An enabled
-        // outer SVG viewport owns its subtree as replaced content.
+        // SVG descendants still need computed fonts and colors for CSSOM's
+        // relative lengths/currentColor. Their outer viewport owns the
+        // graphics; they do not become HTML boxes through author display.
+        if (c->env->svg && n->ns == OS64_HTML_NS_SVG) {
+            Spec ua = sp;
+            if (!author(c, n, &sp, &ua, parent))
+                return NULL;
+        }
         sp.s.display = FLOW_DISPLAY_CONTENTS;
     } else {
         if (svg_root)

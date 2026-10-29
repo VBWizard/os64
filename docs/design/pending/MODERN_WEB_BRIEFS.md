@@ -41,6 +41,14 @@ isolated element/group opacity, with analytic coverage and Chromium comparisons.
 The [Yonder connection](SVG_YONDER.md) paints inline paths/groups using the real
 DOM, cascade, layout and compositor. The [basic-shape increment](SVG_SHAPES.md)
 adds native geometry and CSS geometry properties with a second live gallery.
+The [stroke increment](SVG_STROKES.md) adds dashes, offsets and exact zero-length
+caps, with a reversible phase toggle and independent analytic coverage checks.
+The [instance increment](SVG_INSTANCES.md) adds fragment use references, separate
+instance inheritance and cross-root source mutation. The [viewport increment](SVG_VIEWPORTS.md)
+adds referenced symbol/SVG sizing, nested viewports and rectangular overflow clips.
+[SVG_CLIPS.md](SVG_CLIPS.md) adds one-silhouette clip resources and ancestor intersections.
+[SVG_BOUNDS.md](SVG_BOUNDS.md) adds geometric bounds and numeric object-coordinate
+clips, with shared-consumer boundaries for gradients and future Canvas 2D.
 The static inline renderer stage remains
 active; the first P5 fixture does not complete its broader feature profile.
 

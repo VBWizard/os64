@@ -24,7 +24,7 @@ typedef struct {
     // is the box's rect.x and baseline in page coordinates.
     void (*text)(void *ctx, const flow_box_t *box, int32_t x, int32_t baseline,
                  os64_gui_rect_t clip, uint32_t colour);
-    // A raster picture or an outer SVG viewport, and a form control, at the box's content rectangle.
+    // A fetched picture or an outer inline SVG viewport, and a form control, at the content rectangle.
     void (*image)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
     void (*control)(void *ctx, const flow_box_t *box, os64_gui_rect_t content,
                     os64_gui_rect_t clip);

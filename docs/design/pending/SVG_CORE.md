@@ -102,9 +102,11 @@ Group opacity remains on the group. `display:none` skips its subtree;
 winning resolved transform, including origin, rather than multiplying a losing
 attribute value into it.
 
-The caller supplies the resolved root viewport map. Shapes, nested viewport
-resolution, intrinsic sizes and CSS layout negotiation are outside this API's
-implemented profile. Solid fill/stroke values are retained for the separate
+The caller supplies the resolved root viewport map. Shapes lower to native
+paths; container viewport fields distinguish frame placement from descendant
+content maps. The provider resolves viewport dimensions and viewBox mapping;
+intrinsic sizes and CSS layout negotiation remain outside the native API.
+Solid fill/stroke values are retained for the separate
 [paint entry point](SVG_PAINT.md). Unrepresentable active features must return
 `UNSUPPORTED`, not silently become solid colors or ordinary strokes.
 
@@ -207,11 +209,19 @@ browser changes and keep the adapter changes localized; refresh the stack as
 its base merges so review diffs show each increment's work.
 
 The [Yonder connection](SVG_YONDER.md) supplies the native tree/style adapter,
-paint properties, outer sizing and viewBox mapping. Continue 6b with shapes,
-dashes, use/symbol, nested viewports and clipping. The subsequent
+paint properties, outer sizing and viewBox mapping. [Basic shapes](SVG_SHAPES.md)
+[dash/cap construction](SVG_STROKES.md) and [same-document instances](SVG_INSTANCES.md)
+extend that consumer. [Viewports](SVG_VIEWPORTS.md) add symbol/referenced SVG
+sizing, nested viewports and rectangular overflow clipping.
+[Clip silhouettes](SVG_CLIPS.md) add one direct path/shape clip resource;
+broader clip combinations remain part of 6b. The
 [solid painter](SVG_PAINT.md) consumes prepared paths/groups and isolates opacity;
 the connection paints them in real inline SVG boxes. Parsed-path interning, cache lookup,
-geometric bounds, length/marker APIs and stroke-error control need their own evidence.
+length/marker APIs and stroke-error control need their own evidence.
+[Geometric bounds](SVG_BOUNDS.md) adds allocation-free path/subtree queries
+and object-coordinate clip mapping with separate analytic/browser evidence.
+[Standalone documents](SVG_DOCUMENTS.md) reuse this renderer through isolated
+XML trees and cascades in image mode; picture-job integration remains separate.
 
 The first useful P5 checkpoint is the connection's real inline fixture page
 reaching Yonder's paint path. Full 6b completion is not a prerequisite for that checkpoint,

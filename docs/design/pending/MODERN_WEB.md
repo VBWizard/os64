@@ -4755,3 +4755,108 @@ Nineteen shape/path pixel comparisons, allocator-failure sweeps, window mutation
 checks and selected Chromium comparisons cover the increment. The new gallery
 is `/tests/pages/svg-shapes.html`; its button toggles geometry and color.
 This remains part of the static inline milestone, with its broader debts open.
+
+### Slice 6b, same-document instances — 2026-10-26
+
+[SVG_INSTANCES.md](SVG_INSTANCES.md) adds fragment references to paths, shapes,
+groups and nested uses, with separate instance ancestry and bounded expansion.
+The source keeps its identity; inherited color, paint and geometry come from
+the copy's parent. A source edit repaints uses in different SVG roots. The new
+`/tests/pages/svg-use.html` gallery demonstrates that with a reversible button.
+Twenty-six exact expanded references, 78 expected Chromium outcomes,
+allocation-failure sweeps and a real-window mutation regression cover this
+increment. Per-instance variable substitution remains an explicit profile limit;
+this does not complete static SVG.
+
+### Slice 6b, referenced and nested viewports — 2026-10-27
+
+[SVG_VIEWPORTS.md](SVG_VIEWPORTS.md) adds symbol/SVG instance sizing, nested
+viewBox maps, percentage bases and rectangular overflow clips, including
+rotated frames and nested opacity. `/tests/pages/svg-viewports.html` has six
+cards and a reversible width toggle. Native flattened-reference comparisons,
+mask allocation/cancellation sweeps and browser evidence cover this increment.
+General clip paths and the remaining static SVG debts stay open.
+
+
+### Slice 6b, clip silhouettes — 2026-10-27
+
+[SVG_CLIPS.md](SVG_CLIPS.md) adds fragment clip-path resources with one direct
+path/shape silhouette, clip-rule holes, transforms, ancestor intersections and
+shared source mutation. `/tests/pages/svg-clips.html` moves a circular opening
+across two drawings. Geometric unions, resource percentage
+coordinates and references inside clip resources remain explicit follow-ups.
+This is still inline work; the external SVG image route remains stage 6c.
+
+
+### Slice 6b, object coordinates — 2026-10-27
+
+[SVG_BOUNDS.md](SVG_BOUNDS.md) adds analytic path/subtree geometric bounds and
+numeric objectBoundingBox clips. `/tests/pages/svg-bounds.html` demonstrates a
+clip following a drawing's changing width, with independent curve, stroke,
+group and transform cases. It records shared-consumer boundaries for gradients
+and Canvas 2D through 6c. External SVG images remain the image-route milestone.
+
+
+### Slice 6c, standalone SVG documents — 2026-10-27
+
+[SVG_DOCUMENTS.md](SVG_DOCUMENTS.md) adds independently owned XML SVG trees,
+embedded author sheets, isolated cascades and secure-static image-mode rendering.
+Root opacity/transforms/clips belong to the image viewport. Namespace aliases,
+resource isolation, allocation/cancellation cuts and native/browser references
+are covered. Picture-job dispatch, intrinsic sizing, admission accounting,
+gradients and caches remain separate integration work; this increment does not
+make external SVG images load through Yonder's `<img>` path.
+
+
+### Slice 6c, SVG image route — 2026-10-27
+
+[SVG_IMAGES.md](SVG_IMAGES.md) connects file/HTTP(S) SVG documents to tagged
+picture jobs, retained page ownership, default object sizing and size-aware
+`<img>`/background painting. CSS viewport dimensions stay independent of zoomed
+output pixels. Caller-bounded cascade and attribute-parse limits support
+admission accounting. `/tests/pages/svg-images.html` exercises source changes,
+shared URLs, contain/cover, private styles, static processing and tiled SVG.
+Gradients, pixel-variant caches and corpus-led performance work remain in 6c.
+
+
+### Slice 6c, linear gradient paint — 2026-10-27
+
+[SVG_GRADIENTS.md](SVG_GRADIENTS.md) adds linear fill/stroke paint servers to
+inline SVG and independent image documents. A numeric libsvg sampler accepts
+resolved stops, maps and geometric bounds without a DOM or CSS dependency, so
+a future Canvas 2D adapter can reuse it. The adapter handles local templates,
+stop styling, coordinate units and pad/repeat/reflect spread.
+`/tests/pages/svg-gradients.html` changes a sky and its shared consumers while
+an external SVG postcard retains its private colors. Radial gradients,
+raster-variant caching and corpus-led performance work remain in 6c.
+
+
+### Slice 6c, radial gradient paint — 2026-10-27
+
+[SVG_RADIAL.md](SVG_RADIAL.md) extends fill/stroke servers to centered and
+eccentric radial gradients, focal circles, repeat/reflect, outside foci and
+cross-type templates. A numeric circle-position query separates geometry from
+SVG's tangent-edge coloring for a future Canvas caller.
+`/tests/pages/svg-radial.html` moves a highlight across shared consumers while
+an independent SVG keeps its own light. Raster caching and corpus-led
+latency/fidelity gates remain in 6c.
+
+
+### Slice 6c, raster-cache foundation — 2026-10-27
+
+[SVG_CACHE.md](SVG_CACHE.md) adds value keys and bounded owned-pixel storage in
+libsvg. Keys describe resolved scenes and render extents; full byte comparison
+after digest lookup prevents collision reuse. Entry ownership is independent
+of documents, scenes and temporary keys. Limits, eviction, failure/cancellation
+and exact cached-versus-uncached output are covered by the painter harness.
+Yonder adoption and corpus-led measurements remain separate 6c cuts; this
+foundation does not change browser painting or require a hardware gallery.
+
+### Slice 6, Part 1 closeout — 2026-10-29
+
+[SVG_PART1.md](../completed/SVG_PART1.md) records the accepted static profile
+through 6c and its final reconciliation with current userland. Browser raster
+reuse, real-page sizing/metadata fixes, computed SVG style serialization and
+partial-artwork diagnostics are implemented. The closeout distinguishes the
+P5-accepted feature slices from combined-tree integration checks and retains
+the broader graphics, performance and Canvas design work as follow-ons.
