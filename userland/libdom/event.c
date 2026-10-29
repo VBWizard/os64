@@ -808,7 +808,10 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     dom->current_event = &active;
     event->dispatching = true;
     dom->dispatching++;
+    /* Held until its second half: an ancestor has no wrapper to hold it,
+     * and a listener may take its subtree out of the tree. */
     const os64_html_node_t *activation = activation_target(d, node);
+    if (activation != NULL) os64_html_hold(dom->document, activation);
     DActivation saved = {false, false, false, false};
     int result = activation != NULL && d_activation_before(dom, ctx, activation, &saved) < 0 ? -1 : 0;
     for (size_t i = count; result == 0 && i > 1; i--)
@@ -832,6 +835,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     if (activation != NULL && result == 0 &&
         d_activation_after(dom, ctx, activation, event->canceled, &saved) < 0)
         result = -1;
+    if (activation != NULL) os64_html_release(dom->document, activation);
     return result < 0 ? -1 : event->canceled ? 0 : 1;
 }
 
@@ -2502,7 +2506,9 @@ static int ui_double(JSContext *ctx, JSValueConst value, double *out)
 
 /* One member or argument, `value`, converted as `field`'s IDL type says
  * and set on `event` (`bit`: F_MODIFIER's row). -1 with an exception
- * pending and the event as it was. */
+ * pending, the member perhaps half-written (a number's conversion writes
+ * before it fails): every caller converts into a record it then discards,
+ * a constructor's new event or an init's scratch. */
 static int ui_field(os64_dom_t *dom, JSContext *ctx, DEvent *event, int field, int bit, JSValueConst value)
 {
     int32_t n = 0;

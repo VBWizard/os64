@@ -1521,8 +1521,8 @@ An event's attributes are its Event record's (`DEvent.ui` says which
 interface it is; its view, relatedTarget or submitter and two strings in
 `detail[]`, traced with it), and each getter checks its interface. A host
 event's kind (`os64_dom_event_t`) names its interface: MOUSE, KEY, FOCUS,
-INPUT and SUBMIT, each trusted, its view the window, its other node its
-relatedTarget or submitter; a plain one is an Event. `element.click()` is a
+INPUT and SUBMIT, each trusted, its view the window (a SubmitEvent, no UIEvent,
+has none), its other node its relatedTarget or submitter; a plain one is an Event. `element.click()` is a
 MouseEvent, a script's submission a SubmitEvent. **A click's activation**
 (DOM § 2.9) is the dispatch's: a MouseEvent click a script dispatches at a
 node activates the node, or for one that bubbles the nearest ancestor with

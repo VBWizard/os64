@@ -4650,10 +4650,16 @@ passes of 377 at this branch's base and head; `dom/events` +43,
 `html/semantics/forms/the-input-element` +48, `the-label-element` +34,
 `dom/nodes` +21, `the-button-element` +17, `html/dom` +6,
 `css/cssom-view` +5, `html/webappapis/scripting` +4, the module
-directory +1; every other directory unmoved but the known
-sometimes-passes and `css/cssom`'s serialize-all-longhands loss, which
-predates this. Hosts, 0 failed: DOM 20,216 and 129,030; yonder's
-scripted pages 8,949; userland builds.
+directory +1, each of the 313 `[required]` and failing with the switch
+off; every other directory unmoved but the known sometimes-passes,
+measured over `userland` with SVG's first part merged in. Hosts, 0
+failed: DOM 20,298 and 130,080; yonder's scripted pages 11,709; userland
+builds. Mutants (`tools/test_interfaces_mutants.py`, its P8 group): 41,
+each caught. Read cold once: the activation's ancestor was read after
+the listeners unheld, so a listener that took its subtree out freed it
+(ASan's heap-use-after-free once the test was written; it is held now);
+an init's partly failed conversion, two dictionaries' order and an
+infinite coordinate untested; two comments half true; all fixed.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 

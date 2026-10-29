@@ -249,6 +249,7 @@ static void dom_modern_cases(void)
         "assert(m.getModifierState('CapsLock')&&m.getModifierState('Control')&&!m.getModifierState('control')&&"
         "!m.getModifierState('Shift'),'getModifierState');throws(()=>m.getModifierState(),'a key');"
         "throws(()=>new MouseEvent('m',{clientX:NaN}),'a finite coordinate');"
+        "throws(()=>new MouseEvent('m',{screenY:-Infinity}),'not an infinite one');"
         "throws(()=>new MouseEvent('m',{relatedTarget:{}}),'an EventTarget');"
         "assert(new MouseEvent('m',{relatedTarget:window}).relatedTarget===window);"
         "var at=document.createAttribute('a');assert(new FocusEvent('f',{relatedTarget:at}).relatedTarget===at);"
@@ -258,6 +259,12 @@ static void dom_modern_cases(void)
         "modifierCapsLock,modifierFn,modifierFnLock,modifierHyper,modifierNumLock,modifierScrollLock,modifierSuper,"
         "modifierSymbol,modifierSymbolLock,shiftKey,button,buttons,clientX,clientY,relatedTarget,screenX,screenY',"
         "'WebIDL reads the dictionary in order: '+order.join());"
+        "order.length=0;new KeyboardEvent('k',init);"
+        "assert(order.slice(order.indexOf('shiftKey')).join()==='shiftKey,charCode,code,isComposing,key,keyCode,location,"
+        "repeat','KeyboardEventInit\\'s own, in order: '+order.join());"
+        "order.length=0;new InputEvent('i',init);"
+        "assert(order.join()==='bubbles,cancelable,detail,view,which,data,dataTransfer,inputType,isComposing,targetRanges',"
+        "'InputEventInit\\'s: '+order.join());"
         "var k=new KeyboardEvent('k',{key:'q',code:'KeyQ',location:3,repeat:true,isComposing:true,charCode:113,"
         "keyCode:81,which:81,shiftKey:true});"
         "assert(k.key==='q'&&k.code==='KeyQ'&&k.location===3&&k.repeat&&k.isComposing&&k.charCode===113&&"
@@ -291,6 +298,10 @@ static void dom_modern_cases(void)
         "c.initMouseEvent('click');assert(c.view===null&&c.clientX===0&&!c.ctrlKey&&c.relatedTarget===null,"
         "'what an init leaves out takes its default');"
         "throws(()=>c.initMouseEvent('x',true,true,{}),'a bad view');assert(c.type==='click','left as it was');"
+        "c.initMouseEvent('click',false,false,null,2,3,3,3,3,false,true);"
+        "throws(()=>c.initMouseEvent('x',true,true,window,5,1,1,1,1,true,false,false,false,0,{}),'a bad last argument');"
+        "assert(c.type==='click'&&c.detail===2&&c.clientX===3&&!c.ctrlKey&&c.altKey&&c.view===null,"
+        "'every argument is converted before any is set');"
         "var nt;try{document.body.dispatchEvent(document.createEvent('MouseEvent'))}catch(e){nt=e.name}"
         "assert(nt==='InvalidStateError','createEvent\\'s is not initialized: '+nt);"
         "throws(()=>UIEvent.prototype.initUIEvent.call(c),'initUIEvent needs a type');"
@@ -348,6 +359,13 @@ static void dom_modern_cases(void)
         "c2.disabled=false;c2.click();assert(sent===0&&clicked===1&&c2.checked,"
         "kind+': its own activation, not the button\\'s around it');"
         "b2.click();assert(sent===1,kind+': the button still submits');f2.remove()}"
+        /* The activation's ancestor stays readable when a listener takes
+         * its subtree out of the tree; the link has no wrapper of its own. */
+        "var holder=document.createElement('div');document.body.append(holder);"
+        "holder.innerHTML='<a href=\"#gone\"><span>t</span></a>';var sp2=holder.querySelector('span');"
+        "sp2.addEventListener('click',()=>{document.documentElement.appendChild(sp2);holder.innerHTML=''});"
+        "sp2.click();assert(sp2.parentNode===document.documentElement&&holder.childNodes.length===0);"
+        "sp2.remove();holder.remove();"
         "form.remove();",
         "modern-on-ui-events");
     /* 0f's P1b lists: NodeList apart from HTMLCollection, and the names of
