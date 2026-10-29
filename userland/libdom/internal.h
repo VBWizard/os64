@@ -1429,4 +1429,24 @@ int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *cop
  * records and definitions' memory after the engine. */
 void d_custom_drain(os64_dom_t *dom);
 void d_custom_free(os64_dom_t *dom);
+/* THE [CEReactions] TABLE (ce_reactions.inc, written by
+ * tools/ce_reactions.py from the standard's IDL): a row's interface, its
+ * member, and its kind (METHOD, SETTER, EXOTIC for a special operation no
+ * prototype member is, ALL_SETTERS for every setter of the interface's
+ * prototype). What install made of each row is its state: WRAPPED,
+ * SHARED (one member another row wrapped, reached through a mixin),
+ * ABSENT (libdom has no such member), UNWRAPPABLE (an exotic path). For
+ * the DOM host, which holds the members it expects to be wrapped to it, and
+ * reads each row as "Interface.member" and its state as a word ("wrapped",
+ * "shared", "absent", "unwrappable") so it needs none of these types. */
+enum { D_CE_METHOD, D_CE_SETTER, D_CE_EXOTIC, D_CE_ALL_SETTERS };
+enum { D_CE_ABSENT, D_CE_WRAPPED, D_CE_SHARED, D_CE_UNWRAPPABLE };
+typedef struct {
+    const char *interface, *member;
+    uint8_t kind;
+} DReactionRow;
+size_t d_reactions_rows(void);
+bool d_reactions_row_name(size_t i, char *out, size_t cap);
+const char *d_reactions_row_state(const os64_dom_t *dom, size_t i);
+size_t d_reactions_wrapped(const os64_dom_t *dom);
 #endif

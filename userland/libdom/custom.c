@@ -23,9 +23,11 @@
  * for the backup element queue, and in synchronous construction inside
  * createElement.
  *
- * A member that does not push a queue of its own still works: with the
- * reaction stack empty its reactions go to the backup element queue,
- * which the standard processes at the next microtask checkpoint. Between
+ * Every [CEReactions] member the standard's IDL names is wrapped so that it
+ * pushes a queue of its own ([CEReactions], below). A change no wrapper
+ * reaches (an exotic setter, dataset's) still works: with the reaction
+ * stack empty its reactions go to the backup element queue, which the
+ * standard processes at the next microtask checkpoint. Between
  * tasks (the parser's insertions) no checkpoint is coming, so the queue is
  * OWED: the host runs it with os64_dom_reactions_run, and
  * os64_dom_timer_next answers "now" until it has (decision 6). */
@@ -114,6 +116,10 @@ struct DCustomState {
     const os64_html_node_t *moving_document;
     /* What os64_dom_reactions_run calls inside its task. */
     DValue *runner;
+    /* What install made of each [CEReactions] row (D_CE_WRAPPED and the
+     * rest), and how many members it wrapped, for the DOM host. */
+    uint8_t *row_states;
+    size_t wrapped;
 };
 
 static int registry_mark;
@@ -665,6 +671,12 @@ int d_reactions_pop(os64_dom_t *dom, JSContext *ctx)
     /* Popped before it runs, as the standard pops it: what its reactions
      * cause goes to the queue below, or the backup queue. */
     DElementQueue q = s->stack[--s->depth];
+    /* Most wrapped calls queue nothing: an empty queue, with nothing lost
+     * to report, has nothing to run and nothing to let go of. */
+    if (q.count == 0 && s->lost == 0) {
+        d_free(dom, q.items);
+        return 0;
+    }
     /* A member that threw still runs its reactions, then throws: the
      * exception is set aside meanwhile. One the runtime made uncatchable is
      * never taken, and nothing more runs. */
@@ -1204,8 +1216,244 @@ static JSValue registry_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     }
 }
 
+/* ── [CEReactions] (cut b2) ──────────────────────────────────────────── *
+ *
+ * Every [CEReactions] member the standard's IDL names (tools/ce_reactions.py
+ * writes the table from WPT's dom.idl, html.idl and cssom.idl) is wrapped by
+ * one trampoline at install: it pushes an element queue, calls the member,
+ * and pops the queue, which runs what the member queued before it returns,
+ * and though it threw (d_reactions_pop). A method's function is replaced;
+ * an accessor keeps its getter, so a read pays nothing, and gets a wrapped
+ * setter. A wrapper keeps the original's name, length and property
+ * attributes, and holds the original as its data. */
+
+static const DReactionRow kReactions[] = {
+#include "ce_reactions.inc"
+};
+
+size_t d_reactions_rows(void)
+{
+    return sizeof(kReactions) / sizeof(kReactions[0]);
+}
+
+bool d_reactions_row_name(size_t i, char *out, size_t cap)
+{
+    if (i >= d_reactions_rows() || out == NULL || cap == 0) return false;
+    os64_snprintf(out, cap, "%s.%s", kReactions[i].interface, kReactions[i].member);
+    return true;
+}
+
+const char *d_reactions_row_state(const os64_dom_t *dom, size_t i)
+{
+    static const char *const kStates[] = {"absent", "wrapped", "shared", "unwrappable"};
+    const struct DCustomState *s = dom != NULL ? dom->custom : NULL;
+    return s != NULL && s->row_states != NULL && i < d_reactions_rows() ? kStates[s->row_states[i]] : "absent";
+}
+
+/* data[0] is the binding's anchor (d_callback), data[1] the original. */
+static JSValue trampoline(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                          JSValue *data)
+{
+    (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (d_reactions_push(dom, ctx) < 0) return JS_EXCEPTION;
+    JSValue result = JS_Call(ctx, data[1], self, argc, argv);
+    if (d_reactions_pop(dom, ctx) < 0) {
+        JS_FreeValue(ctx, result);
+        return JS_EXCEPTION;
+    }
+    return result;
+}
+
+/* A wrapper for `original`, named and as long as it is. */
+static JSValue wrapper_for(os64_dom_t *dom, JSContext *ctx, JSValueConst original)
+{
+    int32_t length = 0;
+    JSValue value = JS_GetPropertyStr(ctx, original, "length");
+    if (JS_IsException(value) || JS_ToInt32(ctx, &length, value) < 0) {
+        JS_FreeValue(ctx, value);
+        return JS_EXCEPTION;
+    }
+    JS_FreeValue(ctx, value);
+    JSValue data[2] = {dom->anchor->value, original};
+    JSValue wrapper = JS_NewCFunctionData(ctx, trampoline, length, 0, 2, data);
+    if (JS_IsException(wrapper)) return wrapper;
+    JSValue name = JS_GetPropertyStr(ctx, original, "name");
+    if (JS_IsException(name) || JS_DefinePropertyValueStr(ctx, wrapper, "name", name, JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(ctx, wrapper);
+        return JS_EXCEPTION;
+    }
+    return wrapper;
+}
+
+/* The members wrapped so far, by the object that has them and the key:
+ * mixin rows (ParentNode's append on Document, Element and
+ * DocumentFragment) can reach one member through several interfaces, and
+ * it is wrapped once. Chained in buckets, since install meets every CSS
+ * property's setter. Each key is held by the property it names. */
+#define D_WRAPPED_BUCKETS 512
+typedef struct DWrapped {
+    struct DWrapped *next;
+    void *owner;
+    JSAtom key;
+} DWrapped;
+typedef struct {
+    DWrapped *buckets[D_WRAPPED_BUCKETS];
+    size_t count;
+} DWrapList;
+
+static size_t wrapped_bucket(const void *owner, JSAtom key)
+{
+    return (((uintptr_t)owner >> 4) ^ (uintptr_t)key * 2654435761u) % D_WRAPPED_BUCKETS;
+}
+
+static bool wrapped_already(const DWrapList *list, JSValueConst owner, JSAtom key)
+{
+    for (const DWrapped *w = list->buckets[wrapped_bucket(JS_VALUE_GET_PTR(owner), key)]; w != NULL; w = w->next)
+        if (w->owner == JS_VALUE_GET_PTR(owner) && w->key == key) return true;
+    return false;
+}
+
+static bool wrapped_add(os64_dom_t *dom, DWrapList *list, JSValueConst owner, JSAtom key)
+{
+    DWrapped *w = d_alloc(dom, sizeof(*w));
+    if (w == NULL) return false;
+    w->owner = JS_VALUE_GET_PTR(owner);
+    w->key = key;
+    size_t at = wrapped_bucket(w->owner, key);
+    w->next = list->buckets[at];
+    list->buckets[at] = w;
+    list->count++;
+    return true;
+}
+
+static void wrapped_free(os64_dom_t *dom, DWrapList *list)
+{
+    for (size_t i = 0; i < D_WRAPPED_BUCKETS; i++)
+        while (list->buckets[i] != NULL) {
+            DWrapped *next = list->buckets[i]->next;
+            d_free(dom, list->buckets[i]);
+            list->buckets[i] = next;
+        }
+}
+
+/* Wraps `key` where `from`'s prototype chain has it, as `kind` says: 1
+ * wrapped now, 0 wrapped already through another row, -2 absent or not
+ * the kind of member the row names, -1 with an exception pending. */
+static int wrap_member(os64_dom_t *dom, JSContext *ctx, JSValueConst from, JSAtom key, int kind, DWrapList *list)
+{
+    JSValue owner = JS_DupValue(ctx, from);
+    JSPropertyDescriptor desc;
+    int found = 0;
+    while (JS_IsObject(owner)) {
+        found = JS_GetOwnProperty(ctx, &desc, owner, key);
+        if (found != 0) break;
+        JSValue up = JS_GetPrototype(ctx, owner);
+        JS_FreeValue(ctx, owner);
+        owner = up;
+        if (JS_IsException(owner)) return -1;
+    }
+    int status = -2;
+    if (found < 0) status = -1;
+    else if (found > 0) {
+        bool method = kind == D_CE_METHOD && !(desc.flags & JS_PROP_GETSET) && JS_IsFunction(ctx, desc.value);
+        bool setter = kind == D_CE_SETTER && (desc.flags & JS_PROP_GETSET) && JS_IsFunction(ctx, desc.setter);
+        if ((method || setter) && wrapped_already(list, owner, key)) status = 0;
+        else if ((method || setter) && !wrapped_add(dom, list, owner, key)) {
+            d_error(ctx, "QuotaExceededError", "Custom element reactions quota exceeded");
+            status = -1;
+        } else if (method || setter) {
+            JSValue wrapper = wrapper_for(dom, ctx, method ? desc.value : desc.setter);
+            int flags = desc.flags & (JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+            int defined = -1;
+            if (!JS_IsException(wrapper))
+                defined = method
+                    ? JS_DefinePropertyValue(ctx, owner, key, wrapper, flags)
+                    : JS_DefinePropertyGetSet(ctx, owner, key, JS_DupValue(ctx, desc.getter), wrapper,
+                                              flags & ~JS_PROP_WRITABLE);
+            status = defined < 0 ? -1 : 1;
+        }
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+    }
+    JS_FreeValue(ctx, owner);
+    return status;
+}
+
+/* Every setter CSSStyleDeclaration's prototype has itself: its property
+ * attributes, which CSSOM makes [CEReactions] as a class. */
+static int wrap_all_setters(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, DWrapList *list)
+{
+    JSPropertyEnum *names = NULL;
+    uint32_t n = 0;
+    if (JS_GetOwnPropertyNames(ctx, &names, &n, prototype, JS_GPN_STRING_MASK) < 0) return -1;
+    int status = 0;
+    for (uint32_t i = 0; i < n && status >= 0; i++)
+        if (wrap_member(dom, ctx, prototype, names[i].atom, D_CE_SETTER, list) == -1) status = -1;
+    JS_FreePropertyEnum(ctx, names, n);
+    return status;
+}
+
+/* The table, row by row, against the interfaces the rows before this one
+ * installed: each row's state is kept for the DOM host, which names the
+ * members it expects wrapped and the exotic paths no wrapper reaches. */
+static int reactions_wrap(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    struct DCustomState *s = dom->custom;
+    size_t rows = d_reactions_rows();
+    s->row_states = d_alloc(dom, rows);
+    DWrapList *list = d_alloc(dom, sizeof(*list));
+    if (s->row_states == NULL || list == NULL) {
+        d_free(dom, list);
+        d_error(ctx, "QuotaExceededError", "Custom element reactions quota exceeded");
+        return -1;
+    }
+    os64_memset(list, 0, sizeof(*list));
+    int status = 0;
+    for (size_t i = 0; i < rows && status == 0; i++) {
+        const DReactionRow *row = &kReactions[i];
+        s->row_states[i] = D_CE_ABSENT;
+        if (row->kind == D_CE_EXOTIC) {
+            s->row_states[i] = D_CE_UNWRAPPABLE;
+            continue;
+        }
+        JSValue interface = JS_GetPropertyStr(ctx, global, row->interface);
+        JSValue prototype = JS_IsObject(interface) ? JS_GetPropertyStr(ctx, interface, "prototype") : JS_UNDEFINED;
+        JS_FreeValue(ctx, interface);
+        if (JS_IsException(prototype)) {
+            status = -1;
+            break;
+        }
+        if (JS_IsObject(prototype)) {
+            if (row->kind == D_CE_ALL_SETTERS) {
+                status = wrap_all_setters(dom, ctx, prototype, list);
+                s->row_states[i] = D_CE_WRAPPED;
+            } else {
+                JSAtom key = JS_NewAtom(ctx, row->member);
+                int wrapped = key == JS_ATOM_NULL ? -1 : wrap_member(dom, ctx, prototype, key, row->kind, list);
+                JS_FreeAtom(ctx, key);
+                if (wrapped == -1) status = -1;
+                else if (wrapped >= 0) s->row_states[i] = wrapped == 1 ? D_CE_WRAPPED : D_CE_SHARED;
+            }
+        }
+        JS_FreeValue(ctx, prototype);
+    }
+    s->wrapped = list->count;
+    wrapped_free(dom, list);
+    d_free(dom, list);
+    return status;
+}
+
+size_t d_reactions_wrapped(const os64_dom_t *dom)
+{
+    return dom != NULL && dom->custom != NULL ? dom->custom->wrapped : 0;
+}
+
 /* The custom elements row (modern.c): CustomElementRegistry, an Illegal
- * constructor; window.customElements, [SameObject]; and the listener, so
+ * constructor; window.customElements, [SameObject]; the [CEReactions]
+ * wrappers over the members the rows before it made; and the listener, so
  * everything here exists only with the Modern Web switch on. The
  * HTMLElement constructor is the interfaces row's, which answers Illegal
  * constructor until a definition names its new.target. */
@@ -1239,6 +1487,7 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (s->runner == NULL ||
         d_held_getter(dom, ctx, global, "customElements", registry, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE) < 0)
         return -1;
+    if (reactions_wrap(dom, ctx, global) < 0) return -1;
     os64_html_observe(dom->document, changed, dom);
     return 0;
 }
@@ -1323,6 +1572,7 @@ void d_custom_free(os64_dom_t *dom)
     for (size_t i = 0; i < s->depth; i++) d_free(dom, s->stack[i].items);
     d_free(dom, s->stack);
     d_free(dom, s->backup.items);
+    d_free(dom, s->row_states);
     d_free(dom, s);
     dom->custom = NULL;
 }

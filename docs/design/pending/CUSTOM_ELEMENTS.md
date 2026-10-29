@@ -361,17 +361,24 @@ compare over the list. GitHub defines about a hundred.
   - When the original throws, the wrapper still pops the queue and runs
     its reactions, then rethrows. The standard's `[CEReactions]` steps
     cover a member's exceptions too.
-  - A row naming a member libdom lacks is skipped. The DOM host lists the
-    members it expects to be wrapped and fails when one is not, so a
-    member gained later that is not in the table is caught by the
-    reactions tests, not by a reader.
-  - **Exotic paths cannot be wrapped**, and the host's list names each
-    one with that reason: `DOMStringMap`'s setter and deleter
-    (`dataset.x = y`, `delete dataset.x`, `attr.c`'s exotic class), and
-    the indexed and named exotic paths of the same shape. Their reactions
-    reach the backup queue by design and run at the checkpoint. The style
-    object's `cssText`, `setProperty` and camel-cased properties are
-    prototype accessors, so the table reaches them.
+  - A row's member is wrapped where its interface's prototype chain has
+    it, and once, however many rows reach it (a mixin's member included
+    by several interfaces, or one libdom keeps on an ancestor). A row
+    naming a member libdom lacks is skipped, and a member libdom gains
+    later that the table names is wrapped with no other change. What
+    install made of each row is kept, and the DOM host holds the members
+    it expects to be wrapped to it.
+  - **Exotic paths cannot be wrapped**: the special operations, which no
+    prototype member is. The table names four, and the DOM host names
+    each: `DOMStringMap`'s setter and deleter (`dataset.x = y`,
+    `delete dataset.x`, `attr.c`'s exotic class), and the indexed setters
+    of `HTMLOptionsCollection` and `HTMLSelectElement`. Their reactions
+    reach the backup queue by design and run at the checkpoint.
+  - **CSS properties.** The style object's `cssText`, `setProperty` and
+    `removeProperty` are rows of their own. Its property attributes
+    (camel-cased, dashed, webkit-cased) are `[CEReactions]` in CSSOM as a
+    class, not one by one, so the table gives `CSSStyleDeclaration` one
+    row that wraps every setter its prototype has.
 - **Where reactions come from.** The listener (decision 2) handles three
   kinds of change.
   - **CHILDREN, insertion:** if the target is connected, each inclusive
@@ -503,11 +510,15 @@ records the standard names.
   parser-made element is upgraded, not constructed bare. A constructor
   that reads its own attributes in its body sees them present, and
   `attributeChangedCallback` fires once for each.
-- **The trampoline adds one call** to every wrapped method and setter. A
-  `[CEReactions]` member already does tree work, so one more call there
-  is noise. Cut b's numbers have to show that on the scripted-page
-  host's mutation fixtures, and if it is not noise, the measurement says
-  so.
+- **The trampoline adds one call** to every wrapped method and setter,
+  and the measurement says it is not noise on a tight loop. The DOM
+  host times 20,000 rounds of `setAttribute`, `appendChild` and
+  `removeChild` (best of three, under the sanitizers): with the switch
+  on it is 17–23% slower than off, which is at most half a microsecond a
+  wrapped call. That is an upper bound, since the switch changes more
+  than the wrappers. An empty element queue, which is most calls, leaves
+  the trampoline at once. A page whose script mutates in tight loops pays
+  it. The P5's GitHub record is where it is judged on a real page.
 - **`:defined` turning honest with the switch on** hides the hyphenated
   elements a page hides while they are undefined (above). If a P5 test
   page loses something it showed, that page is behaving the way Chrome
