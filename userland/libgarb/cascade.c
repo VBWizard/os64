@@ -901,7 +901,8 @@ static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t
 static void add_style_rule(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r,
                            uint32_t *order, int32_t sheet)
 {
-    garb_selectors_t *sel = garb_selectors_parse(owner, r->prelude, r->nprelude, c->quirks);
+    garb_selectors_t *sel = garb_selectors_parse(owner, r->prelude, r->nprelude, c->quirks,
+                                                 c->env.modern_off);
     if (sel == NULL)
         return;                         // an invalid selector drops the rule
     garb_item_t *items;
@@ -1163,7 +1164,8 @@ static bool supports_in_parens(garb_cascade_t *c, garb_parsed_t *owner, SCur *s)
         return false;
     s->i++;
     if (t->kind == GARB_FUNCTION && ieq(t->text, t->len, "selector")) {
-        return garb_selectors_parse(owner, t->children, t->nchildren, c->quirks) != NULL;
+        return garb_selectors_parse(owner, t->children, t->nchildren, c->quirks,
+                                    c->env.modern_off) != NULL;
     }
     if (t->kind != GARB_BLOCK || t->open != '(')
         return false;

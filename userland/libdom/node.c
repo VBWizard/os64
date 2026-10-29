@@ -55,27 +55,6 @@ static const uint8_t kTagKinds[OS64_HTML_TAG_COUNT] = {
     [OS64_HTML_TAG_SVG] = D_PROTO_UNKNOWN,
 };
 
-/* A valid custom element name (HTML § 4.13.2): a lowercase ASCII letter,
- * then name characters with a hyphen among them, and none of the names
- * SVG and MathML already use. A byte past ASCII is taken as one of the
- * name characters, which nearly every code point past ASCII is. */
-static bool custom_element_name(const char *name)
-{
-    static const char *const kReserved[] = {"annotation-xml", "color-profile", "font-face", "font-face-src",
-                                            "font-face-uri", "font-face-format", "font-face-name", "missing-glyph"};
-    if (name == NULL || name[0] < 'a' || name[0] > 'z') return false;
-    bool hyphen = false;
-    for (const unsigned char *c = (const unsigned char *)name; *c != '\0'; c++) {
-        hyphen = hyphen || *c == '-';
-        if (!(*c >= 0x80 || (*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' ||
-              *c == '_'))
-            return false;
-    }
-    for (size_t i = 0; hyphen && i < sizeof(kReserved) / sizeof(kReserved[0]); i++)
-        if (os64_streq(name, kReserved[i])) return false;
-    return hyphen;
-}
-
 int d_node_kind(const os64_html_node_t *node)
 {
     if (node->kind == OS64_HTML_DOCUMENT) return D_PROTO_DOCUMENT;
@@ -86,9 +65,14 @@ int d_node_kind(const os64_html_node_t *node)
     if (node->kind != OS64_HTML_ELEMENT) return D_PROTO_NODE;
     if (node->ns == OS64_HTML_NS_HTML) {
         /* A name libhtml does not know is HTML's to judge: a custom
-         * element's is HTMLElement's, any other HTMLUnknownElement's. */
+         * element's is HTMLElement's, any other HTMLUnknownElement's. One
+         * whose constructor failed is HTMLUnknownElement's too, which is
+         * what createElement answers then; an upgrade that fails leaves
+         * the wrapper it already had, since this is asked only when a
+         * wrapper is first made. */
         if (node->tag == OS64_HTML_TAG_UNKNOWN)
-            return custom_element_name(node->name) ? D_PROTO_HTML_ELEMENT : D_PROTO_UNKNOWN;
+            return os64_html_custom_name(node->name) && node->ce != OS64_HTML_CE_FAILED
+                ? D_PROTO_HTML_ELEMENT : D_PROTO_UNKNOWN;
         int kind = node->tag < OS64_HTML_TAG_COUNT ? kTagKinds[node->tag] : 0;
         return kind != 0 ? kind : D_PROTO_HTML_ELEMENT;
     }

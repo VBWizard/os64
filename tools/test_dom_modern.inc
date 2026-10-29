@@ -1187,6 +1187,12 @@ static void dom_modern_cases(void)
             "catch(e){bad=e instanceof TypeError}assert(bad,'the brand is checked');"
             "k.remove();a.remove();t.remove();",
             "modern-on-sheets");
+    /* :defined (CUSTOM_ELEMENTS.md): an HTML element with a custom name is
+     * not defined until a definition constructs it; an SVG one is. */
+    dom_script(&f, MODERN_ASSERT
+        "var h=document.createElement('div');h.innerHTML='<x-wait></x-wait><p></p><svg><x-s></x-s></svg>';"
+        "assert(h.querySelector(':not(:defined)')===h.firstChild&&h.querySelectorAll(':defined').length===3);",
+        "modern-on-defined");
     fixture_free(&f);
 
     options = os64_dom_default_options();
@@ -1247,6 +1253,12 @@ static void dom_modern_cases(void)
         "assert(p!==Object.prototype&&Object.getPrototypeOf(p)===Object.prototype&&"
         "Object.getOwnPropertyNames(p).length===0,'an empty level of its own')});",
         "modern-off-absent");
+    /* :defined with the switch off is what it was before the arc: every
+     * element, since nothing can ever define one. */
+    dom_script(&f, MODERN_ASSERT
+        "var h=document.createElement('div');h.innerHTML='<x-wait></x-wait><p></p><svg><x-s></x-s></svg>';"
+        "assert(h.querySelector(':not(:defined)')===null&&h.querySelectorAll(':defined').length===4);",
+        "modern-off-defined");
 
     bool exact = on != NULL && off != NULL;
     for (size_t i = 0; exact && i < noff; i++)

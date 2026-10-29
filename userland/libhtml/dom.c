@@ -621,6 +621,103 @@ static void moved(HDoc *d)
     d->disturbed = true;
 }
 
+/* ── The listener (html.h, THE LISTENER) ─────────────────────────────── */
+
+void os64_html_observe(os64_html_document_t *doc,
+                       void (*changed)(void *opaque, const os64_html_change_t *change), void *opaque)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d)
+        return;
+    d->changed = changed;
+    d->changed_opaque = changed ? opaque : NULL;
+}
+static void tell(HDoc *d, os64_html_change_t *c)
+{
+    c->version = d->version;
+    d->changed(d->changed_opaque, c);
+}
+/* The standard's insert names the sibling before the reference child as it
+ * stood before anything moved, and the node's own place in the parent it is
+ * leaving. A fragment's children are counted here, while they are still
+ * its own. */
+void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *seen)
+{
+    *seen = (HSeen){0};
+    if (!d->changed)
+        return;
+    seen->previous = before ? before->prev : parent->last_child;
+    if (node->kind == FRAGMENT) {
+        seen->first = node->first_child;
+        for (HNode *c = seen->first; c; c = c->next)
+            seen->count++;
+    } else if (node->parent) {
+        seen->from = node->parent;
+        seen->from_prev = node->prev;
+        seen->from_next = node->next;
+    }
+}
+void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *next)
+{
+    if (!d->changed)
+        return;
+    os64_html_change_t c = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = parent, .removed = node,
+                            .nremoved = 1, .previous_sibling = prev, .next_sibling = next};
+    tell(d, &c);
+}
+/* The fragment's record, or the moved node's removal, comes before the
+ * parent's, as the standard queues them. */
+void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *replaced,
+                   const HSeen *seen)
+{
+    if (!d->changed)
+        return;
+    HNode *added = node;
+    size_t nadded = 1;
+    if (node->kind == FRAGMENT) {
+        added = seen->first;
+        nadded = seen->count;
+        if (nadded) {
+            os64_html_change_t drained = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = node,
+                                          .removed = added, .nremoved = nadded};
+            tell(d, &drained);
+        }
+    } else if (seen->from)
+        d_tell_removed(d, seen->from, node, seen->from_prev, seen->from_next);
+    os64_html_change_t c = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = parent,
+                            .added = nadded ? added : NULL, .nadded = nadded,
+                            .removed = replaced, .nremoved = replaced != NULL,
+                            .previous_sibling = seen->previous, .next_sibling = before};
+    tell(d, &c);
+}
+void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len)
+{
+    if (!d->changed)
+        return;
+    os64_html_change_t c = {.kind = OS64_HTML_CHANGE_TEXT, .target = node, .text_old = old,
+                            .text_old_len = old_len};
+    tell(d, &c);
+}
+/* An attribute's local name is its qualified name past the prefix, and a
+ * prefix only a namespaced attribute has: `foo:bar` in no namespace is all
+ * local name. */
+static void tell_attr(HDoc *d, HNode *e, const char *name, const char *ns, const char *old,
+                      size_t old_len)
+{
+    if (!d->changed)
+        return;
+    const char *local = name;
+    for (const char *c = name; ns && *c; c++)
+        if (*c == ':') {
+            local = c + 1;
+            break;
+        }
+    os64_html_change_t c = {.kind = OS64_HTML_CHANGE_ATTR, .target = e, .attr_name = name,
+                            .attr_ns = ns, .attr_local = local, .attr_old = old,
+                            .attr_old_len = old_len};
+    tell(d, &c);
+}
+
 static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
 {
     bool touched = is_landmark_parent(d, parent) || (node->parent && is_landmark_parent(d, node->parent));
@@ -669,9 +766,12 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
         before = node->next;
     bool stays = node->parent == parent && node->next == before;
     size_t records = d->records;
+    HSeen seen;
+    d_seen(d, parent, node, before, &seen);
     place(d, parent, node, before);
     if (!stays || d->records != records)
         moved(d);
+    d_tell_placed(d, parent, node, before, NULL, &seen);
     if (node->kind == FRAGMENT)
         d_detached(d, node);
     d_collect(d);
@@ -686,17 +786,34 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     int64_t verdict = may_insert(d, parent, node, old, true, NULL);
     if (verdict)
         return verdict;
-    if (node == old)
+    /* The standard's replace adopts the node, which takes it out of its own
+     * parent, BEFORE it takes `old` out (DOM § 4.2.3, WPT's
+     * MutationObserver-childList): so the node's removal names the siblings
+     * it had with `old` still there, and the parent's record names `old`'s,
+     * read before anything moved (the node itself, when it stood just
+     * before `old`). A node replaced by itself is therefore two records: it
+     * leaves, and by the time `old` would be taken out it has no parent, so
+     * it comes back as an insertion with nothing removed. Nothing moves. */
+    if (node == old) {
+        HSeen seen;
+        d_seen(d, parent, node, old->next, &seen);
+        seen.previous = old->prev;
+        d_tell_placed(d, parent, node, old->next, NULL, &seen);
         return OS64_HTML_OK;
+    }
     HNode *before = old->next;
     if (before == node)
         before = node->next;
+    HSeen seen;
+    d_seen(d, parent, node, before, &seen);
+    seen.previous = old->prev;
     moved(d);
     bool touched = is_landmark_parent(d, parent);
     take_out(d, old, NULL);
     place(d, parent, node, before);
     if (touched)
         landmarks(d, NULL);
+    d_tell_placed(d, parent, node, before, old, &seen);
     d_detached(d, old);
     if (node->kind == FRAGMENT)
         d_detached(d, node);
@@ -714,10 +831,12 @@ int64_t os64_html_remove(os64_html_document_t *doc, HNode *node)
     if (!d->pub.is_xml && node->parent == &d->root && node->kind == ELEMENT)
         return OS64_HTML_ROOT_REQUIRED;
     bool touched = is_landmark_parent(d, node->parent);
+    HNode *parent = node->parent, *prev = node->prev, *next = node->next;
     moved(d);
     take_out(d, node, NULL);
     if (touched)
         landmarks(d, NULL);
+    d_tell_removed(d, parent, node, prev, next);
     d_detached(d, node);
     d_collect(d);
     return OS64_HTML_OK;
@@ -795,10 +914,13 @@ void d_seat_html(HDoc *d)
 {
     if (child_of_kind(&d->root, ELEMENT, NULL, NULL))
         return;
+    HSeen seen;
+    d_seen(d, &d->root, &d->html, NULL, &seen);
     h_attach(d, &d->root, NULL, &d->html);
     d->version++;
     if (d->disturbed)
         landmarks(d, NULL);
+    d_tell_placed(d, &d->root, &d->html, NULL, NULL, &seen);
 }
 
 /* ── New nodes ───────────────────────────────────────────────────────── */
@@ -1073,6 +1195,7 @@ int64_t d_attr_add(HDoc *d, HNode *e, const HAttr *a)
     while (*slot)
         slot = &(*slot)->next;
     *slot = fresh;
+    tell_attr(d, e, fresh->name, fresh->ns, NULL, 0);
     return OS64_HTML_OK;
 }
 /* A listed control was given a `form` attribute, or a new value for one:
@@ -1094,6 +1217,39 @@ static bool attrs_equal(const HAttr *a, const HAttr *b)
     return !a && !b;
 }
 
+/* One record for each change as it was applied, in order, to `had`, the
+ * list the element had before: a set is told whether or not it changed the
+ * value, a remove only when there was something to remove. A set keeps the
+ * namespace of a record it replaces, and a name removed and set again comes
+ * back in none, as set_attrs builds it. */
+static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
+                       const os64_html_attr_change_t *changes, size_t count)
+{
+    if (!d->changed)
+        return;
+    for (size_t i = 0; i < count; i++) {
+        const os64_html_attr_change_t *c = &changes[i];
+        const HAttr *a = had;
+        while (a && !h_eq(a->name, c->name))
+            a = a->next;
+        const char *ns = a ? a->ns : NULL, *value = a ? a->value : NULL;
+        size_t len = a ? h_len(a->value) : 0;
+        for (size_t j = 0; j < i; j++) {
+            if (!h_eq(changes[j].name, c->name))
+                continue;
+            if (changes[j].remove) {
+                ns = value = NULL;
+                len = 0;
+            } else {
+                value = changes[j].value ? changes[j].value : "";
+                len = changes[j].value_len;
+            }
+        }
+        if (!c->remove || value)
+            tell_attr(d, e, c->name, ns, value, len);
+    }
+}
+
 int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
                             const os64_html_attr_change_t *changes, size_t count)
 {
@@ -1111,8 +1267,10 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
         const HAttr *a = *attr_slot(e, c->name);
         effective |= c->remove ? a != NULL : !a || !same_bytes(a->value, c->value, c->value_len);
     }
-    if (!effective)
+    if (!effective) {
+        tell_attrs(d, e, e->attrs, changes, count);
         return OS64_HTML_OK;
+    }
     size_t peak = d->pub.peak_arena_bytes;
     int64_t why = OS64_HTML_OK;
     HNode prospective = {0};
@@ -1143,6 +1301,7 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     if (attrs_equal(e->attrs, prospective.attrs)) {
         attrs_discard(d, prospective.attrs);
         d->pub.peak_arena_bytes = peak;
+        tell_attrs(d, e, e->attrs, changes, count);
         return OS64_HTML_OK;
     }
     HAttr *old = e->attrs;
@@ -1152,15 +1311,16 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     *h_word(e) |= H_ATTRS_PRIVATE;
     d->version++;
+    for (size_t i = 0; i < count; i++)
+        if (!changes[i].remove)
+            form_attr_set(d, e, changes[i].name);
+    tell_attrs(d, e, old, changes, count);
     if (private)
         while (old) {
             HAttr *next = old->next;
             d_retire(d, old);
             old = next;
         }
-    for (size_t i = 0; i < count; i++)
-        if (!changes[i].remove)
-            form_attr_set(d, e, changes[i].name);
     return OS64_HTML_OK;
 }
 
@@ -1175,9 +1335,11 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
     const HAttr *existing = *attr_slot(e, name);
     /* The value it has already: no string a reader holds is replaced, and
      * the version stays. A control with a `form` attribute has no record to
-     * void. */
-    if (existing && same_bytes(existing->value, value, value_len))
+     * void. The listener is told all the same, as the standard tells. */
+    if (existing && same_bytes(existing->value, value, value_len)) {
+        tell_attr(d, e, name, existing->ns, existing->value, h_len(existing->value));
         return OS64_HTML_OK;
+    }
     /* The new record first, so that a failure after it has one block to give
      * back and a failure before it has none. */
     int64_t why = OS64_HTML_OK;
@@ -1195,8 +1357,9 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
     fresh->next = old ? old->next : NULL;
     *slot = fresh;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
-    d_retire(d, old);
     form_attr_set(d, e, name);
+    tell_attr(d, e, name, fresh->ns, old ? old->value : NULL, old ? h_len(old->value) : 0);
+    d_retire(d, old);
     return OS64_HTML_OK;
 }
 
@@ -1215,6 +1378,7 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *n
     d->version++;
     *slot = old->next;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
+    tell_attr(d, e, name, old->ns, old->value, h_len(old->value));
     d_retire(d, old);
     return OS64_HTML_OK;
 }
@@ -1227,22 +1391,62 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
         return OS64_HTML_BAD_ARGUMENT;
     if (!d_text_ok(utf8, len))
         return OS64_HTML_BAD_TEXT;
-    /* The text it has already: as in set_attr, nothing is replaced. */
-    if (same_bytes(n->text, utf8, len))
+    /* The text it has already: as in set_attr, nothing is replaced, and the
+     * listener is told. */
+    if (same_bytes(n->text, utf8, len)) {
+        d_tell_text(d, n, n->text, n->text_len);
         return OS64_HTML_OK;
+    }
     int64_t why = OS64_HTML_OK;
     char *bytes = bytes_new(d, utf8, len, &why);
     if (!bytes)
         return why;
     /* A buffer with no capacity recorded is a literal or lies in a permanent
      * chunk: it is left where it is and goes with the document. */
+    const char *was = n->text;
+    size_t was_len = n->text_len;
     char *old = *h_word(n) ? (char *)n->text : NULL;
     d->version++;
     n->text = bytes;
     n->text_len = len;
     *h_word(n) = len + 1;
+    d_tell_text(d, n, was, was_len);
     d_retire(d, old);
     return OS64_HTML_OK;
+}
+
+/* ── Custom state (html.h, CUSTOM STATE) ─────────────────────────────── */
+
+int64_t os64_html_set_ce(os64_html_document_t *doc, HNode *e, os64_html_ce_t ce)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !e || !ours(d, e) || e->kind != ELEMENT || (unsigned)ce > OS64_HTML_CE_FAILED)
+        return OS64_HTML_BAD_ARGUMENT;
+    if (e->ce != ce) {
+        d->version++;
+        e->ce = (uint8_t)ce;
+    }
+    return OS64_HTML_OK;
+}
+
+bool os64_html_custom_name(const char *name)
+{
+    static const char *const kReserved[] = {"annotation-xml", "color-profile", "font-face",
+                                            "font-face-src", "font-face-uri", "font-face-format",
+                                            "font-face-name", "missing-glyph"};
+    if (!name || name[0] < 'a' || name[0] > 'z')
+        return false;
+    bool hyphen = false;
+    for (const unsigned char *c = (const unsigned char *)name; *c; c++) {
+        hyphen = hyphen || *c == '-';
+        if (!(*c >= 0x80 || (*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '-' ||
+              *c == '.' || *c == '_'))
+            return false;
+    }
+    for (size_t i = 0; hyphen && i < H_ARRAY(kReserved); i++)
+        if (h_eq(name, kReserved[i]))
+            return false;
+    return hyphen;
 }
 
 /* ── Clone ───────────────────────────────────────────────────────────── */

@@ -64,6 +64,7 @@ struct List {
 struct garb_selectors {
     List list;
     os64_html_quirks_t quirks;
+    bool modern_off;
 };
 
 // ── Reading the prelude ─────────────────────────────────────────────────
@@ -710,7 +711,7 @@ static List *parse_list(Cur *c, bool forgiving, bool relative)
 }
 
 garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t *prelude,
-                                       int32_t n, os64_html_quirks_t quirks)
+                                       int32_t n, os64_html_quirks_t quirks, bool modern_off)
 {
     Parse p = {.arena = owner->arena, .max = garb_arena_max(owner)};
     Cur c = {prelude, n, 0, &p, false, false};
@@ -728,6 +729,7 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
         return NULL;
     s->list = *l;
     s->quirks = quirks;
+    s->modern_off = modern_off;
     return s;
 }
 
@@ -1132,7 +1134,15 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
                    !disabled(el));
         return s->pseudo == P_READ_WRITE ? rw : !rw;
     }
-    case P_DEFINED: return true;
+    // An HTML element with a custom name is defined once its definition has
+    // constructed it, and not while it waits or after its constructor failed
+    // (a failed one has such a name too, or nothing would have tried). With
+    // the switch off, what yonder answered before the arc: an engine with
+    // no custom elements must not hide what nothing can ever define
+    // (CUSTOM_ELEMENTS.md).
+    case P_DEFINED:
+        return sel->modern_off || el->ce == OS64_HTML_CE_CUSTOM ||
+               !(html(el) && os64_html_custom_name(el->name));
     case P_LANG: return lang_matches(s, el);
     case P_DIR: return dir_matches(s, el);
     case P_NOT: return !match_list(sel, s->list, el, scope);

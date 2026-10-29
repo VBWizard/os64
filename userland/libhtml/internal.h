@@ -79,6 +79,9 @@ typedef struct {
     size_t held, pending_units; /* public holds and detached unit identities */
     HNode *live_nodes, *pending_nodes, *waiting_nodes, *free_nodes;
     os64_html_parser_t *parser; /* active parser references protect identity */
+    /* os64_html_observe's listener, or NULL. */
+    void (*changed)(void *opaque, const os64_html_change_t *change);
+    void *changed_opaque;
 } HDoc;
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
@@ -356,6 +359,23 @@ void d_seat_html(HDoc *d);
 bool d_attrs_inherit(HDoc *d, const HNode *from, HNode *to, int64_t *why);
 /* One more attribute on an element that has none of that name. */
 int64_t d_attr_add(HDoc *d, HNode *e, const HAttr *a);
+
+/* What the listener is told (os64_html_observe), by the verbs and by the
+ * parser (dom.c). A link is read in two halves, because the standard's
+ * records name where things stood before the link: `d_seen` before it,
+ * `d_tell_placed` after, with `replaced` the node a replace took out (or
+ * NULL). Each does nothing without a listener. */
+typedef struct {
+    HNode *previous;                     /* the insertion's previous sibling */
+    HNode *from, *from_prev, *from_next; /* the parent a moved node left, its siblings there */
+    HNode *first;                        /* a fragment's children: the first, how many */
+    size_t count;
+} HSeen;
+void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *seen);
+void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *replaced,
+                   const HSeen *seen);
+void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *next);
+void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len);
 /* How many documents the program has begun (core.c). Here so that a test can
  * set it near its end. */
 extern uint32_t h_document_serial;

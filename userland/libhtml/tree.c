@@ -195,12 +195,18 @@ static bool push_open(os64_html_parser_t *p, HNode *n)
  *
  * False when the link was not made. A node that would lie too deep refuses
  * the parse; any other rule leaves the node where it was and the parse goes
- * on, as the standard's parser goes on whatever a script did to its tree. */
+ * on, as the standard's parser goes on whatever a script did to its tree.
+ *
+ * Either way a link made is told to the document's listener, and so is a
+ * node taken out, as a verb's would be (html.h, THE LISTENER). */
 static bool attach(os64_html_parser_t *p, HNode *parent, HNode *before, HNode *n)
 {
     HDoc *d = p->d;
+    HSeen seen;
+    d_seen(d, parent, n, before, &seen);
     if (!d->disturbed) {
         h_attach(d, parent, before, n);
+        d_tell_placed(d, parent, n, before, NULL, &seen);
         return true;
     }
     uint64_t steps = 0;
@@ -208,18 +214,24 @@ static bool attach(os64_html_parser_t *p, HNode *parent, HNode *before, HNode *n
     h_work(p, steps);
     if (verdict == OS64_HTML_TOO_DEEP)
         h_refuse(p, verdict);
+    if (verdict == OS64_HTML_OK)
+        d_tell_placed(d, parent, n, before, NULL, &seen);
     return verdict == OS64_HTML_OK;
 }
 static void detach(os64_html_parser_t *p, HNode *n)
 {
     HDoc *d = p->d;
-    if (!d->disturbed) {
-        h_detach(d, n);
+    HNode *parent = n->parent, *prev = n->prev, *next = n->next;
+    if (!parent)
         return;
+    if (!d->disturbed)
+        h_detach(d, n);
+    else {
+        uint64_t steps = 0;
+        d_unlink(d, n, &steps);
+        h_work(p, steps);
     }
-    uint64_t steps = 0;
-    d_unlink(d, n, &steps);
-    h_work(p, steps);
+    d_tell_removed(d, parent, n, prev, next);
 }
 /* A node the parser moves from where it sits may end in another tree, once
  * a verb has made more than one for it to sit in. `rooted` is asked before
@@ -448,15 +460,24 @@ static void insert_character(os64_html_parser_t *p, uint32_t c)
 
     HNode *n = before ? before->prev : parent->last_child;
 
+    /* A new text node is one insertion, made with its first character
+     * already in it as the standard makes it, so a listener told of it is
+     * told of a node with its data. One whose character cannot be stored
+     * is not linked, and the parse is refused. A character appended to a
+     * node already there is a change of its text, whose old value is the
+     * new text's prefix. */
     if (!n || n->kind != TEXT) {
         n = h_node(p, TEXT);
         if (!n)
             return;
         n->text = "";
-        if (!attach(p, parent, before, n))
-            return;
+        if (h_text_put(p, n, c))
+            attach(p, parent, before, n);
+        return;
     }
-    h_text_put(p, n, c);
+    size_t had = n->text_len;
+    if (h_text_put(p, n, c))
+        d_tell_text(p->d, n, n->text, had);
 }
 static HNode *clone(os64_html_parser_t *p, HNode *old, bool insert)
 {

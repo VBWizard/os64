@@ -6436,6 +6436,33 @@ static bool has(const char *text, const char *needle) { return text!=NULL && str
 /* A page's record as a load makes one (diag_begin): its name claimed in
  * the directory yonder.conf names, when it names one, since a record with
  * no claim is never written. */
+/* The census of custom elements (CUSTOM_ELEMENTS.md): one waiting for a
+ * definition is MISSING by name and count, one its definition constructed
+ * is not counted, one whose constructor failed is the page's FAILED line,
+ * and a name that is no valid custom element name is no custom element. */
+static void custom_census_cases(void) {
+    probe_page("<!doctype html><x-wait></x-wait><x-wait></x-wait><x-made id=m></x-made>"
+        "<x-fail id=f></x-fail><x-fail id=g></x-fail><font-face></font-face><a-b@c></a-b@c>"
+        "<x-mix></x-mix><x-mix id=x></x-mix>",false);
+    os64_html_document_t *doc=g.page.way.doc;
+    check(os64_html_set_ce(doc,probe_id("m"),OS64_HTML_CE_CUSTOM)==OS64_HTML_OK &&
+          os64_html_set_ce(doc,probe_id("f"),OS64_HTML_CE_FAILED)==OS64_HTML_OK &&
+          os64_html_set_ce(doc,probe_id("g"),OS64_HTML_CE_FAILED)==OS64_HTML_OK &&
+          os64_html_set_ce(doc,probe_id("x"),OS64_HTML_CE_FAILED)==OS64_HTML_OK,"census: states set");
+    g.page.diag=yonder_diag_new("https://fixture.test/custom",1,0);
+    diag_observe(&g.page,"when asked");
+    char record[4096];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"MISSING element x-wait (2)")!=NULL && strstr(record,"x-made")==NULL,
+          "census: a custom element waiting is missing, one constructed is not");
+    check(strstr(record,"FAILED element: x-fail (2)")!=NULL && strstr(record,"MISSING element x-fail")==NULL,
+          "census: one whose constructor failed is the page's failure, by name");
+    check(strstr(record,"font-face")==NULL && strstr(record,"a-b@c")==NULL,
+          "census: a reserved name and an invalid one are no custom elements");
+    check(strstr(record,"MISSING element x-mix (1)")!=NULL && strstr(record,"FAILED element: x-mix (1)")!=NULL,
+          "census: one name, one waiting and one failed, is counted on each line");
+    probe_drop();
+}
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
     yonder_diag_t *d=yonder_diag_new(url,seq,0);
     if(d!=NULL && s_diag.dir[0]!='\0') yonder_diag_claim(d,s_diag.dir,false);
@@ -10670,6 +10697,7 @@ int main(void)
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();
+    custom_census_cases();
     svg_cache_window_cases();
     svg_window_cases();
     picture_svg_window_cases();

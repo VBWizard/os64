@@ -595,7 +595,8 @@ static garb_selectors_t *selectors_of(os64_dom_t *dom, JSContext *ctx, JSValueCo
     if (!d_string(dom, ctx, text, &string)) return NULL;
     garb_status_t status = garb_parse_values(string.data, string.length, parsed);
     garb_selectors_t *list = status == GARB_OK && !parsed->incomplete
-        ? garb_selectors_parse(parsed, parsed->values, parsed->nvalues, dom->document->quirks) : NULL;
+        ? garb_selectors_parse(parsed, parsed->values, parsed->nvalues, dom->document->quirks,
+                               !dom->options.modern) : NULL;
     if (list == NULL) {
         bool short_of_memory = status != GARB_OK || parsed->incomplete;
         /* The message names the selector, so a page's record does. */

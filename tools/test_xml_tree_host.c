@@ -162,7 +162,7 @@ static bool matches(const char *selector, const os64_html_node_t *n)
     assert(p.nitems == 1);
     const garb_rule_t *rule = p.items[0].rule;
     garb_selectors_t *sel =
-        garb_selectors_parse(&p, rule->prelude, rule->nprelude, OS64_HTML_NO_QUIRKS);
+        garb_selectors_parse(&p, rule->prelude, rule->nprelude, OS64_HTML_NO_QUIRKS, false);
     assert(sel && garb_selectors_count(sel) == 1);
     bool answer = garb_selector_matches(sel, 0, n);
     garb_free(&p);

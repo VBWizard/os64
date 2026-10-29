@@ -2157,7 +2157,9 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
 // The elements a page has whose content is not drawn (nothing, or a
 // stand-in in its place), and the custom elements nothing defines, counted
 // whole: the tally is taken again at every write and holds the most any
-// look saw. A canvas where scripting is on is also the page's failure, one
+// look saw. A custom element its definition constructed is drawn as any
+// element is; one whose constructor failed is the page's failure, by
+// name. A canvas where scripting is on is also the page's failure, one
 // FAILED line however many it has (libflow lays out its fallback where
 // scripting is off). Enabled inline SVG reports individual render refusals
 // at the paint boundary instead of declaring every SVG missing. A frame
@@ -2174,7 +2176,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, boo
     static const char *const kNothing[] = {"canvas", "video", "audio", "svg", "iframe", "frame", "embed"};
     enum { NOTHING = sizeof(kNothing) / sizeof(kNothing[0]) };
     uint32_t nothing[NOTHING] = {0}, canvases = 0;
-    struct { const char *name; uint32_t n; } custom[DIAG_CUSTOM_MAX];
+    struct { const char *name; uint32_t n; bool failed; } custom[DIAG_CUSTOM_MAX];
     int32_t ncustom = 0;
     const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
     while (n != NULL) {
@@ -2183,14 +2185,17 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, boo
                 nothing[k] +=
                     os64_streq(n->name, kNothing[k]) && (!svg || !os64_streq(kNothing[k], "svg"));
             canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
-            if (n->ns == OS64_HTML_NS_HTML && os64_strchr(n->name, '-') != NULL) {
+            if (n->ns == OS64_HTML_NS_HTML && n->ce != OS64_HTML_CE_CUSTOM &&
+                os64_html_custom_name(n->name)) {
                 int32_t c = 0;
-                while (c < ncustom && !os64_streq(custom[c].name, n->name))
+                while (c < ncustom && !(custom[c].failed == (n->ce == OS64_HTML_CE_FAILED) &&
+                                        os64_streq(custom[c].name, n->name)))
                     c++;
                 if (c < ncustom) {
                     custom[c].n++;
                 } else if (ncustom < DIAG_CUSTOM_MAX) {
                     custom[ncustom].name = n->name;
+                    custom[ncustom].failed = n->ce == OS64_HTML_CE_FAILED;
                     custom[ncustom++].n = 1;
                 }
             }
@@ -2209,8 +2214,12 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, boo
             yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);
     if (scripting && canvases != 0)
         yonder_diag_failed_seen(d, "unsupported", "canvas");
-    for (int32_t c = 0; c < ncustom; c++)
-        yonder_diag_missing_seen(d, "element", custom[c].name, custom[c].n);
+    for (int32_t c = 0; c < ncustom; c++) {
+        if (custom[c].failed)
+            yonder_diag_failed_most(d, "element", custom[c].name, custom[c].n);
+        else
+            yonder_diag_missing_seen(d, "element", custom[c].name, custom[c].n);
+    }
 }
 
 // What the page's cascade passed over (garb_cascade_skips), by its kind.
