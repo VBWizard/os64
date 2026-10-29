@@ -1334,6 +1334,8 @@ static struct {
     os64_ui_action_view_t *action_view;
     os64_ui_menu_model_t *context_menus[CONTEXT_MENUS];
     char context_link[OS64_FETCH_URL_MAX], context_picture[OS64_FETCH_URL_MAX];
+    // Programs this window spawned and has not collected (children_turn).
+    uint32_t children;
     os64_ui_widget_t root, status, view, back, forward, reload, stop;
     // The badge at the right of the status bar: the shown page's MISSING
     // and FAILED counts, the file's own tokens, present only when nonzero.
@@ -9819,23 +9821,35 @@ static const os64_html_node_t *element_of(const os64_html_node_t *node)
     return node;
 }
 
-// The element under a window position, and the link it is in, if any.
-static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link)
+// The element under a window position, and the link it is in, if any; and,
+// in `boxed`, the element whose box was hit, which differs from the answer
+// over an image map: the answer is the region's `area`, the box the
+// picture's.
+static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html_node_t **link,
+                                           const os64_html_node_t **boxed)
 {
     os64_gui_rect_t v = g.view.bounds;
     if (link != NULL)
         *link = NULL;
+    if (boxed != NULL)
+        *boxed = NULL;
     if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
         return NULL;
     const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     if (b == NULL)
         return NULL;
+    if (boxed != NULL)
+        *boxed = element_of(b->node);
     // Where in the picture: the point taken into the box, through any
-    // transform it is drawn through.
+    // transform it is drawn through, and then into the content box the
+    // painter draws the picture in. That is yonder_box_edge's, not the
+    // box's `content`, which libflow leaves empty on an inline picture's
+    // atom.
     flow_point_t at;
     bool in = flow_box_point(b, scroll_now(), x - v.x + g.sx, y - v.y + g.sy, &at);
-    int64_t px = (int64_t)at.x - b->content.x, py = (int64_t)at.y - b->content.y;
-    if (in && px >= 0 && py >= 0 && px < b->content.w && py < b->content.h) {
+    os64_gui_rect_t content = yonder_box_edge(b, b->rect, FLOW_EDGE_CONTENT);
+    int64_t px = (int64_t)at.x - content.x, py = (int64_t)at.y - content.y;
+    if (in && px >= 0 && py >= 0 && px < content.w && py < content.h) {
         double scale = 1000.0 / (g.zoom != 0 ? g.zoom : 1000);
         const os64_html_node_t *area = yonder_image_map_hit(page_doc(&g.page), b->node, px*scale, py*scale);
         if (area != NULL) {
@@ -9848,6 +9862,11 @@ static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_
         *link = l != NULL ? l->node : NULL;
     }
     return element_of(b->node);
+}
+
+static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link)
+{
+    return element_hit(x, y, link, NULL);
 }
 
 // A mouse event of the primary button, the one yonder hands a page: a
@@ -12592,8 +12611,11 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
 // changes or departs under an open menu leaves them meaning what was
 // clicked.
 
-// The link's address as following it would ask for it: the resolved
-// address, then the fragment, as a fragment navigation spells it.
+// The link's address resolved as the page's links are, with its fragment
+// as the page wrote it: the model's fragment is DECODED, for matching an
+// anchor, and spelling that back would copy a different address (`%2520`
+// would come out `%20`). The attribute is the one the model's link came
+// from: `href`, or a frame's `src`.
 static bool context_link_address(const os64_html_node_t *node, char *out, size_t cap)
 {
     const os64_page_t *model = page_model(&g.page);
@@ -12601,10 +12623,11 @@ static bool context_link_address(const os64_html_node_t *node, char *out, size_t
     const os64_page_link_t *l = at >= 0 ? os64_page_link(model, at) : NULL;
     if (l == NULL || l->href.url == NULL)
         return false;
-    int n = l->href.has_fragment && l->href.fragment != NULL
-                ? os64_snprintf(out, cap, "%s#%s", l->href.url, l->href.fragment)
-                : os64_snprintf(out, cap, "%s", l->href.url);
-    return n > 0 && (size_t)n < cap;
+    const os64_html_attr_t *spelled = os64_html_attr(node, "href");
+    if (spelled == NULL)
+        spelled = os64_html_attr(node, "src");
+    return spelled != NULL && spelled->value != NULL &&
+           os64_page_resolve_in(page_doc(&g.page), os64_page_document_url(model), spelled->value, out, cap);
 }
 
 // The address the picture was fetched from, `srcset`'s choice included: the
@@ -12661,10 +12684,22 @@ static void context_open(const char *address)
 {
     char *argv[] = {"/bin/yonder", (char *)address, NULL};
     int64_t pid = os64_spawn(argv[0], argv);
-    if (pid == OS64_SPAWN_TOO_LONG)
+    if (pid > 0)
+        g.children++;
+    else if (pid == OS64_SPAWN_TOO_LONG)
         status_rest("That address is too long to hand to a new window.");
     else if (pid <= 0)
         status_rest("A new window would not start.");
+}
+
+// A child that has finished is collected at the window's next turn, never
+// waited for: the kernel keeps an uncollected child of a living parent, so
+// a window opened and closed over and over would otherwise pile up until
+// this one exits.
+static void children_turn(void)
+{
+    while (g.children > 0 && os64_reap(NULL) > 0)
+        g.children--;
 }
 
 static void context_copy(const char *address, const char *said)
@@ -12749,10 +12784,12 @@ static bool view_context(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *
         return false;
     bool keyboard = ev->type == OS64_GUI_EVENT_KEY_DOWN;
     int32_t x = keyboard ? g.pointer_x : ev->mouse.x, y = keyboard ? g.pointer_y : ev->mouse.y;
-    const os64_html_node_t *link = NULL;
-    const os64_html_node_t *at = element_at(x, y, &link);
+    // The picture is the hit box's element, not the answer: over an image
+    // map the answer is the region, and the picture under it is still one.
+    const os64_html_node_t *link = NULL, *boxed = NULL;
+    (void)element_hit(x, y, &link, &boxed);
     bool has_link = context_link_address(link, g.context_link, sizeof(g.context_link));
-    bool has_picture = context_picture_address(at, g.context_picture, sizeof(g.context_picture));
+    bool has_picture = context_picture_address(boxed, g.context_picture, sizeof(g.context_picture));
     if (!has_link)
         g.context_link[0] = '\0';
     if (!has_picture)
@@ -13558,6 +13595,7 @@ int main(int argc, char **argv)
         bool scripts_ready = script_turn();
         storage_turn();
         cookies_turn();
+        children_turn();
         pictures_settle();
         title_follow();
         before_paint();
