@@ -57,6 +57,7 @@ typedef struct {
     os64_dom_view_provider_t view;
     os64_dom_computed_provider_t computed;
     os64_dom_image_provider_t images;
+    os64_dom_text_provider_t canvas_text;
     os64_dom_history_t history;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, a module that failed (or, with

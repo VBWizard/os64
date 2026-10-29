@@ -8036,6 +8036,20 @@ static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
 
 static os64_dom_image_status_t canvas_source(void *,const os64_html_node_t *,bool,os64_dom_image_view_t *);
 static void canvas_source_release(void *,os64_dom_image_view_t *);
+static Page *page_of_doc(const os64_html_document_t *);
+static os64_font_status_t canvas_text_layout(void *opaque,const os64_font_family_list_t *families,
+    bool bold,bool italic,uint32_t px,const uint8_t *text,size_t length,os64_text_run_t **out)
+{
+    *out=NULL;
+    if(!s_env.text||!s_env.fonts)return OS64_FONT_UNSUPPORTED;
+    flow_family_list_t names={.names=(const flow_family_name_t *)families->names,
+        .count=families->count,.generic=(flow_generic_t)families->generic};
+    os64_text_font_t *const *fonts=NULL;size_t count=0;os64_font_face_info_t info;
+    os64_font_status_t status=s_env.fonts(page_of_doc(opaque),&names,bold,italic,px,&fonts,&count,&info);
+    if(status!=OS64_FONT_OK)return status;
+    os64_text_layout_t options={.fonts=fonts,.font_count=count,.tab_interval=64};
+    return os64_text_layout(s_env.text,text,length,&options,out);
+}
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
@@ -8049,6 +8063,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
+        .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,

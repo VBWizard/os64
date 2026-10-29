@@ -44,9 +44,9 @@ def main():
             'userland/libhtml/include', 'userland/libxml/include', 'userland/libpage/include', 'userland/libpage/upstream/ryu',
             'userland/libgarb/include', 'userland/libfetch/include', 'userland/libgzip/include',
             'userland/libtls/include', 'userland/libway/include')]
-    entries = [(ROOT/'userland/libdraw2d'/name, includes) for name in ('paint.c', 'stroke.c')]
+    entries = [(ROOT/'userland/libdraw2d'/name, includes) for name in ('paint.c', 'stroke.c', 'gradient.c')]
     if args.canvas:
-        entries += [(ROOT/'userland/libcanvas'/name, includes) for name in ('core.c', 'path.c')]
+        entries += [(ROOT/'userland/libcanvas'/name, includes) for name in ('core.c', 'path.c', 'gradient.c')]
     # Read production membership; new source files cannot silently miss the harness.
     membership = (ROOT/'userland/libsvg/library.mk').read_text().replace('\\\n', ' ')
     membership = membership.split('LIBSVG_SRCS := ', 1)[1].splitlines()[0]

@@ -1,7 +1,7 @@
 #include "internal.h"
 static canvas_state_t defaults(void) { return (canvas_state_t){.fill_argb=0xff000000,.global_alpha=1,.fill_alpha=1,
     .stroke_argb=0xff000000,.stroke_alpha=1,.transform={1,0,0,1,0,0},
-    .line={1,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER},.image_smoothing=true}; }
+    .line={1,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER},.text={.font="10px sans-serif",.size=10},.image_smoothing=true}; }
 canvas_options_t canvas_options_default(os64_geometry_memory_t memory)
 {
     return (canvas_options_t){.memory = memory, .max_dimension = 16384,
@@ -45,6 +45,7 @@ static void drain(canvas_context_t *c)
     while (c->saved) {
         Saved *s = c->saved;
         c->saved = s->next;
+        c_style_release(&s->state);
         c_clip_release(c, s->clip);
         c_release(c, s, sizeof(*s));
     }
@@ -82,6 +83,7 @@ static canvas_status_t reset(canvas_context_t *c, uint32_t w, uint32_t h)
     c->surface = (draw2d_surface_t){pixels, w, h, (size_t)w * sizeof(uint32_t), bytes,
                                     DRAW2D_ARGB8_PREMULTIPLIED};
     drain(c);
+    c_style_release(&c->state);
     c_clip_release(c,c->clip);c->clip=NULL;
     c_path_release(c,&c->path);
     c->state = defaults();
@@ -122,6 +124,7 @@ canvas_status_t canvas_destroy(canvas_context_t *c)
     canvas_status_t status = c_enter(c);
     if (status != CANVAS_OK) return status;
     drain(c);
+    c_style_release(&c->state);
     c_clip_release(c,c->clip);
     c_path_release(c,&c->path);
     c_release(c, c->surface.pixels, c->surface.capacity);
@@ -145,6 +148,7 @@ canvas_status_t canvas_save(canvas_context_t *c)
     if (status == CANVAS_OK) {
         Saved *s = storage;
         *s = (Saved){c->saved, c->state, c->clip};
+        canvas_gradient_retain(s->state.fill_gradient);canvas_gradient_retain(s->state.stroke_gradient);
         if(c->clip)++c->clip->references;
         c->saved = s;
         ++c->stats.saved_states;
@@ -158,6 +162,7 @@ canvas_status_t canvas_restore(canvas_context_t *c)
     if (c->saved) {
         Saved *s = c->saved;
         c->saved = s->next;
+        c_style_release(&c->state);
         c->state = s->state;
         c_clip_release(c,c->clip);c->clip=s->clip;
         --c->stats.saved_states;
@@ -174,6 +179,7 @@ canvas_status_t canvas_set_fill_rgb_alpha(canvas_context_t *c, uint32_t rgb, dou
     canvas_status_t status = c_enter(c);
     if (status != CANVAS_OK) return status;
     if (!isfinite(alpha) || alpha < 0 || alpha > 1) return c_leave(c, CANVAS_BAD_ARGUMENT);
+    canvas_gradient_release(c->state.fill_gradient);c->state.fill_gradient=NULL;
     c->state.fill_argb = ((uint32_t)(alpha * 255 + .5) << 24) | (rgb & 0xffffffu);
     c->state.fill_alpha = alpha;
     return c_leave(c, CANVAS_OK);
@@ -336,4 +342,12 @@ canvas_status_t canvas_put_pixels(canvas_context_t *c, const canvas_rgba8_t *sou
     }
     c_damage_union(c, (draw2d_damage_t){dx, dy, dx + w, dy + h});
     return c_leave(c, CANVAS_OK);
+}
+
+canvas_status_t canvas_set_text_style(canvas_context_t *c,const canvas_text_style_t *style)
+{
+    canvas_status_t s=c_enter(c);if(s!=CANVAS_OK)return s;
+    if(!style||style->align>4||style->baseline>5||style->direction>2||
+       !isfinite(style->size)||style->size<0||style->size>1280||style->font[1023])return c_leave(c,CANVAS_BAD_ARGUMENT);
+    c->state.text=*style;return c_leave(c,CANVAS_OK);
 }

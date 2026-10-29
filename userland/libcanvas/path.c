@@ -141,6 +141,7 @@ canvas_status_t canvas_set_stroke(canvas_context_t *c,uint32_t rgb,double a)
 {
     canvas_status_t s=c_enter(c);if(s!=CANVAS_OK)return s;
     if(!isfinite(a)||a<0||a>1)return c_leave(c,CANVAS_BAD_ARGUMENT);
+    canvas_gradient_release(c->state.stroke_gradient);c->state.stroke_gradient=NULL;
     c->state.stroke_argb=((uint32_t)(a*255+.5)<<24)|(rgb&0xffffff);c->state.stroke_alpha=a;
     return c_leave(c,CANVAS_OK);
 }
@@ -339,6 +340,10 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
     if(!b || b->revision!=OS64_GEOMETRY_BACKEND_REVISION ||
        b->struct_size<offsetof(os64_geometry_backend_t,stroke_with_caps)+sizeof(b->stroke_with_caps) ||
        !b->create||!b->destroy||!b->path||!b->stroke_with_caps||!b->raster||!b->release)return CANVAS_UNSUPPORTED;
+    GradientProgram program;draw2d_shader_t shader={&program,c_gradient_sample};
+    canvas_gradient_t *gradient=mode==2?c->state.stroke_gradient:c->state.fill_gradient;
+    if(image||mode==1||mode==3)gradient=NULL;
+    if(gradient){canvas_status_t prepared=c_gradient_prepare(gradient,&c->state.transform,&program);if(prepared!=CANVAS_OK)return prepared;}
     size_t pixels=(size_t)c->surface.width*c->surface.height;
     if(!pixels)return CANVAS_OK;
     if(pixels>c->options.max_draw_pixels)return CANVAS_LIMIT;
@@ -400,7 +405,8 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
         }
     } else if(status==CANVAS_OK) {
         draw2d_damage_t damage;
-        draw2d_status_t result=image?draw2d_paint_image(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,image,
+        draw2d_status_t result=gradient?draw2d_paint_shader(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,&shader,
+            (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},c->options.max_draw_pixels,&damage):image?draw2d_paint_image(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,image,
             (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},
             c->options.max_draw_pixels,&damage):draw2d_paint_mask(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,
             (draw2d_solid_t){mode==2?c->state.stroke_argb:c->state.fill_argb},
@@ -428,7 +434,7 @@ canvas_status_t c_rectangle(canvas_context_t *c,double x,double y,double w,doubl
     if(!isfinite(x)||!isfinite(y)||!isfinite(w)||!isfinite(h) || (mode!=2 && (!w||!h)) || (!w&&!h))
         return c_leave(c,CANVAS_OK);
     Map m=c->state.transform;
-    if(mode!=2 && !c->clip && m.a==1&&m.b==0&&m.c==0&&m.d==1 &&
+    if(mode!=2 && (mode==1||!c->state.fill_gradient) && !c->clip && m.a==1&&m.b==0&&m.c==0&&m.d==1 &&
        (mode==1 || c->state.composite==DRAW2D_SOURCE_OVER)) {
         draw2d_damage_t damage;
         draw2d_status_t result=draw2d_paint_rect(&c->surface,x+m.tx,y+m.ty,w,h,
@@ -497,4 +503,27 @@ canvas_status_t canvas_draw_image(canvas_context_t *c,const draw2d_surface_t *so
     if(status==CANVAS_OK&&!clean)c->origin_clean=false;
     c_path_release(c,&path);c_release(c,copy,bytes);
     return c_leave(c,status);
+}
+
+canvas_status_t canvas_draw_contours(canvas_context_t *c,const Command *commands,size_t count,
+    const Map *placement,bool stroke)
+{
+    canvas_status_t s=c_enter(c);if(s!=CANVAS_OK)return s;
+    if((count&&!commands)||!placement||!finite_map(placement))return c_leave(c,CANVAS_BAD_ARGUMENT);
+    Path path={0};s=reserve(c,&path,count);
+    bool open=false;
+    for(size_t i=0;s==CANVAS_OK&&i<count;++i) {
+        Command command=commands[i];
+        if(command.verb<OS64_GEOMETRY_MOVE||command.verb>OS64_GEOMETRY_CLOSE||
+           (!open&&command.verb!=OS64_GEOMETRY_MOVE)){s=CANVAS_BAD_ARGUMENT;break;}
+        if(command.verb==OS64_GEOMETRY_MOVE)open=true;
+        if(command.verb==OS64_GEOMETRY_CLOSE)open=false;
+        for(unsigned k=0;k<points(command);++k) {
+            command.p[k]=mapped(&c->state.transform,mapped(placement,command.p[k]));
+            if(!isfinite(command.p[k].x)||!isfinite(command.p[k].y))s=CANVAS_LIMIT;
+        }
+        path.commands[path.count++]=command;
+    }
+    if(s==CANVAS_OK)s=render(c,&path,stroke?2:0,false,NULL);
+    c_path_release(c,&path);return c_leave(c,s);
 }

@@ -14,6 +14,8 @@
 2d.state.saverestore.fillStyle.html	save()/restore() restores fillStyle, for a canvas of size (300, 150).
 2d.state.saverestore.font.html	save() does not modify font, for a canvas of size (0, 0).
 2d.state.saverestore.font.html	save() does not modify font, for a canvas of size (300, 150).
+2d.state.saverestore.font.html	save()/restore() restores font, for a canvas of size (0, 0).
+2d.state.saverestore.font.html	save()/restore() restores font, for a canvas of size (300, 150).
 2d.state.saverestore.globalAlpha.html	save() does not modify globalAlpha, for a canvas of size (0, 0).
 2d.state.saverestore.globalAlpha.html	save() does not modify globalAlpha, for a canvas of size (300, 150).
 2d.state.saverestore.globalAlpha.html	save()/restore() restores globalAlpha, for a canvas of size (0, 0).
@@ -54,7 +56,11 @@
 2d.state.saverestore.strokeStyle.html	save()/restore() restores strokeStyle, for a canvas of size (300, 150).
 2d.state.saverestore.textAlign.html	save() does not modify textAlign, for a canvas of size (0, 0).
 2d.state.saverestore.textAlign.html	save() does not modify textAlign, for a canvas of size (300, 150).
+2d.state.saverestore.textAlign.html	save()/restore() restores textAlign, for a canvas of size (0, 0).
+2d.state.saverestore.textAlign.html	save()/restore() restores textAlign, for a canvas of size (300, 150).
 2d.state.saverestore.textBaseline.html	save() does not modify textBaseline, for a canvas of size (0, 0).
 2d.state.saverestore.textBaseline.html	save() does not modify textBaseline, for a canvas of size (300, 150).
+2d.state.saverestore.textBaseline.html	save()/restore() restores textBaseline, for a canvas of size (0, 0).
+2d.state.saverestore.textBaseline.html	save()/restore() restores textBaseline, for a canvas of size (300, 150).
 2d.state.saverestore.transformation.html	save()/restore() affects the current transformation matrix
 2d.state.saverestore.underflow.html	restore() with an empty stack has no effect

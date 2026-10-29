@@ -271,3 +271,69 @@ os64_font_status_t os64_text_selection(const os64_text_run_t *r, size_t begin,
         r->view.carets[b].x,r->view.line_height-r->view.ascent};
     return OS64_FONT_OK;
 }
+
+/* Both markup and script clients consume positioned contours through this
+ * boundary; glyph identity, fallback and run lifetime stay in the text layer. */
+typedef struct {
+    os64_font_outline_emit_t emit;
+    void *context;
+    size_t count,limit;
+    double x,y;
+} TextOutline;
+static os64_font_status_t text_outline_emit(void *opaque,const os64_geometry_command_t *input)
+{
+    TextOutline *v=opaque;
+    if(v->count==v->limit)return OS64_FONT_LIMIT;
+    ++v->count;
+    os64_geometry_command_t command=*input;
+    unsigned n=command.verb==OS64_GEOMETRY_CLOSE?0:command.verb==OS64_GEOMETRY_CUBIC?3:command.verb==OS64_GEOMETRY_QUADRATIC?2:1;
+    for(unsigned i=0;i<n;++i){command.p[i].x+=v->x;command.p[i].y+=v->y;}
+    return v->emit?v->emit(v->context,&command):OS64_FONT_OK;
+}
+static void text_bounds_union(os64_geometry_bounds_t *a,os64_geometry_bounds_t b)
+{
+    if(b.empty)return;
+    if(a->empty){*a=b;return;}
+    if(b.x_min<a->x_min)a->x_min=b.x_min;
+    if(b.y_min<a->y_min)a->y_min=b.y_min;
+    if(b.x_max>a->x_max)a->x_max=b.x_max;
+    if(b.y_max>a->y_max)a->y_max=b.y_max;
+}
+os64_font_status_t os64_text_run_outline(const os64_text_run_t *run,size_t limit,
+    os64_font_outline_emit_t emit,void *opaque,os64_geometry_bounds_t *out)
+{
+    if(out)*out=(os64_geometry_bounds_t){.empty=true};
+    if(!run||!out)return OS64_FONT_BAD_ARGUMENT;
+    TextOutline v={.emit=emit,.context=opaque,.limit=limit};
+    os64_geometry_bounds_t bounds={.empty=true};
+    const os64_font_backend_t *backend=run->context->backend;
+    for(size_t i=0;i<run->view.glyph_count;++i) {
+        const os64_text_placement_t *g=&run->view.glyphs[i];
+        v.x=g->x/64.0;v.y=g->y/64.0;
+        os64_text_font_t *font=NULL;
+        for(size_t f=0;f<run->font_count;++f)if(run->fonts[f]->identity==g->font_identity){font=run->fonts[f];break;}
+        if(font&&font->face) {
+            if(backend->struct_size<offsetof(os64_font_backend_t,outline)+sizeof(backend->outline)||!backend->outline)return OS64_FONT_UNSUPPORTED;
+            os64_geometry_bounds_t b;
+            os64_font_status_t status=backend->outline(font->face,g->glyph_index,limit-v.count,text_outline_emit,&v,&b);
+            if(status!=OS64_FONT_OK)return status;
+            b.x_min+=v.x;b.x_max+=v.x;b.y_min+=v.y;b.y_max+=v.y;text_bounds_union(&bounds,b);
+        } else {
+            const os64_font_glyph_view_t *image=&run->images[i]->view;
+            for(uint32_t y=0;y<image->height;++y)for(uint32_t x=0;x<image->width;) {
+                if(!image->coverage[(size_t)y*image->stride+x]){++x;continue;}
+                uint32_t start=x++;
+                while(x<image->width&&image->coverage[(size_t)y*image->stride+x])++x;
+                /* Widen signed bearings before adding unsigned row offsets. */
+                double x0=(double)image->left+start,x1=(double)image->left+x,y0=(double)image->top+y;
+                os64_geometry_command_t commands[]={
+                    {.verb=OS64_GEOMETRY_MOVE,.p={{x0,y0}}},{.verb=OS64_GEOMETRY_LINE,.p={{x1,y0}}},
+                    {.verb=OS64_GEOMETRY_LINE,.p={{x1,y0+1}}},{.verb=OS64_GEOMETRY_LINE,.p={{x0,y0+1}}},
+                    {.verb=OS64_GEOMETRY_CLOSE}};
+                for(unsigned k=0;k<5;++k){os64_font_status_t status=text_outline_emit(&v,&commands[k]);if(status!=OS64_FONT_OK)return status;}
+                text_bounds_union(&bounds,(os64_geometry_bounds_t){false,x0+v.x,y0+v.y,x1+v.x,y0+1+v.y});
+            }
+        }
+    }
+    *out=bounds;return OS64_FONT_OK;
+}

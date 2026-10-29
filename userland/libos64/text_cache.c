@@ -47,7 +47,7 @@ void *text_alloc(os64_text_context_t *c, size_t bytes)
 }
 static bool valid_backend(const os64_font_backend_t *b)
 {
-    return b && b->revision==OS64_FONT_BACKEND_REVISION && b->struct_size==sizeof(*b) &&
+    return b && b->revision==OS64_FONT_BACKEND_REVISION && b->struct_size>=offsetof(os64_font_backend_t,glyph_release)+sizeof(b->glyph_release) &&
         b->engine_create && b->engine_destroy && b->engine_stats && b->face_open &&
         b->face_close && b->face_info && b->lookup && b->pair_adjust && b->render &&
         b->glyph_view && b->glyph_release;

@@ -2,6 +2,7 @@
 #define OS64_DOM_CANVAS_H
 #include <dom/dom.h>
 #include <canvas/canvas.h>
+#include <os64/font_provider.h>
 
 typedef enum { OS64_DOM_IMAGE_PENDING, OS64_DOM_IMAGE_READY, OS64_DOM_IMAGE_BROKEN,
                OS64_DOM_IMAGE_REFUSED } os64_dom_image_status_t;
@@ -21,7 +22,16 @@ typedef struct {
     void (*release)(void *,os64_dom_image_view_t *);
     void *opaque;
 } os64_dom_image_provider_t;
+/* The host resolves its existing font families and lays out a retained run.
+ * No script reentry. Inputs are borrowed for the call; success transfers run
+ * ownership to the caller. No drawing state or markup crosses this boundary. */
+typedef struct {
+    os64_font_status_t (*layout)(void *,const os64_font_family_list_t *,bool bold,bool italic,
+        uint32_t pixel_height,const uint8_t *,size_t,os64_text_run_t **);
+    void *opaque;
+} os64_dom_text_provider_t;
 #pragma GCC visibility push(default)
+void os64_dom_set_text(os64_dom_t *,const os64_dom_text_provider_t *);
 void os64_dom_set_images(os64_dom_t *,const os64_dom_image_provider_t *);
 /* Poll wrapped image elements for a completed request. No script enters here;
  * consume marks one event delivered before the host dispatches it as a task. */

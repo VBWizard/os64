@@ -296,6 +296,16 @@ static void bitmap(void)
 }
 
 #ifdef TEXT_REAL
+typedef struct {size_t count,stop;bool open;double last_x;} OutlineProbe;
+static os64_font_status_t outline_probe(void *opaque,const os64_geometry_command_t *cmd)
+{
+    OutlineProbe *p=opaque;
+    if(p->stop&&p->count==p->stop)return OS64_FONT_NO_MEMORY;
+    ++p->count;
+    if(cmd->verb==OS64_GEOMETRY_MOVE){CHECK(!p->open);p->open=true;p->last_x=cmd->p[0].x;}
+    else {CHECK(p->open);if(cmd->verb==OS64_GEOMETRY_CLOSE)p->open=false;}
+    return OS64_FONT_OK;
+}
 static void real_fonts(const char *dir)
 {
     current="real FreeType integration";
@@ -325,6 +335,19 @@ static void real_fonts(const char *dir)
         CHECK(a->view.caret_count==3 && a->view.carets[1].x==a->view.glyphs[1].x);
         printf("real %s: AV advance %d/64, V origin %d/64, ink pixels %zu\n",names[n],a->view.advance_x,a->view.glyphs[1].x,ink);
         os64_text_font_release(f);CHECK(os64_text_destroy(c)==OS64_FONT_BUSY);
+        os64_geometry_bounds_t bounds,measured;OutlineProbe probe={0};
+        CHECK(os64_text_run_outline(a,4096,outline_probe,&probe,&bounds)==OS64_FONT_OK);
+        CHECK(!probe.open&&probe.count>10&&!bounds.empty&&bounds.x_max>20&&bounds.y_min<0);
+        CHECK(os64_text_run_outline(a,4096,NULL,NULL,&measured)==OS64_FONT_OK);
+        CHECK(bounds.x_min==measured.x_min&&bounds.y_min==measured.y_min&&bounds.x_max==measured.x_max&&bounds.y_max==measured.y_max);
+        CHECK(os64_text_run_outline(a,probe.count-1,NULL,NULL,&measured)==OS64_FONT_LIMIT&&measured.empty);
+        size_t commands=probe.count;
+        for(size_t cut=1;cut<commands;++cut) {
+            probe=(OutlineProbe){.stop=cut};
+            CHECK(os64_text_run_outline(a,4096,outline_probe,&probe,&measured)==OS64_FONT_NO_MEMORY&&measured.empty);
+        }
+        CHECK(os64_text_run_outline(a,commands,NULL,NULL,&measured)==OS64_FONT_OK);
+
         CHECK(os64_text_draw(a,&ps,(os64_gui_rect_t){0,0,128,64},4,40,0xffffff)==OS64_FONT_OK);
         os64_text_run_release(a);CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
     }
@@ -436,11 +459,31 @@ static void ranges(void)
         CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
     }
 }
+static void outline_compatibility(void)
+{
+    current="old backend table and bitmap outline fallback";
+    size_t prefix=offsetof(os64_font_backend_t,glyph_release)+sizeof(((os64_font_backend_t *)0)->glyph_release);
+    os64_font_backend_t *old=malloc(prefix);CHECK(old!=NULL);memcpy(old,os64_fake_font_backend(),prefix);
+    memcpy((char *)old+offsetof(os64_font_backend_t,struct_size),&prefix,sizeof(prefix));
+    os64_text_options_t options={.memory={NULL,alloc,release},.backend=old};
+    CHECK(os64_text_create(&options,&c)==OS64_FONT_OK);
+    os64_text_font_t *font=NULL;CHECK(os64_text_font_bitmap(c,&font)==OS64_FONT_OK);
+    os64_text_run_t *run=layout(c,font,(const uint8_t *)"Ag",2,0,0);
+    os64_geometry_bounds_t bounds;
+    CHECK(os64_text_run_outline(run,4096,NULL,NULL,&bounds)==OS64_FONT_OK&&!bounds.empty&&bounds.x_max>8);
+    CHECK(os64_text_run_outline(run,1,NULL,NULL,&bounds)==OS64_FONT_LIMIT&&bounds.empty);
+    os64_text_run_release(run);os64_text_font_release(font);
+    font=open_font(c,'P');run=layout(c,font,(const uint8_t *)"A",1,0,0);
+    CHECK(os64_text_run_outline(run,4096,NULL,NULL,&bounds)==OS64_FONT_UNSUPPORTED&&bounds.empty);
+    os64_text_run_release(run);os64_text_font_release(font);
+    CHECK(os64_text_destroy(c)==OS64_FONT_OK&&live==0);
+    size_t short_size=prefix-1;memcpy((char *)old+offsetof(os64_font_backend_t,struct_size),&short_size,sizeof(short_size));CHECK(os64_text_create(&options,&c)==OS64_FONT_BAD_ARGUMENT);free(old);
+}
 int main(int argc,char **argv)
 {
     (void)argc;(void)argv;
     c=create(0,0);frozen_vectors();CHECK(os64_text_destroy(c)==OS64_FONT_OK);CHECK(live==0);
-    lifetimes();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();
+    lifetimes();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();outline_compatibility();
 #ifdef TEXT_REAL
     CHECK(argc==2);real_fonts(argv[1]);
 #endif

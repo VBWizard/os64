@@ -7,7 +7,9 @@
 [excluded]
 [passing]
 2d.reset.basic.html	reset clears to transparent black
+2d.reset.state.direction.html	check that the state is reset
 2d.reset.state.fill_style.html	check that the state is reset
+2d.reset.state.font.html	check that the state is reset
 2d.reset.state.global_alpha.html	check that the state is reset
 2d.reset.state.global_composite_operation.html	check that the state is reset
 2d.reset.state.image_smoothing_enabled.html	check that the state is reset
@@ -19,3 +21,5 @@
 2d.reset.state.line_width.html	check that the state is reset
 2d.reset.state.miter_limit.html	check that the state is reset
 2d.reset.state.stroke_style.html	check that the state is reset
+2d.reset.state.text_align.html	check that the state is reset
+2d.reset.state.text_baseline.html	check that the state is reset

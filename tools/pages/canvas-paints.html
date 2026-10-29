@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — A Few Choice Words</title>
+<style>
+body{margin:0;background:#eaf1ee;color:#29413d;font:18px sans-serif}
+main{max-width:960px;margin:32px auto;padding:0 24px}h1{font-size:42px;margin:8px 0 12px}h2{font-size:23px;margin:0 0 12px}
+p{line-height:1.5}.eyebrow{color:#678b80;font-size:14px;letter-spacing:3px}.cards{display:flex;flex-wrap:wrap;gap:20px}
+.card{width:400px;flex-shrink:0;padding:20px;border:1px solid #bdd1c9;background:#fffdf5;border-radius:12px}
+canvas{width:100%;height:180px;display:block;background:#dce9e2;border:1px solid #a4bcae}
+button{margin-top:12px;padding:10px 16px;background:#386d61;color:white;border:0;border-radius:6px;font-size:16px}
+.caption{font-size:15px;min-height:66px}.small{font-size:14px;color:#597268}
+</style>
+<main><p class="eyebrow">YONDER / CANVAS 2D / C5</p><h1>A Few Choice Words</h1>
+<p>Light, living colors, and letters with curves of their own.</p>
+<p id="status">Enable Scripts and Modern Web, then reload.</p>
+<div class="cards">
+<section class="card"><h2>1. A little atmosphere</h2><canvas id="glow" width="400" height="180"></canvas>
+<p class="caption">A warm light moves across a cool sky. Its glow comes from a radial gradient, under a solid horizon.</p><button id="light">Move the light</button></section>
+<section class="card"><h2>2. Colors run in the family</h2><canvas id="shared" width="400" height="180"></canvas>
+<p class="caption">Both panels use one gradient. Adding a color also changes the saved drawing state used by the right panel.</p><button id="color">Give them another color</button></section>
+<section class="card"><h2>3. A turn of phrase</h2><canvas id="lettering" width="400" height="180"></canvas>
+<p class="caption">Filled and outlined letters turn together. Their gradient follows the same drawing transform.</p><button id="turn">Turn the phrase</button></section>
+<section class="card"><h2>4. Room for one more word</h2><canvas id="fitted" width="400" height="180"></canvas>
+<p class="caption">The same font fits two messages inside the amber guides. The ruler shows the measured width before fitting.</p><button id="words">Change the message</button><p id="receipt" class="small">Waiting for a few choice words.</p></section>
+</div><p>Try 25%–400% zoom. Click quickly for a little motion; scheduled animation comes later.</p></main>
+<script>
+(function(){
+ function context(id){return document.getElementById(id).getContext('2d');}
+ var glow=context('glow'),shared=context('shared'),lettering=context('lettering'),fitted=context('fitted');
+ var phase=0,edition=0,angle=0,longer=false,gradient;
+ var colors=['#e9b44c','#d98b83','#96cbaa','#94add6','#c7a1cd','#f1d59b'];
+ function light(){
+  phase=(phase+1)%24;var x=200+115*Math.cos(phase*Math.PI/12),y=55+24*Math.sin(phase*Math.PI/12);
+  var sky=glow.createLinearGradient(0,0,0,180);sky.addColorStop(0,'#264b62');sky.addColorStop(1,'#9fbdb0');glow.fillStyle=sky;glow.fillRect(0,0,400,180);
+  var sun=glow.createRadialGradient(x,y,3,x,y,110);sun.addColorStop(0,'#fff6ce');sun.addColorStop(.2,'rgba(255,223,141,.85)');sun.addColorStop(1,'rgba(255,223,141,0)');glow.fillStyle=sun;glow.fillRect(0,0,400,180);
+  glow.fillStyle='#386d61';glow.beginPath();glow.moveTo(0,150);glow.bezierCurveTo(90,95,180,185,270,132);glow.bezierCurveTo(330,110,365,120,400,100);glow.lineTo(400,180);glow.lineTo(0,180);glow.closePath();glow.fill();
+ }
+ function family(){
+  if(edition%24===0){shared.reset();gradient=shared.createLinearGradient(0,0,180,0);gradient.addColorStop(0,'#365f77');gradient.addColorStop(1,'#e9dba4');shared.fillStyle=gradient;shared.save();}
+  gradient.addColorStop(.5,colors[edition++%colors.length]);
+  shared.fillStyle=gradient;shared.fillRect(10,15,180,150);
+  shared.fillStyle='#fffdf5';shared.restore();shared.save();shared.translate(210,0);shared.fillRect(0,15,180,150);shared.resetTransform();
+ }
+ function phrase(){
+  angle=(angle+1)%24;lettering.reset();
+  var ink=lettering.createLinearGradient(-170,0,170,0);ink.addColorStop(0,'#28695f');ink.addColorStop(.5,'#d89043');ink.addColorStop(1,'#775b8b');
+  lettering.fillStyle=ink;lettering.strokeStyle=ink;lettering.lineWidth=1.6;
+  lettering.font='bold 50px sans-serif';lettering.textAlign='center';
+  lettering.save();lettering.translate(200,90);lettering.rotate(Math.sin(angle*Math.PI/12)*.18);
+  lettering.fillText('HELLO',0,-8);lettering.strokeText('CANVAS',0,48);lettering.restore();
+ }
+ function words(){
+  longer=!longer;fitted.reset();fitted.font='38px sans-serif';fitted.textAlign='center';
+  var message=longer?'A little more room for joy':'Hello, world!';var width=fitted.measureText(message).width;
+  fitted.strokeStyle='#d79a36';fitted.lineWidth=2;fitted.beginPath();fitted.moveTo(30,25);fitted.lineTo(30,155);fitted.moveTo(370,25);fitted.lineTo(370,155);fitted.stroke();
+  fitted.fillStyle='#386d61';fitted.fillText(message,200,85,320);
+  fitted.fillStyle='#8baaa1';fitted.fillRect(30,120,Math.min(width,340),5);
+  fitted.font='15px sans-serif';fitted.fillText(Math.round(width)+' px before fitting',200,151);
+  document.getElementById('receipt').textContent='Measured '+Math.round(width)+' px; fitted to at most 320 px.';
+ }
+ document.getElementById('light').onclick=light;document.getElementById('color').onclick=family;
+ document.getElementById('turn').onclick=phrase;document.getElementById('words').onclick=words;
+ light();family();phrase();words();document.getElementById('status').textContent='Four experiments, ready for light, color, and a few choice words.';
+})();
+</script>

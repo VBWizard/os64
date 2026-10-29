@@ -1,6 +1,23 @@
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
 
+const os64_font_backend_t *os64_freetype_real_backend_v1(void);
+static uint8_t *gallery_font_bytes;
+static size_t gallery_font_length;
+static os64_text_font_t *gallery_font;
+static uint32_t gallery_font_size;
+static os64_font_status_t gallery_fonts(void *ctx,const flow_family_list_t *family,bool bold,bool italic,
+    uint32_t px,os64_text_font_t *const **fonts,size_t *count,os64_font_face_info_t *info)
+{
+    (void)ctx;(void)family;(void)bold;(void)italic;
+    if(!gallery_font||gallery_font_size!=px) {
+        os64_text_font_t *fresh=NULL;os64_font_face_options_t options={px,OS64_FONT_HINT_NONE};
+        os64_font_status_t status=os64_text_font_open(probe_text,gallery_font_bytes,gallery_font_length,&options,&fresh);
+        if(status!=OS64_FONT_OK)return status;
+        os64_text_font_release(gallery_font);gallery_font=fresh;gallery_font_size=px;
+    }
+    *fonts=&gallery_font;*count=1;return os64_text_font_info(gallery_font,info);
+}
 static os64_work_t gallery_jobs[32];
 static os64_work_id_t gallery_ids[32];
 static unsigned gallery_queued;
@@ -50,16 +67,24 @@ int main(int argc,char **argv)
     char *html=malloc(n+1);if(!html)return 2;
     if(fread(html,1,n,file)!=(size_t)n)return 2;
     html[n]=0;fclose(file);
+    bool paints=strstr(html,"YONDER / CANVAS 2D / C5")!=NULL;
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
-        .backend=flow_test_backend(),.memory_cap=8*1024*1024};
+        .backend=paints?os64_freetype_real_backend_v1():flow_test_backend(),.memory_cap=32*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     bool images=strstr(html,"YONDER / CANVAS 2D / C4")!=NULL;
     probe_page(html,true);free(html);
+    if(paints) {
+        FILE *font=fopen("userland/libfreetype/fixtures/DejaVuSans.ttf","rb");check(font!=NULL,"gallery font opens");
+        if(!font)return 2;
+        fseek(font,0,SEEK_END);gallery_font_length=ftell(font);rewind(font);gallery_font_bytes=malloc(gallery_font_length);
+        check(fread(gallery_font_bytes,1,gallery_font_length,font)==gallery_font_length,"gallery font reads");fclose(font);
+        s_env.fonts=gallery_fonts;
+    }
     if(images){pool_open=true;g.pool=(os64_work_pool_t *)1;pool_submit_hook=gallery_submit;}
     gallery_pump();
-    const char *names[]={images?"stamps":"route",images?"crop":"turn",images?"echo":"stencil",images?"returned":"scratch"};
-    const char *buttons[]={images?"stamp":"march",images?"inspect":"spin",images?"scoot":"slide",images?"export":"reveal"};
+    const char *names[]={paints?"glow":images?"stamps":"route",paints?"shared":images?"crop":"turn",paints?"lettering":images?"echo":"stencil",paints?"fitted":images?"returned":"scratch"};
+    const char *buttons[]={paints?"light":images?"stamp":"march",paints?"color":images?"inspect":"spin",paints?"turn":images?"scoot":"slide",paints?"words":images?"export":"reveal"};
     for(unsigned i=0;i<4;++i)dump_canvas(argv[2],names[i],"");
     for(unsigned i=0;i<4;++i) {
         os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};
@@ -77,6 +102,7 @@ int main(int argc,char **argv)
         pool_submit_hook=NULL;g.pool=NULL;pool_open=false;
     }
     probe_drop();os64_text_font_release(probe_font);
+    os64_text_font_release(gallery_font);free(gallery_font_bytes);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"gallery text released");
     check(live==0,"gallery heap released");
     printf("Canvas gallery: %u failed\n",failures);return failures?1:0;

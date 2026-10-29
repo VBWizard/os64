@@ -79,6 +79,9 @@ typedef struct {
     os64_geometry_map_t device_to_source;
     bool smoothing;
 } draw2d_image_t;
+/* A validated, infallible straight-sRGB source. sample must not allocate,
+ * reenter painting, mutate storage, or execute script. */
+typedef struct { void *context; uint32_t (*sample)(void *,double,double); } draw2d_shader_t;
 #pragma GCC visibility push(default)
 /* Empty surfaces may have NULL storage. Nonempty surfaces require aligned
  * storage/stride, nonoverflowing row bounds and sufficient capacity. */
@@ -108,5 +111,7 @@ draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *cover
 draw2d_status_t draw2d_paint_image(const draw2d_surface_t *, const uint8_t *coverage,
     const uint8_t *clip, size_t length, const draw2d_image_t *, draw2d_composite_t,
     uint64_t max_pixels, draw2d_damage_t *);
+draw2d_status_t draw2d_paint_shader(const draw2d_surface_t *,const uint8_t *,const uint8_t *,size_t,
+    const draw2d_shader_t *,draw2d_composite_t,uint64_t,draw2d_damage_t *);
 #pragma GCC visibility pop
 #endif

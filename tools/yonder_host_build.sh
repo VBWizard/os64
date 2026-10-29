@@ -46,9 +46,9 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
-        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,image_data,canvas,canvas_path,canvas_image,mutation}.c \
+        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,image_data,canvas,canvas_path,canvas_text,canvas_image,mutation}.c \
         userland/apps/yonder/{scripts,modules,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture}.c \
-        "${svg_sources[@]}" userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/core.c userland/libcanvas/path.c \
+        "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
@@ -66,19 +66,23 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         host_compile "$source" "$object" "${private[@]}"
         objects+=("$object")
     done
-    # Geometry executes the production FreeType adapter. The font table stays
-    # the fixture's fake; omitting its separate adapter avoids a second getter.
+    # Geometry and optional real-font probes use the production adapters.
+    # Rename the real font getter so existing layout probes keep their fake.
     local ft_sources=()
     mapfile -t ft_sources < <(python3 -c '
 import sys
 sys.path.insert(0,"tools")
 import test_freetype_host as ft
 for p in sum(ft.sources(),[]):
-    if p != ft.LIB/"port/backend.c": print(p.relative_to(ft.REPO))
+    print(p.relative_to(ft.REPO))
 ')
     for source in "${ft_sources[@]}"; do
+        local ft_extra=()
+        if [[ "$source" = userland/libfreetype/port/backend.c ]]; then
+            ft_extra=(-Dos64_freetype_backend_v1=os64_freetype_real_backend_v1)
+        fi
         object="$work/${source//\//_}.o"
-        host_compile "$source" "$object" -DOS64_FREETYPE_HOSTED -DFT2_BUILD_LIBRARY \
+        host_compile "$source" "$object" "${ft_extra[@]}" -DOS64_FREETYPE_HOSTED -DFT2_BUILD_LIBRARY \
             -Iuserland/libfreetype/port -Iuserland/libfreetype/upstream/include \
             -Wno-unused-variable -Wno-unused-but-set-variable -fcf-protection=none \
             -fno-fast-math -ffp-contract=off -fexcess-precision=standard -mno-avx -mno-fma
