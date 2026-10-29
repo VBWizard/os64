@@ -49,8 +49,39 @@ phase totals, 52 model rebuilds and 53 layout attempts, with zero refusals
 or clock errors. This establishes functionality; emulator timings are not
 the P5 baseline.
 
-Hardware acceptance is pending. Install the frozen cohort, enable Scripts
-and Modern Web, and launch:
+Hardware acceptance passed on 2026-10-29. The P5 completed the default
+workload, and corpus entry 229 records `written: when asked`, with zero
+refused/partial results and zero clock errors. The screenshot confirms the
+completed table and its viewport: 2,526 × 1,259 CSS pixels, device pixel
+ratio 1, 100% zoom, dark appearance, Scripts and Modern Web enabled.
+
+| Experiment | Median | Worst | Samples |
+|---|---:|---:|---:|
+| Read unchanged geometry | 0.100 ms | 0.200 ms | 20 |
+| Change one paragraph | 63.900 ms | 109.600 ms | 20 |
+| Replace one list item | 55.300 ms | 56.900 ms | 20 |
+
+The native totals span 52 model rebuilds and 54 layout attempts:
+
+| Phase | Cumulative time | Share of the six measured phases |
+|---|---:|---:|
+| Model rebuild | 21.279 ms | 0.70% |
+| Cascade construction | 432.828 ms | 14.28% |
+| Computed styles | 83.864 ms | 2.77% |
+| Box construction | 19.925 ms | 0.66% |
+| Layout | 2,414.759 ms | 79.65% |
+| Public tree | 59.009 ms | 1.95% |
+
+This run supports the planned cascade/restyle and layout-reuse work. Model
+rebuild and public-tree time are each below the design's 10% investigation
+trigger on this fixture; real-page measurements can differ. The table was
+transcribed from the screenshot, and native totals were retrieved from the
+corpus report. Individual raw sample values have not been retrieved.
+The report's initial-load dimensions precede the enlarged measurement
+viewport; future comparisons should use the viewport recorded by the page.
+
+To reproduce, install the frozen cohort, enable Scripts and Modern Web,
+and launch:
 
 ```
 yonder --layout-profile /tests/pages/layout-measure.html

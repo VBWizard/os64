@@ -552,6 +552,6 @@ Validation and the test/gallery entry points are recorded in
 
 Slice 5a provides the native change readers and opt-in phase profiling, with
 its implementation contract in [RELAYOUT.md](RELAYOUT.md) and
-[validation record](../../relayout-evidence/5a-validation.md). Hardware timing
-is pending. The next cuts remain 5b, 5c and 5d, followed by pointer events
+[validation record](../../relayout-evidence/5a-validation.md). The P5 baseline
+passed on 2026-10-29 (corpus 229). The next cuts remain 5b, 5c and 5d, followed by pointer events
 and C6. This preparation does not add scheduled Canvas animation.
