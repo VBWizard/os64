@@ -11,7 +11,7 @@
 #define CANVAS_PAGE_BYTES ((size_t)128 * 1024 * 1024)
 typedef union { max_align_t alignment; size_t bytes; } CanvasAllocation;
 static JSClassID canvas_slot;
-static os64_geometry_status_t allocate(void *opaque, size_t size, void **out)
+os64_geometry_status_t d_canvas_allocate(void *opaque, size_t size, void **out)
 {
     os64_dom_t *dom = opaque;
     *out = NULL;
@@ -25,7 +25,7 @@ static os64_geometry_status_t allocate(void *opaque, size_t size, void **out)
     *out = p + 1;
     return OS64_GEOMETRY_OK;
 }
-static void release(void *opaque, void *pointer, size_t size)
+void d_canvas_release(void *opaque, void *pointer, size_t size)
 {
     (void)size;
     if (!pointer) return;
@@ -43,7 +43,7 @@ static uint32_t dimension(const os64_html_node_t *node, const char *name, uint32
 static canvas_status_t create(DValue *e)
 {
     canvas_options_t options = canvas_options_default((os64_geometry_memory_t){
-        .context = e->dom, .alloc = allocate, .free = release});
+        .context = e->dom, .alloc = d_canvas_allocate, .free = d_canvas_release});
     options.geometry = os64_freetype_geometry_v1();
     return canvas_create(&options, dimension(e->node, "width", 300),
                          dimension(e->node, "height", 150), &e->canvas);
@@ -62,12 +62,18 @@ void d_canvas_sync(DValue *e)
         e->canvas = NULL;
     }
 }
+canvas_status_t d_canvas_prepare(DValue *e)
+{
+    d_canvas_sync(e);
+    return e->canvas ? CANVAS_OK : e->canvas_object ? CANVAS_NO_MEMORY : create(e);
+}
 static void changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
+    d_image_changed(dom,c);
     if (c->kind != OS64_HTML_CHANGE_ATTR || c->attr_ns ||
         (os64_strcmp(c->attr_local, "width") && os64_strcmp(c->attr_local, "height"))) return;
     DValue *e = d_find(dom, c->target);
-    if (e && e->canvas_object) e->canvas_reset_pending = true;
+    if (e && (e->canvas_object || e->canvas)) e->canvas_reset_pending = true;
 }
 void d_canvas_free(DValue *e)
 {
@@ -131,7 +137,7 @@ static JSValue get_context(JSContext *ctx, JSValueConst self, int argc, JSValueC
     if (supported < 0) return JS_EXCEPTION;
     /* A dictionary getter may itself have created the context. */
     if (e->canvas_object) return JS_DupValue(ctx, e->canvas_object->value);
-    if (!supported || create(e) != CANVAS_OK) return JS_NULL;
+    if (!supported || d_canvas_prepare(e) != CANVAS_OK) return JS_NULL;
     JSValue object = JS_NewObjectClass(ctx, dom->canvas_class);
     if (JS_IsException(object)) { d_canvas_free(e); return object; }
     DValue *held = d_retain(dom, ctx, object);
@@ -235,6 +241,11 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         if (w < 0) { x += w; w = -w; } if (h < 0) { y += h; h = -h; }
         if ((uint64_t)w * h > 8u * 1024 * 1024)
             return d_error(ctx, "QuotaExceededError", "Canvas pixel read exceeds its work budget");
+        if(magic==C_GET_IMAGE) {
+            d_canvas_sync(e);
+            if(w && h && e->canvas && !canvas_origin_clean(e->canvas))
+                return d_error(ctx,"SecurityError","Canvas contains an image from another origin");
+        }
         JSValue image = d_image_data_new(ctx, (uint32_t)w, (uint32_t)h);
         if (JS_IsException(image)) return image;
         if (magic == C_GET_IMAGE) {
@@ -289,7 +300,8 @@ int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     for (unsigned i = 0; i < 3; ++i)
         if (d_accessor(dom, ctx, prototype, accessors[i], member, i, i != 0) < 0) return -1;
     if (d_accessor(dom, ctx, prototype, "strokeStyle", member, C_STROKE, true) < 0 ||
-        d_canvas_paths_install(dom, ctx, prototype) < 0) return -1;
+        d_canvas_paths_install(dom, ctx, prototype) < 0 ||
+        d_canvas_images_install(dom,ctx,prototype) < 0) return -1;
     const struct { const char *name; int magic, length; } methods[] = {
         {"save", C_SAVE, 0}, {"restore", C_RESTORE, 0}, {"fillRect", C_FILL_RECT, 4},
         {"clearRect", C_CLEAR_RECT, 4}, {"createImageData", C_CREATE_IMAGE, 2},

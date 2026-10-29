@@ -21,6 +21,8 @@
 #include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
+bool yonder_scripts_images_pending(const yonder_scripts_t *);
+bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
 bool yonder_scripts_canvas_bitmap(yonder_scripts_t *, const os64_html_node_t *, canvas_bitmap_t *);
 bool yonder_scripts_canvas_dirty(yonder_scripts_t *, bool (*visible)(void *, const os64_html_node_t *), void *);
 void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
@@ -54,6 +56,7 @@ typedef struct {
     // a page's view reads as zeros and its history is its own.
     os64_dom_view_provider_t view;
     os64_dom_computed_provider_t computed;
+    os64_dom_image_provider_t images;
     os64_dom_history_t history;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, a module that failed (or, with

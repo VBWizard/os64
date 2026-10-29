@@ -1,11 +1,12 @@
 #ifndef OS64_LIBPNG_PNG_H
 #define OS64_LIBPNG_PNG_H
 
-// PNG bytes in, normalized pixels out. This library owns the PNG and zlib
+// PNG decoding and bounded RGBA8 encoding. This library owns the PNG and zlib
 // layers; raw DEFLATE remains libgzip's job, and drawing remains libdraw's.
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef enum {
     OS64_PNG_OK = 0,
@@ -37,6 +38,14 @@ typedef struct os64_png_image {
 os64_png_status_t os64_png_decode(const uint8_t *data, size_t length,
                                   uint64_t pixel_cap,
                                   os64_png_image_t *out);
+
+/* Exact output size for the stored-DEFLATE RGBA8 writer. Nonzero dimensions
+ * obey the decoder's default pixel/dimension caps. Output is sRGB, 96 dpi.
+ * Caller storage is borrowed and disjoint. No allocations or partial writes
+ * on refusal; written is zero on failure and must not alias either buffer. */
+os64_png_status_t os64_png_encode_size(uint32_t width,uint32_t height,size_t *size);
+os64_png_status_t os64_png_encode(const uint32_t *pixels,uint32_t width,uint32_t height,
+    size_t stride,size_t capacity,bool premultiplied,uint8_t *out,size_t out_capacity,size_t *written);
 
 void os64_png_free(os64_png_image_t *image);
 const char *os64_png_status_name(os64_png_status_t status);

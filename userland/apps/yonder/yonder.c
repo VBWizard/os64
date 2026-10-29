@@ -544,6 +544,8 @@ typedef struct {
     const char *url;
     PictureState state;
     yonder_picture_kind_t kind;
+    unsigned canvas_request;
+    bool origin_clean;
     yonder_svg_document_t *svg;
     uint32_t width, height;         // SVG default object size, in CSS pixels
     os64_image_t image;             // a still raster picture's pixels
@@ -3883,8 +3885,8 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
 
 // Who asks for a page's picture, sheet, script or font, and what for: the
 // agent's preset lines, read with the agent, and the request's metadata
-// from the page at `page_url`. Mode no-cors for every one: yonder runs no
-// CORS check on any of them, a font included, so none says it does.
+// from the page at `page_url`. This display-resource path uses no-cors;
+// Canvas image requests use fetch_job's hop and CORS checks separately.
 static void hooks_ask(way_hooks_t *hooks, const char *page_url, way_dest_t dest)
 {
     hooks->identity = g.way.identity;
@@ -3925,6 +3927,11 @@ static void pictures_feed(Page *p)
         job->dark = s_dark;
         job->reduced_motion = s_reduce_motion;
         os64_strcopy(job->url, sizeof(job->url), pic->url);
+        job->canvas_request=pic->canvas_request;
+        if((os64_strlen(pic->url)>=5&&!os64_memcmp(pic->url,"data:",5))) {
+            job->data_url=(char *)copy_text(pic->url);
+            if(!job->data_url){os64_free(job);picture_failed(p,pic->url,NULL,"no memory for image URL");refused=true;continue;}
+        }
         job->hooks.jar = g.way.jar;
         job->hooks.cache = g.cache;
         os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
@@ -3932,6 +3939,7 @@ static void pictures_feed(Page *p)
         os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
         pic->id = os64_work_submit(g.pool, &work);
         if (pic->id == 0) {
+            os64_free(job->data_url);
             os64_free(job);
             picture_failed(p, pic->url, NULL, "the workers would not take it");
             refused = true;
@@ -3953,32 +3961,32 @@ static size_t url_hash(const char *url)
     return (size_t)h;
 }
 
-// The table's index slot for `url`: where it is, or the empty slot where it
+// The table's slot for URL and request mode: its entry, or the empty slot where it
 // would go. The index is never full (picture_for keeps it half empty).
-static size_t picture_slot(const Page *p, const char *url)
+static size_t picture_slot(const Page *p, const char *url,unsigned mode)
 {
-    size_t at = url_hash(url) & (p->pic_slot_cap - 1);
-    while (p->pic_slot[at] >= 0 && !os64_streq(p->pics[p->pic_slot[at]].url, url))
+    size_t at = (url_hash(url) ^ mode) & (p->pic_slot_cap - 1);
+    while (p->pic_slot[at] >= 0 && (p->pics[p->pic_slot[at]].canvas_request!=mode || !os64_streq(p->pics[p->pic_slot[at]].url, url)))
         at = (at + 1) & (p->pic_slot_cap - 1);
     return at;
 }
 
-// The picture at `url` in the page's table, or -1: found through the index,
+// The display picture at `url`, or -1: found through the index,
 // never by a walk of the table — a page names every picture it likes, and a
 // walk per picture is quadratic in them.
 static int32_t picture_find(const Page *p, const char *url)
 {
     if (p->pic_slot == NULL || url == NULL)
         return -1;
-    return p->pic_slot[picture_slot(p, url)];
+    return p->pic_slot[picture_slot(p, url,0)];
 }
 
-// The picture at `url`, gathered once however many times the page or its
-// sheets name it: its index in the page's table, QUEUED for pictures_feed
+// The picture for URL and request mode, gathered once per key: its index
+// in the page's table, QUEUED for pictures_feed
 // when it is new, or -1 for an address nothing here fetches (or no memory).
 // The catalog owns each address. The index grows with the table, so pictures found
 // after a layout join the same one.
-static int32_t picture_for(Page *p, const char *url)
+static int32_t picture_for_mode(Page *p, const char *url,unsigned mode)
 {
     if (url == NULL)
         return -1;
@@ -3986,9 +3994,10 @@ static int32_t picture_for(Page *p, const char *url)
                      (os64_memcmp(url, "http://", 7) == 0 ||
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
                       os64_memcmp(url, "file://", 7) == 0);
+    fetchable |= (os64_strlen(url)>=5&&!os64_memcmp(url,"data:",5));
     if (!fetchable)
         return -1;
-    int32_t found = picture_find(p, url);
+    int32_t found = p->pic_slot?p->pic_slot[picture_slot(p,url,mode)]:-1;
     if (found >= 0)
         return found;
     // Script-driven source changes may revisit many URLs between rebuilds.
@@ -4009,7 +4018,7 @@ static int32_t picture_for(Page *p, const char *url)
         p->pic_slot = slot;
         p->pic_slot_cap = cap;
         for (int32_t k = 0; k < p->npics; k++)
-            p->pic_slot[picture_slot(p, p->pics[k].url)] = k;
+            p->pic_slot[picture_slot(p, p->pics[k].url,p->pics[k].canvas_request)] = k;
     }
     if (p->npics == p->cap_pics) {
         int32_t cap = p->cap_pics > 0 ? p->cap_pics * 2 : 8;
@@ -4023,14 +4032,17 @@ static int32_t picture_for(Page *p, const char *url)
     const char *kept = copy_text(url);
     if (kept == NULL)
         return -1;
-    p->pic_slot[picture_slot(p, kept)] = p->npics;
+    p->pic_slot[picture_slot(p, kept,mode)] = p->npics;
     Picture *pic = &p->pics[p->npics];
     pic->url = kept;
+    pic->canvas_request=mode;
     p->picture_url_bytes += bytes;
     pic->state = PIC_QUEUED;
     p->waiting++;
     return p->npics++;
 }
+
+static int32_t picture_for(Page *p,const char *url) { return picture_for_mode(p,url,0); }
 
 // ── The page's sheets ───────────────────────────────────────────────────
 
@@ -4653,6 +4665,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         return;
     }
     pic->kind = product->kind;
+    pic->origin_clean=product->origin_clean;
     pic->svg = product->svg;
     product->svg = NULL;
     pic->width = product->width;
@@ -8021,6 +8034,8 @@ static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
         *modified = 0;
 }
 
+static os64_dom_image_status_t canvas_source(void *,const os64_html_node_t *,bool,os64_dom_image_view_t *);
+static void canvas_source_release(void *,os64_dom_image_view_t *);
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
@@ -8033,6 +8048,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .fetch = script_fetch, .cancel = script_cancel, .activate = script_activate,
         .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
+        .images={canvas_source,canvas_source_release,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
@@ -8740,7 +8756,7 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
     }
 }
 
-// One task of a page's: a ready script, else a due timer. True when one
+// One task of a page's: script, image event, message or timer. True when one
 // ran. `shown` decides whether its asks may reach the page on screen.
 static bool page_event_run(Page *p, bool shown);
 
@@ -8775,6 +8791,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     int64_t began = task_begin(host);
     const char *what = "script";
     bool ran = yonder_scripts_step(host, &out);
+    if (!ran) { what="image"; ran=yonder_scripts_image_fire(host,&out); }
     if (!ran)
         ran = queued_task(host, &what, &out);
     if (!ran)
@@ -8785,7 +8802,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 }
 
 // Whether a host has a task to run now: a history event owed its page, a
-// script ready, a message posted, or a timer due. An idle callback is no
+// script ready, image event ready, a message posted, or a timer due. An idle callback is no
 // task owed: the shown page's turn runs one only when nothing else is
 // (script_turn).
 static bool scripts_owed(const yonder_scripts_t *host)
@@ -8793,7 +8810,7 @@ static bool scripts_owed(const yonder_scripts_t *host)
     const Page *p = page_of_host(host);
     uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
-           yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now;
+           yonder_scripts_images_pending(host) || yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now;
 }
 
 // The measured layout of the page whose document is `doc`, when that page
@@ -9636,6 +9653,10 @@ static bool script_turn(void)
     if (!ran) {
         what = "script";
         ran = yonder_scripts_step(g.page.scripts, &out);
+    }
+    if (!ran) {
+        what = "image";
+        ran = yonder_scripts_image_fire(g.page.scripts, &out);
     }
     if (!ran)
         ran = queued_task(g.page.scripts, &what, &out);
@@ -11279,6 +11300,57 @@ static void svg_partial_diagnostic(const yonder_svg_pixels_t *pixels, bool image
         yonder_diag_missing_seen(g.page.diag, image ? "svg image" : "svg",
             "unsupported drawing subtrees omitted (maximum per render)", pixels->omitted_subtrees);
 }
+/* Canvas sources use the same decoded products and bounded picture catalog.
+ * Their request-mode key prevents a display-only or differently credentialed
+ * fetch from being reused as proof that script may read the image. */
+static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t *node,
+    bool pixels,os64_dom_image_view_t *out)
+{
+    *out=(os64_dom_image_view_t){0};
+    Page *p=page_of_doc(opaque);
+    if(!p||!p->modern||!os64_html_owns_node(opaque,node))return OS64_DOM_IMAGE_BROKEN;
+    /* The picture catalog and worker generation belong to the shown page.
+     * Streaming/coming pages acquire images once they become that owner. */
+    if(p!=&g.page)return OS64_DOM_IMAGE_PENDING;
+    const os64_html_attr_t *src=os64_html_attr(node,"src");
+    if(!src||!src->value[0])return OS64_DOM_IMAGE_PENDING;
+    char resolved[OS64_FETCH_URL_MAX];const char *url=src->value;
+    const char *base=yonder_scripts_url(page_scripts(p));
+    if((os64_strlen(url)<5||os64_memcmp(url,"data:",5))) {
+        if(!os64_dom_resolve(opaque,base,url,resolved,sizeof(resolved)))return OS64_DOM_IMAGE_BROKEN;
+        url=resolved;
+    }
+    bool local=(os64_strlen(url)>=7&&!os64_memcmp(url,"file://",7)),data=(os64_strlen(url)>=5&&!os64_memcmp(url,"data:",5));
+    if(local&&(!base||(os64_strlen(base)<7||os64_memcmp(base,"file://",7))))return OS64_DOM_IMAGE_BROKEN;
+    const os64_html_attr_t *cors=os64_html_attr(node,"crossorigin");
+    unsigned mode=local||data?1:!cors?1:os64_streq_nocase(cors->value,"use-credentials")?3:2;
+    int32_t index=picture_for_mode(p,url,mode);
+    if(index<0)return OS64_DOM_IMAGE_REFUSED;
+    if(p==&g.page)pictures_feed(p);
+    Picture *pic=&p->pics[index];
+    if(pic->state==PIC_QUEUED||pic->state==PIC_WAITING)return OS64_DOM_IMAGE_PENDING;
+    if(pic->state!=PIC_SHOWN)return OS64_DOM_IMAGE_BROKEN;
+    uint32_t w,h;const uint32_t *plane=picture_pixels(pic,&w,&h);
+    out->origin_clean=pic->origin_clean;
+    out->surface=(draw2d_surface_t){(void *)plane,w,h,(size_t)w*4,(size_t)w*h*4,DRAW2D_ARGB8_STRAIGHT};
+    if(!pixels||pic->kind!=YONDER_PICTURE_SVG)return OS64_DOM_IMAGE_READY;
+    yonder_svg_pixels_t *rendered=os64_calloc(1,sizeof(*rendered));
+    if(!rendered)return OS64_DOM_IMAGE_REFUSED;
+    yonder_svg_image_view_t view={.width=w,.height=h,.pixel_width=w,.pixel_height=h,
+        .dark=s_dark,.reduced_motion=s_reduce_motion};
+    os64_geometry_memory_t memory={p,svg_allocate,svg_free};
+    svg_status_t status=yonder_svg_document_render(pic->svg,&view,&memory,os64_freetype_geometry_v1(),rendered);
+    if(status!=SVG_OK){os64_free(rendered);return OS64_DOM_IMAGE_REFUSED;}
+    out->surface=(draw2d_surface_t){rendered->pixels,w,h,(size_t)w*4,rendered->bytes,DRAW2D_ARGB8_STRAIGHT};
+    out->token=rendered;return OS64_DOM_IMAGE_READY;
+}
+static void canvas_source_release(void *opaque,os64_dom_image_view_t *view)
+{
+    if(!view->token)return;
+    Page *p=page_of_doc(opaque);os64_geometry_memory_t memory={p,svg_allocate,svg_free};
+    yonder_svg_pixels_free(&memory,view->token);os64_free(view->token);view->token=NULL;
+}
+
 static bool svg_picture_pixels(const Picture *pic, os64_gui_rect_t at, yonder_svg_pixels_t *out)
 {
     *out = (yonder_svg_pixels_t){0};

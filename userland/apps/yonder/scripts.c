@@ -429,6 +429,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     if (s->options.view.read != NULL)
         os64_dom_set_view(s->dom, &s->options.view);
     os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
+    os64_dom_set_images(s->dom,&s->options.images);
     if (s->options.history.update != NULL)
         os64_dom_set_history(s->dom, &s->options.history);
     // The state the session gave the document before there was a binding
@@ -1808,4 +1809,14 @@ bool yonder_scripts_canvas_dirty(yonder_scripts_t *s, bool (*visible)(void *, co
 void yonder_scripts_canvas_painted(yonder_scripts_t *s, const os64_html_node_t *node)
 {
     if (s) os64_dom_canvas_painted(s->dom, node);
+}
+
+bool yonder_scripts_images_pending(const yonder_scripts_t *s)
+{ return s&&!s->dead&&os64_dom_image_event(s->dom,NULL,NULL,false); }
+bool yonder_scripts_image_fire(yonder_scripts_t *s,os64_js_outcome_t *out)
+{
+    const os64_html_node_t *node;bool failed;
+    if(!s||s->dead||!os64_dom_image_event(s->dom,&node,&failed,true))return false;
+    os64_dom_event_t event={.type=failed?"error":"load"};bool prevented=false;
+    yonder_scripts_dispatch(s,node,&event,&prevented,out);return true;
 }

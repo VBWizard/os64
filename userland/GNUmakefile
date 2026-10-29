@@ -185,7 +185,7 @@ LIBGZIP_SO   := $(BIN)/libgzip.so
 # zlib door and libos64's heap/CRC primitives, but neither of
 # those lower libraries knows an image format exists. That direction keeps a
 # decoder out of every program's foundational runtime.
-LIBPNG_SRCS := libpng/png.c
+LIBPNG_SRCS := libpng/png.c libpng/encode.c
 LIBPNG_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBPNG_SRCS))
 LIBPNG_SO   := $(BIN)/libpng.so
 

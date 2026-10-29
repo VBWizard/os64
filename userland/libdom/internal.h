@@ -13,6 +13,7 @@
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
 #define D_CLONE_HELD 34
 #include <canvas/canvas.h>
+#include <dom/canvas.h>
 
 /* Embedded consumers of libdom's document listener. Registration happens
  * during binding construction; callbacks borrow records and never enter JS. */
@@ -31,6 +32,11 @@ int d_canvas_install(os64_dom_t *, JSContext *, JSValueConst);
 typedef struct DValue DValue;
 void d_canvas_free(DValue *);
 void d_canvas_sync(DValue *);
+canvas_status_t d_canvas_prepare(DValue *);
+os64_geometry_status_t d_canvas_allocate(void *,size_t,void **);
+void d_canvas_release(void *,void *,size_t);
+void d_image_changed(os64_dom_t *,const os64_html_change_t *);
+int d_canvas_images_install(os64_dom_t *,JSContext *,JSValueConst);
 JSValue d_canvas_result(JSContext *,canvas_status_t);
 int d_canvas_paths_install(os64_dom_t *,JSContext *,JSValueConst);
 int d_double_sequence(os64_dom_t *,JSContext *,JSValueConst,size_t,JSValue **,size_t *);
@@ -170,6 +176,7 @@ struct DValue {
     canvas_context_t *canvas;
     DValue *canvas_object;
     bool canvas_reset_pending;
+    bool image_reported;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
@@ -302,6 +309,7 @@ struct os64_dom {
     DMutationConsumer *mutation_consumers, canvas_mutations;
     bool mutation_installed;
     size_t canvas_bytes;
+    os64_dom_image_provider_t image_provider;
     JSClassID canvas_class;
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;

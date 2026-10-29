@@ -29,6 +29,8 @@ typedef struct {
     uint64_t generation;            // the page it belongs to
     const char *agent;              // the browser's, read-only for the run
     char url[OS64_FETCH_URL_MAX];
+    char *data_url;                 // owned long data URL, or NULL for url
+    unsigned canvas_request;        // 0 display; 1 no-cors; 2 anonymous; 3 use-credentials
     // The browser's cookies and the page's address for the Referer: a
     // picture is fetched as the page is (YONDER.md § Y3b); the agent's
     // preset lines and the picture's Fetch Metadata; and the browser's
@@ -42,6 +44,7 @@ typedef struct {
 // temporary SVG rasterization has a separate serialized working allowance.
 typedef struct {
     yonder_picture_kind_t kind;
+    bool origin_clean;             // native Canvas request passed its origin/CORS checks
     yonder_svg_document_t *svg;      // when kind is YONDER_PICTURE_SVG
     uint32_t width, height;         // SVG default object size in CSS pixels
     os64_image_status_t status;     // OK, or why there is no picture

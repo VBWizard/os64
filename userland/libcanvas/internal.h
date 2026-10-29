@@ -18,7 +18,7 @@ struct canvas_context {
     Saved *saved;
     Clip *clip;
     Path path;
-    bool busy;
+    bool busy, origin_clean;
 };
 
 canvas_status_t c_enter(canvas_context_t *);

@@ -10,6 +10,8 @@
 2d.reset.state.fill_style.html	check that the state is reset
 2d.reset.state.global_alpha.html	check that the state is reset
 2d.reset.state.global_composite_operation.html	check that the state is reset
+2d.reset.state.image_smoothing_enabled.html	check that the state is reset
+2d.reset.state.image_smoothing_quality.html	check that the state is reset
 2d.reset.state.line_cap.html	check that the state is reset
 2d.reset.state.line_dash.html	check that the line dash is reset
 2d.reset.state.line_dash_offset.html	check that the state is reset

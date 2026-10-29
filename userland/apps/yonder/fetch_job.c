@@ -643,7 +643,7 @@ static bool preflight(Hop *h, yonder_fetch_job_t *job, way_request_t *r, const c
     return ok;
 }
 
-int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out)
+static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out,bool image)
 {
     yonder_fetch_job_t *job = job_ptr;
     yonder_fetched_t *got = os64_calloc(1, sizeof(*got));
@@ -662,9 +662,7 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     if (current == NULL)
         return network_error(got, "out of memory");
     way_request_start(r, current);
-    // A script's request is fetch()'s or XMLHttpRequest's: destination
-    // empty, the page's mode.
-    way_metadata_request(&h.metadata, &r->origin, WAY_DEST_EMPTY, r->mode);
+    way_metadata_request(&h.metadata, &r->origin, image?WAY_DEST_IMAGE:WAY_DEST_EMPTY, r->mode);
     h.page_given = page_sets(r);
     int64_t verdict = 0;
     for (;;) {
@@ -831,7 +829,7 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         // The final response, filtered for the page.
         way_type_t type = way_response_type(r);
         got->type = type;
-        got->status = type == WAY_TYPE_OPAQUE ? 0 : head->status;
+        got->status = type == WAY_TYPE_OPAQUE && !image ? 0 : head->status;
         if (type != WAY_TYPE_OPAQUE)
             os64_strcopy(got->status_text, sizeof(got->status_text), head->reason);
         got->url = type == WAY_TYPE_OPAQUE ? copy_text("", 0) : without_fragment(current);
@@ -849,8 +847,9 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
             network_error(got, "the answer's headers did not fit");
             break;
         }
-        // An opaque body is never read: what was never read cannot leak.
-        got->has_body = way_response_has_body(r, type, head->status);
+        // Script responses discard opaque bodies. The separate native image
+        // entry point retains bytes with the opaque verdict for canvas tainting.
+        got->has_body = way_response_has_body(r, image?WAY_TYPE_BASIC:type, head->status);
         if (got->has_body) {
             bool limit;
             if (!read_body(f, max_body, &got->body, &got->body_len, &limit)) {
@@ -873,3 +872,8 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     os64_free(h.omitted);
     return verdict;
 }
+
+int64_t yonder_fetch_run(void *job,bool (*cancelled)(void *),void *ctx,void **out)
+{ return fetch_run(job,cancelled,ctx,out,false); }
+int64_t yonder_fetch_image_run(void *job,bool (*cancelled)(void *),void *ctx,void **out)
+{ return fetch_run(job,cancelled,ctx,out,true); }

@@ -1,0 +1,22 @@
+{
+  "stamps": {
+    "mean": 0.16868055555555556,
+    "max": 79,
+    "changed_pixels": 1284
+  },
+  "crop": {
+    "mean": 0.6742395833333333,
+    "max": 20,
+    "changed_pixels": 25217
+  },
+  "echo": {
+    "mean": 0.0,
+    "max": 0,
+    "changed_pixels": 0
+  },
+  "returned": {
+    "mean": 0.01882638888888889,
+    "max": 20,
+    "changed_pixels": 840
+  }
+}

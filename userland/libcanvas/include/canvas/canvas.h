@@ -30,6 +30,8 @@ typedef struct {
     double dash[256], dash_offset;
     size_t dash_count;
     draw2d_operator_t composite;
+    bool image_smoothing;
+    unsigned image_quality; /* 0 low, 1 medium, 2 high; filtering may share one algorithm. */
 } canvas_state_t;
 typedef struct {
     const uint32_t *pixels; /* Borrowed premultiplied 0xAARRGGBB, sRGB. */
@@ -91,6 +93,13 @@ canvas_status_t canvas_set_line(canvas_context_t *,const os64_geometry_stroke_t 
 canvas_status_t canvas_set_dash(canvas_context_t *,const double *,size_t);
 canvas_status_t canvas_set_dash_offset(canvas_context_t *,double);
 canvas_status_t canvas_set_composite(canvas_context_t *,draw2d_operator_t);
+canvas_status_t canvas_set_smoothing(canvas_context_t *,bool,unsigned quality);
+/* Source is borrowed for this synchronous operation. Overlapping destination
+ * storage is snapshotted before drawing. Negative extents normalize without
+ * reversing pixels; source clipping proportionally clips the destination. */
+canvas_status_t canvas_draw_image(canvas_context_t *,const draw2d_surface_t *,bool origin_clean,
+    double sx,double sy,double sw,double sh,double dx,double dy,double dw,double dh);
+bool canvas_origin_clean(const canvas_context_t *);
 /* Pixel transfer ignores drawing state. Read fills out-of-bitmap samples
  * with transparent black; put replaces the intersection, optionally limited
  * by a source-coordinate dirty rectangle. The binding normalizes WebIDL

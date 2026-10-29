@@ -44,6 +44,7 @@
 2d.fillStyle.parse.css-color-4-rgba-6.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgba-6
 2d.fillStyle.parse.current.basic.html	currentColor is computed from the canvas element
 2d.fillStyle.parse.current.changed.html	currentColor is computed when the attribute is set, not when it is painted
+2d.fillStyle.parse.current.removed.html	currentColor is solid black when the canvas element is not in a document
 2d.fillStyle.parse.hex3.html	Canvas test: 2d.fillStyle.parse.hex3
 2d.fillStyle.parse.hex4.html	Canvas test: 2d.fillStyle.parse.hex4
 2d.fillStyle.parse.hex6.html	Canvas test: 2d.fillStyle.parse.hex6

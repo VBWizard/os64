@@ -941,6 +941,28 @@ static void cookie_room(void)
     }
 }
 
+static void native_images(void)
+{
+    for(unsigned cors=0;cors<3;++cors) {
+        fresh();
+        fake_answer(NULL,"https://b.test/pixel",200,cors==1?"Access-Control-Allow-Origin: https://a.test\r\n":"","pixels");
+        yonder_fetch_job_t *j=job_of(&(Ask){"https://a.test/page","https://b.test/pixel",
+            .mode=cors?WAY_MODE_CORS:WAY_MODE_NO_CORS});
+        void *out=NULL;yonder_fetch_image_run(j,cancel_cb,NULL,&out);yonder_fetched_t *g=out;
+        expect("native images: CORS refusal remains a refusal",g&&g->ok==(cors!=2),g?g->why:NULL);
+        if(g&&g->ok)expect("native images: retained pixels carry the taint verdict",
+            g->has_body&&g->body_len==6&&!memcmp(g->body,"pixels",6)&&
+            g->type==(cors?WAY_TYPE_CORS:WAY_TYPE_OPAQUE),NULL);
+        yonder_fetch_release(j,g);
+    }
+    fresh();fake_answer(NULL,"https://a.test/start",302,"Location: https://b.test/pixel\r\n","");
+    fake_answer(NULL,"https://b.test/pixel",200,"","pixels");
+    yonder_fetch_job_t *j=job_of(&(Ask){"https://a.test/page","https://a.test/start",.mode=WAY_MODE_NO_CORS});
+    void *out=NULL;yonder_fetch_image_run(j,cancel_cb,NULL,&out);yonder_fetched_t *g=out;
+    expect("native images: redirect taints even a same-origin starting URL",g&&g->ok&&g->type==WAY_TYPE_OPAQUE&&g->body_len==6,NULL);
+    yonder_fetch_release(j,g);
+}
+
 int main(void)
 {
     cookie_room();
@@ -952,6 +974,7 @@ int main(void)
     preflight_cleared_across_a_taint();
     redirects();
     opaque_and_refusals();
+    native_images();
     data_and_limits();
     fields();
     sweep();

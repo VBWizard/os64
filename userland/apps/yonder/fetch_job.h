@@ -79,6 +79,10 @@ typedef struct {
     way_cookies_short_t cookies_short;  // what its hops left out for want of room (way/jar.h)
 } yonder_fetched_t;
 
+/* Native image consumer: applies the same hop/CORS checks but retains an
+ * opaque body's bytes for decoding. Its product must not enter script-response
+ * delivery. type still carries the origin-clean verdict (opaque taints). */
+int64_t yonder_fetch_image_run(void *job,bool (*cancelled)(void *),void *ctx,void **out);
 int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);
 // Frees the job and the product (either may be NULL).
 void yonder_fetch_release(void *job, void *product);
