@@ -348,17 +348,25 @@ static void document_contracts(void)
     assert(yonder_svg_document_parse("", YONDER_SVG_DOCUMENT_BYTES + 1, NULL, NULL, &d, NULL) ==
                SVG_LIMIT &&
            !d);
-    // Namespace identity and case are independent of the qualified spelling.
-    const char *refused[] = {"<RECT width='10' height='10'/>",
+    // Unknown element spelling is omitted, not treated as a supported shape;
+    // an unsupported effect on a recognized shape still refuses the root.
+    const char *unsupported[] = {"<RECT width='10' height='10'/>",
                              "<foreignObject/>",
                              "<rect width='10' height='10' style='transform-origin:50% 50%'/>",
                              "<image href='https://example.invalid/image.png'/>"};
-    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
+    for (size_t i = 0; i < sizeof(unsupported) / sizeof(unsupported[0]); ++i) {
         char source[1024];
         snprintf(source, sizeof(source), "<svg xmlns='http://www.w3.org/2000/svg'>%s</svg>",
-                 refused[i]);
+                 unsupported[i]);
         assert(yonder_svg_document_parse(source, strlen(source), NULL, NULL, &d, NULL) == SVG_OK);
-        assert(image_draw(d, &l, &pixels) == SVG_UNSUPPORTED && !pixels.pixels && !l.live);
+        if (i == 2) {
+            assert(image_draw(d, &l, &pixels) == SVG_UNSUPPORTED && !pixels.pixels && !l.live);
+        } else {
+            assert(image_draw(d, &l, &pixels) == SVG_OK && pixels.omitted_subtrees == 1);
+            for (size_t p = 0; p < pixels.bytes / 4; ++p)
+                assert(pixels.pixels[p] == 0);
+            pixels_free(&l, &pixels);
+        }
         yonder_svg_document_free(d);
         assert(live == baseline);
     }

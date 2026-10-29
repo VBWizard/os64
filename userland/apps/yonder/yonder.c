@@ -11112,6 +11112,14 @@ _Static_assert(YONDER_SVG_CASCADE_BYTES + YONDER_SVG_READ_BYTES +
                (size_t)YONDER_SVG_ATTRIBUTES * YONDER_SVG_ATTRIBUTE_BYTES +
                YONDER_SVG_ATTRIBUTE_BYTES + YONDER_SVG_MEMORY_MAX < YONDER_SVG_WINDOW_RESERVE,
                "SVG window allowance must leave room for CSS scratch");
+// A repaint is not another omission. Keep the largest count seen in one
+// successful root/image render; this is not a page-wide subtree census.
+static void svg_partial_diagnostic(const yonder_svg_pixels_t *pixels, bool image)
+{
+    if (pixels->omitted_subtrees)
+        yonder_diag_missing_seen(g.page.diag, image ? "svg image" : "svg",
+            "unsupported drawing subtrees omitted (maximum per render)", pixels->omitted_subtrees);
+}
 static bool svg_picture_pixels(const Picture *pic, os64_gui_rect_t at, yonder_svg_pixels_t *out)
 {
     *out = (yonder_svg_pixels_t){0};
@@ -11130,6 +11138,8 @@ static bool svg_picture_pixels(const Picture *pic, os64_gui_rect_t at, yonder_sv
             status == SVG_UNSUPPORTED ? "SVG image uses an unsupported feature" :
             status == SVG_MALFORMED ? "SVG image contains malformed geometry" :
                                      "SVG image rendering failed or exceeded its limits");
+    else
+        svg_partial_diagnostic(out, true);
     return status == SVG_OK;
 }
 static void svg_picture_pixels_free(yonder_svg_pixels_t *out)
@@ -11525,6 +11535,7 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
                               s_env.ink ^ 0xff000000u, &memory, os64_freetype_geometry_v1(),
                               svg_window_cache(), &pixels);
         if (status == SVG_OK) {
+            svg_partial_diagnostic(&pixels, false);
             if (pixels.pixels)
                 for (int32_t k = 0; k < gp->n; ++k)
                     glass_pixels(gp->now[k], pixels.rect, pixels.pixels);

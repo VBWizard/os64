@@ -36,7 +36,7 @@ typedef struct {
     svg_linear_gradient_t gradients[2];
     svg_radial_gradient_t radial_gradients[2];
     svg_gradient_stop_t gradient_stops[2][SVG_GRADIENT_STOPS_MAX];
-    uint32_t root_color, initial_color;
+    uint32_t root_color, initial_color, omitted_subtrees;
     os64_geometry_memory_t memory;
     Instance *instances;
     size_t capacity;
@@ -770,7 +770,10 @@ static bool ignored(const os64_html_node_t *n)
     return n->ns != OS64_HTML_NS_SVG ||
            (same_word(n->name, "defs") || same_word(n->name, "title") ||
             same_word(n->name, "desc") || same_word(n->name, "metadata") ||
-            same_word(n->name, "style") || same_word(n->name, "clipPath") ||
+            same_word(n->name, "style") || same_word(n->name, "script") ||
+            same_word(n->name, "pattern") || same_word(n->name, "mask") ||
+            same_word(n->name, "filter") || same_word(n->name, "marker") ||
+            same_word(n->name, "clipPath") ||
             same_word(n->name, "linearGradient") || same_word(n->name, "radialGradient") ||
             same_word(n->name, "stop"));
 }
@@ -1117,20 +1120,25 @@ static svg_status_t shape(void *ctx, void *snapshot, const svg_style_request_t *
         out->ry = out->rx;
     return SVG_OK;
 }
+static svg_node_kind_t node_kind(const os64_html_node_t *n)
+{
+    if (n->ns != OS64_HTML_NS_SVG)
+        return SVG_NODE_UNSUPPORTED;
+    if (same_word(n->name, "g") || same_word(n->name, "svg") || same_word(n->name, "symbol"))
+        return SVG_NODE_GROUP;
+    if (same_word(n->name, "path"))
+        return SVG_NODE_PATH;
+    if (same_word(n->name, "use"))
+        return SVG_NODE_USE;
+    return basic_shape(n) ? SVG_NODE_SHAPE : SVG_NODE_UNSUPPORTED;
+}
 static svg_status_t node(void *ctx, void *snapshot, uint64_t source, svg_node_t *out)
 {
     Adapter *a = ctx;
     (void)snapshot;
     const os64_html_node_t *n = (const void *)(uintptr_t)source;
-    bool group =
-        n->ns == OS64_HTML_NS_SVG &&
-        (same_word(n->name, "g") || same_word(n->name, "svg") || same_word(n->name, "symbol"));
-    out->kind = group                                                     ? SVG_NODE_GROUP
-                : n->ns == OS64_HTML_NS_SVG && same_word(n->name, "path") ? SVG_NODE_PATH
-                : n->ns == OS64_HTML_NS_SVG && same_word(n->name, "use")  ? SVG_NODE_USE
-                : basic_shape(n)                                          ? SVG_NODE_SHAPE
-                                                                          : SVG_NODE_UNSUPPORTED;
-    out->first_child = group ? (uintptr_t)element(a, n->first_child) : 0;
+    out->kind = node_kind(n);
+    out->first_child = out->kind == SVG_NODE_GROUP ? (uintptr_t)element(a, n->first_child) : 0;
     out->next_sibling = (uintptr_t)element(a, n->next);
     return a->stopped;
 }
@@ -1147,6 +1155,24 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     bool symbol = n->ns == OS64_HTML_NS_SVG && same_word(n->name, "symbol");
     if (image_inert(a, n) || ignored(n) ||
         (symbol && !(parent && parent->ns == OS64_HTML_NS_SVG && same_word(parent->name, "use")))) {
+        *out = svg_initial_style();
+        out->display = false;
+        return SVG_OK;
+    }
+    if (node_kind(n) == SVG_NODE_UNSUPPORTED) {
+        // This is a drawing occurrence, not clip/paint resource resolution.
+        // Omit it before reading its paints, transforms or descendants. Keep
+        // libsvg's unsupported-style refusal for artwork we actually render.
+        if (!adapter_spend(a, 1))
+            return a->stopped;
+        const garb_val_t *display = winner(a->cascade, n, GARB_DISPLAY);
+        bool instanced = parent && (a->instances[r->parent_instance].instanced ||
+                         (parent->ns == OS64_HTML_NS_SVG && same_word(parent->name, "use")));
+        // DOM-resolved variables are not a use-instance display oracle. In
+        // that case report the omission even if the source was display:none.
+        if (!keyword(display, "none") ||
+            (instanced && garb_style_needs_substitution(a->cascade, n)))
+            ++a->omitted_subtrees;
         *out = svg_initial_style();
         out->display = false;
         return SVG_OK;
@@ -2005,6 +2031,8 @@ static svg_status_t render_adapter(Adapter *a, const Map *map, os64_gui_rect_t c
     svg_destroy(c);
     if (status != SVG_OK)
         yonder_svg_pixels_free(&a->memory, out);
+    else
+        out->omitted_subtrees = a->omitted_subtrees;
     return status;
 }
 svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_cascade_t *cascade,

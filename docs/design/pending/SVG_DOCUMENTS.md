@@ -59,7 +59,11 @@ These choices implement the security boundary of SVG's
 [secure static processing mode](https://www.w3.org/TR/SVG2/conform.html#secure-static-mode)
 within the supported graphics profile. They do not claim full SVG conformance:
 embedded data images, text and the other recorded graphics debts
-remain unsupported. An active `<image>` element is refused without fetching.
+remain unsupported. Drawing occurrences of `<image>`, `<text>`, `<foreignObject>`
+and other unsupported element kinds are omitted with their subtrees, without
+fetching. The supported pixels carry an omission count for Yonder's partial
+capability diagnostic. Referenced clip/paint contents remain strict; see
+[SVG_PARTIAL.md](SVG_PARTIAL.md).
 
 Unlike the inline adapter, which leaves outer box effects to libflow, the
 standalone root owns its opacity and transform. Opacity isolates the complete
@@ -117,7 +121,7 @@ enabled outside the sandbox:
 - 613 parse and 1,015 render cancellation positions, with unchanged live
   allocation counts and empty failure outputs.
 - Input poisoning, pixels surviving owner teardown, repeated-size rendering,
-  two independent documents, UTF-16 endian variants, namespace/case refusals,
+  two independent documents, UTF-16 endian variants, root namespace/case refusals,
   malformed XML, media preferences and byte/sheet/output limits.
 - The existing inline connection, shape, stroke, instance, viewport, clip and
   object-bounds regressions remain green.
