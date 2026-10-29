@@ -15,5 +15,6 @@
 2d.canvas.context.shared.html	getContext('2d') returns objects which share canvas state
 2d.canvas.context.type.exists.html	The 2D context interface is a property of 'window'
 2d.canvas.context.type.extend.html	Interface methods can be added
+2d.canvas.context.type.prototype.html	window.CanvasRenderingContext2D.prototype are not [[Writable]] and not [[Configurable]], and its methods are [[Configurable]].
 2d.canvas.context.type.replace.html	Interface methods can be overridden
 2d.canvas.context.unique.html	getContext('2d') returns the same object

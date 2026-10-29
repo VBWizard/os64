@@ -117,6 +117,44 @@ static void dom_canvas_cases(void)
     dom_script(&f, STORAGE_ASSERT
         "assert(ctx.fillStyle==='#000000');assert(ctx.getImageData(0,0,1,1).data.every(x=>x===0));",
         "canvas: native same-value reset reaches binding listener");
+    dom_script(&f, STORAGE_ASSERT
+        "c.width=32;c.height=32;ctx.strokeStyle='rgba(255,0,0,0.5)';"
+        "assert(ctx.strokeStyle==='rgba(255, 0, 0, 0.5)');"
+        "ctx.lineWidth=4;ctx.lineCap='round';ctx.lineJoin='bevel';ctx.miterLimit=.5;"
+        "ctx.setLineDash([2,3,4]);ctx.lineDashOffset=-3;ctx.save();"
+        "ctx.lineWidth=0;ctx.lineCap='bad';ctx.lineJoin='bad';ctx.miterLimit=NaN;"
+        "assert(ctx.lineWidth===4&&ctx.lineCap==='round'&&ctx.lineJoin==='bevel'&&ctx.miterLimit===.5);"
+        "ctx.setLineDash([-1]);assert(ctx.getLineDash().join(',')==='2,3,4,2,3,4');"
+        "ctx.setLineDash([]);ctx.lineWidth=8;ctx.restore();assert(ctx.lineWidth===4&&ctx.lineDashOffset===-3);"
+        "c.width=c.width;assert(ctx.lineWidth===1&&ctx.lineCap==='butt'&&ctx.getLineDash().length===0);"
+        "ctx.fillStyle='red';ctx.beginPath();ctx.moveTo(2,2);ctx.lineTo(12,2);ctx.translate(0,10);"
+        "ctx.lineTo(12,2);ctx.lineTo(2,2);ctx.closePath();ctx.fill();"
+        "assert(ctx.getImageData(5,5,1,1).data.join(',')==='255,0,0,255');"
+        "assert(ctx.getImageData(5,15,1,1).data[3]===0);"
+        "ctx.reset();ctx.beginPath();ctx.rect(2,2,20,20);ctx.clip();ctx.save();"
+        "ctx.beginPath();ctx.rect(8,8,20,20);ctx.clip();ctx.fillRect(0,0,32,32);"
+        "assert(ctx.getImageData(4,4,1,1).data[3]===0);ctx.restore();ctx.fillRect(0,0,32,32);"
+        "assert(ctx.getImageData(4,4,1,1).data[3]===255&&ctx.getImageData(24,24,1,1).data[3]===0);"
+        "ctx.reset();ctx.fillRect(0,0,32,32);ctx.globalCompositeOperation='destination-out';"
+        "ctx.beginPath();ctx.arc(16,16,8,0,Math.PI*2);ctx.fill();"
+        "assert(ctx.getImageData(16,16,1,1).data[3]===0&&ctx.getImageData(1,1,1,1).data[3]===255);"
+        "ctx.globalCompositeOperation='bad';assert(ctx.globalCompositeOperation==='destination-out');"
+        "ctx.reset();ctx.setTransform({a:2,d:2,e:4});ctx.fillRect(0,0,2,2);"
+        "assert(ctx.getImageData(5,1,1,1).data[3]===255&&ctx.getImageData(1,1,1,1).data[3]===0);"
+        "throws('TypeError',()=>ctx.setTransform({a:1,m11:2}));"
+        "throws('TypeError',()=>ctx.setTransform(1,0));throws('TypeError',()=>ctx.fill('bad'));"
+        "throws('IndexSizeError',()=>ctx.arc(0,0,-1,0,1));"
+        "ctx.resetTransform();ctx.beginPath();ctx.moveTo(2,2);"
+        "ctx.lineTo({valueOf(){c.width=c.width;return 8}},8);ctx.stroke();"
+        "assert(ctx.getImageData(0,0,32,32).data.every(x=>x===0));"
+        "var steps=[],iteratorClosed=false;ctx.setLineDash({[Symbol.iterator](){return {next(){"
+        "steps.push('next');return steps.length===1?{value:{valueOf(){steps.push('convert');return 2}},done:false}:{done:true}}}}});"
+        "assert(steps.join(',')==='next,convert,next'&&ctx.getLineDash().join(',')==='2,2');"
+        "throws('Error',()=>ctx.setLineDash({[Symbol.iterator](){return {next(){return {value:{valueOf(){throw Error('stop')}},done:false}},"
+        "return(){iteratorClosed=true;return {done:true}}}}}));assert(iteratorClosed);"
+        "ctx.setLineDash([{valueOf(){c.height=c.height;return 3}}]);"
+        "assert(ctx.getLineDash().join(',')==='3,3'&&ctx.lineWidth===1);",
+        "canvas: paths, pen state, clip stack, composite and conversion ordering");
     fixture_free(&f);
 }
 

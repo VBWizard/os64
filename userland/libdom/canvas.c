@@ -44,10 +44,11 @@ static canvas_status_t create(DValue *e)
 {
     canvas_options_t options = canvas_options_default((os64_geometry_memory_t){
         .context = e->dom, .alloc = allocate, .free = release});
+    options.geometry = os64_freetype_geometry_v1();
     return canvas_create(&options, dimension(e->node, "width", 300),
                          dimension(e->node, "height", 150), &e->canvas);
 }
-static void synchronize(DValue *e)
+void d_canvas_sync(DValue *e)
 {
     if (!e->canvas_reset_pending) return;
     e->canvas_reset_pending = false;
@@ -73,11 +74,11 @@ void d_canvas_free(DValue *e)
     if (e->canvas) canvas_destroy(e->canvas);
     e->canvas = NULL;
 }
-static JSValue result(JSContext *ctx, canvas_status_t status)
+JSValue d_canvas_result(JSContext *ctx, canvas_status_t status)
 {
     if (status == CANVAS_OK) return JS_UNDEFINED;
     return d_error(ctx, status == CANVAS_LIMIT || status == CANVAS_NO_MEMORY ?
-        "QuotaExceededError" : "InvalidStateError", "Canvas operation refused");
+        "QuotaExceededError" : status == CANVAS_UNSUPPORTED ? "NotSupportedError" : "InvalidStateError", "Canvas operation refused");
 }
 /* The unsupported creation profiles are refused, so callers do not mistake
  * a transparent sRGB bitmap for an opaque or wide-gamut one. */
@@ -169,7 +170,7 @@ static int color(JSContext *ctx, JSValueConst value, uint32_t *out, bool *curren
     return valid;
 }
 enum { C_CANVAS, C_FILL, C_ALPHA, C_SAVE, C_RESTORE, C_FILL_RECT, C_CLEAR_RECT,
-       C_CREATE_IMAGE, C_GET_IMAGE, C_PUT_IMAGE, C_LOST, C_RESET };
+       C_CREATE_IMAGE, C_GET_IMAGE, C_PUT_IMAGE, C_LOST, C_RESET, C_STROKE };
 static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                        int magic, JSValue *data)
 {
@@ -180,10 +181,10 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     bool set = magic & D_SET;
     magic &= ~D_SET;
     if (magic == C_CANVAS) return JS_DupValue(ctx, e->value);
-    if (magic == C_FILL || magic == C_ALPHA) {
+    if (magic == C_FILL || magic == C_STROKE || magic == C_ALPHA) {
         uint32_t fill = 0; double alpha = 1;
         if (set) {
-            if (magic == C_FILL) { bool current = false;
+            if (magic == C_FILL || magic == C_STROKE) { bool current = false;
                 int ok = color(ctx, argc ? argv[0] : JS_UNDEFINED, &fill, &current, &alpha);
                 if (ok > 0 && current) {
                     JSValue resolved = d_computed_color(dom, ctx, e->node);
@@ -195,17 +196,19 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
                 if (!ok) return JS_UNDEFINED;
             } else if (JS_ToFloat64(ctx, &alpha, argc ? argv[0] : JS_UNDEFINED) < 0) return JS_EXCEPTION;
         }
-        synchronize(e);
-        if (set) return e->canvas ? result(ctx, magic == C_FILL ? canvas_set_fill_rgb_alpha(e->canvas, fill, alpha) :
+        d_canvas_sync(e);
+        if (set) return e->canvas ? d_canvas_result(ctx, magic == C_FILL ? canvas_set_fill_rgb_alpha(e->canvas, fill, alpha) :
+                    magic == C_STROKE ? canvas_set_stroke(e->canvas, fill, alpha) :
                                                          canvas_set_alpha(e->canvas, alpha)) : JS_UNDEFINED;
-        canvas_state_t state = {0xff000000, 1, 1};
+        canvas_state_t state = {.fill_argb=0xff000000,.global_alpha=1,.fill_alpha=1, .stroke_argb=0xff000000,.stroke_alpha=1};
         if (e->canvas) canvas_state(e->canvas, &state);
         if (magic == C_ALPHA) return JS_NewFloat64(ctx, state.global_alpha);
-        char text[80]; uint32_t p = state.fill_argb;
-        if (state.fill_alpha == 1) os64_snprintf(text, sizeof(text), "#%06x", p & 0xffffff);
+        char text[80]; uint32_t p = magic == C_STROKE ? state.stroke_argb : state.fill_argb;
+        double paint_alpha = magic == C_STROKE ? state.stroke_alpha : state.fill_alpha;
+        if (paint_alpha == 1) os64_snprintf(text, sizeof(text), "#%06x", p & 0xffffff);
         else {
             garb_val_t value = {.kind = GARB_V_COLOR, .color = {
-                (p >> 16) & 255, (p >> 8) & 255, p & 255, state.fill_alpha, false}};
+                (p >> 16) & 255, (p >> 8) & 255, p & 255, paint_alpha, false}};
             garb_val_dump(&value, text, sizeof(text));
         }
         return JS_NewString(ctx, text);
@@ -214,9 +217,9 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         if (argc < 4) return JS_ThrowTypeError(ctx, "Canvas rectangle requires four coordinates");
         double v[4];
         for (unsigned i = 0; i < 4; ++i) if (JS_ToFloat64(ctx, &v[i], argv[i]) < 0) return JS_EXCEPTION;
-        synchronize(e);
+        d_canvas_sync(e);
         if (!e->canvas) return JS_UNDEFINED;
-        return result(ctx, magic == C_FILL_RECT ? canvas_fill_rect(e->canvas, v[0], v[1], v[2], v[3]) :
+        return d_canvas_result(ctx, magic == C_FILL_RECT ? canvas_fill_rect(e->canvas, v[0], v[1], v[2], v[3]) :
                                                    canvas_clear_rect(e->canvas, v[0], v[1], v[2], v[3]));
     }
     if (magic == C_CREATE_IMAGE || magic == C_GET_IMAGE) {
@@ -235,12 +238,12 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         JSValue image = d_image_data_new(ctx, (uint32_t)w, (uint32_t)h);
         if (JS_IsException(image)) return image;
         if (magic == C_GET_IMAGE) {
-            synchronize(e);
+            d_canvas_sync(e);
             canvas_rgba8_t view;
             if (d_image_data_view(dom, ctx, image, &view) < 0) { JS_FreeValue(ctx, image); return JS_EXCEPTION; }
             if (e->canvas) {
                 canvas_status_t status = canvas_read_pixels(e->canvas, x, y, &view);
-                if (status != CANVAS_OK) { JS_FreeValue(ctx, image); return result(ctx, status); }
+                if (status != CANVAS_OK) { JS_FreeValue(ctx, image); return d_canvas_result(ctx, status); }
             }
         }
         return image;
@@ -258,18 +261,18 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         int64_t x0 = v[2] > 0 ? v[2] : 0, y0 = v[3] > 0 ? v[3] : 0;
         int64_t x1 = v[2] + v[4] < w ? v[2] + v[4] : w;
         int64_t y1 = v[3] + v[5] < h ? v[3] + v[5] : h;
-        synchronize(e);
+        d_canvas_sync(e);
         canvas_rgba8_t view;
         if (d_image_data_view(dom, ctx, argv[0], &view) < 0) return JS_EXCEPTION;
         if (!e->canvas || x1 <= x0 || y1 <= y0) return JS_UNDEFINED;
         draw2d_damage_t dirty = {(uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1};
-        return result(ctx, canvas_put_pixels(e->canvas, &view, v[0], v[1], &dirty));
+        return d_canvas_result(ctx, canvas_put_pixels(e->canvas, &view, v[0], v[1], &dirty));
     }
     if (magic == C_RESET) e->canvas_reset_pending = true;
-    synchronize(e);
+    d_canvas_sync(e);
     if (magic == C_LOST) return JS_NewBool(ctx, !e->canvas);
     if (!e->canvas || magic == C_RESET) return JS_UNDEFINED;
-    return result(ctx, magic == C_SAVE ? canvas_save(e->canvas) : canvas_restore(e->canvas));
+    return d_canvas_result(ctx, magic == C_SAVE ? canvas_save(e->canvas) : canvas_restore(e->canvas));
 }
 int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
@@ -285,6 +288,8 @@ int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     const char *accessors[] = {"canvas", "fillStyle", "globalAlpha"};
     for (unsigned i = 0; i < 3; ++i)
         if (d_accessor(dom, ctx, prototype, accessors[i], member, i, i != 0) < 0) return -1;
+    if (d_accessor(dom, ctx, prototype, "strokeStyle", member, C_STROKE, true) < 0 ||
+        d_canvas_paths_install(dom, ctx, prototype) < 0) return -1;
     const struct { const char *name; int magic, length; } methods[] = {
         {"save", C_SAVE, 0}, {"restore", C_RESTORE, 0}, {"fillRect", C_FILL_RECT, 4},
         {"clearRect", C_CLEAR_RECT, 4}, {"createImageData", C_CREATE_IMAGE, 2},
@@ -304,7 +309,7 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
     if (!dom || dom->closed || !out) return false;
     DValue *e = d_find(dom, node);
     if (!e || !e->canvas_object) return false;
-    synchronize(e);
+    d_canvas_sync(e);
     return e->canvas && canvas_bitmap(e->canvas, out) == CANVAS_OK;
 }
 bool os64_dom_canvas_dirty(os64_dom_t *dom, bool (*visible)(void *, const os64_html_node_t *), void *opaque)

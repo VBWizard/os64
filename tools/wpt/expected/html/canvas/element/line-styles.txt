@@ -1,0 +1,41 @@
+# WPT's html/canvas/element/line-styles in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/line-styles --update
+# rewrites [passing].
+[required]
+2d.line.cap.round.html	lineCap 'round' is rendered correctly
+2d.line.join.miter.html	lineJoin 'miter' is rendered correctly
+2d.line.width.transformed.html	Line stroke widths are affected by scale transformations
+[excluded]
+[passing]
+2d.line.cap.butt.html	lineCap 'butt' is rendered correctly
+2d.line.cap.closed.html	Line caps are not drawn at the corners of an unclosed rectangle
+2d.line.cap.invalid.html	Setting lineCap to invalid values is ignored
+2d.line.cap.open.html	Line caps are drawn at the corners of an unclosed rectangle
+2d.line.cap.round.html	lineCap 'round' is rendered correctly
+2d.line.cap.square.html	lineCap 'square' is rendered correctly
+2d.line.cap.valid.html	Setting lineCap to valid values works
+2d.line.defaults.html	Canvas test: 2d.line.defaults
+2d.line.fill.noop.html	Filling a line draws nothing
+2d.line.invalid.strokestyle.html	Verify correct behavior of canvas on an invalid strokeStyle()
+2d.line.join.bevel.html	lineJoin 'bevel' is rendered correctly
+2d.line.join.closed.html	Line joins are drawn at the corner of a closed rectangle
+2d.line.join.invalid.html	Setting lineJoin to invalid values is ignored
+2d.line.join.miter.html	lineJoin 'miter' is rendered correctly
+2d.line.join.open.html	Line joins are not drawn at the corner of an unclosed rectangle
+2d.line.join.parallel.html	Line joins are drawn at 180-degree joins
+2d.line.join.round.html	lineJoin 'round' is rendered correctly
+2d.line.join.valid.html	Setting lineJoin to valid values works
+2d.line.miter.acute.html	Miter joins are drawn correctly with acute angles
+2d.line.miter.exceeded.html	Miter joins are not drawn when the miter limit is exceeded
+2d.line.miter.invalid.html	Setting miterLimit to invalid values is ignored
+2d.line.miter.lineedge.html	Miter joins are not drawn when the miter limit is exceeded at the corners of a zero-height rectangle
+2d.line.miter.rightangle.html	Miter joins are not drawn when the miter limit is exceeded, on exact right angles
+2d.line.miter.valid.html	Setting miterLimit to valid values works
+2d.line.miter.within.html	Miter joins are drawn when the miter limit is not quite exceeded
+2d.line.union.html	Canvas test: 2d.line.union
+2d.line.width.basic.html	lineWidth determines the width of line strokes
+2d.line.width.invalid.html	Setting lineWidth to invalid values is ignored
+2d.line.width.scaledefault.html	Default lineWidth strokes are affected by scale transformations
+2d.line.width.transformed.html	Line stroke widths are affected by scale transformations
+2d.line.width.valid.html	Setting lineWidth to valid values works

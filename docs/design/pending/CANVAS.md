@@ -286,8 +286,9 @@ context including resize peaks. Callers may lower these literal limits; their
 shared owner ledger also enforces aggregate page usage. These are bounded
 native defaults, not measured promises about the live targets. Before browser
 integration freezes policy, C2 must measure concurrent target bitmaps and
-coordinate the page-wide budget. Pixel draws allocate nothing after admission;
-reset prepares replacement storage before clearing or releasing retained
+coordinate the page-wide budget. The unclipped source-over rectangle fast path
+and pixel transfers allocate nothing after admission; path drawing uses scratch
+charged to the same owner ledger. A reset prepares replacement storage before clearing or releasing retained
 state. Read-only pixel views expire on successful reset or destruction.
 
 `tools/test_canvas_core.sh` checks literal pixels, fractional/negative
@@ -344,7 +345,7 @@ The context identity remains, `isContextLost()` reports the loss, and a later
 dimension assignment can restore a blank context. Event delivery for loss and
 restoration is explicitly recorded in DEBTS.md.
 
-The exposed profile comprises `getContext("2d")`, `canvas`, solid
+The C2 profile comprises `getContext("2d")`, `canvas`, solid
 `fillStyle`, `globalAlpha`, `save`, `restore`, `reset`, `fillRect`, `clearRect`,
 `createImageData`, `getImageData`, `putImageData` and `isContextLost`.
 ImageData retains its Uint8ClampedArray identity and participates in
@@ -390,3 +391,53 @@ cut a (#403). Subsequent Canvas slices target that integration branch or stack
 on an unmerged Canvas slice. Their review merges accumulate there; promotion
 to `userland` is a separate reviewed integration step. Incorporate concurrent
 Yonder changes explicitly and repeat affected checks before that promotion.
+
+
+## C3 paths, clips and compositing
+
+`libdraw2d/stroke.c` owns the curve-preserving dash cutter extracted from SVG.
+Its callbacks charge the caller's work and allocation ledger and emit centerline
+commands plus isolated cap contours. SVG retains its scene/style adapter;
+Canvas supplies its own cap geometry and the current pen transform. The shared
+cutter has no DOM, scene, FreeType allocator or script dependency. The existing
+SVG fixture pixels remain byte-identical after extraction.
+
+The Canvas current path stores points transformed when each command is appended.
+It is separate from saved drawing state. Stroke maps those retained points back
+through the current transform, constructs the pen and dashes in that user space,
+then maps the resulting outline to device space. A singular pen transform draws
+nothing. Arc/ellipse construction uses cubic Hermite segments with a device-space
+error bound; resource limits produce an explicit refusal. Zero-length segments
+are pruned before stroking; zero-width/height rectangles retain their closed-path
+join semantics.
+
+Drawing state contains the transform, solid stroke style, line width/cap/join,
+miter limit, normalized dash list/offset, composite operator and a reference to
+an immutable clip mask. Save/restore retains that mask; a new clip intersects it
+without changing saved masks. Reset discards paths, clips and the save stack.
+Geometry and coverage are prepared before a draw touches retained pixels. An
+allocation or work refusal leaves the prior pixels and clip intact. Appends
+reserve their command storage before changing the current path.
+
+`draw2d_paint_mask` composites premultiplied ARGB8/16 through coverage and an
+optional clip. The profile includes the Porter–Duff operators, copy, xor and
+lighter; clearRect ignores paint, alpha and the selected operator. Operators
+whose transparent source changes the destination process the uncovered portion
+inside the clip as well. ImageData transfer still ignores drawing state. Canvas
+continues using C2's damage/presentation path; C3 adds no frame loop.
+
+Bindings add current-path construction, fill/stroke/clip, strokeRect, transform
+operations, setTransform's numeric and dictionary forms, line styles and dashes,
+and globalCompositeOperation. Numeric conversions and sequence iteration finish
+before acquiring native state, so script callbacks can resize safely. Dash
+iteration converts each yielded item before requesting the next and closes the
+iterator when conversion throws. Defaults bound paths to 4096 commands, dash
+lists to 256 entries after odd-list duplication, and geometry work to 16 Mi units
+per operation, within the existing context and page memory ledgers.
+
+This is a bounded profile, not complete Canvas path conformance. Path2D,
+roundRect, hit testing, DOMMatrix/getTransform and advanced blend modes remain
+outside it. Wide-stroke overlap artifacts and extreme-coordinate refusals are
+recorded separately in DEBTS.md. The four-card gallery is
+`tools/pages/canvas-paths.html`; evidence and the upstream pass/fail census are
+in [C3 validation](../../canvas-evidence/c3-validation.md).

@@ -6,6 +6,8 @@
 [excluded]
 [passing]
 2d.state.saverestore.bitmap.html	save()/restore() does not affect the current bitmap
+2d.state.saverestore.clip.2.html	save()/restore() affects the clipping path
+2d.state.saverestore.clip.html	save()/restore() affects the clipping path
 2d.state.saverestore.fillStyle.html	save() does not modify fillStyle, for a canvas of size (0, 0).
 2d.state.saverestore.fillStyle.html	save() does not modify fillStyle, for a canvas of size (300, 150).
 2d.state.saverestore.fillStyle.html	save()/restore() restores fillStyle, for a canvas of size (0, 0).
@@ -18,14 +20,25 @@
 2d.state.saverestore.globalAlpha.html	save()/restore() restores globalAlpha, for a canvas of size (300, 150).
 2d.state.saverestore.globalCompositeOperation.html	save() does not modify globalCompositeOperation, for a canvas of size (0, 0).
 2d.state.saverestore.globalCompositeOperation.html	save() does not modify globalCompositeOperation, for a canvas of size (300, 150).
+2d.state.saverestore.globalCompositeOperation.html	save()/restore() restores globalCompositeOperation, for a canvas of size (0, 0).
+2d.state.saverestore.globalCompositeOperation.html	save()/restore() restores globalCompositeOperation, for a canvas of size (300, 150).
 2d.state.saverestore.lineCap.html	save() does not modify lineCap, for a canvas of size (0, 0).
 2d.state.saverestore.lineCap.html	save() does not modify lineCap, for a canvas of size (300, 150).
+2d.state.saverestore.lineCap.html	save()/restore() restores lineCap, for a canvas of size (0, 0).
+2d.state.saverestore.lineCap.html	save()/restore() restores lineCap, for a canvas of size (300, 150).
 2d.state.saverestore.lineJoin.html	save() does not modify lineJoin, for a canvas of size (0, 0).
 2d.state.saverestore.lineJoin.html	save() does not modify lineJoin, for a canvas of size (300, 150).
+2d.state.saverestore.lineJoin.html	save()/restore() restores lineJoin, for a canvas of size (0, 0).
+2d.state.saverestore.lineJoin.html	save()/restore() restores lineJoin, for a canvas of size (300, 150).
 2d.state.saverestore.lineWidth.html	save() does not modify lineWidth, for a canvas of size (0, 0).
 2d.state.saverestore.lineWidth.html	save() does not modify lineWidth, for a canvas of size (300, 150).
+2d.state.saverestore.lineWidth.html	save()/restore() restores lineWidth, for a canvas of size (0, 0).
+2d.state.saverestore.lineWidth.html	save()/restore() restores lineWidth, for a canvas of size (300, 150).
 2d.state.saverestore.miterLimit.html	save() does not modify miterLimit, for a canvas of size (0, 0).
 2d.state.saverestore.miterLimit.html	save() does not modify miterLimit, for a canvas of size (300, 150).
+2d.state.saverestore.miterLimit.html	save()/restore() restores miterLimit, for a canvas of size (0, 0).
+2d.state.saverestore.miterLimit.html	save()/restore() restores miterLimit, for a canvas of size (300, 150).
+2d.state.saverestore.path.html	save()/restore() does not affect the current path
 2d.state.saverestore.shadowBlur.html	save() does not modify shadowBlur, for a canvas of size (0, 0).
 2d.state.saverestore.shadowBlur.html	save() does not modify shadowBlur, for a canvas of size (300, 150).
 2d.state.saverestore.shadowColor.html	save() does not modify shadowColor, for a canvas of size (0, 0).
@@ -34,10 +47,14 @@
 2d.state.saverestore.shadowOffsetX.html	save() does not modify shadowOffsetX, for a canvas of size (300, 150).
 2d.state.saverestore.shadowOffsetY.html	save() does not modify shadowOffsetY, for a canvas of size (0, 0).
 2d.state.saverestore.shadowOffsetY.html	save() does not modify shadowOffsetY, for a canvas of size (300, 150).
+2d.state.saverestore.stack.html	save()/restore() can be nested as a stack
 2d.state.saverestore.strokeStyle.html	save() does not modify strokeStyle, for a canvas of size (0, 0).
 2d.state.saverestore.strokeStyle.html	save() does not modify strokeStyle, for a canvas of size (300, 150).
+2d.state.saverestore.strokeStyle.html	save()/restore() restores strokeStyle, for a canvas of size (0, 0).
+2d.state.saverestore.strokeStyle.html	save()/restore() restores strokeStyle, for a canvas of size (300, 150).
 2d.state.saverestore.textAlign.html	save() does not modify textAlign, for a canvas of size (0, 0).
 2d.state.saverestore.textAlign.html	save() does not modify textAlign, for a canvas of size (300, 150).
 2d.state.saverestore.textBaseline.html	save() does not modify textBaseline, for a canvas of size (0, 0).
 2d.state.saverestore.textBaseline.html	save() does not modify textBaseline, for a canvas of size (300, 150).
+2d.state.saverestore.transformation.html	save()/restore() affects the current transformation matrix
 2d.state.saverestore.underflow.html	restore() with an empty stack has no effect

@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — A Little Off the Straight and Narrow</title>
+<style>
+body { margin:0; background:#eef3e9; color:#263e35; font:18px sans-serif; }
+main { max-width:960px; margin:32px auto; padding:0 24px; }
+h1 { font-size:38px; margin:8px 0 12px; } h2 { font-size:23px; margin:0 0 12px; }
+p { line-height:1.5; } .eyebrow { color:#537b67; font-size:14px; letter-spacing:3px; }
+.cards { display:flex; flex-wrap:wrap; gap:20px; }
+.card { width:400px; padding:20px; border:1px solid #bdcdbb; background:#fffdf5; border-radius:12px; }
+canvas { width:100%; height:180px; display:block; background:#e1eade; border:1px solid #9fb49f; }
+button { margin-top:12px; padding:10px 16px; background:#285e4a; color:white; border:0; border-radius:6px; font-size:16px; }
+.caption { font-size:15px; min-height:66px; }
+.ticket { position:relative; height:180px; background:#315e4c; }
+.ticket p { position:absolute; top:32px; left:26px; color:#fff3c5; font-size:28px; font-weight:bold; }
+.ticket canvas { position:absolute; left:0; top:0; background:transparent; }
+</style>
+<main>
+<p class="eyebrow">YONDER / CANVAS 2D / C3</p>
+<h1>A Little Off the Straight and Narrow</h1>
+<p>Curves, spinning pens, stencils—and something worth scratching.</p>
+<p id="status">Enable Scripts and Modern Web, then reload.</p>
+<div class="cards">
+<section class="card"><h2>1. Taking the scenic route</h2><canvas id="route" width="400" height="180"></canvas>
+<p class="caption">One curved route, two dashed lanes. The button shifts the dashes. Rapid clicks are welcome.</p><button id="march">Take another step</button></section>
+<section class="card"><h2>2. A different angle</h2><canvas id="turn" width="400" height="180"></canvas>
+<p class="caption">Saved transforms turn and stretch each petal. Stroke outlines stretch with the pen.</p><button id="spin">Turn the drawing</button></section>
+<section class="card"><h2>3. Through the stencil</h2><canvas id="stencil" width="400" height="180"></canvas>
+<p class="caption">Paint stays inside the ring. Its empty center and the frame remain untouched when the stripes move.</p><button id="slide">Slide the stripes</button></section>
+<section class="card"><h2>4. A little scratch of luck</h2><div class="ticket"><p>YOU FOUND<br>THE PIXELS!</p><canvas id="scratch" width="400" height="180"></canvas></div>
+<p class="caption">Each click erases a curved stroke from the gold coating. After six scratches, the next click recoats it.</p><button id="reveal">Scratch / recoat</button></section>
+</div>
+<p>Try 25%–400% zoom. These buttons draw immediately; continuous animation and pointer-driven scratching come later.</p>
+</main>
+<script>
+(function(){
+  function context(id){return document.getElementById(id).getContext('2d');}
+  var route=context('route'),turn=context('turn'),stencil=context('stencil'),scratch=context('scratch');
+  var phase=0,angle=0,shift=0,scratches=0;
+  function road(){
+    route.clearRect(0,0,400,180);route.beginPath();route.moveTo(18,120);
+    route.bezierCurveTo(110,-35,270,240,382,58);
+    route.lineWidth=36;route.lineCap='round';route.setLineDash([]);route.strokeStyle='#386853';route.stroke();
+    route.lineWidth=5;route.setLineDash([12,14]);route.lineDashOffset=phase;
+    route.strokeStyle='#ffdb87';route.stroke();
+    route.save();route.translate(0,12);route.beginPath();route.moveTo(18,120);
+    route.bezierCurveTo(110,-35,270,240,382,58);route.lineWidth=3;route.lineDashOffset=-phase;
+    route.strokeStyle='#e7f0d9';route.stroke();route.restore();
+  }
+  function flower(){
+    turn.clearRect(0,0,400,180);turn.save();turn.translate(200,90);turn.rotate(angle);
+    for(var i=0;i<8;i++){
+      turn.save();turn.rotate(i*Math.PI/4);turn.scale(1.6,.7);turn.beginPath();
+      turn.moveTo(14,0);turn.quadraticCurveTo(50,-26,68,0);turn.quadraticCurveTo(50,26,14,0);turn.closePath();
+      turn.fillStyle=i%2?'#e5ab56':'#679983';turn.fill();turn.lineWidth=3;turn.strokeStyle='#315b4b';turn.stroke();turn.restore();
+    }
+    turn.beginPath();turn.arc(0,0,13,0,Math.PI*2);turn.fillStyle='#fff1b7';turn.fill();turn.restore();
+  }
+  function stripes(){
+    stencil.clearRect(0,0,400,180);stencil.save();stencil.beginPath();
+    stencil.ellipse(200,90,162,70,0,0,Math.PI*2);stencil.moveTo(270,90);
+    stencil.ellipse(200,90,70,32,0,0,Math.PI*2);stencil.clip('evenodd');
+    for(var x=-80;x<480;x+=32){stencil.fillStyle=((x+80)/32)%2?'#e6b15b':'#649780';stencil.fillRect(x+shift,0,22,180);}
+    stencil.restore();stencil.strokeStyle='#315e4c';stencil.lineWidth=3;stencil.strokeRect(12,12,376,156);
+  }
+  function coat(){scratch.reset();scratch.fillStyle='#dfb15b';scratch.fillRect(0,0,400,180);
+    scratch.strokeStyle='#bd8b3c';scratch.lineWidth=2;for(var x=-180;x<400;x+=24){scratch.beginPath();scratch.moveTo(x,0);scratch.lineTo(x+180,180);scratch.stroke();}}
+  document.getElementById('march').onclick=function(){phase+=5;road();};
+  document.getElementById('spin').onclick=function(){angle+=Math.PI/16;flower();};
+  document.getElementById('slide').onclick=function(){shift=(shift+7)%32;stripes();};
+  document.getElementById('reveal').onclick=function(){
+    if(scratches===6){scratches=0;coat();return;}
+    scratch.save();scratch.globalCompositeOperation='destination-out';scratch.lineWidth=25;scratch.lineCap='round';
+    scratch.beginPath();scratch.moveTo(24,20+scratches*27);
+    scratch.bezierCurveTo(120,-12+scratches*27,260,58+scratches*27,376,20+scratches*27);scratch.stroke();scratch.restore();scratches++;
+  };
+  road();flower();stripes();coat();
+  document.getElementById('status').textContent='Four live drawings. Every button changes the retained canvas pixels.';
+})();
+</script>

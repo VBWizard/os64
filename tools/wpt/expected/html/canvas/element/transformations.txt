@@ -1,0 +1,30 @@
+# WPT's html/canvas/element/transformations in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/transformations --update
+# rewrites [passing].
+[required]
+2d.transformation.order.html	Transformations are applied in the right order
+2d.transformation.scale.negative.html	scale() with negative scale factors works
+[excluded]
+[passing]
+2d.transformation.order.html	Transformations are applied in the right order
+2d.transformation.rotate.direction.html	rotate() is clockwise
+2d.transformation.rotate.nonfinite.html	rotate() with Infinity/NaN is ignored
+2d.transformation.rotate.radians.html	rotate() uses radians
+2d.transformation.rotate.wrap.html	rotate() wraps large positive values correctly
+2d.transformation.rotate.wrapnegative.html	rotate() wraps large negative values correctly
+2d.transformation.rotate.zero.html	rotate() by 0 does nothing
+2d.transformation.scale.basic.html	scale() works
+2d.transformation.scale.multiple.html	Multiple scale()s combine
+2d.transformation.scale.negative.html	scale() with negative scale factors works
+2d.transformation.scale.nonfinite.html	scale() with Infinity/NaN is ignored
+2d.transformation.scale.zero.html	scale() with a scale factor of zero works
+2d.transformation.setTransform.multiple.html	Canvas test: 2d.transformation.setTransform.multiple
+2d.transformation.setTransform.nonfinite.html	setTransform() with Infinity/NaN is ignored
+2d.transformation.setTransform.skewed.html	Canvas test: 2d.transformation.setTransform.skewed
+2d.transformation.transform.identity.html	transform() with the identity matrix does nothing
+2d.transformation.transform.multiply.html	transform() multiplies the CTM
+2d.transformation.transform.nonfinite.html	transform() with Infinity/NaN is ignored
+2d.transformation.transform.skewed.html	transform() with skewy matrix transforms correctly
+2d.transformation.translate.basic.html	translate() works
+2d.transformation.translate.nonfinite.html	translate() with Infinity/NaN is ignored

@@ -8,18 +8,28 @@
  * serialized by that owner; callbacks must not reenter the context. */
 typedef struct canvas_context canvas_context_t;
 typedef enum {
-    CANVAS_OK, CANVAS_BAD_ARGUMENT, CANVAS_LIMIT, CANVAS_NO_MEMORY, CANVAS_BUSY
+    CANVAS_OK, CANVAS_BAD_ARGUMENT, CANVAS_LIMIT, CANVAS_NO_MEMORY, CANVAS_BUSY, CANVAS_UNSUPPORTED
 } canvas_status_t;
 typedef struct {
     os64_geometry_memory_t memory; /* Shared owner ledger, including temporary resize peaks. */
     uint32_t max_dimension;
     uint64_t max_pixels, max_draw_pixels;
     size_t max_bytes, max_saved_states; /* Literal limits, including zero. */
+    const os64_geometry_backend_t *geometry; /* Borrowed backend table; NULL refuses path rendering. */
+    size_t max_commands;
+    uint64_t max_geometry_work;
 } canvas_options_t;
 typedef struct {
     uint32_t fill_argb; /* Straight-alpha sRGB. */
     double global_alpha;
     double fill_alpha; /* Unquantized source alpha for state serialization. */
+    uint32_t stroke_argb;
+    double stroke_alpha;
+    os64_geometry_map_t transform;
+    os64_geometry_stroke_t line;
+    double dash[256], dash_offset;
+    size_t dash_count;
+    draw2d_operator_t composite;
 } canvas_state_t;
 typedef struct {
     const uint32_t *pixels; /* Borrowed premultiplied 0xAARRGGBB, sRGB. */
@@ -57,10 +67,30 @@ canvas_status_t canvas_set_fill(canvas_context_t *, uint32_t straight_argb);
 canvas_status_t canvas_set_fill_rgb_alpha(canvas_context_t *, uint32_t rgb, double alpha);
 /* Nonfinite/out-of-range values are ignored, matching Canvas assignment. */
 canvas_status_t canvas_set_alpha(canvas_context_t *, double);
-/* Axis-aligned bitmap-space rectangles; transform/path support is tracked in
- * CANVAS.md C3. clear ignores the fill color and global alpha. */
+/* Rectangles use the current transform and clip without altering the current
+ * path. clear ignores paint, alpha and the composite operator. */
 canvas_status_t canvas_fill_rect(canvas_context_t *, double x, double y, double w, double h);
 canvas_status_t canvas_clear_rect(canvas_context_t *, double x, double y, double w, double h);
+/* The current path stores transformed points and is not saved/restored.
+ * Appends are transactional on resource refusal; nonfinite arguments leave
+ * it unchanged. arcTo establishes an empty path's first point before rejecting
+ * a negative radius. Stroke uses current transform's pen in user space. */
+canvas_status_t canvas_begin_path(canvas_context_t *);
+canvas_status_t canvas_path_command(canvas_context_t *, const os64_geometry_command_t *);
+canvas_status_t canvas_path_rect(canvas_context_t *, double x,double y,double w,double h);
+canvas_status_t canvas_ellipse(canvas_context_t *,double x,double y,double rx,double ry,
+    double rotation,double start,double end,bool anticlockwise);
+canvas_status_t canvas_arc_to(canvas_context_t *,double x1,double y1,double x2,double y2,double radius);
+canvas_status_t canvas_fill(canvas_context_t *,bool even_odd);
+canvas_status_t canvas_stroke(canvas_context_t *);
+canvas_status_t canvas_clip(canvas_context_t *,bool even_odd);
+canvas_status_t canvas_stroke_rect(canvas_context_t *,double x,double y,double w,double h);
+canvas_status_t canvas_transform(canvas_context_t *,const os64_geometry_map_t *,bool replace);
+canvas_status_t canvas_set_stroke(canvas_context_t *,uint32_t rgb,double alpha);
+canvas_status_t canvas_set_line(canvas_context_t *,const os64_geometry_stroke_t *);
+canvas_status_t canvas_set_dash(canvas_context_t *,const double *,size_t);
+canvas_status_t canvas_set_dash_offset(canvas_context_t *,double);
+canvas_status_t canvas_set_composite(canvas_context_t *,draw2d_operator_t);
 /* Pixel transfer ignores drawing state. Read fills out-of-bitmap samples
  * with transparent black; put replaces the intersection, optionally limited
  * by a source-coordinate dirty rectangle. The binding normalizes WebIDL

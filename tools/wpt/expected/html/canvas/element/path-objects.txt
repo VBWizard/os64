@@ -1,0 +1,128 @@
+# WPT's html/canvas/element/path-objects in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/path-objects --update
+# rewrites [passing].
+[required]
+2d.path.transformation.changing.html	Transformations are applied while building paths, not when drawing
+2d.path.stroke.scale2.html	Stroke line widths are scaled by the current transformation matrix
+2d.path.clip.winding.evenodd.1.html	evenodd winding number rule works in clip
+2d.path.clip.intersect.html	Canvas test: 2d.path.clip.intersect
+[excluded]
+[passing]
+2d.path.arc.angle.1.html	arc() draws pi/2 .. -pi anticlockwise correctly
+2d.path.arc.angle.2.html	arc() draws -3pi/2 .. -pi anticlockwise correctly
+2d.path.arc.angle.3.html	arc() wraps angles mod 2pi when anticlockwise and end > start+2pi
+2d.path.arc.angle.4.html	arc() draws a full circle when clockwise and end > start+2pi
+2d.path.arc.angle.5.html	arc() wraps angles mod 2pi when clockwise and start > end+2pi
+2d.path.arc.angle.6.html	arc() draws a full circle when anticlockwise and start > end+2pi
+2d.path.arc.default.html	arc() with missing last argument defaults to clockwise
+2d.path.arc.empty.html	arc() with an empty path does not draw a straight line to the start point
+2d.path.arc.end.html	arc() adds the end point of the arc to the subpath
+2d.path.arc.nonempty.html	arc() with a non-empty path does draw a straight line to the start point
+2d.path.arc.nonfinite.html	arc() with Infinity/NaN is ignored
+2d.path.arc.scale.1.html	Non-uniformly scaled arcs are the right shape
+2d.path.arc.scale.2.html	Highly scaled arcs are the right shape
+2d.path.arc.selfintersect.1.html	arc() with lineWidth > 2*radius is drawn sensibly
+2d.path.arc.shape.1.html	arc() from 0 to pi does not draw anything in the wrong half
+2d.path.arc.shape.2.html	arc() from 0 to pi draws stuff in the right half
+2d.path.arc.shape.3.html	arc() from 0 to -pi/2 does not draw anything in the wrong quadrant
+2d.path.arc.shape.4.html	arc() from 0 to -pi/2 draws stuff in the right quadrant
+2d.path.arc.shape.5.html	arc() from 0 to 5pi does not draw crazy things
+2d.path.arc.twopie.1.html	arc() draws nothing when end = start + 2pi-e and anticlockwise
+2d.path.arc.twopie.2.html	arc() draws a full circle when end = start + 2pi-e and clockwise
+2d.path.arc.twopie.3.html	arc() draws a full circle when end = start + 2pi+e and anticlockwise
+2d.path.arc.twopie.4.html	arc() draws nothing when end = start + 2pi+e and clockwise
+2d.path.arc.twopie.5.html	arc() draws correctly when start = 2 and end = start + 2pi+e and clockwise
+2d.path.arc.twopie.6.html	arc() draws correctly when start = 5 and end = start + 2pi+e and clockwise
+2d.path.arc.zero.1.html	arc() draws nothing when startAngle = endAngle and anticlockwise
+2d.path.arc.zero.2.html	arc() draws nothing when startAngle = endAngle and clockwise
+2d.path.arc.zeroradius.html	arc() with zero radius draws a line to the start point
+2d.path.arcTo.coincide.1.html	arcTo() has no effect if P0 = P1
+2d.path.arcTo.coincide.2.html	arcTo() draws a straight line to P1 if P1 = P2
+2d.path.arcTo.collinear.1.html	arcTo() with all points on a line, and P1 between P0/P2, draws a straight line to P1
+2d.path.arcTo.collinear.2.html	arcTo() with all points on a line, and P2 between P0/P1, draws a straight line to P1
+2d.path.arcTo.collinear.3.html	arcTo() with all points on a line, and P0 between P1/P2, draws a straight line to P1
+2d.path.arcTo.ensuresubpath.1.html	If there is no subpath, the first control point is added (and nothing is drawn up to it)
+2d.path.arcTo.ensuresubpath.2.html	If there is no subpath, the first control point is added
+2d.path.arcTo.ensuresubpath.3.html	If there is no subpath, the first control point is added (and nothing is drawn up to it)
+2d.path.arcTo.nonfinite.html	arcTo() with Infinity/NaN is ignored
+2d.path.arcTo.scale.html	arcTo scales the curve, not just the control points
+2d.path.arcTo.shape.curve1.html	arcTo() curves in the right kind of shape
+2d.path.arcTo.shape.curve2.html	arcTo() curves in the right kind of shape
+2d.path.arcTo.shape.end.html	arcTo() does not draw anything from P1 to P2
+2d.path.arcTo.shape.start.html	arcTo() draws a straight line from P0 to P1
+2d.path.arcTo.transformation.html	arcTo joins up to the last subpath point correctly
+2d.path.arcTo.zero.1.html	arcTo() with zero radius draws a straight line from P0 to P1
+2d.path.arcTo.zero.2.html	arcTo() with zero radius draws a straight line from P0 to P1, even when all points are collinear
+2d.path.beginPath.html	Canvas test: 2d.path.beginPath
+2d.path.bezierCurveTo.basic.html	Canvas test: 2d.path.bezierCurveTo.basic
+2d.path.bezierCurveTo.ensuresubpath.1.html	If there is no subpath, the first control point is added (and nothing is drawn up to it)
+2d.path.bezierCurveTo.ensuresubpath.2.html	If there is no subpath, the first control point is added
+2d.path.bezierCurveTo.nonfinite.html	bezierCurveTo() with Infinity/NaN is ignored
+2d.path.clip.basic.1.html	Canvas test: 2d.path.clip.basic.1
+2d.path.clip.basic.2.html	Canvas test: 2d.path.clip.basic.2
+2d.path.clip.empty.html	Canvas test: 2d.path.clip.empty
+2d.path.clip.intersect.html	Canvas test: 2d.path.clip.intersect
+2d.path.clip.unaffected.html	Canvas test: 2d.path.clip.unaffected
+2d.path.clip.winding.1.html	Canvas test: 2d.path.clip.winding.1
+2d.path.clip.winding.2.html	Canvas test: 2d.path.clip.winding.2
+2d.path.clip.winding.evenodd.1.html	evenodd winding number rule works in clip
+2d.path.closePath.empty.html	Canvas test: 2d.path.closePath.empty
+2d.path.closePath.newline.html	Canvas test: 2d.path.closePath.newline
+2d.path.closePath.nextpoint.html	Canvas test: 2d.path.closePath.nextpoint
+2d.path.closed.arc.html	line caps should not be drawn on closed arcs
+2d.path.ellipse.basics.html	Verify canvas throws error when drawing ellipse with negative radii.
+2d.path.fill.closed.basic.html	Canvas test: 2d.path.fill.closed.basic
+2d.path.fill.closed.unaffected.html	Canvas test: 2d.path.fill.closed.unaffected
+2d.path.fill.overlap.html	Canvas test: 2d.path.fill.overlap
+2d.path.fill.winding.add.html	Canvas test: 2d.path.fill.winding.add
+2d.path.fill.winding.evenodd.1.html	evenodd winding number rule works in fill
+2d.path.fill.winding.subtract.1.html	Canvas test: 2d.path.fill.winding.subtract.1
+2d.path.fill.winding.subtract.2.html	Canvas test: 2d.path.fill.winding.subtract.2
+2d.path.fill.winding.subtract.3.html	Canvas test: 2d.path.fill.winding.subtract.3
+2d.path.initial.html	Canvas test: 2d.path.initial
+2d.path.lineTo.basic.html	Canvas test: 2d.path.lineTo.basic
+2d.path.lineTo.ensuresubpath.1.html	If there is no subpath, the point is added and nothing is drawn
+2d.path.lineTo.ensuresubpath.2.html	If there is no subpath, the point is added and used for subsequent drawing
+2d.path.lineTo.nextpoint.html	Canvas test: 2d.path.lineTo.nextpoint
+2d.path.lineTo.nonfinite.details.html	lineTo() with Infinity/NaN for first arg still converts the second arg
+2d.path.lineTo.nonfinite.html	lineTo() with Infinity/NaN is ignored
+2d.path.moveTo.basic.html	Canvas test: 2d.path.moveTo.basic
+2d.path.moveTo.multiple.html	Canvas test: 2d.path.moveTo.multiple
+2d.path.moveTo.newsubpath.html	Canvas test: 2d.path.moveTo.newsubpath
+2d.path.moveTo.nonfinite.html	moveTo() with Infinity/NaN is ignored
+2d.path.open.arc.html	line caps should be drawn on open arcs
+2d.path.quadraticCurveTo.basic.html	Canvas test: 2d.path.quadraticCurveTo.basic
+2d.path.quadraticCurveTo.ensuresubpath.1.html	If there is no subpath, the first control point is added (and nothing is drawn up to it)
+2d.path.quadraticCurveTo.ensuresubpath.2.html	If there is no subpath, the first control point is added
+2d.path.quadraticCurveTo.nonfinite.html	quadraticCurveTo() with Infinity/NaN is ignored
+2d.path.quadraticCurveTo.scaled.html	Canvas test: 2d.path.quadraticCurveTo.scaled
+2d.path.quadraticCurveTo.shape.html	Canvas test: 2d.path.quadraticCurveTo.shape
+2d.path.rect.basic.html	Canvas test: 2d.path.rect.basic
+2d.path.rect.closed.html	Canvas test: 2d.path.rect.closed
+2d.path.rect.end.1.html	Canvas test: 2d.path.rect.end.1
+2d.path.rect.negative.html	Canvas test: 2d.path.rect.negative
+2d.path.rect.newsubpath.html	Canvas test: 2d.path.rect.newsubpath
+2d.path.rect.nonfinite.html	rect() with Infinity/NaN is ignored
+2d.path.rect.winding.html	Canvas test: 2d.path.rect.winding
+2d.path.rect.zero.1.html	Canvas test: 2d.path.rect.zero.1
+2d.path.rect.zero.2.html	Canvas test: 2d.path.rect.zero.2
+2d.path.rect.zero.3.html	Canvas test: 2d.path.rect.zero.3
+2d.path.rect.zero.4.html	Canvas test: 2d.path.rect.zero.4
+2d.path.rect.zero.5.html	Canvas test: 2d.path.rect.zero.5
+2d.path.rect.zero.6.html	Canvas test: 2d.path.rect.zero.6
+2d.path.stroke.empty.html	Empty subpaths are not stroked
+2d.path.stroke.overlap.html	Stroked subpaths are combined before being drawn
+2d.path.stroke.prune.arc.html	Zero-length line segments from arcTo and arc are removed before stroking
+2d.path.stroke.prune.closed.html	Zero-length line segments from closed paths are removed before stroking
+2d.path.stroke.prune.corner.html	Zero-length line segments are removed before stroking with miters
+2d.path.stroke.prune.curve.html	Zero-length line segments from quadraticCurveTo and bezierCurveTo are removed before stroking
+2d.path.stroke.prune.line.html	Zero-length line segments from lineTo are removed before stroking
+2d.path.stroke.prune.rect.html	Zero-length line segments from rect and strokeRect are removed before stroking
+2d.path.stroke.scale1.html	Stroke line widths are scaled by the current transformation matrix
+2d.path.stroke.scale2.html	Stroke line widths are scaled by the current transformation matrix
+2d.path.stroke.unaffected.html	Stroking does not start a new path or subpath
+2d.path.stroke.union.html	Strokes in opposite directions are unioned, not subtracted
+2d.path.transformation.basic.html	Canvas test: 2d.path.transformation.basic
+2d.path.transformation.changing.html	Transformations are applied while building paths, not when drawing
+2d.path.transformation.multiple.html	Transformations are applied while building paths, not when drawing

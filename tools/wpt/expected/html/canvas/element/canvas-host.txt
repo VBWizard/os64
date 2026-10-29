@@ -8,8 +8,17 @@
 2d.canvas.host.initial.color.html	Initial state is transparent black
 2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets fillStyle
 2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets globalAlpha
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets globalCompositeOperation
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets lineCap
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets lineJoin
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets lineWidth
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets miterLimit
+2d.canvas.host.initial.reset.2dstate.html	Resetting the canvas state resets strokeStyle
+2d.canvas.host.initial.reset.clip.html	Resetting the canvas state resets the current clip region
 2d.canvas.host.initial.reset.different.html	Changing size resets canvas to transparent black
+2d.canvas.host.initial.reset.path.html	Resetting the canvas state resets the current path
 2d.canvas.host.initial.reset.same.html	Setting size (not changing the value) resets canvas to transparent black
+2d.canvas.host.initial.reset.transform.html	Resetting the canvas state resets the current transformation matrix
 2d.canvas.host.readonly.html	Canvas objects are readonly
 2d.canvas.host.reference.html	canvas refers back to its canvas
 2d.canvas.host.size.attributes.default.html	Default width/height when attributes are missing
