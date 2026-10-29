@@ -30,6 +30,9 @@ static os64_html_document_t *told_doc;
 static bool told_hold;
 static const HNode *held_by_listener[64];
 static size_t nheld_by_listener;
+// Set while the parser is listened to: the parser makes a text node with
+// its first character in it, so no text it adds is empty.
+static bool told_texts_full;
 
 static void listen(void *opaque, const os64_html_change_t *c)
 {
@@ -51,6 +54,8 @@ static void listen(void *opaque, const os64_html_change_t *c)
         const HNode *n = c->added;
         for (size_t i = 0; i < c->nadded && i < RUN_MAX; i++, n = n ? n->next : NULL) {
             check(n && n->parent == c->target, "listener: added node %zu lies in the target", i);
+            if (told_texts_full && n && n->kind == OS64_HTML_TEXT)
+                check(n->text_len > 0, "listener: a text the parser adds has its data when told");
             t->added[i] = n;
         }
         n = c->removed;
@@ -82,6 +87,7 @@ static void listen_to(os64_html_document_t *doc)
 {
     told_doc = doc;
     ntold = told_dropped = 0;
+    told_texts_full = false;
     os64_html_observe(doc, listen, doc);
 }
 static void release_listener_holds(void)
@@ -240,8 +246,10 @@ static void t_observe_children(void)
               told_children(&told[1], a, em, 1, i1, 1, NULL, u),
           "a replace by a node from elsewhere: its removal, then one record with both lists");
     m_apply_told();
-    // The node `old` stood beside: it leaves from between `old`'s
-    // neighbours, since `old` has gone first.
+    // The node beside `old`: the standard adopts it, taking it out, before
+    // it takes `old` out, so it leaves from beside `old` (WPT's n52), and
+    // the parent's record names the siblings `old` had before anything
+    // moved: the node itself, when it stood just before `old`.
     HNode *left = os64_html_create_element(doc, OS64_HTML_NS_HTML, "q", NULL),
           *old = os64_html_create_element(doc, OS64_HTML_NS_HTML, "q", NULL),
           *beside = os64_html_create_element(doc, OS64_HTML_NS_HTML, "q", NULL),
@@ -253,9 +261,16 @@ static void t_observe_children(void)
     m_apply_told();
     ntold = 0;
     check(os64_html_replace(doc, b, beside, old) == OS64_HTML_OK && ntold == 2 &&
-              told_children(&told[0], b, NULL, 0, beside, 1, left, right) &&
+              told_children(&told[0], b, NULL, 0, beside, 1, old, right) &&
               told_children(&told[1], b, beside, 1, old, 1, left, right),
-          "a replace by the node beside `old`: it leaves from between `old`'s neighbours");
+          "a replace by the node after `old`: it leaves from beside `old`, which is still there");
+    m_apply_told();
+    // Now b is t1, left, beside, right: `left` replaces `beside`.
+    ntold = 0;
+    check(os64_html_replace(doc, b, left, beside) == OS64_HTML_OK && ntold == 2 &&
+              told_children(&told[0], b, NULL, 0, left, 1, t1, beside) &&
+              told_children(&told[1], b, left, 1, beside, 1, left, right),
+          "a replace by the node before `old`: the parent's previous sibling is that node itself");
     m_apply_told();
     HNode *fresh = os64_html_create_element(doc, OS64_HTML_NS_HTML, "s", NULL);
     ntold = 0;
@@ -264,12 +279,14 @@ static void t_observe_children(void)
           "a replace by a detached node: one record");
     m_apply_told();
 
-    // A replace by itself moves nothing and is still one record.
+    // A replace by itself moves nothing and is two records: the node leaves
+    // as it is adopted, and comes back with nothing removed (WPT's n53).
     ntold = 0;
     version = os64_html_version(doc);
-    check(os64_html_replace(doc, a, fresh, fresh) == OS64_HTML_OK && ntold == 1 &&
-              told_children(&told[0], a, fresh, 1, fresh, 1, em, i2) && os64_html_version(doc) == version,
-          "a node replaced by itself: one record, and the version stays");
+    check(os64_html_replace(doc, a, fresh, fresh) == OS64_HTML_OK && ntold == 2 &&
+              told_children(&told[0], a, NULL, 0, fresh, 1, em, i2) &&
+              told_children(&told[1], a, fresh, 1, NULL, 0, em, i2) && os64_html_version(doc) == version,
+          "a node replaced by itself: its removal, then its insertion, and the version stays");
     m_apply_told();
 
     // An insert where the node already sits: out and back in, and the
@@ -441,6 +458,7 @@ static os64_html_parser_t *parser_listened(void)
     os64_html_document_t *doc = os64_html_parser_document(p);
     m_start(doc->document);
     listen_to(doc);
+    told_texts_full = true;
     return p;
 }
 static void feed(os64_html_parser_t *p, const char *s)

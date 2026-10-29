@@ -63,16 +63,18 @@ mutants = [
      '    d_tell_placed(d, parent, node, before, NULL, &seen);\n    if (node->kind == FRAGMENT)',
      '    if (node->kind == FRAGMENT)', [HTML]),
     ('replace-self-tells', DOM_C,
-     '        HSeen seen = {.previous = old->prev};\n        d_tell_placed(d, parent, node, old->next, old, &seen);\n',
-     '', [HTML]),
-    ('replace-seen-after-old-leaves', DOM_C,
-     '    take_out(d, old, NULL);\n'
-     '    /* The node leaves its own parent after `old` has gone, so its removal\n'
-     '     * names the siblings it had then; the parent\'s record names `old`\'s. */\n'
-     '    HSeen seen;\n    d_seen(d, parent, node, before, &seen);\n',
-     '    HSeen seen;\n    d_seen(d, parent, node, before, &seen);\n    take_out(d, old, NULL);\n', [HTML]),
-    ('replace-previous', DOM_C, '    seen.previous = previous;', '    seen.previous = previous ? NULL : NULL;',
-     [HTML]),
+     '        d_tell_placed(d, parent, node, old->next, NULL, &seen);\n        return OS64_HTML_OK;',
+     '        return OS64_HTML_OK;', [HTML]),
+    ('replace-self-removes-nothing', DOM_C, '        d_tell_placed(d, parent, node, old->next, NULL, &seen);',
+     '        d_tell_placed(d, parent, node, old->next, old, &seen);', [HTML]),
+    # The standard adopts the new node (its removal) before it takes `old` out.
+    ('replace-seen-before-old-leaves', DOM_C,
+     '    HSeen seen;\n    d_seen(d, parent, node, before, &seen);\n    seen.previous = old->prev;\n'
+     '    moved(d);\n    bool touched = is_landmark_parent(d, parent);\n    take_out(d, old, NULL);\n',
+     '    HNode *previous = old->prev;\n    moved(d);\n    bool touched = is_landmark_parent(d, parent);\n'
+     '    take_out(d, old, NULL);\n    HSeen seen;\n    d_seen(d, parent, node, before, &seen);\n'
+     '    seen.previous = previous;\n', [HTML]),
+    ('replace-previous', DOM_C, '    seen.previous = old->prev;\n    moved(d);', '    moved(d);', [HTML]),
     ('remove-tells-before-reclaim', DOM_C,
      '    d_tell_removed(d, parent, node, prev, next);\n    d_detached(d, node);\n    d_collect(d);',
      '    d_detached(d, node);\n    d_collect(d);\n    d_tell_removed(d, parent, node, prev, next);', [HTML]),
@@ -116,6 +118,9 @@ mutants = [
      '    if (verdict == OS64_HTML_OK)\n        d_tell_placed(d, parent, n, before, NULL, &seen);\n', '', [HTML]),
     ('parser-detach-tells', TREE_C, '    d_tell_removed(d, parent, n, prev, next);\n}',
      '    (void)prev;\n    (void)next;\n}', [HTML]),
+    ('parser-text-before-link', TREE_C,
+     '        if (h_text_put(p, n, c))\n            attach(p, parent, before, n);',
+     '        if (attach(p, parent, before, n))\n            h_text_put(p, n, c);', [HTML]),
     ('parser-append-tells', TREE_C,
      '    if (h_text_put(p, n, c))\n        d_tell_text(p->d, n, n->text, had);',
      '    (void)had;\n    h_text_put(p, n, c);', [HTML]),

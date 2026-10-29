@@ -421,15 +421,17 @@ int64_t os64_html_set_text(os64_html_document_t *doc, os64_html_node_t *node, co
  * are both built on it. A verb that sets an attribute or a text to the
  * value it already has is told too, though the version does not move, and
  * so is a node inserted where it already sits (its removal and its
- * insertion) or replaced by itself (one record). Removing an absent attribute is not a change and is not
- * told, nor is inserting an empty fragment.
+ * insertion) or replaced by itself (the same two). Removing an absent
+ * attribute is not a change and is not told, nor is inserting an empty
+ * fragment.
  *
  * The record shapes are the standard's. A node inserted or replaced in
  * from another parent is two records: its removal from that parent, then
  * the insertion. A fragment drained is two: the fragment's record with its
  * children removed, then the parent's with them added. A replace is one
- * record on the parent, with both lists filled. The siblings are the ones
- * the standard names, read as the tree stood at that step.
+ * record on the parent, with both lists filled; the node it puts in has
+ * left its own parent before the node it takes out goes. The siblings are
+ * the ones the standard names, read as the tree stood at that step.
  *
  * THE DOCUMENT PARSER IS TOLD AS A VERB IS: every node it links in or takes
  * out, every character it appends to a text node, every attribute a second

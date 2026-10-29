@@ -786,25 +786,30 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     int64_t verdict = may_insert(d, parent, node, old, true, NULL);
     if (verdict)
         return verdict;
-    /* Nothing moves, but the standard still takes the node out and puts it
-     * back, and records the two in one. */
+    /* The standard's replace adopts the node, which takes it out of its own
+     * parent, BEFORE it takes `old` out (DOM § 4.2.3, WPT's
+     * MutationObserver-childList): so the node's removal names the siblings
+     * it had with `old` still there, and the parent's record names `old`'s,
+     * read before anything moved (the node itself, when it stood just
+     * before `old`). A node replaced by itself is therefore two records: it
+     * leaves, and by the time `old` would be taken out it has no parent, so
+     * it comes back as an insertion with nothing removed. Nothing moves. */
     if (node == old) {
-        HSeen seen = {.previous = old->prev};
-        d_tell_placed(d, parent, node, old->next, old, &seen);
+        HSeen seen;
+        d_seen(d, parent, node, old->next, &seen);
+        seen.previous = old->prev;
+        d_tell_placed(d, parent, node, old->next, NULL, &seen);
         return OS64_HTML_OK;
     }
     HNode *before = old->next;
     if (before == node)
         before = node->next;
-    HNode *previous = old->prev;
+    HSeen seen;
+    d_seen(d, parent, node, before, &seen);
+    seen.previous = old->prev;
     moved(d);
     bool touched = is_landmark_parent(d, parent);
     take_out(d, old, NULL);
-    /* The node leaves its own parent after `old` has gone, so its removal
-     * names the siblings it had then; the parent's record names `old`'s. */
-    HSeen seen;
-    d_seen(d, parent, node, before, &seen);
-    seen.previous = previous;
     place(d, parent, node, before);
     if (touched)
         landmarks(d, NULL);

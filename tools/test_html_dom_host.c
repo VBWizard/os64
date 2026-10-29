@@ -1877,7 +1877,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             want = r_may(document, (int)(2 * max_depth + 2), y, x, z, true);
             got = os64_html_replace(doc, y->real, x->real, z ? z->real : NULL);
             if (!want)
-                expect_told = x == z || (x->kind == OS64_HTML_FRAGMENT ? !x->nkids : !x->parent) ? 1 : 2;
+                expect_told = x != z && (x->kind == OS64_HTML_FRAGMENT ? !x->nkids : !x->parent) ? 1 : 2;
             if (!want && x != z) {
                 int at = r_index(y, z);
                 R *before = at + 1 < y->nkids ? y->kids[at + 1] : NULL;

@@ -107,10 +107,15 @@ The declaration is RELAYOUT.md's `os64_html_observe` and
     children as `removed`, and the parent's record has them as `added`.
     An observer on a fragment sees it emptied.
   - **A replace is one record** on the parent, with both lists filled,
-    after the separate removal record if the new node had a parent.
+    after the separate removal record if the new node had a parent. The
+    standard adopts the new node, taking it out of its own parent, before
+    it takes the old one out, so that removal names the siblings the node
+    had with the old one still there.
   Each record's `previous_sibling` and `next_sibling` are read as the
-  tree stood at that step. A node replaced by itself is one record too,
-  as the standard has it, though nothing moves.
+  tree stood at that step. A node replaced by itself is therefore two
+  records, though nothing moves: it leaves as it is adopted, and comes
+  back with nothing removed, since by then it has no parent (WPT's
+  `MutationObserver-childList`, n52 and n53).
 - **The node lists are runs, not arrays.** `added` and `removed` are the
   first node and a count, read along `next`. RELAYOUT's record has
   arrays, and a drained fragment would need one allocated inside a verb
@@ -414,7 +419,7 @@ What 5a then holds is the change log, its readers, and the instrument.
 
 | Cut | Builds | Oracle | Size |
 |---|---|---|---|
-| a | libhtml: `os64_html_observe` with the record above, and the `STATE` kind; the document parser's reports on both attach paths and the text append; `ce` and `os64_html_set_ce`; `os64_html_custom_name`. libgarb: `:defined`, honest with the switch on. yonder's census. | libhtml host: one fixture per verb, asserting the records by shape (a move is two, a fragment drained is two, a replace is one, an attribute set to its own value is one), the parser's attachments on both paths and its text appends, and a fragment parse reporting nothing; `set_ce` moves the version and reaches no listener; a clone is PLAIN. libgarb host: `:defined` against each state, switch on and off. Mutants. | S |
+| a | libhtml: `os64_html_observe` with the record above, and the `STATE` kind; the document parser's reports on both attach paths and the text append; `ce` and `os64_html_set_ce`; `os64_html_custom_name`. libgarb: `:defined`, honest with the switch on. yonder's census. | libhtml host: one fixture per verb, asserting the records by shape (a move is two, a fragment drained is two, a replace is one and a replace by itself two, an attribute set to its own value is one), the parser's attachments on both paths and its text appends, and a fragment parse reporting nothing; `set_ce` moves the version and reaches no listener; a clone is PLAIN. libgarb host: `:defined` against each state, switch on and off. Mutants. | S |
 | b | libdom `custom.c`: the registry, the `HTMLElement` constructor, `createElement`'s and clone's construction, the reactions, the trampoline and `ce_reactions.inc`, `os64_dom_reactions_run` and yonder's calls to it, the timer backstop, the row. | WPT `custom-elements/` (added to the sparse checkout): its expected file, and the required lines the cut earns. DOM host: the cases above, and the wrapped-member list with the exotic paths named. Scripted-page host: a classic page that defines in `<head>` and calls a method in `<body>`, and a streamed page. Mutants. P5: GitHub's record. | L |
 | c | libdom `MutationObserver`, `MutationRecord`. | WPT `dom/nodes/MutationObserver-*` (17 files). DOM host. P5: GitHub's record past catalyst. | M |
 
@@ -498,3 +503,10 @@ Text corrections taken: the three points where JavaScript runs, the
 marker's InvalidStateError, FAILED and the wrapper's interface, the
 candidate walk's number on the record, and the listener's `d_alloc`
 quota.
+
+**Fable, 2026-10-29, cut a's diff (PR #403, `b5018009`).** Merge after one
+fix, taken: `replace` takes the new node out of its own parent before it
+takes the old one out, so the node's removal names the siblings it had
+beside the old one, and a node replaced by itself is two records. That
+corrects finding 7 for the self case. His smaller note, taken too: the
+parser puts a new text node's first character in before it links the node.

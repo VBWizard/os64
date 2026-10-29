@@ -460,17 +460,19 @@ static void insert_character(os64_html_parser_t *p, uint32_t c)
 
     HNode *n = before ? before->prev : parent->last_child;
 
-    /* A new text node is one insertion; a character appended to one already
-     * there is a change of its text, whose old value is the new text's
-     * prefix. */
+    /* A new text node is one insertion, made with its first character
+     * already in it as the standard makes it, so a listener told of it is
+     * told of a node with its data. One whose character cannot be stored
+     * is not linked, and the parse is refused. A character appended to a
+     * node already there is a change of its text, whose old value is the
+     * new text's prefix. */
     if (!n || n->kind != TEXT) {
         n = h_node(p, TEXT);
         if (!n)
             return;
         n->text = "";
-        if (!attach(p, parent, before, n))
-            return;
-        h_text_put(p, n, c);
+        if (h_text_put(p, n, c))
+            attach(p, parent, before, n);
         return;
     }
     size_t had = n->text_len;
