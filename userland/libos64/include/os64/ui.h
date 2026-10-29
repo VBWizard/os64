@@ -286,6 +286,12 @@ struct os64_ui_widget
     const os64_ui_class_t *cls;
     os64_gui_rect_t bounds;      // content-local, assigned by app or layout
     bool hidden;                 // skipped by paint AND hit-test
+    // When `clipped`, the widget is seen and reached only through `clip`:
+    // its paint is cut to it and a point outside it is not the widget's, as
+    // a page's control half scrolled out of its view is. Its children's
+    // paint is not cut, though a point outside the clip reaches none of them.
+    bool clipped;
+    os64_gui_rect_t clip;
     bool disabled;               // disables this subtree; use runtime setters below
     bool focusable;              // participates in keyboard traversal
     bool accepts_tab;            // literal Tab input; Ctrl+Tab still traverses
@@ -844,6 +850,9 @@ void os64_ui_cancel_interaction(os64_ui_t *ui);
 typedef struct os64_ui_checkbox {
     os64_ui_widget_t w;
     bool checked;
+    // A third look, neither ticked nor clear, drawn whatever `checked` says;
+    // a click clears it as it toggles `checked`.
+    bool indeterminate;
     void (*on_change)(struct os64_ui_checkbox *, void *);
     void *check_user;
 } os64_ui_checkbox_t;
@@ -851,6 +860,7 @@ void os64_ui_checkbox(os64_ui_checkbox_t *cb, const char *text, bool checked,
                      void (*on_change)(os64_ui_checkbox_t *, void *), void *user);
 // Programmatic setters update/repaint without firing interaction callbacks.
 void os64_ui_checkbox_set(os64_ui_t *ui, os64_ui_checkbox_t *cb, bool checked);
+void os64_ui_checkbox_set_indeterminate(os64_ui_t *ui, os64_ui_checkbox_t *cb, bool indeterminate);
 
 typedef struct os64_ui_slider {
     os64_ui_widget_t w;

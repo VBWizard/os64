@@ -167,7 +167,7 @@ static size_t byte_of_unit(const char *text, size_t len, uint32_t units)
 }
 
 /* `len` bytes of UTF-8 in UTF-16 code units. */
-static uint32_t units_of(const char *text, size_t len)
+uint32_t d_utf16_length(const char *text, size_t len)
 {
     uint32_t units = 0;
     for (size_t i = 0; i < len; i++)
@@ -236,7 +236,7 @@ static JSValue range_text(JSContext *ctx, JSValueConst this_value, int argc, JSV
         JS_FreeCString(ctx, added);
         return d_error(ctx, "IndexSizeError", "The start is past the end");
     }
-    uint32_t length = units_of(value, value_len);
+    uint32_t length = d_utf16_length(value, value_len);
     if (start > length) start = length;
     if (end > length) end = length;
     size_t from = byte_of_unit(value, value_len, start), to = byte_of_unit(value, value_len, end);
@@ -250,7 +250,7 @@ static JSValue range_text(JSContext *ctx, JSValueConst this_value, int argc, JSV
     os64_memcpy(made + from, added, added_len);
     os64_memcpy(made + from + added_len, value + to, value_len - to);
     made[made_len] = '\0';
-    uint32_t new_end = start + units_of(added, added_len);
+    uint32_t new_end = start + d_utf16_length(added, added_len);
     JS_FreeCString(ctx, added);
     int64_t set = os64_page_node_set_value(dom->state, self, made, made_len);
     js_free(ctx, made);

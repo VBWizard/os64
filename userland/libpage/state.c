@@ -70,6 +70,7 @@ void os64_page_state_free(os64_page_state_t *state)
         PNodeState *next = edit->next;
         p_state_dealloc(state, edit->text);
         p_state_dealloc(state, edit->cache);
+        p_state_dealloc(state, edit->custom);
         os64_html_release(state->doc, edit->node);
         p_state_dealloc(state, edit);
         edit = next;
@@ -344,15 +345,15 @@ static const os64_html_node_t *tree_next(const os64_html_node_t *root,
 static const os64_html_node_t *node_owner(const os64_html_node_t *node)
 {
     const char *form = p_attr(node, "form");
-    if (form != NULL) {
-        const os64_html_node_t *root = tree_root(node);
-        // Explicit association is an ID lookup in the document tree.
-        if (root->kind == OS64_HTML_DOCUMENT)
-            for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at)) {
-                const char *id = p_attr(at, "id");
-                if (id != NULL && os64_streq(id, form))
-                    return p_is(at, OS64_HTML_TAG_FORM) ? at : NULL;
-            }
+    const os64_html_node_t *root = tree_root(node);
+    // Explicit association is an ID lookup in the document tree, and an ID
+    // is never empty; a control in no document has its ancestor form.
+    if (form != NULL && root->kind == OS64_HTML_DOCUMENT) {
+        for (const os64_html_node_t *at = root; at != NULL && form[0] != '\0'; at = tree_next(root, at)) {
+            const char *id = p_attr(at, "id");
+            if (id != NULL && os64_streq(id, form))
+                return p_is(at, OS64_HTML_TAG_FORM) ? at : NULL;
+        }
         return NULL;
     }
     return node->form_owner != NULL ? node->form_owner : p_ancestor(node, OS64_HTML_TAG_FORM);
@@ -432,6 +433,107 @@ int64_t os64_page_node_set_checked(os64_page_state_t *state, const os64_html_nod
 no_memory:
     p_reserve_abort(&reserve);
     return -OS64_PAGE_REASON_NO_MEMORY;
+}
+
+int64_t os64_page_node_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool *on)
+{
+    os64_page_element_t element;
+    os64_page_input_t input;
+    if (on == NULL || !node_kind(state, node, &element, &input) || element != OS64_PAGE_EL_INPUT)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    const PNodeState *edit = p_state_find(state, node);
+    *on = edit != NULL && edit->indeterminate;
+    return 0;
+}
+
+int64_t os64_page_node_set_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool on)
+{
+    bool before;
+    if (os64_page_node_indeterminate(state, node, &before) < 0)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    if (before == on)
+        return 0;
+    PReserve reserve = {.state = state};
+    if (!p_reserve_node(&reserve, node)) {
+        p_reserve_abort(&reserve);
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    }
+    p_reserve_commit(&reserve);
+    p_state_find(state, node)->indeterminate = on;
+    p_state_publish(state);
+    p_state_changed(state);
+    return 0;
+}
+
+bool p_node_kind(os64_page_state_t *state, const os64_html_node_t *node, os64_page_element_t *element,
+                 os64_page_input_t *input)
+{
+    return node_kind(state, node, element, input);
+}
+
+bool p_radio_group_missing(os64_page_state_t *state, const os64_html_node_t *node)
+{
+    // A radio with no name is in no group, and is never missing (submit.c's
+    // radio_group_ok says why).
+    const char *name = p_attr(node, "name");
+    if (name == NULL || name[0] == '\0')
+        return false;
+    bool required = false;
+    const os64_html_node_t *root = tree_root(node);
+    for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at)) {
+        if (at != node && !radio_group_member(node, at))
+            continue;
+        // A member checked by its own record or attribute leaves the group
+        // with one ticked, whichever of several the last-wins rule keeps.
+        if (checked_raw(state, at))
+            return false;
+        required = required || p_has_attr(at, "required");
+    }
+    return required;
+}
+
+bool p_node_bad_input(const os64_page_state_t *state, const os64_html_node_t *node)
+{
+    const PNodeState *edit = p_state_find(state, node);
+    return edit != NULL && edit->bad_input;
+}
+
+const char *p_node_custom(const os64_page_state_t *state, const os64_html_node_t *node, size_t *len)
+{
+    const PNodeState *edit = p_state_find(state, node);
+    *len = edit != NULL ? edit->custom_len : 0;
+    return edit != NULL ? edit->custom : NULL;
+}
+
+static char *state_copy(os64_page_state_t *state, const char *s, size_t len);
+
+int64_t os64_page_node_set_custom_validity(os64_page_state_t *state, const os64_html_node_t *node,
+                                           const char *utf8, size_t len)
+{
+    if (state == NULL || len == SIZE_MAX || (utf8 == NULL && len != 0) || !os64_html_owns_node(state->doc, node) ||
+        !(p_is(node, OS64_HTML_TAG_INPUT) || p_is(node, OS64_HTML_TAG_TEXTAREA) ||
+          p_is(node, OS64_HTML_TAG_SELECT) || p_is(node, OS64_HTML_TAG_BUTTON) ||
+          p_is(node, OS64_HTML_TAG_FIELDSET) || p_is(node, OS64_HTML_TAG_OUTPUT)))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    PNodeState *edit = p_state_find(state, node);
+    if (len == 0 && (edit == NULL || edit->custom == NULL))
+        return 0;
+    char *copy = NULL;
+    if (len != 0 && (copy = state_copy(state, utf8, len)) == NULL)
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    PReserve reserve = {.state = state};
+    if (!p_reserve_node(&reserve, node)) {
+        p_reserve_abort(&reserve);
+        p_state_dealloc(state, copy);
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    }
+    p_reserve_commit(&reserve);
+    edit = p_state_find(state, node);
+    p_state_dealloc(state, edit->custom);
+    edit->custom = copy;
+    edit->custom_len = len;
+    p_state_publish(state);
+    return 0;
 }
 
 static bool option_selected(os64_page_state_t *state, const os64_html_node_t *option)
@@ -925,6 +1027,24 @@ static int64_t html_reason(int64_t status)
         status == OS64_HTML_TOO_LARGE ? -OS64_PAGE_REASON_NO_MEMORY : -OS64_PAGE_REASON_WRONG_KIND;
 }
 
+// Whether a person's text for a control whose value came out "" said
+// something the type's grammar refused (HTML's badInput): a number or a
+// date, time, month or week with more than white space in it.
+static bool unparsed(os64_page_input_t input, const char *utf8, size_t len)
+{
+    switch (input) {
+    case OS64_PAGE_INPUT_NUMBER: case OS64_PAGE_INPUT_DATE: case OS64_PAGE_INPUT_MONTH:
+    case OS64_PAGE_INPUT_WEEK: case OS64_PAGE_INPUT_TIME: case OS64_PAGE_INPUT_DATETIME_LOCAL:
+        break;
+    default:
+        return false;
+    }
+    for (size_t i = 0; i < len; i++)
+        if (utf8[i] != ' ' && utf8[i] != '\t' && utf8[i] != '\n' && utf8[i] != '\r' && utf8[i] != '\f')
+            return true;
+    return false;
+}
+
 int64_t os64_page_node_set_value(os64_page_state_t *state, const os64_html_node_t *node,
                                  const char *utf8, size_t len)
 {
@@ -978,12 +1098,14 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
     }
     PNodeState *edit = p_state_find(state, node);
     bool attribute = p_value_is_attribute(element, input);
+    bool bad = user && value_len == 0 && unparsed(input, utf8, len);
     bool changed;
     if (!attribute && edit != NULL && edit->text != NULL) {
         changed = !same_bytes(edit->text, edit->text_len, text, value_len);
         if (!changed) {
             bool origin_changed = edit->text_user != user;
             edit->text_user = user;
+            edit->bad_input = bad;
             edit->text_clean = false;
             edit->text_version = os64_html_version(state->doc);
             if (origin_changed)
@@ -1039,6 +1161,7 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
         changed |= edit->text_user != user;
     edit->text_user = user;
     edit->text_clean = false;
+    edit->bad_input = bad;
     char *previous = attribute ? edit->cache : edit->text;
     if (!attribute && edit->text == NULL && edit->cache != NULL &&
         edit->cache_version == os64_html_version(state->doc) &&
@@ -1255,6 +1378,7 @@ void p_state_reset(os64_page_t *page, int32_t form)
             edit->on_dirty = false;
             edit->on_attr = p_has_attr(c->node, "checked");
             edit->selection_set = false;
+            edit->bad_input = false;
         }
         for (int32_t o = 0; o < c->noptions; o++) {
             changed |= c->options[o].selected != (initial->selected[o] != 0);
@@ -1686,6 +1810,12 @@ int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t
     }
     p_state_publish(state);
     attr_stages_free(state, stages);
+    // A new type is a new field: the text a person typed into the old one,
+    // which its value could not hold, is not this one's bad input.
+    PNodeState *typed = p_is(node, OS64_HTML_TAG_INPUT) && os64_streq_nocase(name, "type")
+        ? p_state_find(state, node) : NULL;
+    if (typed != NULL)
+        typed->bad_input = false;
     if (changed)
         p_state_changed(state);
     p_arena_free(&temporary);
@@ -2180,6 +2310,7 @@ os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
                 fresh->on = checked ? 1 : 0;
                 fresh->on_dirty = old != NULL && old->on_dirty;
                 fresh->on_attr = p_has_attr(target, "checked");
+                fresh->indeterminate = old != NULL && old->indeterminate;
             }
             bool dirty = old != NULL && old->text != NULL && !old->text_clean;
             if (input && (p_value_is_attribute(element, type) || type == OS64_PAGE_INPUT_FILE))

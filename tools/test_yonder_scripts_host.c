@@ -2610,6 +2610,89 @@ static void input_script_buttons(void) {
     check(status_says("belongs to no form"),"input: without scripts, a formless button says why it did nothing");
     probe_drop();
 }
+/* 0f's P4: a person's submission is validated by the page before its
+ * submit event: invalid at each invalid control, the first nobody handled
+ * reported (focused, its sentence on the status line), and no submit; a
+ * pattern is judged with the engine's; formnovalidate skips it; Enter is
+ * validated as a button is. A page whose scripts do not run is refused by
+ * the model, which says the control's sentence too. */
+static void input_validation(void) {
+    probe_page("<form action=/send><input id=mail name=m type=email required><input id=code name=c pattern=[0-9]+>"
+        "<button id=send>Send</button><button id=raw formnovalidate>Raw</button></form><p id=log>-</p>"
+        "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+        "document.forms[0].addEventListener('invalid',function(e){note('invalid '+e.target.name)},true);"
+        "document.forms[0].addEventListener('submit',function(e){note('submit');e.preventDefault()});</script>",true);
+    script_turn();
+    FormWidget *send=probe_field("send"),*mail=probe_field("mail"),*code=probe_field("code");
+    button_clicked(send->w,send); inputs_run();
+    check(probe_text_is("log","invalid m") && g.ui.focus==mail->w && status_says("Please fill out this field."),
+          "validation: an invalid form stops before submit, its control focused and its sentence said");
+    FormWidget *raw=probe_field("raw");
+    button_clicked(raw->w,raw); inputs_run();
+    check(probe_text_is("log","invalid m|submit"),"validation: formnovalidate skips it");
+    os64_ui_textfield_set(&g.ui,&mail->u.field,"a@b.example");
+    os64_ui_textfield_set(&g.ui,&code->u.field,"12x");
+    button_clicked(send->w,send); inputs_run();
+    check(probe_text_is("log","invalid m|submit|invalid c") && g.ui.focus==code->w &&
+          status_says("Please match the requested format."),
+          "validation: a pattern, which only the engine judges");
+    os64_ui_textfield_set(&g.ui,&code->u.field,"12");
+    os64_ui_set_focus(&g.ui,code->w); inputs_run();
+    input_key('\r');
+    check(probe_text_is("log","invalid m|submit|invalid c|submit"),"validation: Enter, valid, reaches submit");
+    os64_ui_textfield_set(&g.ui,&mail->u.field,"");
+    os64_ui_set_focus(&g.ui,code->w); inputs_run();
+    input_key('\r');
+    check(probe_text_is("log","invalid m|submit|invalid c|submit|invalid m"),"validation: Enter is validated too");
+    probe_drop();
+    /* Validated once, before submit: a submit listener that empties a
+     * required field (the hash-then-clear login) is still sent. */
+    probe_page("<form action=/send><input id=pw name=p required><button id=go>Go</button></form>"
+        "<script>document.forms[0].addEventListener('submit',function(){document.getElementById('pw').value=''});"
+        "</script>",true);
+    script_turn();
+    FormWidget *pw=probe_field("pw"),*go_once=probe_field("go");
+    os64_ui_textfield_set(&g.ui,&pw->u.field,"secret");
+    button_clicked(go_once->w,go_once); inputs_run();
+    check(status_says("background workers") && !status_says("Please fill out this field."),
+          "validation: once, before submit; what a submit listener changes cannot refuse it");
+    probe_drop();
+    /* A submission an invalid listener asks of the form a person is
+     * submitting does nothing: the form is already being submitted. */
+    probe_page("<form action=/send><input name=q required><button id=go>Go</button></form><p id=log>-</p>"
+        "<script>var n=0;document.forms[0].addEventListener('invalid',function(){n++;"
+        "document.getElementById('log').textContent='invalid '+n;document.forms[0].requestSubmit()},true);</script>",true);
+    script_turn();
+    FormWidget *again=probe_field("go");
+    button_clicked(again->w,again); inputs_run();
+    check(probe_text_is("log","invalid 1"),"validation: no submission inside a person's submission's validation");
+    probe_drop();
+    /* Nor inside its submit event: a listener's requestSubmit() is no
+     * second submission. */
+    probe_page("<form action=/send><input name=q value=v><button id=go>Go</button></form><p id=log>-</p>"
+        "<script>var n=0;document.forms[0].addEventListener('submit',function(){n++;"
+        "document.getElementById('log').textContent='submit '+n;document.forms[0].requestSubmit()});</script>",true);
+    script_turn();
+    FormWidget *twice=probe_field("go");
+    button_clicked(twice->w,twice); inputs_run();
+    check(probe_text_is("log","submit 1"),"validation: no submission inside a person's submit event");
+    probe_drop();
+    /* A page all handlers, with only an onsubmit: validated before the
+     * handler, which an invalid form never runs. */
+    probe_page("<form action=/send onsubmit=\"document.getElementById('log').textContent='submitted'\">"
+        "<input id=need name=q required><button id=go>Go</button></form><p id=log>-</p>",true);
+    FormWidget *handlers=probe_field("go");
+    button_clicked(handlers->w,handlers); inputs_run();
+    check(probe_text_is("log","-") && status_says("Please fill out this field."),
+          "validation: an onsubmit attribute alone is validated before, and not run for an invalid form");
+    probe_drop();
+    probe_page("<form action=/send><input id=need name=n required><button id=go>Go</button></form>",false);
+    FormWidget *go=probe_field("go"),*need=probe_field("need");
+    button_clicked(go->w,go); inputs_run();
+    check(status_says("Please fill out this field.") && g.ui.focus==need->w,
+          "validation: without scripts the model refuses, and says the control's sentence");
+    probe_drop();
+}
 /* A one-line select is a dropdown (DROPDOWN.md); a select with a size is a
  * listbox. A click opens the list with the options' labels and the
  * disabled one refused; a pick of another option sets the model and fires
@@ -2685,6 +2768,28 @@ static void input_select_dropdown(void) {
     g.ui.menu=menus;
     probe_drop();
 }
+/* A checkbox's indeterminate flag, which a script sets: drawn on a
+ * checkbox and on no radio; a person's click clears it; a cancelled click
+ * puts it back with the box. */
+static void checkbox_indeterminate(void) {
+    probe_page("<input id=a type=checkbox><input id=b type=checkbox><input id=r type=radio>"
+        "<script>for(var id of ['a','b','r'])document.getElementById(id).indeterminate=true;"
+        "document.getElementById('b').addEventListener('click',function(e){e.preventDefault()})</script>",true);
+    script_turn();
+    check(probe_field("a")->u.check.indeterminate && probe_field("b")->u.check.indeterminate &&
+          !probe_field("r")->u.check.indeterminate,
+          "indeterminate: drawn on a checkbox a script set it on, and on no radio");
+    os64_page_t *model=page_model(&g.page);
+    const os64_page_control_t *a=os64_page_control(model,os64_page_control_for(model,probe_id("a")));
+    ui_click_on("a");
+    check(!probe_field("a")->u.check.indeterminate && a->checked && !a->indeterminate,
+          "indeterminate: a person's click clears it, in the widget and the model");
+    ui_click_on("b");
+    const os64_page_control_t *b=os64_page_control(model,os64_page_control_for(model,probe_id("b")));
+    check(probe_field("b")->u.check.indeterminate && !b->checked && b->indeterminate,
+          "indeterminate: a cancelled click puts it back with the box");
+    probe_drop();
+}
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;
     yonder_bar_raise(&g.bar,1);yonder_bar_settled(&g.bar);
@@ -2702,6 +2807,7 @@ static void input_cases(void) {
     input_hover();
     input_forms();
     input_script_buttons();
+    input_validation();
     input_select_dropdown();
 }
 
@@ -10428,6 +10534,31 @@ static void covered_link_cases(void) {
     probe_drop();
 }
 
+/* A control half out of the view is half a control: shown, clipped to the
+ * view; one wholly out is hidden. And a field under an outline and an
+ * invisible focus ring laid over the whole of it (a sign-in page's, whose
+ * script answers a click on them by focusing the field) keeps its widget:
+ * neither draws at its centre, so neither covers it (POSITION.md, ruling
+ * 9's amendment). */
+static void clipped_control_cases(void) {
+    probe_page("<!doctype html><style>body{margin:0} p{margin:0}"
+        ".wrap{position:relative;width:200px;height:40px} .ring,.line{position:absolute;top:0;bottom:0;left:0;right:0}"
+        ".ring{opacity:0;border:2px solid blue} .line{border:1px solid gray} #edge{position:absolute;top:580px;left:0;height:40px}"
+        " #below{position:absolute;top:700px;left:0}</style>"
+        "<p class=wrap><input id=field name=identifier><span class=line></span><span class=ring></span></p>"
+        "<button id=edge>Next</button><button id=below>Later</button>",false);
+    forms_place();
+    check(probe_field("field")!=NULL && !probe_field("field")->w->hidden,
+        "outline: a field under an outline and an invisible ring keeps its widget");
+    FormWidget *edge=probe_field("edge"), *below=probe_field("below");
+    check(edge!=NULL && !edge->w->hidden && edge->w->clipped && edge->w->clip.x==g.view.bounds.x &&
+          edge->w->clip.y==g.view.bounds.y && edge->w->clip.w==g.view.bounds.w && edge->w->clip.h==g.view.bounds.h &&
+          edge->w->bounds.y+edge->w->bounds.h>g.view.bounds.y+g.view.bounds.h,
+        "clip: a button across the view's edge is shown, clipped to the view");
+    check(below!=NULL && below->w->hidden, "clip: a button wholly out of the view is hidden");
+    probe_drop();
+}
+
 #include "test_yonder_requests.inc"
 #include "test_yonder_modules.inc"
 #include "test_yonder_window.inc"
@@ -10483,6 +10614,7 @@ int main(void)
     svg_window_cases();
     picture_svg_window_cases();
     covered_link_cases();
+    clipped_control_cases();
     classic_downloaded_cases();
     hover_batch_cases();
     classic_hover_profile();
@@ -10513,6 +10645,7 @@ int main(void)
     snapshot_actions();
     bounded_resources();
     stylesheet_reuse();
+    checkbox_indeterminate();
     input_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) stream_cases();
     reporting_teardown();

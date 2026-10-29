@@ -8,6 +8,7 @@
 #include "os64/str.h"
 #include "os64/url.h"
 #include "script_job.h"
+#include "scripts.h"
 #include "way/origin.h"
 
 typedef enum {
@@ -108,12 +109,16 @@ static int32_t slot_new(yonder_modules_t *m, const char *name)
 }
 
 // What went wrong with the module, on the page's record under the script
-// key the page's other scripts use.
-static void record(yonder_modules_t *m, int32_t i, const char *why)
+// key the page's other scripts use, with where when `stack` says
+// (yonder_scripts_failure: a module is compiled under its address, so a
+// place in its own source is the line and column alone).
+static void record(yonder_modules_t *m, int32_t i, const char *why, const char *stack)
 {
     char key[OS64_DOM_URL_MAX + 16];
     os64_snprintf(key, sizeof(key), "script %s", m->mods[i].name);
-    yonder_diag_failed(m->diag, key, why);
+    char placed[OS64_JS_MESSAGE_CAP + OS64_DOM_URL_MAX + 128];
+    yonder_scripts_failure(NULL, m->mods[i].name, why, stack, placed, sizeof(placed));
+    yonder_diag_failed(m->diag, key, placed);
 }
 
 // The module failed, said once on the record.
@@ -126,7 +131,7 @@ static void fail(yonder_modules_t *m, int32_t i, const char *why)
     mod->job = 0;
     os64_free(mod->why);
     mod->why = copy(why);
-    record(m, i, why);
+    record(m, i, why, "");
 }
 
 static void fetch_start(yonder_modules_t *m, int32_t i)
@@ -228,7 +233,7 @@ static void try_compile(yonder_modules_t *m, int32_t i, const char *url)
     if (handle == NULL && status == OS64_JS_EXCEPTION) {
         // A syntax error: the module's to rethrow when an entry runs.
         m->mods[i].state = MOD_BROKEN;
-        record(m, i, out.message[0] != '\0' ? out.message : "the module did not compile");
+        record(m, i, out.message[0] != '\0' ? out.message : "the module did not compile", out.stack_trace);
         return;
     }
     if (handle == NULL) {
@@ -279,7 +284,7 @@ static void each_request(void *opaque, const char *specifier)
                       : m->mapped ? "the import \"%.100s\" is a bare name no import map maps"
                       : "the import \"%.100s\" names no module (a bare name needs an import map)",
                       specifier);
-        record(m, from, why);
+        record(m, from, why, "");
         return;
     }
     int32_t dep = find(m, url);

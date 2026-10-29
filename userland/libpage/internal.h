@@ -52,6 +52,20 @@ struct PNodeState {
     // Its cache holds the child-text baseline until a child mutation resets it.
     bool text_clean;
     bool on_dirty, on_attr, selected_dirty, selected_attr;
+    // An input's indeterminate flag (os64_page_node_set_indeterminate):
+    // no attribute stands for it, and a clone copies it.
+    bool indeterminate;
+    // A person's text the control's value could not hold: a number or a
+    // date the type's grammar refused, which left the value "". It is the
+    // field's, not the value's, so a clone does not copy it, and any value
+    // set by other than a person, a reset, or a change of the input's type
+    // clears it (badInput).
+    bool bad_input;
+    // The control's custom validity message (setCustomValidity), NULL being
+    // none: a reset keeps it, and a clone does not copy it, as HTML's
+    // cloning steps do not list it.
+    char *custom;
+    size_t custom_len;
     // A text control's selection, in UTF-16 code units of its value: one a
     // script or the host set (os64_page_node_set_selection), or the value's
     // end where a changed value put it. `range_kept` says there is one;
@@ -105,6 +119,16 @@ void p_reserve_abort(PReserve *reserve);
 void p_state_publish(os64_page_state_t *state);
 void p_state_changed(os64_page_state_t *state);
 bool p_value_is_attribute(os64_page_element_t element, os64_page_input_t input);
+// Constraint validation's questions of the live state (state.c), asked by
+// submit.c's judge. The control's kind, as the value verbs accept it; its
+// radio group required with nothing ticked (HTML's Radio Button state), over
+// the tree the node is in, never for a radio with no name; its bad input; its
+// custom message, NULL for none.
+bool p_node_kind(os64_page_state_t *state, const os64_html_node_t *node, os64_page_element_t *element,
+                 os64_page_input_t *input);
+bool p_radio_group_missing(os64_page_state_t *state, const os64_html_node_t *node);
+bool p_node_bad_input(const os64_page_state_t *state, const os64_html_node_t *node);
+const char *p_node_custom(const os64_page_state_t *state, const os64_html_node_t *node, size_t *len);
 int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node,
                           const char *utf8, size_t len, bool user);
 bool p_state_normalize(os64_page_t *page);
@@ -146,6 +170,14 @@ struct os64_page {
     // decides an address, and `<base href>` moves only the second.
     const char *document_url;
     const char *base_url;
+    // Both are kept without a fragment, which no resolution reads. HTML's
+    // document base URL keeps one (os64_page_base_url_in): the document's
+    // own, or its base's, from the `#` on as written, NULL for none.
+    const char *document_fragment, *base_fragment;
+    // The tree p_base looks for a `<base href>` in: NULL for the
+    // document's own, else another document libhtml keeps beside it (one a
+    // script made: os64_page_base_url_in).
+    const os64_html_node_t *base_root;
     os64_url_t document, base;
     bool document_hierarchical, base_hierarchical;
     char document_scheme[OS64_URL_SCHEME_MAX];
@@ -235,6 +267,8 @@ char *p_child_text_into(PArena *arena, const os64_html_node_t *node, size_t *len
 bool p_nonnegative(const char *text, uint64_t *value);
 // Whether the select display size is one, using HTML integer parsing.
 bool p_select_one_line(const os64_page_control_t *control);
+// The text-like input types (core.c says why one list serves several rules).
+bool p_text_like_input(os64_page_input_t input);
 // The select's list of options in tree order, excluding the subtrees the
 // HTML list-of-options algorithm skips. NULL starts or ends the walk.
 const os64_html_node_t *p_option_next(const os64_html_node_t *select,
@@ -285,6 +319,58 @@ size_t p_number_spell(double value, char out[32]);
 long double p_number_mod(long double x, long double y);
 const char *p_range_value(PArena *arena, const os64_html_node_t *node,
                           const char *raw, size_t *len);
+// HTML's "convert a string to a number" for the types min, max and step
+// apply to (number, range, the dates and times; value.c): false for any
+// other type, and for a string that does not convert — which is not the
+// same as no valid value: a number's or range's string is read by the
+// lenient floating-point rules ("10 " and "5px" convert), and a date or
+// time whose year is past 275760 does not, valid or not. A date
+// is milliseconds since 1970-01-01T00:00Z, a month months since January
+// 1970, a week the milliseconds of its Monday, a time milliseconds since
+// midnight, a local date and time milliseconds since the epoch as though
+// it were UTC.
+bool p_input_number(os64_page_input_t input, const char *s, double *out);
+// The type's default step, step scale factor and default step base.
+void p_input_step(os64_page_input_t input, double *step, uint32_t *scale, double *base);
+// What an input's min, max and step attributes say (HTML § 4.10.5.3.7-8),
+// read by p_input_number: the min and max that convert; a range's 0 and
+// 100 where it has none, and its max made its min when below it (`pinned`,
+// as Blink makes it); the step in the type's units, its default where the
+// attribute is no positive number, and `any` for step=any, which draws no
+// grid; the scale; and the step base: the min attribute's number, else
+// the value attribute's, else the type's default.
+typedef struct {
+    double min, max, step, base;
+    uint32_t scale;
+    bool has_min, has_max, pinned, any;
+} PLimits;
+void p_input_limits(const os64_html_node_t *n, os64_page_input_t input, PLimits *out);
+// HTML's "convert a number to a string" for the type (and, `as_date`, its
+// "convert a Date object to a string", which differs from it for a month
+// alone: a time value rather than a count of months), into `out`: false
+// for a number the type cannot spell, a date before year 1 or after 275760
+// (p_input_number's last; Blink's is 275760-09-13). A date, a local date and
+// time, a month and a week round to the nearest millisecond or month, and
+// a time takes the floor of its place in the day, as Blink does.
+bool p_input_spell(os64_page_input_t input, double number, bool as_date, char out[32]);
+// stepUp(count), or stepDown(-count) (HTML § 4.10.5.4) from `value` (0
+// when the value did not convert, `valid` false), in decimal over each
+// double's shortest spelling (range.c): the number to set, or false for
+// the steps that return. A value off the grid moves onto it, which is one
+// of the steps, as Blink and Gecko count it; the result is clamped onto
+// the grid within min and max; and a step that would move a value that
+// converted against the sign of `count` changes nothing (the spec's step
+// 10, read by the signed count as Blink and Gecko read it, where the spec
+// names the method, so stepDown(-1) moves up; and skipped for a value that
+// did not convert, as Blink does and WPT has it).
+bool p_step_by(double value, bool valid, const PLimits *limits, int64_t count, double *out);
+// Whether `value` is `base` plus a whole number of `step` times `scale`,
+// in decimal over each double's shortest spelling (range.c's arithmetic),
+// the scale multiplied there too; or, when `held` (a range's value, which
+// its sanitizer chose on the grid), is the double nearest such a grid
+// point, as the sanitizer holds the point it chooses: what stepMismatch
+// asks.
+bool p_step_aligned(double value, double base, double step, uint32_t scale, bool held);
 os64_page_input_t p_input_type(const os64_html_node_t *n);
 // Shared by initial values and edits; temporary storage belongs to arena.
 // raw_len is authoritative; raw also has a terminator at that offset.

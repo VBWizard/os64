@@ -314,7 +314,9 @@ static void state_byte_spans(void)
     };
     for (size_t i=0;i<sizeof(cases)/sizeof(cases[0]);i++) {
         char html[256], name[80];
-        snprintf(html,sizeof(html),"<form method=post>%s<button>Go</button></form>",cases[i].control);
+        // novalidate: these spans are judged by what is sent, and several
+        // are a typeMismatch or a person's bad input that validation stops.
+        snprintf(html,sizeof(html),"<form method=post novalidate>%s<button>Go</button></form>",cases[i].control);
         snprintf(name,sizeof(name),"byte span: case %zu",i);
         os64_html_document_t *doc=parse(html,"utf-8");
         os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
@@ -763,8 +765,502 @@ static void state_option_labels(void)
     os64_html_document_free(doc);
 }
 
+static int validity_calls;
+static char validity_last[64];
+
+/* A matcher that says `value` matches when it equals the pattern. */
+static int validity_equal(void *opaque, const char *pattern, const char *value, size_t len)
+{
+    (void)opaque;
+    validity_calls++;
+    snprintf(validity_last, sizeof(validity_last), "%.*s", (int)len, value);
+    if (strcmp(pattern, "[") == 0)
+        return -1;
+    return strlen(pattern) == len && memcmp(pattern, value, len) == 0;
+}
+
+/* The first element with this tag under `at`, in tree order. */
+static const os64_html_node_t *validity_find(const os64_html_node_t *at, os64_html_tag_t tag)
+{
+    for (; at != NULL; at = at->next) {
+        if (at->kind == OS64_HTML_ELEMENT && at->tag == tag)
+            return at;
+        const os64_html_node_t *inner = validity_find(at->first_child, tag);
+        if (inner != NULL)
+            return inner;
+    }
+    return NULL;
+}
+
+static uint32_t validity_of(os64_page_t *page, int32_t control, os64_page_pattern_t matcher)
+{
+    uint32_t flags = 0xffffffffu;
+    const os64_page_control_t *c = os64_page_control(page, control);
+    if (c == NULL || os64_page_node_validity(os64_page_shared_state(page), c->node, matcher, NULL, &flags) < 0)
+        return 0xffffffffu;
+    return flags;
+}
+
+static const char *validity_message(os64_page_t *page, int32_t control)
+{
+    static char out[128];
+    uint32_t flags = validity_of(page, control, NULL);
+    const os64_page_control_t *c = os64_page_control(page, control);
+    if (c == NULL || os64_page_node_validation_message(os64_page_shared_state(page), c->node, flags, out,
+                                                       sizeof(out)) < 0)
+        return "(refused)";
+    return out;
+}
+
+/* Constraint validation by node (0f's P4): the judge's flags and sentences,
+ * the custom message's life, a person's bad input, and the submission that
+ * obeys them. */
+static void state_validity(void)
+{
+    os64_html_document_t *doc = parse("<form action=/s method=get>"
+        "<input name=q required>"                                   // 0
+        "<input type=email name=e value=nope>"                      // 1
+        "<input type=url name=u value=http://x.example>"            // 2
+        "<input type=number name=n>"                                // 3
+        "<input name=p pattern=abc value=abd>"                      // 4
+        "<input name=l maxlength=2>"                                // 5
+        "<input type=radio required>"                               // 6
+        "<input type=checkbox name=k readonly required>"            // 7
+        "<input type=hidden name=h>"                                // 8
+        "<button name=b>Go</button></form>"                         // 9
+        "<fieldset id=fs></fieldset><div id=d></div>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    os64_page_state_t *state = os64_page_shared_state(page);
+    state_expect("validity: missing", validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    state_expect("validity: missing's sentence", strcmp(validity_message(page, 0), "Please fill out this field.") == 0);
+    state_expect("validity: email", validity_of(page, 1, NULL) == OS64_PAGE_VALIDITY_TYPE);
+    state_expect("validity: email's sentence", strcmp(validity_message(page, 1), "Please enter an email address.") == 0);
+    state_expect("validity: url", validity_of(page, 2, NULL) == 0);
+    state_expect("validity: no matcher, no pattern", validity_of(page, 4, NULL) == 0 && validity_calls == 0);
+    state_expect("validity: the matcher judges the value",
+                 validity_of(page, 4, validity_equal) == OS64_PAGE_VALIDITY_PATTERN && validity_calls == 1 &&
+                 strcmp(validity_last, "abd") == 0);
+    state_expect("validity: an unnamed radio is never missing", validity_of(page, 6, NULL) == 0);
+    bool will = true;
+    const os64_page_control_t *tick = os64_page_control(page, 7);
+    state_expect("validity: readonly bars a tick",
+                 os64_page_node_will_validate(state, tick->node, &will) == 0 && !will &&
+                 validity_of(page, 7, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    will = true;
+    state_expect("validity: hidden is barred",
+                 os64_page_node_will_validate(state, os64_page_control(page, 8)->node, &will) == 0 && !will);
+    const os64_html_node_t *fs = validity_find(doc->document, OS64_HTML_TAG_FIELDSET);
+    const os64_html_node_t *d = validity_find(doc->document, OS64_HTML_TAG_DIV);
+    will = true;
+    uint32_t flags = 1;
+    state_expect("validity: a fieldset never validates",
+                 fs != NULL && os64_page_node_will_validate(state, fs, &will) == 0 && !will &&
+                 os64_page_node_validity(state, fs, NULL, NULL, &flags) == 0 && flags == 0);
+    state_expect("validity: a div is no kind",
+                 d != NULL && os64_page_node_validity(state, d, NULL, NULL, &flags) == -OS64_PAGE_REASON_WRONG_KIND &&
+                 os64_page_node_set_custom_validity(state, d, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    /* the custom message: kept until cleared, by a reset too; a fieldset's alone */
+    const os64_page_control_t *b = os64_page_control(page, 9);
+    state_expect("validity: custom", os64_page_node_set_custom_validity(state, b->node, "No\xc3\xa9", 4) == 0 &&
+                 validity_of(page, 9, NULL) == OS64_PAGE_VALIDITY_CUSTOM &&
+                 strcmp(validity_message(page, 9), "No\xc3\xa9") == 0);
+    state_expect("validity: a fieldset's custom",
+                 os64_page_node_set_custom_validity(state, fs, "f", 1) == 0 &&
+                 os64_page_node_validity(state, fs, NULL, NULL, &flags) == 0 && flags == OS64_PAGE_VALIDITY_CUSTOM);
+    /* a person's text a number cannot hold, and what clears it */
+    state_expect("validity: bad input", os64_page_set_text(page, 3, "abc", 3) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT &&
+                 strcmp(validity_message(page, 3), "Please enter a number.") == 0);
+    state_expect("validity: white space is no input", os64_page_set_text(page, 3, "  ", 2) == 0 &&
+                 validity_of(page, 3, NULL) == 0);
+    state_expect("validity: bad again", os64_page_set_text(page, 3, "x", 1) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT);
+    const os64_page_control_t *n = os64_page_control(page, 3);
+    state_expect("validity: a script's value clears it",
+                 os64_page_node_set_value(state, n->node, "abc", 3) == 0 && validity_of(page, 3, NULL) == 0);
+    state_expect("validity: a reset clears it", os64_page_set_text(page, 3, "x", 1) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT && os64_page_reset(page, 0) == 0 &&
+                 validity_of(page, 3, NULL) == 0);
+    /* a person's text past maxlength, and its sentence */
+    state_expect("validity: too long", os64_page_set_text(page, 5, "abc", 3) == 0 &&
+                 validity_of(page, 5, NULL) == OS64_PAGE_VALIDITY_TOO_LONG &&
+                 strcmp(validity_message(page, 5), "Please shorten this text to 2 characters or less.") == 0);
+    /* the submission obeys the judge: the first invalid control, in order */
+    os64_page_set_text(page, 0, "q", 1);
+    os64_page_request_t req;
+    os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL, 9, 0, 0};
+    state_expect("validity: submission stops at the email",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
+                 req.reason == OS64_PAGE_REASON_INVALID && req.control == 1);
+    os64_page_request_free(&req);
+    os64_page_set_text(page, 1, "a@b.c", 5);
+    os64_page_set_text(page, 5, "ab", 2);
+    state_expect("validity: then at the custom error",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING && req.control == 9);
+    os64_page_request_free(&req);
+    os64_page_node_set_custom_validity(state, b->node, "", 0);
+    state_expect("validity: cleared, it is sent (the pattern unjudged)",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    os64_page_set_text(page, 0, "", 0);
+    state_expect("validity: invalid again", os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING);
+    os64_page_request_free(&req);
+    state_expect("validity: a submission the scripts validated is not judged again",
+                 os64_page_activate_validated(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    /* a long custom message's sentence is cut between characters, and a
+     * NUL in an address is no address character */
+    char long_message[600];
+    for (int k = 0; k < 300; k++) { long_message[2 * k] = (char)0xc3; long_message[2 * k + 1] = (char)0xa9; }
+    char cut[256];
+    uint32_t custom = OS64_PAGE_VALIDITY_CUSTOM;
+    size_t whole = 0;
+    const char *kept = NULL;
+    state_expect("validity: a long message, cut between characters",
+                 os64_page_node_set_custom_validity(state, b->node, long_message, 600) == 0 &&
+                 os64_page_node_validation_message(state, b->node, custom, cut, sizeof(cut)) == 0 &&
+                 strlen(cut) == 254 && os64_page_node_custom_validity(state, b->node, &kept, &whole) == 0 &&
+                 whole == 600 && memcmp(kept, long_message, 600) == 0);
+    os64_page_node_set_custom_validity(state, b->node, "", 0);
+    const os64_page_control_t *mail = os64_page_control(page, 1);
+    state_expect("validity: a NUL in an address",
+                 os64_page_node_set_value(state, mail->node, "a\0b@c.d", 7) == 0 &&
+                 (validity_of(page, 1, NULL) & OS64_PAGE_VALIDITY_TYPE) != 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* the submitter a submission would take */
+    doc = parse("<form><input name=a><input name=b><button>Go</button></form>"
+                "<form><input name=c></form><form><input name=d><input name=e></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    int32_t who = 5;
+    state_expect("submitter: the button pressed",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 2, 0, 0}, &who) && who == 2);
+    state_expect("submitter: Enter takes the default button",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 0, 0, 0}, &who) && who == 2);
+    state_expect("submitter: one field submits its form itself",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 3, 0, 0}, &who) && who == -1);
+    state_expect("submitter: two fields and no button submit nothing",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 4, 0, 0}, &who));
+    state_expect("submitter: a form has none",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_FORM, 0, 0, 0}, &who));
+    state_expect("submitter: a link or a refresh is no submission",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_LINK, 0, 0, 0}, &who) &&
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0}, &who));
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* a placeholder whose only text is a script's: its value is empty, as
+     * the option's own text leaves scripts out */
+    doc = parse("<select required><option><script>0</script></option><option>A</option></select>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("validity: a script's text is no option text",
+                 validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* a type change is a new field: it clears the bad input */
+    doc = parse("<input type=number>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state = os64_page_shared_state(page);
+    const os64_html_node_t *field = os64_page_control(page, 0)->node;
+    uint32_t after = 0;
+    state_expect("validity: a type that cannot be bad is not",
+                 os64_page_set_text(page, 0, "x", 1) == 0 &&
+                 validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT &&
+                 os64_page_node_set_attr(state, field, "type", "text", 4, false) == 0 &&
+                 os64_page_node_validity(state, field, NULL, NULL, &after) == 0 &&
+                 (after & OS64_PAGE_VALIDITY_BAD_INPUT) == 0);
+    state_expect("validity: and back to a number, the old text is not this field's",
+                 os64_page_node_set_attr(state, field, "value", "7", 1, false) == 0 &&
+                 os64_page_node_set_attr(state, field, "type", "number", 6, false) == 0 &&
+                 os64_page_node_validity(state, field, NULL, NULL, &after) == 0 && after == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+/* 0f's P4b: min, max and step, over each type read as a number. Each case
+ * is one input, judged with its flags. */
+static void state_validity_range(void)
+{
+    static const struct { const char *html, *value; uint32_t want; const char *message; } cases[] = {
+        {"<input type=number min=2>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 2."},
+        {"<input type=number max=2>", "3", OS64_PAGE_VALIDITY_OVERFLOW, "Value must be less than or equal to 2."},
+        {"<input type=number>", "-.8", OS64_PAGE_VALIDITY_STEP, "Please enter a valid value."},
+        {"<input type=number step=0.003>", "3.6", 0, ""},
+        {"<input type=number step=1e-12>", "-12345678.9", 0, ""},
+        {"<input type=number step=3e-15>", "17", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=number step=any>", "0.5", 0, ""},
+        {"<input type=number step=0>", "0.5", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=number min=0.5 step=1>", "1.5", 0, ""},
+        /* a min that does not convert: the value attribute is the base */
+        {"<input type=number step=2 value=3 min=nope>", NULL, 0, NULL},
+        /* a range's max below its min is its min: the value it is put at is valid */
+        {"<input type=range value=50 min=60 max=40>", NULL, 0, NULL},
+        {"<input type=date min=2000-01-02>", "2000-01-01", OS64_PAGE_VALIDITY_UNDERFLOW,
+         "Value must be 2000-01-02 or later."},
+        {"<input type=date max=275760-09-13>", "2000-01-01", 0, ""},
+        {"<input type=date step=2>", "1970-01-02", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=date step=2>", "1970-01-03", 0, NULL},
+        {"<input type=month step=2>", "1970-04", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=month max=2000-01>", "2000-02", OS64_PAGE_VALIDITY_OVERFLOW, "Value must be 2000-01 or earlier."},
+        {"<input type=week step=2>", "1970-W04", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=week step=2>", "1970-W03", 0, NULL},
+        {"<input type=week min=2009-W53>", "2010-W01", 0, NULL},
+        {"<input type=week min=2010-W01>", "2009-W53", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        {"<input type=time step=120>", "12:03", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=time step=0.001>", "12:00:00.001", 0, NULL},
+        {"<input type=time step=0.5>", "12:00:00.5", 0, NULL},
+        /* the scale multiplied in decimal: 16.1 s is 16100 ms exactly */
+        {"<input type=time step=16.1>", "00:00:16.1", 0, NULL},
+        {"<input type=datetime-local step=1.001>", "1970-01-01T00:00:01.001", 0, NULL},
+        {"<input type=week step=1e300>", "1970-W01", 0, NULL},
+        /* min, max and the base read as the sanitizer reads them */
+        {"<input type=range min='10 ' step=3>", NULL, 0, NULL},
+        {"<input type=number min='+10'>", "5", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        /* a year past a Date's does not convert (DEBTS.md § libpage) */
+        {"<input type=date max=2030-12-31>", "300000-01-01", 0, NULL},
+        {"<input type=range min=150 max=abc>", NULL, 0, NULL},
+        /* the value a range's sanitizer chose, a grid point held as the
+         * nearest double, is on the grid: a step finer than the value's
+         * precision, and a step of seventeen digits */
+        {"<input type=range step=0.12345678901234567>", NULL, 0, NULL},
+        {"<input type=range min=0 max=1e17 step=0.3>", NULL, 0, NULL},
+        /* a range pinned at its min is snapped to no step, nor judged by one */
+        {"<input type=range max=-10 value=0.5>", NULL, 0, NULL},
+        /* a bound's fraction of any length, its first three digits kept */
+        {"<input type=time min=09:00:00.0000>", "08:00", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        /* a number's bound said as the number it was read as */
+        {"<input type=number min=5px>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 5."},
+        /* a date whose max is below its min does not wrap: one bound is said */
+        {"<input type=date min=2020-01-01 max=2019-01-01>", "2019-06-01",
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW, "Value must be 2020-01-01 or later."},
+        {"<input type=time min=22:00 max=02:00>", "23:00", 0, NULL},
+        {"<input type=time min=22:00 max=02:00>", "12:00",
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW,
+         "Value must be 22:00 or later, or 02:00 or earlier."},
+        {"<input type=datetime-local step=120>", "1970-01-01T12:03", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=datetime-local min=2000-01-01T00:00>", "1999-12-31T23:59", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        {"<input type=text min=5>", "1", 0, NULL},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "validity range: %s", cases[i].html);
+        os64_html_document_t *doc = parse(cases[i].html, "utf-8");
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+        if (cases[i].value != NULL)
+            os64_page_node_set_value(os64_page_shared_state(page), os64_page_control(page, 0)->node, cases[i].value,
+                                     strlen(cases[i].value));
+        uint32_t got = validity_of(page, 0, NULL);
+        if (got != cases[i].want)
+            fprintf(stderr, "%s: flags %#x, wanted %#x\n", name, got, cases[i].want);
+        bool said = cases[i].message == NULL || strcmp(validity_message(page, 0), cases[i].message) == 0;
+        if (!said)
+            fprintf(stderr, "%s: said '%s'\n", name, validity_message(page, 0));
+        state_expect(name, got == cases[i].want && said);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+}
+
+/* 0f's P5: valueAsNumber, valueAsDate, stepUp and stepDown, each case one
+ * input. A NULL value leaves the input's own. */
+static os64_page_t *value_as_page(const char *html, const char *value, os64_html_document_t **doc,
+                                  const os64_html_node_t **node)
+{
+    *doc = parse(html, "utf-8");
+    os64_page_t *page = os64_page_build(*doc, kPage, NULL, NULL);
+    *node = os64_page_control(page, 0)->node;
+    if (value != NULL)
+        os64_page_node_set_value(os64_page_shared_state(page), *node, value, strlen(value));
+    return page;
+}
+
+static const char *value_of(os64_page_t *page, const os64_html_node_t *node)
+{
+    const char *text = NULL;
+    size_t len = 0;
+    return os64_page_node_value(os64_page_shared_state(page), node, &text, &len) == 0 ? text : "(refused)";
+}
+
+static void state_value_as(void)
+{
+    const double nan = __builtin_nan("");
+    static const struct { const char *html, *value; os64_page_as_t as; double want; bool applies; } reads[] = {
+        {"<input type=date>", "2019-12-10", OS64_PAGE_AS_NUMBER, 1575936000000.0, true},
+        {"<input type=date>", "2019-12-10", OS64_PAGE_AS_DATE, 1575936000000.0, true},
+        {"<input type=date>", "", OS64_PAGE_AS_NUMBER, __builtin_nan(""), true},
+        {"<input type=month>", "2019-12", OS64_PAGE_AS_NUMBER, 599, true},
+        {"<input type=month>", "2019-12", OS64_PAGE_AS_DATE, 1575158400000.0, true},
+        {"<input type=month>", "1969-12", OS64_PAGE_AS_DATE, -2678400000.0, true},
+        {"<input type=week>", "1969-W20", OS64_PAGE_AS_NUMBER, -20217600000.0, true},
+        {"<input type=time>", "23:59", OS64_PAGE_AS_DATE, 86340000, true},
+        {"<input type=datetime-local>", "2019-12-10T12:00", OS64_PAGE_AS_NUMBER, 1575979200000.0, true},
+        {"<input type=datetime-local>", "2019-12-10T12:00", OS64_PAGE_AS_DATE, __builtin_nan(""), false},
+        {"<input type=number>", "1e3", OS64_PAGE_AS_NUMBER, 1000, true},
+        {"<input type=number>", "1", OS64_PAGE_AS_DATE, __builtin_nan(""), false},
+        /* a range's sanitized value: no value is its midpoint */
+        {"<input type=range>", NULL, OS64_PAGE_AS_NUMBER, 50, true},
+        {"<input type=text>", "5", OS64_PAGE_AS_NUMBER, __builtin_nan(""), false},
+        /* a year past a Date's is kept, and converts to nothing */
+        {"<input type=date>", "300000-01-01", OS64_PAGE_AS_NUMBER, __builtin_nan(""), true},
+    };
+    for (size_t i = 0; i < sizeof(reads) / sizeof(reads[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: read %s %s %d", reads[i].html, reads[i].value ? reads[i].value : "-",
+                 (int)reads[i].as);
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(reads[i].html, reads[i].value, &doc, &node);
+        double got = 0;
+        bool applies = !reads[i].applies;
+        int64_t status = os64_page_node_value_as(os64_page_shared_state(page), node, reads[i].as, &got, &applies);
+        bool same = got == reads[i].want || (got != got && reads[i].want != reads[i].want);
+        if (!same) fprintf(stderr, "%s: %.17g\n", name, got);
+        state_expect(name, status == 0 && same && applies == reads[i].applies);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    static const struct { const char *html; double number; os64_page_as_t as; const char *want; bool applies; } writes[] = {
+        {"<input type=date>", 0, OS64_PAGE_AS_NUMBER, "1970-01-01", true},
+        /* rounded to the nearest millisecond, as Blink rounds */
+        {"<input type=date>", 86399999.5, OS64_PAGE_AS_NUMBER, "1970-01-02", true},
+        {"<input type=date>", -62135596800000.0, OS64_PAGE_AS_NUMBER, "0001-01-01", true},
+        /* before year 1, or past 275760: nothing to spell, so empty */
+        {"<input type=date value=2000-01-01>", -62135596800001.0, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=date value=2000-01-01>", 8.7e15, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=datetime-local>", 2.7343337071894478e26, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=month>", -1, OS64_PAGE_AS_NUMBER, "1969-12", true},
+        {"<input type=month>", 2.5, OS64_PAGE_AS_NUMBER, "1970-04", true},
+        {"<input type=month>", 1575936000000.0, OS64_PAGE_AS_DATE, "2019-12", true},
+        {"<input type=week>", 0, OS64_PAGE_AS_NUMBER, "1970-W01", true},
+        {"<input type=week>", -20217600000.0, OS64_PAGE_AS_NUMBER, "1969-W20", true},
+        /* a Sunday is its ISO week's last day, in the year its Thursday is */
+        {"<input type=week>", 1609632000000.0, OS64_PAGE_AS_DATE, "2020-W53", true},
+        /* a time's place in its day, exact however large the number */
+        {"<input type=time>", 2.7343337071894478e26, OS64_PAGE_AS_NUMBER, "10:54:10.944", true},
+        {"<input type=time>", -3600000, OS64_PAGE_AS_NUMBER, "23:00", true},
+        {"<input type=time>", -0.5, OS64_PAGE_AS_NUMBER, "23:59:59.999", true},
+        {"<input type=time>", 1000, OS64_PAGE_AS_DATE, "00:00:01", true},
+        {"<input type=datetime-local>", -86400000, OS64_PAGE_AS_NUMBER, "1969-12-31T00:00", true},
+        /* the local date and time's sanitizer shortens the fraction */
+        {"<input type=datetime-local>", 500, OS64_PAGE_AS_NUMBER, "1970-01-01T00:00:00.5", true},
+        {"<input type=number>", 123.456, OS64_PAGE_AS_NUMBER, "123.456", true},
+        {"<input type=number>", 1e21, OS64_PAGE_AS_NUMBER, "1e+21", true},
+        {"<input type=number value=4>", __builtin_nan(""), OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=time value=12:00>", __builtin_nan(""), OS64_PAGE_AS_DATE, "", true},
+        {"<input type=range>", 100, OS64_PAGE_AS_NUMBER, "100", true},
+        {"<input type=checkbox value=on>", 5, OS64_PAGE_AS_NUMBER, "on", false},
+        {"<input type=datetime-local value=2000-01-01T00:00>", 0, OS64_PAGE_AS_DATE, "2000-01-01T00:00", false},
+    };
+    for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: write %s %.17g %d", writes[i].html, writes[i].number,
+                 (int)writes[i].as);
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(writes[i].html, NULL, &doc, &node);
+        bool applies = !writes[i].applies;
+        int64_t status = os64_page_node_set_value_as(os64_page_shared_state(page), node, writes[i].as,
+                                                     writes[i].number, &applies);
+        const char *got = value_of(page, node);
+        if (strcmp(got, writes[i].want) != 0) fprintf(stderr, "%s: '%s'\n", name, got);
+        state_expect(name, status == 0 && applies == writes[i].applies && strcmp(got, writes[i].want) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    static const struct { const char *html, *value; int32_t n; bool down; const char *want; bool applies; } steps[] = {
+        /* WPT's input-stepdown-02: a value that did not convert is 0, and
+         * moves wherever its clamp puts it */
+        {"<input type=number>", "", 1, true, "-1", true},
+        {"<input type=number min=7>", "", 1, true, "7", true},
+        {"<input type=number min=-7>", "", 1, true, "-1", true},
+        {"<input type=number min=7>", "7", 1, true, "7", true},
+        {"<input type=number min=7>", "3", 1, true, "3", true},
+        {"<input type=number min=7>", "10", 1, true, "9", true},
+        {"<input type=number max=30 step=3>", "30", 5, true, "15", true},
+        {"<input type=number min=300 step=1>", "200", 1, true, "200", true},
+        /* in decimal: 1.2 - 0.3 is 0.9, where binary64 makes 0.8999... */
+        {"<input type=number step=0.3>", "1.2", 1, true, "0.9", true},
+        {"<input type=number min=0 step=2>", "5", 1, false, "6", true},
+        {"<input type=number min=0 step=3>", "8", 1, true, "6", true},
+        {"<input type=number min=10 max=5>", "0", 1, false, "0", true},
+        {"<input type=number step=3 max=7>", "0", 3, false, "6", true},
+        /* the snap onto the grid is one of the steps (Blink, Gecko) */
+        {"<input type=number step=2>", "5", 3, false, "10", true},
+        {"<input type=number step=2>", "5", -2, false, "2", true},
+        /* a step down that snaps, then clamps up to the min, is the wrong
+         * way for a value that converted: nothing changes (the spec's step
+         * 10 and Gecko; Blink counts the snap off first and moves it) */
+        {"<input type=number min=5 step=2>", "4", 1, true, "4", true},
+        /* step 10 by the signed count, as Blink and Gecko read it, where
+         * the spec names the method: stepDown(-1) moves up */
+        {"<input type=number>", "5", -1, true, "6", true},
+        /* the min is the step base, so always a grid point: a value that
+         * did not convert snaps up onto it */
+        {"<input type=number min=1 max=2 step=5>", "", 1, false, "1", true},
+        /* a stride times a count past the decimal base: its carry spans
+         * words, and the clamp compares it whole */
+        {"<input type=number step=999999999 max=1e18>", "0", INT32_MAX, false, "1000000000000000000", true},
+        /* and taken from a value it outgrows, which compares them whole */
+        {"<input type=number step=999999999>", "1500000000000000000", INT32_MAX, true, "-647483644352516400", true},
+        /* -(INT32_MIN) steps */
+        {"<input type=number>", "0", INT32_MIN, true, "2147483648", true},
+        /* past the largest double: nothing changes */
+        {"<input type=number step=1e308>", "1.7976931348623157e308", 1, false, "1.7976931348623157e308", true},
+        {"<input type=date>", "", 1, false, "1970-01-02", true},
+        {"<input type=month>", "", 1, false, "1970-02", true},
+        /* week 1 of 1970 began on 1969-12-29: 0 is off its grid */
+        {"<input type=week>", "", 1, false, "1970-W02", true},
+        {"<input type=time>", "", 1, false, "00:01", true},
+        {"<input type=datetime-local>", "", 1, false, "1970-01-01T00:01", true},
+        {"<input type=time step=2>", "00:00:01", 1, false, "00:00:02", true},
+        {"<input type=range>", NULL, 1, false, "51", true},
+        {"<input type=range min=60 max=40>", NULL, 1, false, "60", true},
+        {"<input type=number step=any>", "1", 1, false, "1", false},
+        {"<input type=text>", "1", 1, false, "1", false},
+    };
+    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: step %s %s %d %s", steps[i].html, steps[i].value ? steps[i].value : "-",
+                 (int)steps[i].n, steps[i].down ? "down" : "up");
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(steps[i].html, steps[i].value, &doc, &node);
+        bool applies = !steps[i].applies;
+        int64_t status = os64_page_node_step(os64_page_shared_state(page), node, steps[i].n, steps[i].down, &applies);
+        const char *got = value_of(page, node);
+        if (strcmp(got, steps[i].want) != 0) fprintf(stderr, "%s: '%s'\n", name, got);
+        state_expect(name, status == 0 && applies == steps[i].applies && strcmp(got, steps[i].want) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    /* An infinite number is the caller's TypeError; a node that is no
+     * input, any member's WRONG_KIND. */
+    os64_html_document_t *doc;
+    const os64_html_node_t *node;
+    os64_page_t *page = value_as_page("<input type=number>", NULL, &doc, &node);
+    os64_page_state_t *state = os64_page_shared_state(page);
+    bool applies = false;
+    double got = 0;
+    state_expect("value as: infinity refused",
+                 os64_page_node_set_value_as(state, node, OS64_PAGE_AS_NUMBER, 1.0 / 0.0, &applies) ==
+                     -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("value as: NaN taken", os64_page_node_set_value_as(state, node, OS64_PAGE_AS_NUMBER, nan, &applies) ==
+                                            0 && applies);
+    state_expect("value as: not an input",
+                 os64_page_node_value_as(state, node->parent, OS64_PAGE_AS_NUMBER, &got, &applies) ==
+                     -OS64_PAGE_REASON_WRONG_KIND &&
+                     os64_page_node_step(state, node->parent, 1, false, &applies) == -OS64_PAGE_REASON_WRONG_KIND);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 static void state_cases(void)
 {
+    state_validity();
+    state_validity_range();
+    state_value_as();
     state_option_labels();
     state_scale();
     state_taken_away();

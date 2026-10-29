@@ -445,11 +445,60 @@ static void tree_selection_moves(void)
     rebuild_clear(&f);
 }
 
+static void tree_indeterminate(void)
+{
+    RebuildFixture f=rebuild_fixture("<input id=c type=checkbox><input id=r type=radio name=g>"
+        "<textarea id=t></textarea>",0);
+    os64_html_node_t *c=rebuild_id(f.doc,"c"), *r=rebuild_id(f.doc,"r"), *t=rebuild_id(f.doc,"t");
+    int32_t cc=os64_page_control_for(f.page,c), rc=os64_page_control_for(f.page,r);
+    bool on=true;
+    rebuild_expect("indeterminate: false until set, and an input's alone",
+        os64_page_node_indeterminate(f.state,c,&on)==0&&!on&&
+        os64_page_node_indeterminate(f.state,t,&on)==-OS64_PAGE_REASON_WRONG_KIND&&
+        os64_page_node_set_indeterminate(f.state,t,true)==-OS64_PAGE_REASON_WRONG_KIND);
+    uint64_t revision=os64_page_state_version(f.state);
+    rebuild_expect("indeterminate: a set is published and moves the revision; the same set again does not",
+        os64_page_node_set_indeterminate(f.state,c,true)==0&&os64_page_control(f.page,cc)->indeterminate&&
+        os64_page_state_version(f.state)!=revision&&(revision=os64_page_state_version(f.state),
+        os64_page_node_set_indeterminate(f.state,c,true)==0)&&os64_page_state_version(f.state)==revision);
+    int64_t status=0;
+    os64_html_node_t *copy=os64_page_node_clone(f.state,c,false,&status);
+    rebuild_expect("indeterminate: a clone copies it",
+        copy!=NULL&&os64_page_node_indeterminate(f.state,copy,&on)==0&&on);
+    rebuild_expect("indeterminate: a person's tick of a checkbox clears it, not a radio's",
+        os64_page_node_set_indeterminate(f.state,r,true)==0&&os64_page_set_checked(f.page,cc,true)==0&&
+        os64_page_node_indeterminate(f.state,c,&on)==0&&!on&&!os64_page_control(f.page,cc)->indeterminate&&
+        os64_page_set_checked(f.page,rc,true)==0&&os64_page_node_indeterminate(f.state,r,&on)==0&&on);
+    rebuild_expect("indeterminate: a script's checked set leaves it",
+        os64_page_node_set_indeterminate(f.state,c,true)==0&&os64_page_node_set_checked(f.state,c,false)==0&&
+        os64_page_node_indeterminate(f.state,c,&on)==0&&on);
+    rebuild_clear(&f);
+}
+
+/* No ID is empty, so form="" names no form, even beside a form whose id
+ * attribute is empty: the model gives the control none, and a radio so
+ * owned is in no group with that form's. */
+static void tree_empty_form_attribute(void)
+{
+    RebuildFixture f=rebuild_fixture("<form id=\"\"><input id=i form=\"\" name=n>"
+        "<input type=radio name=g id=a form=\"\" checked><input type=radio name=g id=b></form>",0);
+    os64_html_node_t *i=rebuild_id(f.doc,"i"), *a=rebuild_id(f.doc,"a"), *b=rebuild_id(f.doc,"b");
+    bool on=false;
+    rebuild_expect("form owner: an empty form attribute names no form",
+        os64_page_control(f.page,os64_page_control_for(f.page,i))->form<0&&
+        os64_page_control(f.page,os64_page_control_for(f.page,b))->form>=0);
+    rebuild_expect("form owner: so a radio it owns is in no group with the form's",
+        os64_page_node_set_checked(f.state,b,true)==0&&os64_page_node_checked(f.state,a,&on)==0&&on);
+    rebuild_clear(&f);
+}
+
 static void test_libpage_tree(void)
 {
+    tree_empty_form_attribute();
     tree_option_selectedness();
     tree_selection_value_failure();
     tree_selection_moves();
+    tree_indeterminate();
     tree_option_dirtiness();
     tree_depth_and_state_cap();
     tree_unmodeled_select();

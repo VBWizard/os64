@@ -65,6 +65,7 @@ WPT_DIRS=(
     requestidlecallback
     webmessaging/without-ports
     html/semantics/document-metadata/the-link-element
+    html/semantics/document-metadata/the-style-element
     preload
     html/semantics/forms/the-select-element
     html/semantics/forms/the-option-element
@@ -72,6 +73,18 @@ WPT_DIRS=(
     import-maps
     html/semantics/forms/textfieldselection
     html/semantics/forms/the-input-element
+    html/semantics/forms/form-control-infrastructure
+    html/semantics/forms/the-textarea-element
+    html/semantics/forms/the-button-element
+    html/semantics/forms/the-label-element
+    html/semantics/forms/the-form-element
+    html/semantics/forms/the-fieldset-element
+    html/semantics/forms/the-legend-element
+    html/semantics/forms/the-output-element
+    html/semantics/forms/constraints
+    html/infrastructure/common-dom-interfaces/collections
+    html/semantics/tabular-data
+    interfaces
 )
 
 top=$(git rev-parse --show-toplevel)

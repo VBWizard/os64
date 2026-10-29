@@ -1,0 +1,51 @@
+# WPT's html/semantics/forms/the-fieldset-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-fieldset-element --update
+# rewrites [passing].
+[required]
+# 0f's phases (MODERN_WEB.md § 0f's P3b, as built), this directory joining
+# the run whole with P3b: each line fails with the switch off, the earlier
+# phases' members among them. The passes not listed pass either way.
+HTMLFieldSetElement.html	The controls must root at the fieldset element
+HTMLFieldSetElement.html	The elements must return an HTMLCollection object
+HTMLFieldSetElement.html	The form attribute must return the fieldset's form owner
+HTMLFieldSetElement.html	The type attribute must return 'fieldset'
+disabled-nested-legend.html	fieldset.elements includes controls inside legend
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+disabled-001.html	A <fieldset> element is in the <legend> element of another disabled <fieldset>: Its descendants should be disabled.
+disabled-001.html	The <legend> element is child of the disabled fieldset: Its descendants should be disabled.
+disabled-001.html	The <legend> element is not a child of the disabled fieldset: Its descendants should be disabled.
+disabled-001.html	The disabled attribute, when specified, causes all the form control descendants of the fieldset element, excluding those that are descendants of the fieldset element's first legend element child, if any, to be disabled.
+disabled-001.html	The first 'legend' element is not a child of the disabled fieldset: Its descendants should be disabled.
+fieldset-checkvalidity.html	Forms
+fieldset-setcustomvalidity.html	fieldset setCustomValidity is correct
+fieldset-validationmessage.html	Forms
+fieldset-validity.html	Forms
+fieldset-willvalidate.html	Forms
+[excluded]
+[passing]
+HTMLFieldSetElement.html	The controls must root at the fieldset element
+HTMLFieldSetElement.html	The elements must return an HTMLCollection object
+HTMLFieldSetElement.html	The form attribute must return the fieldset's form owner
+HTMLFieldSetElement.html	The type attribute must return 'fieldset'
+disabled-001.html	A <fieldset> element is in the <legend> element of another disabled <fieldset>: Its descendants should be disabled.
+disabled-001.html	The <legend> element is child of the disabled fieldset: Its descendants should be disabled.
+disabled-001.html	The <legend> element is not a child of the disabled fieldset: Its descendants should be disabled.
+disabled-001.html	The disabled attribute, when specified, causes all the form control descendants of the fieldset element, excluding those that are descendants of the fieldset element's first legend element child, if any, to be disabled.
+disabled-001.html	The first 'legend' element is not a child of the disabled fieldset: Its descendants should be disabled.
+disabled-nested-legend.html	Changing the first legend updates the disabled state
+disabled-nested-legend.html	Descendants of the first legend aren't disabled
+disabled-nested-legend.html	Inner fieldset's legend doesn't shield from an outer disabled fieldset
+disabled-nested-legend.html	fieldset.elements includes controls inside legend
+fieldset-checkvalidity.html	Forms
+fieldset-intrinsic-size.html	auto border-box
+fieldset-intrinsic-size.html	auto content-box
+fieldset-intrinsic-size.html	max-content border-box
+fieldset-intrinsic-size.html	max-content content-box
+fieldset-intrinsic-size.html	min-content border-box
+fieldset-intrinsic-size.html	min-content content-box
+fieldset-setcustomvalidity.html	fieldset setCustomValidity is correct
+fieldset-validationmessage.html	Forms
+fieldset-validity.html	Forms
+fieldset-willvalidate.html	Forms

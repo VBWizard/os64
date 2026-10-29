@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to the page files and the badge
 (docs/design/pending/YONDER_DIAGNOSTICS.md), against the scripted-page
-harness: a mutant is CAUGHT when the harness fails, MISSED when it passes,
+harness, and the DOM host for libdom's half of where a script failed: a
+mutant is CAUGHT when its harness fails, MISSED when it passes,
 which means a test is missing and gets written. A build failure is neither.
 
 The shape is test_yonder_loop_mutants.py's: each mutant is applied to the
@@ -26,6 +27,10 @@ DIAG = 'userland/apps/yonder/diag.c'
 SCRIPTS = 'userland/apps/yonder/scripts.c'
 YONDER = 'userland/apps/yonder/yonder.c'
 WINDOW = 'tools/test_yonder_scripts_host.sh'
+REPORT = 'userland/libdom/report.c'
+EVENT = 'userland/libdom/event.c'
+DOM = 'tools/test_dom_host.sh'
+MODULES = 'userland/apps/yonder/modules.c'
 CASCADE = 'userland/libgarb/cascade.c'
 GARB = 'tools/test_garb_host.sh'
 
@@ -55,8 +60,49 @@ mutants = [
      '    diag_observe(p, "when the page arrived");\n    diag_write(p->diag);',
      '    diag_observe(p, "when the page arrived");', WINDOW),
     ('a-failure-is-not-recorded', YONDER,
-     '    yonder_diag_failed(diag, key, failure);',
-     '    (void)failure;', WINDOW),
+     '    yonder_diag_failed(diag, key, placed);',
+     '    (void)placed;', WINDOW),
+    # Where a script failed (YONDER_DIAGNOSTICS.md, a FAILED line's place).
+    ('a-frame-names-eval', REPORT,
+     "        bool anonymous = length >= 2 && text[0] == '<' && text[length - 1] == '>';",
+     '        bool anonymous = false;', DOM),
+    ('a-frame-file-keeps-its-function', REPORT, '            if (last != end)\n                for (',
+     '            if (false)\n                for (', DOM),
+    ('a-listener-error-has-no-stack', EVENT,
+     '    out->diagnostic_truncated |= d_error_stack(ctx, error, out->stack_trace, sizeof(out->stack_trace));',
+     '', DOM),
+    ('a-rejection-has-no-stack', REPORT,
+     '        failure.diagnostic_truncated |= d_error_stack(ctx, reason, failure.stack_trace, sizeof(failure.stack_trace));',
+     '', WINDOW),
+    ('a-told-rejection-loses-its-stack', REPORT, 'failure.message, failure.stack_trace);',
+     'failure.message, "");', WINDOW),
+    ('the-page-is-not-inline', REPORT, '    *page = os64_streq(name, page_name);', '    *page = false;', WINDOW),
+    ('the-own-script-is-named', SCRIPTS,
+     '    if (address != NULL && own != NULL && os64_streq(address, own)) {',
+     '    if (address != NULL && own != NULL && false) {', WINDOW),
+    ('another-script-is-unnamed', SCRIPTS, '    } else if (address != NULL) {', '    } else if (false) {', WINDOW),
+    ('the-outcome-place-is-dropped', YONDER,
+     '    yonder_scripts_failure(host, address, failure, out->stack_trace, placed, sizeof(placed));',
+     '    yonder_scripts_failure(host, address, failure, "", placed, sizeof(placed));', WINDOW),
+    ('a-told-place-is-dropped', SCRIPTS,
+     '    yonder_scripts_failure(s, s->task_address, message, stack, failure, sizeof(failure));',
+     '    yonder_scripts_failure(s, s->task_address, message, stack + os64_strlen(stack), failure, sizeof(failure));',
+     WINDOW),
+    ('json-text-is-a-place', REPORT,
+     "            if (!(last == end && frame->file_length >= 2 && frame->file[0] == '<' &&",
+     "            if (true || !(last == end && frame->file_length >= 2 && frame->file[0] == '<' &&", WINDOW),
+    ('eval-code-is-no-place', REPORT,
+     "            if (!(last == end && frame->file_length >= 2 && frame->file[0] == '<' &&",
+     "            if (!(frame->file_length >= 2 && frame->file[0] == '<' &&", DOM),
+    ('a-cut-line-is-a-frame', REPORT, "        if (*end != '\\n') break;",
+     "        if (*end != '\\n' && !(end > start && end[-1] >= '0' && end[-1] <= '9')) break;", DOM),
+    ('a-module-is-not-its-own', SCRIPTS,
+     '    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&',
+     '    if (false && address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&', WINDOW),
+    ('a-module-compile-is-unplaced', MODULES,
+     '    yonder_scripts_failure(NULL, m->mods[i].name, why, stack, placed, sizeof(placed));',
+     '    yonder_scripts_failure(NULL, m->mods[i].name, why, stack + os64_strlen(stack), placed, sizeof(placed));',
+     WINDOW),
     ('a-lost-load-writes-nothing', YONDER,
      'static void stream_failed(const char *line)\n{\n    yonder_diag_failed(g.stream.diag, "page", line);',
      'static void stream_failed(const char *line)\n{\n    (void)line;', WINDOW),

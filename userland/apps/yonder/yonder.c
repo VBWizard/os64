@@ -1299,8 +1299,12 @@ typedef struct {
     const os64_html_node_t *related;    // held: over/out's other node, a click's link
     const os64_html_document_t *doc;
     int32_t x, y;                       // window coordinates, for a mouse event
-    bool was;                           // IN_CHECK: the box before the click
+    uint8_t was;                        // IN_CHECK: the box before the click (WAS_*)
 } Input;
+
+// What a box was before its click, which a cancelled click puts back.
+#define WAS_CHECKED 1u
+#define WAS_INDETERMINATE 2u
 
 #define INPUTS_MAX 32
 
@@ -2953,7 +2957,7 @@ static void script_release(void *opaque, os64_dom_response_t *response);
 static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got);
 static bool scripts_live(void);
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
-                        int32_t x, int32_t y, bool was);
+                        int32_t x, int32_t y, uint8_t was);
 static void inputs_drop(void);
 
 static void refresh_if_declared(void)
@@ -6921,10 +6925,10 @@ static void forms_sync_from_model(bool text);
 static void check_changed(os64_ui_checkbox_t *cb, void *user)
 {
     const FormWidget *fw = user;
-    bool was = false;
+    uint8_t was = 0;
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
     if (c != NULL)
-        was = c->checked;
+        was = (c->checked ? WAS_CHECKED : 0) | (c->indeterminate ? WAS_INDETERMINATE : 0);
     if (os64_page_set_checked(page_model(&g.page), widget_control(fw), cb->checked) < 0)
         status_rest("the page keeps that one as it is");
     forms_sync_from_model(false);
@@ -7065,6 +7069,9 @@ static void forms_sync_from_model(bool text)
         }
         case FW_CHECK:
             os64_ui_checkbox_set(&g.ui, &fw->u.check, c->checked);
+            // HTML shows a checkbox's indeterminate flag and no radio's.
+            os64_ui_checkbox_set_indeterminate(&g.ui, &fw->u.check,
+                                               c->indeterminate && c->input == OS64_PAGE_INPUT_CHECKBOX);
             break;
         case FW_LIST:
         case FW_DROPDOWN: {
@@ -7286,16 +7293,20 @@ static void forms_flush(void)
 
 // Sends a form: the button pressed (CONTROL) or Enter in a field (IMPLICIT).
 // libpage decides what goes and where; libway judges it; an INVALID
-// refusal puts the focus on the control that failed. `kind` is how the
+// refusal puts the focus on the control that failed and its validation
+// message on the status line. `kind` is how the
 // reply comes: a new way, or a refresh when a script sends the form before
 // its page has completely loaded (navigation_perform). `by` is whether a
-// person sent it or the page's script did.
-static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind, way_initiator_t by)
+// person sent it or the page's script did. `validated`: the page's scripts
+// validated it before its submit event, and the model does not again.
+static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind, way_initiator_t by,
+                         bool validated)
 {
     forms_flush();
     os64_page_what_t what = {how, control, 0, 0};
     os64_page_request_t request;
-    os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
+    os64_page_verdict_t verdict = validated ? os64_page_activate_validated(page_model(&g.page), what, &request)
+                                            : os64_page_activate(page_model(&g.page), what, &request);
     if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
         request_navigate(&request, kind, WAY_ASK_SEND, g.page.way.url, by, g.page.diag);
@@ -7310,8 +7321,20 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
         // scripts the sentence is why nothing happened.
         bool scripts_own_it = scripts_live() && (request.reason == OS64_PAGE_REASON_NO_FORM ||
                                                  request.reason == OS64_PAGE_REASON_NO_SUBMISSION);
+        const os64_page_control_t *invalid = request.reason == OS64_PAGE_REASON_INVALID
+            ? os64_page_control(page_model(&g.page), request.control) : NULL;
+        char sentence[256];
+        uint32_t flags = 0;
         if (reason_refuses(request.reason))
             say_failed(g.page.diag, "form refused", os64_page_reason_name(request.reason));
+        else if (invalid != NULL &&
+                 os64_page_node_validity(os64_page_shared_state(page_model(&g.page)), invalid->node, NULL, NULL,
+                                         &flags) >= 0 &&
+                 os64_page_node_validation_message(os64_page_shared_state(page_model(&g.page)), invalid->node,
+                                                   flags, sentence, sizeof(sentence)) >= 0 &&
+                 sentence[0] != '\0')
+            // The control's own sentence, as the page's report says it.
+            status_rest(sentence);
         else if (!scripts_own_it)
             status_rest(os64_page_reason_name(request.reason));
         FormWidget *failed = request.reason == OS64_PAGE_REASON_INVALID
@@ -7325,7 +7348,7 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
 // A form a person sent: a button pressed, Enter in a field.
 static void form_send(int32_t control, os64_page_activation_t how)
 {
-    form_send_as(control, how, NAV_GO, WAY_BY_PERSON);
+    form_send_as(control, how, NAV_GO, WAY_BY_PERSON, false);
 }
 
 // The byte offset in a password's value of its `chars`th character, the
@@ -7521,14 +7544,15 @@ refused:
     forms_sync_from_model(true);
 }
 
-// Every control's widget at its box on the glass — or hidden, when its box
-// is not wholly inside the page view, because libui does not clip a child
-// to its parent and a widget half out of the view would paint over the
-// toolbar; and hidden when the pointer cannot reach the control at its
-// centre (flow_box_covered; POSITION.md, ruling 9): a field under a fixed
-// header, a hidden dialog's field, one `visibility: hidden`. Whatever of
-// its frame the page draws, the painter draws. Without a layout there is
-// no box to place a control at, so the widgets stay hidden.
+// Every control's widget at its box on the glass, clipped to the page view
+// (libui's `clipped`), so a control half scrolled out of the view is half a
+// control and takes no click on the toolbar it would otherwise cross; and
+// hidden when none of it is in the view, or when the pointer cannot reach
+// the control at its centre (flow_box_covered; POSITION.md, ruling 9 and
+// its amendment): a field under a fixed header, a hidden dialog's field,
+// one `visibility: hidden`. Whatever of its frame the page draws, the
+// painter draws. Without a layout there is no box to place a control at,
+// so the widgets stay hidden.
 // A control the page made invisible (`opacity: 0`) is drawn when it is a
 // FIELD — in a form, or named, so something is submitted — because then it
 // is nearly always a custom checkbox's real input, whose styled stand-in
@@ -7585,9 +7609,10 @@ static void forms_place(void)
         const os64_ui_class_t *cls = fw->own_class;
         if (gadget(b, widget_control(fw)))
             cls = unpainted_class(fw->own_class);
-        bool shown = x >= v.x && y >= v.y && x + at.w <= (int64_t)v.x + v.w &&
-                     y + at.h <= (int64_t)v.y + v.h && at.w > 0 && at.h > 0 &&
-                     !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+        bool shown = x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h && x + at.w > v.x && y + at.h > v.y &&
+                     at.w > 0 && at.h > 0 && !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+        fw->w->clipped = true;
+        fw->w->clip = v;
         if (cls != NULL && cls != fw->w->cls) {
             fw->w->cls = cls;
             os64_ui_mark_dirty(&g.ui, fw->w);
@@ -8101,8 +8126,9 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         at += 2;
     }
     // The record keeps what the line says of the script, without the
-    // layouts beside it: the same failure is one line however many times
-    // it happens, and the count says how many.
+    // layouts beside it, and with where it failed (yonder_scripts_failure):
+    // the same failure at the same place is one line however many times it
+    // happens, and the count says how many.
     char failure[OS64_JS_MESSAGE_CAP + 64];
     if (was_alive && !yonder_scripts_alive(host)) {
         if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_EXECUTION)
@@ -8116,7 +8142,9 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         os64_strcopy(failure, sizeof(failure), out->message[0] ? out->message : "error");
     }
     os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s", name, failure);
-    yonder_diag_failed(diag, key, failure);
+    char placed[OS64_JS_MESSAGE_CAP + OS64_DOM_URL_MAX + 128];
+    yonder_scripts_failure(host, address, failure, out->stack_trace, placed, sizeof(placed));
+    yonder_diag_failed(diag, key, placed);
     if (out->source_name[0] != '\0')
         yonder_diag_fact(diag, key, died);
     badge_follow();
@@ -8622,11 +8650,14 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             NavKind kind = page_navigation_replaces(&g.page) ? NAV_REFRESH : NAV_GO;
             int32_t control = ask->submitter != NULL
                 ? os64_page_control_for(page_model(&g.page), ask->submitter) : -1;
+            // With the Modern Web switch on, the binding validated a
+            // submitter's submission before its submit event (libdom's
+            // window.c), and the model must not judge it again.
             if (control >= 0)
-                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, WAY_BY_PAGE);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, WAY_BY_PAGE, g.page.modern);
             else
                 form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind,
-                             WAY_BY_PAGE);
+                             WAY_BY_PAGE, false);
         }
         return;
     case OS64_DOM_NAVIGATE_NONE:
@@ -8651,6 +8682,14 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
                 os64_ui_set_focus(&g.ui, fw->w);
             } else if (fw != NULL && g.ui.focus == fw->w && g.asks[i].what == OS64_DOM_ACTIVATE_BLUR) {
                 os64_ui_set_focus(&g.ui, &g.view);
+            } else if (g.asks[i].what == OS64_DOM_ACTIVATE_REPORT) {
+                // A control's constraint problem, reported as a refused
+                // submission is: the control focused, its sentence said.
+                char said[256];
+                if (fw != NULL && !fw->w->hidden)
+                    os64_ui_set_focus(&g.ui, fw->w);
+                if (yonder_scripts_report_message(host, g.asks[i].node, said, sizeof(said)) && said[0] != '\0')
+                    status_rest(said);
             }
         }
         os64_html_release(g.asks[i].doc, g.asks[i].node);
@@ -9709,7 +9748,7 @@ static bool scripts_live(void)
 }
 
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
-                        int32_t x, int32_t y, bool was)
+                        int32_t x, int32_t y, uint8_t was)
 {
     const os64_html_document_t *doc = page_doc(&g.page);
     if (node == NULL || doc == NULL)
@@ -9846,6 +9885,42 @@ static const os64_html_node_t *control_form(int32_t control)
     return f != NULL ? f->node : NULL;
 }
 
+// A person's submission from `control` (a button pressed, Enter in a
+// field), validated by the page's scripts before its submit event (HTML §
+// 4.10.21.3): false when it is invalid, and then the first problem whose
+// invalid event nobody cancelled is reported.
+// Only a submission that will happen is validated, by the submitter libpage
+// would take. `*validated` says the scripts' task did it and finished, so
+// the model must not judge the submission again after its submit event;
+// without scripts, or with a task that failed, the model's validation in
+// form_send is the whole of it.
+static bool page_validates(int32_t control, os64_page_activation_t how, bool *validated)
+{
+    yonder_scripts_t *host = g.page.scripts;
+    *validated = false;
+    if (!scripts_live())
+        return true;
+    forms_flush();
+    const os64_page_t *page = page_model(&g.page);
+    os64_page_what_t what = {how, control, 0, 0};
+    int32_t submitter = -1;
+    const os64_html_node_t *form = control_form(control);
+    if (form == NULL || !os64_page_submitter(page, what, &submitter))
+        return true;
+    const os64_page_control_t *by = os64_page_control(page, submitter);
+    const os64_html_document_t *doc = page_doc(&g.page);
+    os64_js_outcome_t out;
+    bool valid = true;
+    int64_t began = task_begin(host);
+    if (yonder_scripts_form_validate(host, form, by != NULL ? by->node : NULL, &valid, &out)) {
+        *validated = out.status == OS64_JS_OK;
+        task_said(host, true, "invalid", &out, began);
+        if (script_rebuild())
+            asks_perform(host, doc, true);
+    }
+    return valid;
+}
+
 // A text control's value as its editor holds it, for `change`.
 static bool editor_text(const os64_html_node_t *node, const char **text, size_t *len)
 {
@@ -9955,7 +10030,18 @@ static void inputs_run(void)
                 break;
             bool resets = c->resets, submits = c->submits;
             const char *type = resets ? "reset" : "submit";
-            if ((!resets && !submits) || plain_event(type, true, true, control_form(control)))
+            if (!resets && !submits)
+                break;
+            bool validated = false;
+            if (submits) {
+                if (!page_validates(control, OS64_PAGE_ACTIVATE_CONTROL, &validated))
+                    break;
+                // The invalid events' listeners may have rebuilt the page.
+                control = os64_page_control_for(page_model(&g.page), in.node);
+                if (control < 0)
+                    break;
+            }
+            if (plain_event(type, true, true, control_form(control)))
                 break;
             // The listeners may have rebuilt the page: the button is found
             // again, and is gone if they took it away.
@@ -9964,21 +10050,30 @@ static void inputs_run(void)
             if (c != NULL && resets)
                 form_reset(c->form);
             else if (c != NULL)
-                form_send(control, OS64_PAGE_ACTIVATE_CONTROL);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, NAV_GO, WAY_BY_PERSON, validated);
             break;
         }
-        case IN_IMPLICIT:
+        case IN_IMPLICIT: {
             change_if_edited(in.node);
             control = os64_page_control_for(page_model(&g.page), in.node);
+            bool validated = false;
+            if (!page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT, &validated))
+                break;
+            control = os64_page_control_for(page_model(&g.page), in.node);
             if (!plain_event("submit", true, true, control_form(control)))
-                form_send(os64_page_control_for(page_model(&g.page), in.node), OS64_PAGE_ACTIVATE_IMPLICIT);
+                form_send_as(os64_page_control_for(page_model(&g.page), in.node), OS64_PAGE_ACTIVATE_IMPLICIT, NAV_GO,
+                             WAY_BY_PERSON, validated);
             break;
+        }
         case IN_CHECK: {
             os64_dom_event_t ev = mouse_event("click", true, &in);
             if (page_event(&ev, in.node)) {
-                // A cancelled click puts the box back.
+                // A cancelled click puts the box back, and its
+                // indeterminate flag, which the tick cleared.
                 control = os64_page_control_for(page_model(&g.page), in.node);
-                (void)os64_page_set_checked(page_model(&g.page), control, in.was);
+                if (os64_page_set_checked(page_model(&g.page), control, (in.was & WAS_CHECKED) != 0) >= 0)
+                    (void)os64_page_node_set_indeterminate(os64_page_shared_state(page_model(&g.page)), in.node,
+                                                           (in.was & WAS_INDETERMINATE) != 0);
                 forms_sync_from_model(false);
                 break;
             }
@@ -11259,9 +11354,9 @@ frame:
 
 static FormWidget *form_widget(int32_t control);
 
-// A control whose widget is showing draws itself; one hidden (its box not
-// wholly in the view), or with no widget, is drawn inert: a white well with
-// a sunken edge.
+// A control whose widget is showing draws itself; one hidden (out of the
+// view, or covered), or with no widget, is drawn inert: a white well with a
+// sunken edge.
 static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     const FormWidget *fw = form_widget(os64_page_control_for(page_model(&g.page), b->node));

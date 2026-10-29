@@ -579,6 +579,82 @@ static void position_fixed_door_cases(void)
            b != NULL && !flow_box_covered(t, b, top), NULL);
     flow_free(t);
     sheeted_close(&q);
+
+    // Ruling 9's amendment (Chris, 2026-10-26): a box covers only where it
+    // draws. An outline the size of the field (a border round a
+    // transparent box) and a focus ring at opacity 0 draw nothing at its
+    // centre, and cover nothing there; the pointer still finds them. A box
+    // with a background, or one whose border is where the centre is, still
+    // covers it.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0}"
+                     ".wrap{position:relative;width:200px;height:40px}"
+                     ".line{position:absolute;top:0;bottom:0;left:0;right:0;border:1px solid gray}"
+                     ".ring{position:absolute;top:0;bottom:0;left:0;right:0;opacity:0;border:2px solid blue}"
+                     ".bar{position:absolute;top:0;left:0;width:200px;height:40px;background:gray}"
+                     ".thick{position:absolute;top:0;left:0;width:200px;height:40px;border-left:120px solid gray;"
+                     "box-sizing:border-box} .veil{position:absolute;top:0;left:0;width:200px;height:40px;"
+                     "opacity:0;background:red} .pic{position:absolute;top:0;left:0;width:200px;height:40px;"
+                     "background-image:linear-gradient(red,blue)} .words{position:absolute;top:0;left:0;width:200px;"
+                     "height:40px;line-height:20px} .inset{position:absolute;top:0;left:0;width:200px;height:40px;"
+                     "box-shadow:inset 0 0 0 100px white} .rim{position:absolute;top:0;left:0;width:200px;"
+                     "height:40px;box-shadow:inset 0 0 0 1px gray} .haze{position:absolute;top:0;left:0;width:200px;"
+                     "height:90px;box-shadow:inset 0 0 40px black} .hair{position:absolute;top:0;left:50px;width:40px;height:20px;border-left:0.5px solid black}"
+                     ".inward{position:absolute;top:0;left:0;width:100px;height:20px;outline:10px solid black;"
+                     "outline-offset:-10px} .outward{position:absolute;top:0;left:0;width:100px;height:20px;"
+                     "outline:3px solid black}</style>"
+                     "<p class=wrap><input name=a><span class=line></span><span class=ring></span></p>"
+                     "<p class=wrap><input name=b><span class=bar></span><span class=ring></span></p>"
+                     "<p class=wrap><input name=c><span class=thick></span></p>"
+                     "<p class=wrap><input name=d><span class=veil></span></p>"
+                     "<p class=wrap><input name=e><span class=pic></span></p>"
+                     "<p class=wrap><input name=f><span class=words>WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW</span></p>"
+                     "<p class=wrap><input name=g><span class=inset></span></p>"
+                     "<p class=wrap><input name=h><span class=rim></span></p>"
+                     "<p class=wrap style='height:90px'><input name=i style='margin-top:35px'><span class=haze></span></p>"
+                     "<p class=wrap><input name=j style='width:100px;height:20px;margin:0;padding:0;border:0'>"
+                     "<span class=hair id=hair></span></p>"
+                     "<p class=wrap><input name=k style='width:100px;height:20px;margin:0;padding:0;border:0'>"
+                     "<span class=inward></span></p>"
+                     "<p class=wrap><input name=l style='width:100px;height:20px;margin:0;padding:0;border:0'>"
+                     "<span class=outward></span></p>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    a = t != NULL ? flow_control(t, 0) : NULL;
+    b = t != NULL ? flow_control(t, 1) : NULL;
+    const flow_box_t *c = t != NULL ? flow_control(t, 2) : NULL;
+    os64_gui_rect_t ar = a != NULL ? flow_box_doc_rect(a, top) : (os64_gui_rect_t){0, 0, 0, 0};
+    hit = t != NULL ? flow_hit(t, ar.x + ar.w / 2, ar.y + ar.h / 2, top) : NULL;
+    expect("fixed door: the pointer finds an invisible ring over a field",
+           hit != NULL && hit != a && hit->unpainted, NULL);
+    expect("fixed door: an outline and an invisible ring over a field cover nothing at its centre",
+           a != NULL && !flow_box_covered(t, a, top), NULL);
+    expect("fixed door: a background under an invisible ring still covers",
+           b != NULL && flow_box_covered(t, b, top), NULL);
+    expect("fixed door: a border where the field's centre is covers it",
+           c != NULL && flow_box_covered(t, c, top), NULL);
+    const flow_box_t *d = t != NULL ? flow_control(t, 3) : NULL, *e = t != NULL ? flow_control(t, 4) : NULL;
+    const flow_box_t *f = t != NULL ? flow_control(t, 5) : NULL;
+    expect("fixed door: an invisible box covers nothing, whatever its background",
+           d != NULL && !flow_box_covered(t, d, top), NULL);
+    expect("fixed door: a background picture covers", e != NULL && flow_box_covered(t, e, top), NULL);
+    expect("fixed door: text over a field's centre covers it", f != NULL && flow_box_covered(t, f, top), NULL);
+    const flow_box_t *g6 = t != NULL ? flow_control(t, 6) : NULL, *h7 = t != NULL ? flow_control(t, 7) : NULL;
+    expect("fixed door: an inset shadow that fills a box covers", g6 != NULL && flow_box_covered(t, g6, top), NULL);
+    expect("fixed door: an inset shadow at a box's edge leaves its centre",
+           h7 != NULL && !flow_box_covered(t, h7, top), NULL);
+    const flow_box_t *i8 = t != NULL ? flow_control(t, 8) : NULL;
+    expect("fixed door: a blurred inset shadow covers as far as the painter's blur reaches",
+           i8 != NULL && flow_box_covered(t, i8, top), NULL);
+    const flow_box_t *j9 = t != NULL ? flow_control(t, 9) : NULL;
+    expect("fixed door: half a pixel of border is a pixel, as the painter rounds it",
+           j9 != NULL && flow_box_covered(t, j9, top), NULL);
+    const flow_box_t *k10 = t != NULL ? flow_control(t, 10) : NULL, *l11 = t != NULL ? flow_control(t, 11) : NULL;
+    expect("fixed door: an outline drawn inward over a field's centre covers it",
+           k10 != NULL && flow_box_covered(t, k10, top), NULL);
+    expect("fixed door: an outline drawn outward leaves the field under the box",
+           l11 != NULL && !flow_box_covered(t, l11, top), NULL);
+    flow_free(t);
+    sheeted_close(&q);
 }
 
 // z-index (P3): the paint order a flow_visit hands over, worked from
@@ -730,11 +806,13 @@ static void position_sticky_cases(void)
 {
     // A header 30 high at 100, in a wrapper 100..900: it stays put until
     // the page scrolls past 100, then rides the view's top, and lets go
-    // 30 above the wrapper's end, at 870 — 770 below where it began.
+    // 30 above the wrapper's end, at 870 — 770 below where it began. It
+    // has a background, as a header that hides what scrolls under it does:
+    // a box covers only where it draws (ruling 9's amendment).
     Sheeted q;
     const char *page =
         "<!doctype html><style>body{margin:0} p{margin:0} .gap{height:100px}"
-        ".wrap{height:800px} .s{position:sticky;top:0;height:30px} .long{height:1000px}</style>"
+        ".wrap{height:800px} .s{position:sticky;top:0;height:30px;background:white} .long{height:1000px}</style>"
         "<p class=gap></p><div class=wrap id=w><div class=s id=s>head</div>"
         "<p><input name=q></p></div><p class=long></p>";
     sheeted_open(&q, page, 400, 600);

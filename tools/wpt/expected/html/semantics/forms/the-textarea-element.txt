@@ -1,0 +1,75 @@
+# WPT's html/semantics/forms/the-textarea-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-textarea-element --update
+# rewrites [passing].
+[required]
+# 0f's phases (INTERFACES_FORMS.md): added whole by P3a; each line fails
+# with the switch off, the earlier phases' interfaces among them. The passes
+# not listed here pass either way.
+textarea-maxlength.html	Assigning negative integer throws IndexSizeError
+textarea-maxlength.html	Assigning non-numeric to maxlength sets maxlength to 0
+textarea-maxlength.html	Negative maxlength is always -1
+textarea-maxlength.html	Non-numeric maxlength is -1
+textarea-maxlength.html	Unset maxlength is -1
+textarea-minlength.html	Assigning negative integer throws IndexSizeError
+textarea-minlength.html	Assigning non-numeric to minlength sets minlength to 0
+textarea-minlength.html	Negative minlength is always -1
+textarea-minlength.html	Non-numeric minlength is -1
+textarea-minlength.html	Unset minlength is -1
+textarea-placeholder-lineheight.html	ComputedStyle line-height for textarea must be the same as set value
+textarea-textLength.html	Textarea's 'testLength' should work for utf-16.
+value-defaultValue-textContent.html	Setting defaultValue wipes out any children, including elements (just like setting textContent)
+value-defaultValue-textContent.html	defaultValue and value are affected by setting data on a child text node
+value-defaultValue-textContent.html	defaultValue and value are affected by setting nodeValue on a child text node
+value-defaultValue-textContent.html	defaultValue and value are affected by setting textContent
+value-defaultValue-textContent.html	defaultValue and value are affected by textContent in combination with appending a DocumentFragment
+value-defaultValue-textContent.html	defaultValue and value are affected by textContent in combination with appending a text node
+value-defaultValue-textContent.html	defaultValue and value are the empty string by default
+value-defaultValue-textContent.html	defaultValue and value reflect child text content, not textContent
+value-defaultValue-textContent.html	defaultValue and value treat CRLF differently
+value-defaultValue-textContent.html	tests for the value setter
+value-defaultValue-textContent.html	value normalizes CRLF even spread over multiple text nodes
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: One\ntwo\nthree\nintermingled\n\nlines\nand so
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: Some text that is too long for the specified character width.
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: Some text that is too long for the\n\n\nspecified character width.
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: exact  len
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+textarea-setcustomvalidity.html	textarea setCustomValidity is correct
+textarea-validity-clone.html	<textarea> validity state should be preserved after a clone
+textarea-validity-valueMissing-inside-datalist.html	textarea element with "required" attribute and empty value is considered "suffering from being missing" even if inside datalist element
+[excluded]
+[passing]
+cloning-steps.html	textarea element's dirty value flag should be cloned, so setAttribute doesn't affect the cloned textarea's value
+cloning-steps.html	textarea element's value should be cloned
+textarea-maxlength.html	Assigning negative integer throws IndexSizeError
+textarea-maxlength.html	Assigning non-numeric to maxlength sets maxlength to 0
+textarea-maxlength.html	Negative maxlength is always -1
+textarea-maxlength.html	Non-numeric maxlength is -1
+textarea-maxlength.html	Unset maxlength is -1
+textarea-minlength.html	Assigning negative integer throws IndexSizeError
+textarea-minlength.html	Assigning non-numeric to minlength sets minlength to 0
+textarea-minlength.html	Negative minlength is always -1
+textarea-minlength.html	Non-numeric minlength is -1
+textarea-minlength.html	Unset minlength is -1
+textarea-placeholder-lineheight.html	ComputedStyle line-height for textarea must be the same as set value
+textarea-setcustomvalidity.html	textarea setCustomValidity is correct
+textarea-textLength.html	Textarea's 'testLength' should work for utf-16.
+textarea-type.html	Textarea's type attribute should return 'textarea'
+textarea-validity-clone.html	<textarea> validity state should be preserved after a clone
+textarea-validity-valueMissing-inside-datalist.html	textarea element with "required" attribute and empty value is considered "suffering from being missing" even if inside datalist element
+value-defaultValue-textContent.html	Setting defaultValue wipes out any children, including elements (just like setting textContent)
+value-defaultValue-textContent.html	defaultValue and value are affected by setting data on a child text node
+value-defaultValue-textContent.html	defaultValue and value are affected by setting nodeValue on a child text node
+value-defaultValue-textContent.html	defaultValue and value are affected by setting textContent
+value-defaultValue-textContent.html	defaultValue and value are affected by textContent in combination with appending a DocumentFragment
+value-defaultValue-textContent.html	defaultValue and value are affected by textContent in combination with appending a text node
+value-defaultValue-textContent.html	defaultValue and value are the empty string by default
+value-defaultValue-textContent.html	defaultValue and value reflect child text content, not textContent
+value-defaultValue-textContent.html	defaultValue and value treat CRLF differently
+value-defaultValue-textContent.html	tests for the value setter
+value-defaultValue-textContent.html	value normalizes CRLF even spread over multiple text nodes
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: One\ntwo\nthree\nintermingled\n\nlines\nand so
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: Some text that is too long for the specified character width.
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: Some text that is too long for the\n\n\nspecified character width.
+wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: exact  len

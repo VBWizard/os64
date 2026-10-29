@@ -272,6 +272,11 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
+    /* A Location's member is the location's, a History's the history
+     * object's: called on anything else, WebIDL's brand check refuses it. */
+    if ((magic <= L_TO_STRING && !d_same_object(self, dom->location)) ||
+        (magic >= H_BACK && magic <= H_LENGTH && !d_same_object(self, dom->history)))
+        return JS_ThrowTypeError(ctx, "Illegal invocation");
     switch (magic) {
     case L_HREF:
         return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false) : location_part(dom, ctx, magic);
@@ -362,6 +367,15 @@ static bool type_is(const os64_html_node_t *node, const char *wanted, bool missi
     return *a == '\0' && *b == '\0';
 }
 
+/* A submit button (HTML § 4.10.2): a button of type submit, or of a type
+ * that is neither reset nor button; an input of type submit or image. */
+static bool submit_button(const os64_html_node_t *node)
+{
+    if (html_element(node, OS64_HTML_TAG_BUTTON))
+        return type_is(node, "submit", true) || !(type_is(node, "reset", false) || type_is(node, "button", false));
+    return html_element(node, OS64_HTML_TAG_INPUT) && (type_is(node, "submit", false) || type_is(node, "image", false));
+}
+
 static const os64_html_node_t *tree_root(const os64_html_node_t *node)
 {
     while (node->parent != NULL) node = node->parent;
@@ -391,17 +405,20 @@ static bool form_associated(const os64_html_node_t *node)
     }
 }
 
-/* HTML's form owner: the parser's record, else the form a `form` attribute
- * names in the control's own document's tree (any document's, as libpage's
- * node_owner reads it), else the nearest form ancestor. libhtml clears a
- * record the moment it stops being true, so a record found is believed. */
+/* HTML's form owner (§ 4.10.17.3, "reset the form owner"): the parser's
+ * record; else, for a control in a document (any document's, as libpage's
+ * node_owner reads it), the form its `form` attribute names by ID, and
+ * none for an empty one, since no ID is empty; else the nearest form
+ * ancestor, which is a control's in no document whatever the attribute
+ * says. libhtml clears a record the moment it stops being true, so a
+ * record found is believed. */
 const os64_html_node_t *d_form_owner(const os64_html_node_t *node)
 {
     if (!form_associated(node)) return NULL;
     if (node->form_owner != NULL) return node->form_owner;
     const os64_html_attr_t *named = os64_html_attr(node, "form");
-    if (named != NULL) {
-        if (!d_connected(node)) return NULL;
+    if (named != NULL && d_connected(node)) {
+        if (named->value[0] == '\0') return NULL;
         const os64_html_node_t *root = tree_root(node);
         for (const os64_html_node_t *at = root; at != NULL;) {
             const os64_html_attr_t *id = at->kind == OS64_HTML_ELEMENT ? os64_html_attr(at, "id") : NULL;
@@ -449,16 +466,34 @@ static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activ
 
 enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
 
-/* A form's submission: HTML fires submit at the form unless the script
- * called submit() itself, and a submit nobody cancelled becomes the ask. A
- * form in a document with no window cannot navigate, and HTML submits
- * nothing from it, not even the event. */
+/* A form's submission: unless the script called submit() itself, HTML
+ * validates the form's constraints (validity.c, with the Modern Web switch
+ * on; skipped by the submitter's formnovalidate or the form's novalidate),
+ * and stops when they fail, then fires submit at the form; a submit nobody
+ * cancelled becomes the ask. A
+ * form in a document with no window, or in no document, cannot navigate,
+ * and HTML submits nothing from it, not even the event. */
 static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
                   const os64_html_node_t *submitter, bool event)
 {
-    if (!d_window_document(dom, form)) return 1;
-    int result = event ? fire(dom, ctx, form, "submit", true, true) : 1;
-    if (result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
+    if (!d_window_document(dom, form) || !d_connected(form)) return 1;
+    if (!event) {
+        d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
+        return 1;
+    }
+    /* HTML's firing-submission-events flag: a submission asked from inside
+     * this form's own invalid or submit listener does nothing, rather than
+     * validating and firing again until the engine's stack gives out. */
+    for (const struct DClicking *at = dom->submitting; at != NULL; at = at->next)
+        if (at->node == form) return 1;
+    struct DClicking self = {form, dom->submitting};
+    dom->submitting = &self;
+    bool novalidate = (submitter != NULL && os64_html_attr(submitter, "formnovalidate") != NULL) ||
+        os64_html_attr(form, "novalidate") != NULL;
+    int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
+    int result = valid > 0 ? fire(dom, ctx, form, "submit", true, true) : valid < 0 ? -1 : 1;
+    dom->submitting = self.next;
+    if (valid > 0 && result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
     return result;
 }
 
@@ -472,16 +507,19 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
 /* element.click() is a synthetic click: the event, then the element's
  * activation behaviour unless a listener cancelled it. A checkbox or radio
  * changes before its click is dispatched and is put back when the click is
- * cancelled (HTML's legacy-pre-activation behaviour). */
+ * cancelled (HTML's legacy-pre-activation behaviour); a checkbox's
+ * indeterminate flag is cleared with it, and put back with it. */
 static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
-    bool checkable = html_element(node, OS64_HTML_TAG_INPUT) &&
-        (type_is(node, "checkbox", false) || type_is(node, "radio", false));
-    bool was = false;
+    bool radio = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "radio", false);
+    bool checkbox = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "checkbox", false);
+    bool checkable = radio || checkbox;
+    bool was = false, was_indeterminate = false;
     if (checkable) {
         int64_t status = os64_page_node_checked(dom->state, node, &was);
-        bool radio = type_is(node, "radio", false);
+        if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &was_indeterminate);
         if (status >= 0) status = os64_page_node_set_checked(dom->state, node, radio ? true : !was);
+        if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);
         if (status < 0) { d_page_error(ctx, status); return -1; }
     }
     int result = fire(dom, ctx, node, "click", true, true);
@@ -490,6 +528,8 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
         bool now = false;
         if (result == 0) {
             int64_t status = os64_page_node_set_checked(dom->state, node, was);
+            if (status >= 0 && checkbox)
+                status = os64_page_node_set_indeterminate(dom->state, node, was_indeterminate);
             if (status < 0) { d_page_error(ctx, status); return -1; }
         } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != was) {
             result = fire(dom, ctx, node, "input", true, false);
@@ -508,17 +548,10 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     bool input = html_element(node, OS64_HTML_TAG_INPUT);
     const os64_html_node_t *form = d_form_owner(node);
     if (form == NULL) return 1;
-    if ((button && (type_is(node, "submit", true) || !(type_is(node, "reset", false) || type_is(node, "button", false)))) ||
-        (input && (type_is(node, "submit", false) || type_is(node, "image", false))))
-        return submit(dom, ctx, form, node, true);
+    if (submit_button(node)) return submit(dom, ctx, form, node, true);
     if ((button || input) && type_is(node, "reset", false)) return reset(dom, ctx, form);
     return 1;
 }
-
-struct DClicking {
-    const os64_html_node_t *node;
-    const struct DClicking *next;
-};
 
 /* HTML's click-in-progress flag: an onclick that clicks its own element
  * returns at once instead of recursing until the engine's stack gives out.
@@ -554,12 +587,21 @@ JSValue d_element_action(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
 static JSValue element_method(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                               int magic, JSValue *data)
 {
-    (void)argc; (void)argv;
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
     if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Expected an element");
+    /* requestSubmit(submitter) (HTML § 4.10.3): a submitter given is a
+     * submit button this form owns, and the submission is its. */
+    if (magic == A_REQUEST_SUBMIT && argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+        const os64_html_node_t *submitter = d_node(dom, ctx, argv[0]);
+        if (submitter == NULL) return JS_EXCEPTION;
+        if (!submit_button(submitter)) return JS_ThrowTypeError(ctx, "The submitter is not a submit button");
+        if (d_form_owner(submitter) != node)
+            return d_error(ctx, "NotFoundError", "The submitter is not this form's");
+        return submit(dom, ctx, node, submitter, true) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    }
     return d_element_action(dom, ctx, node, magic);
 }
 
@@ -568,7 +610,13 @@ typedef struct { const char *name; int magic, argc; bool accessor, writable; } M
 static JSValue object_with(os64_dom_t *dom, JSContext *ctx, DValue **slot, const Member *members,
                            size_t count)
 {
-    JSValue object = JS_NewObject(ctx);
+    /* Over a prototype level of its own, empty but for what the Modern
+     * Web's row puts there (d_window_objects_install), so the object's
+     * chain has the same levels with the switch on or off. */
+    JSValue level = JS_NewObject(ctx);
+    if (JS_IsException(level)) return JS_EXCEPTION;
+    JSValue object = JS_NewObjectProto(ctx, level);
+    JS_FreeValue(ctx, level);
     *slot = d_retain(dom, ctx, object);
     if (*slot == NULL) return JS_EXCEPTION;
     for (size_t i = 0; i < count; i++)
@@ -592,7 +640,9 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     };
     static const Member history[] = {
         {"back", H_BACK, 0, false, false}, {"forward", H_FORWARD, 0, false, false},
-        {"go", H_GO, 1, false, false}, {"length", H_LENGTH, 0, true, false}
+        /* go's delta is optional, so its length is 0 (WebIDL's
+         * operations). */
+        {"go", H_GO, 0, false, false}, {"length", H_LENGTH, 0, true, false}
     };
     if (JS_IsException(object_with(dom, ctx, &dom->location, location,
                                    sizeof(location) / sizeof(location[0]))) ||
@@ -1060,9 +1110,9 @@ enum { HS_PUSH, HS_REPLACE, HS_STATE, HS_RESTORATION };
 static JSValue history_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                               int magic, JSValue *data)
 {
-    (void)self;
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
+    if (!d_same_object(self, dom->history)) return JS_ThrowTypeError(ctx, "Illegal invocation");
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     switch (magic) {
@@ -1171,6 +1221,164 @@ int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     }
     JS_FreeValue(ctx, event_prototype);
     JS_FreeValue(ctx, event);
+    return result;
+}
+
+/* THE WINDOW'S OWN OBJECTS AS THEIR INTERFACES' (0f's P7; HTML's Location,
+ * History and Navigator interfaces): the Modern Web table's row, after the
+ * history row, reshaping what the classic install made so that the
+ * surface without the switch cannot move. The classic install made each
+ * object over an empty prototype level of its own, so its chain has the
+ * same levels either way; the row makes each level its interface's
+ * prototype object. History's members and Navigator's go to it, leaving
+ * the objects none of their own; Location's stay on the location
+ * ([LegacyUnforgeable]), made unconfigurable, with its own valueOf and
+ * Symbol.toPrimitive (HTML's "Location object setup"), and its prototype
+ * holds no member. Each interface object is an Illegal constructor. */
+
+/* WebIDL's names for a member's functions: an operation's its own, an
+ * attribute's accessors "get href" and "set href" (WebIDL's operations and
+ * attributes). The binding makes most of them nameless, and one it named
+ * is named again the same; a symbol-keyed property keeps what it has. */
+static int name_accessors(JSContext *ctx, JSAtom atom, const JSPropertyDescriptor *desc)
+{
+    if (!(desc->flags & JS_PROP_GETSET) && !JS_IsFunction(ctx, desc->value)) return 0;
+    JSValue key = JS_AtomToValue(ctx, atom);
+    if (JS_IsException(key)) return -1;
+    bool text = JS_IsString(key);
+    JS_FreeValue(ctx, key);
+    if (!text) return 0;
+    const char *name = JS_AtomToCString(ctx, atom);
+    if (name == NULL) return -1;
+    int result = 0;
+    bool operation = !(desc->flags & JS_PROP_GETSET);
+    JSValueConst functions[2] = {operation ? desc->value : desc->getter, operation ? JS_UNDEFINED : desc->setter};
+    for (int i = 0; result == 0 && i < 2; i++) {
+        if (!JS_IsFunction(ctx, functions[i])) continue;
+        char spelled[96];
+        os64_snprintf(spelled, sizeof(spelled), "%s%s", operation ? "" : i == 0 ? "get " : "set ", name);
+        if (JS_DefinePropertyValueStr(ctx, functions[i], "name", JS_NewString(ctx, spelled), JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    JS_FreeCString(ctx, name);
+    return result;
+}
+
+/* Every own property of `object` moved to `prototype`, as it was but that
+ * an operation is enumerable and an attribute's functions are named, as
+ * WebIDL makes an interface's members (its operations and attributes). */
+static int move_members(JSContext *ctx, JSValueConst object, JSValueConst prototype)
+{
+    JSPropertyEnum *names;
+    uint32_t count;
+    if (JS_GetOwnPropertyNames(ctx, &names, &count, object, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
+        return -1;
+    int result = 0;
+    for (uint32_t i = 0; result == 0 && i < count; i++) {
+        JSPropertyDescriptor desc;
+        int has = JS_GetOwnProperty(ctx, &desc, object, names[i].atom);
+        if (has <= 0) {
+            result = has;
+            continue;
+        }
+        int flags = (desc.flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) | JS_PROP_ENUMERABLE |
+            JS_PROP_HAS_CONFIGURABLE | JS_PROP_HAS_ENUMERABLE |
+            ((desc.flags & JS_PROP_GETSET) ? JS_PROP_HAS_GET | JS_PROP_HAS_SET : JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE);
+        if (name_accessors(ctx, names[i].atom, &desc) < 0 ||
+            JS_DefineProperty(ctx, prototype, names[i].atom, desc.value, desc.getter, desc.setter, flags) < 0 ||
+            JS_DeleteProperty(ctx, object, names[i].atom, 0) < 0)
+            result = -1;
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+    }
+    JS_FreePropertyEnum(ctx, names, count);
+    return result;
+}
+
+/* [LegacyUnforgeable]: each own property of `object` unconfigurable, a
+ * method unwritable too and enumerable, a member's functions named
+ * (WebIDL's operations and attributes). */
+static int unforgeable(JSContext *ctx, JSValueConst object)
+{
+    JSPropertyEnum *names;
+    uint32_t count;
+    if (JS_GetOwnPropertyNames(ctx, &names, &count, object, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
+        return -1;
+    int result = 0;
+    for (uint32_t i = 0; result == 0 && i < count; i++) {
+        JSPropertyDescriptor desc;
+        int has = JS_GetOwnProperty(ctx, &desc, object, names[i].atom);
+        if (has <= 0) {
+            result = has;
+            continue;
+        }
+        /* valueOf and Symbol.toPrimitive, defined unconfigurable already,
+         * are no members: they stay unenumerable, and valueOf, which is
+         * Object.prototype's own function, is not renamed. */
+        bool member = (desc.flags & JS_PROP_CONFIGURABLE) != 0;
+        int flags = JS_PROP_HAS_CONFIGURABLE |
+            ((desc.flags & JS_PROP_GETSET) ? 0 : JS_PROP_HAS_WRITABLE |
+             (member ? JS_PROP_HAS_ENUMERABLE | JS_PROP_ENUMERABLE : 0));
+        if ((member && name_accessors(ctx, names[i].atom, &desc) < 0) ||
+            JS_DefineProperty(ctx, object, names[i].atom, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, flags) < 0)
+            result = -1;
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+    }
+    JS_FreePropertyEnum(ctx, names, count);
+    return result;
+}
+
+/* The interface `name` over a new prototype, defined on window. */
+static int interface_over(JSContext *ctx, JSValueConst global, const char *name, JSValue prototype)
+{
+    JSValue interface = d_interface_new(ctx, name, 0, NULL, prototype, JS_UNDEFINED);
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(interface)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, name, interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+int d_window_objects_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValueConst location = dom->location->value, history = dom->history->value,
+                 navigator = dom->navigator->value;
+    /* The location's own valueOf, Object.prototype's, taken before any
+     * page ran, and its Symbol.toPrimitive, undefined. */
+    JSValue object = JS_GetPropertyStr(ctx, global, "Object");
+    JSValue object_prototype = JS_IsException(object) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, object, "prototype");
+    JS_FreeValue(ctx, object);
+    if (JS_IsException(object_prototype)) return -1;
+    JSValue value_of = JS_GetPropertyStr(ctx, object_prototype, "valueOf");
+    JS_FreeValue(ctx, object_prototype);
+    if (JS_IsException(value_of)) return -1;
+    if (JS_DefinePropertyValueStr(ctx, location, "valueOf", value_of, 0) < 0) return -1;
+    JSAtom primitive = JS_NewAtom(ctx, "toPrimitive");
+    JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+    JSValue key = JS_IsException(symbol) ? JS_EXCEPTION : JS_GetProperty(ctx, symbol, primitive);
+    JS_FreeValue(ctx, symbol);
+    JS_FreeAtom(ctx, primitive);
+    if (JS_IsException(key)) return -1;
+    JSAtom key_atom = JS_ValueToAtom(ctx, key);
+    JS_FreeValue(ctx, key);
+    if (key_atom == JS_ATOM_NULL) return -1;
+    int defined = JS_DefinePropertyValue(ctx, location, key_atom, JS_UNDEFINED, 0);
+    JS_FreeAtom(ctx, key_atom);
+    if (defined < 0 || unforgeable(ctx, location) < 0) return -1;
+    /* Each object's own prototype level, which the classic install made
+     * empty, becomes its interface's prototype object. */
+    static const char *const kNames[3] = {"Location", "History", "Navigator"};
+    JSValueConst objects[3] = {location, history, navigator};
+    int result = 0;
+    for (int i = 0; result == 0 && i < 3; i++) {
+        JSValue prototype = JS_GetPrototype(ctx, objects[i]);
+        if (JS_IsException(prototype) ||
+            (i > 0 && move_members(ctx, objects[i], prototype) < 0) ||
+            interface_over(ctx, global, kNames[i], JS_DupValue(ctx, prototype)) < 0)
+            result = -1;
+        JS_FreeValue(ctx, prototype);
+    }
     return result;
 }
 

@@ -12,7 +12,9 @@ static void navigation_flags(void)
         os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
         const os64_page_control_t *c=os64_page_control(page,0);
         state_expect("effective readonly by type",c && c->readonly==(i<12));
-        state_expect("validation bars by type",c && c->barred_from_validation==(i<12 || i==17 || i>=20));
+        // readonly takes effect on the text-like types alone, and bars an
+        // input of every type from validation (core.c's barred).
+        state_expect("validation bars by type",c && c->barred_from_validation);
         state_expect("disabled bars by type",os64_page_control(page,1)->barred_from_validation);
         os64_page_free(page);os64_html_document_free(doc);
     }

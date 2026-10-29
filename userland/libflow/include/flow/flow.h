@@ -1437,14 +1437,21 @@ void flow_scroll_reveal(flow_tree_t *tree, const flow_box_t *box);
 // over a box the pointer reaches and that container can move no further.
 int32_t flow_box_scroller(const flow_box_t *box);
 
-// Whether the pointer cannot reach `box` at this scroll: flow_hit at its
+// Whether the pointer cannot reach `box` at this scroll: a hit at its
 // centre answers something that is neither it nor inside it — a box
 // painted over it, or nothing, since it is hidden or lets the pointer
-// through itself. A face that draws live widgets over the page draws a
-// control's exactly when this is false (POSITION.md, ruling 9): a text
-// field under a fixed header must not draw over the header and take its
-// click, while a floating label or an icon in a field's corner, which the
-// pointer passes or does not reach at the centre, leaves the field usable.
+// through itself. A box covers only where it draws: the hit passes a box
+// that draws nothing of its own at the centre — one of opacity 0
+// (`unpainted`), or one whose background is transparent, inside its
+// borders and clear of its inset shadows and its outline — unless it is
+// `box` or inside it. A face that draws live
+// widgets over the page draws a control's exactly when this is false
+// (POSITION.md, ruling 9 and its amendment): a text field under a fixed
+// header must not draw over the header and take its click, while a
+// floating label or an icon in a field's corner, which the pointer passes
+// or does not reach at the centre, and an outline laid over the whole
+// field, drawn at its edges or not at all, which a page's script answers
+// by focusing the field, leave the field usable.
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of

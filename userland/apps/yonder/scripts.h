@@ -187,6 +187,18 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *scripts, const os64_h
 // on<type> attribute in the document names it, looked at once per tree
 // version.
 bool yonder_scripts_listens(yonder_scripts_t *scripts, const char *type);
+// A person's submission of `form` by `submitter`, validated by the page as
+// os64_dom_form_validate does, before its submit event. A page whose script
+// never ran makes its runtime here if an element carries an oninvalid or an
+// onsubmit attribute; a page with no runtime otherwise leaves `valid` true, and the
+// model's own validation in the submission decides. True when a task ran
+// (or the runtime it needed could not be made), and `outcome` says how.
+bool yonder_scripts_form_validate(yonder_scripts_t *scripts, const os64_html_node_t *form,
+                                  const os64_html_node_t *submitter, bool *valid, os64_js_outcome_t *outcome);
+// The sentence the page's last report gave for `node`
+// (os64_dom_report_message); false when it was not of `node`.
+bool yonder_scripts_report_message(const yonder_scripts_t *scripts, const os64_html_node_t *node, char *out,
+                                   size_t cap);
 // The last thing the page's scripts said on the status line, kept so the
 // page's arrival, which writes the status line, can say it again. NULL when
 // nothing was said.
@@ -222,6 +234,21 @@ bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // source name (OS64_JS_SOURCE_NAME_CAP) may cut short; NULL when the task
 // was an inline script, an event or a timer. Good until the host is freed.
 const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
+// A failure as its FAILED line says it: `message`, then where the first
+// frame of its stack that names a place is (libdom's os64_dom_stack_frame):
+// `TypeError: x is undefined, at f 12:5`. A place in `own`, the failing
+// task's script's address (NULL for an inline script, an event or a
+// timer), is its line and column; in another script, that script's
+// address before them; in one of the page's classic inline scripts,
+// `inline`; and anywhere else, the engine's own name for it. A script's
+// own code and an anonymous function have no name there. `scripts`, the
+// page's host, says which script a classic script's file is, and may be
+// NULL where only modules, which are compiled under their address, can
+// have failed.
+// `message` alone when the stack names no place, which a DOMException's
+// and a thrown primitive's never do; cut short at `cap`.
+void yonder_scripts_failure(const yonder_scripts_t *scripts, const char *own, const char *message,
+                            const char *stack, char *out, size_t cap);
 // How long the engine took to evaluate the script the last task ran
 // (os64_js_run, compiling it included), in microseconds; -1 when the last
 // task was an event or a timer, or ran no script.

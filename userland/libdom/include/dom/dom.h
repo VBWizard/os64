@@ -75,7 +75,11 @@ typedef enum {
 typedef enum {
     OS64_DOM_ACTIVATE_FOCUS = 1,
     OS64_DOM_ACTIVATE_BLUR,
-    OS64_DOM_ACTIVATE_RESET     /* a form whose reset event was not cancelled */
+    OS64_DOM_ACTIVATE_RESET,    /* a form whose reset event was not cancelled */
+    /* A control whose constraint problem is reported to the person
+     * (reportValidity, or a submission constraint validation stopped):
+     * focus it and say os64_dom_report_message's sentence. */
+    OS64_DOM_ACTIVATE_REPORT
 } os64_dom_activation_t;
 
 typedef struct {
@@ -141,17 +145,19 @@ typedef struct {
      * one is told, and the binding carries on as the sentence says. */
     void (*broken)(void *opaque, const char *sentence);
     /* A failure of the task being run past the one its outcome carries: an
-     * unhandled rejection (`message` begins "unhandled rejection: ") of a
+     * unhandled rejection (`message` begins "unhandled rejection: "), or
+     * an error the binding caught and reported itself (a listener's), of a
      * task whose outcome already holds a failure, which the host records
      * as it records the outcome's, under `task`, the task's source name.
-     * The first sixteen of a task are told one by one, and the rest as
+     * A task's first sixteen such rejections are told one by one, the rest as
      * one line as the task closes, `and <n> more unhandled rejections`:
      * a page can leave hundreds of thousands in one task, and what each
      * costs the host must not be its to size (report.c's
      * D_REJECTIONS_TOLD). On the owner thread, between a task's calls or
      * as it closes; it must not enter JS. NULL: only the outcome's
-     * failure is known. */
-    void (*failed)(void *opaque, const char *task, const char *message);
+     * failure is known. `stack` is the failure's as an outcome's
+     * stack_trace is, "" when it has none. */
+    void (*failed)(void *opaque, const char *task, const char *message, const char *stack);
     /* crypto.getRandomValues' and randomUUID's randomness: `length` bytes
      * (never more than 65,536) written into `out` from the host's
      * cryptographically strong source, true when every one was. False is
@@ -641,6 +647,26 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
 os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node,
                                    const os64_dom_event_t *event, bool *prevented,
                                    os64_js_outcome_t *outcome);
+/* A person's submission of `form`, by `submitter` (a submit button, or NULL
+ * for none), as one task: HTML's interactive constraint validation (§
+ * 4.10.21.3, the form submission algorithm), which the host asks BEFORE it
+ * fires submit. Unless
+ * the submitter's formnovalidate or the form's novalidate says not to, each
+ * invalid control the form owns gets an `invalid` event, and the first
+ * whose event nobody cancelled is reported (OS64_DOM_ACTIVATE_REPORT).
+ * `valid` false means the host submits nothing. With the Modern Web switch
+ * off, or with validation skipped, it is true and no task runs (`ran`
+ * false): with the switch off the model judges the submission alone, and
+ * a submission novalidate or formnovalidate skips is judged by nobody.
+ * Owner thread, between tasks. */
+os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t *form,
+                                        const os64_html_node_t *submitter, bool *valid, bool *ran,
+                                        os64_js_outcome_t *outcome);
+/* The sentence the last report (OS64_DOM_ACTIVATE_REPORT) gave for `node`,
+ * into `out` (truncated to `cap`, terminated): the control's validation
+ * message, judged with the page's engine, which a pattern needs. False,
+ * and `out` empty, when the last report was not of `node`. */
+bool os64_dom_report_message(const os64_dom_t *dom, const os64_html_node_t *node, char *out, size_t cap);
 /* HTML's readiness steps as the host's dispatches make them: DOMContentLoaded
  * at `doc`'s document node moves LOADING to INTERACTIVE, and load at window
  * (node NULL) moves either to COMPLETE; anything else leaves `now` as it is.
@@ -671,12 +697,12 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type);
  * It needs no runtime, so a host can ask before making one. It knows no
  * binding, so it names the Modern Web arc's types whatever the switch
  * says; os64_dom_listens counts them only with the switch on. */
-uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
+uint64_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
  * (DOMContentLoaded; readystatechange, visibilitychange and
  * prerenderingchange, whose handlers are the document's IDL properties
  * alone; or one outside the types os64_dom_listens counts). */
-uint32_t os64_dom_handler_bit(const char *type);
+uint64_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due
  * time, or UINT64_MAX with none. fire runs AT MOST ONE timer due at or before
@@ -745,6 +771,32 @@ bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_
  * classic script resolves against it (HTML's referencing script's base
  * URL). */
 const char *os64_dom_script_address(const os64_dom_t *dom, const char *name);
+/* The first frame of an engine stack text (an Error's `stack`, an
+ * outcome's stack_trace) that names a place in a script, as the engine
+ * writes a frame a line, ending it with a newline: "    at f
+ * (file:line:col)", or "    at file:line:col" for a script that did not
+ * compile. A native frame names no place, nor does the second form in a
+ * file the engine or the binding names in angle brackets (JSON text, or
+ * eval'd source, that did not parse), and a last line with no newline was
+ * cut short: each is passed over. `file` and
+ * `function` point into `stack`, with their lengths; `function` is NULL
+ * for the second form, and for a name the engine wrote in angle brackets:
+ * an anonymous function's, a script's own code's. The file of a classic
+ * script run through the binding is its name for it
+ * (os64_dom_script_name), which os64_dom_frame_script reads back. False
+ * when no frame names a place. */
+typedef struct {
+    const char *function, *file;
+    size_t function_length, file_length;
+    uint32_t line, column;
+} os64_dom_frame_t;
+bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame);
+/* The script a frame's file names, when it is one of the binding's names:
+ * its address, as os64_dom_script_address reads one. The page's own name,
+ * its inline scripts', is NULL with *page true; any other file, and one of
+ * another site's scripts the binding keeps no address for, NULL with
+ * *page false. */
+const char *os64_dom_frame_script(const os64_dom_t *dom, const os64_dom_frame_t *frame, bool *page);
 /* After that script ran (and drained): what it left owed, settled as one
  * task named `name`, the host's own name for it (MODERN_WEB.md § P2a). The
  * window's error event for each exception it threw, said to come from its

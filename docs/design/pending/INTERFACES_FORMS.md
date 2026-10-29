@@ -168,7 +168,7 @@ DEBTS.md ("Interface objects only for the binding's own prototypes") records
 the rule this inventory is bound by: **naming a broader prototype for an
 interface would make `instanceof` lie**, so an interface whose objects share
 a prototype with another needs a prototype of its own first. The binding's
-kinds (`internal.h` `D_PROTO_*`, chosen in `node.c`'s `node_prototype_kind`,
+kinds (`internal.h` `D_PROTO_*`, chosen in `node.c`'s `d_node_kind`,
 parented by `d_proto_parent`) are Node, Document, Element, CharacterData,
 DocumentFragment, DocumentType, Attr, HTMLElement, and the HTML kinds input,
 textarea, select, button, form, image, script, anchor, link and iframe. Every
@@ -537,9 +537,30 @@ excluded by name where they need `test_driver`), `the-fieldset-element`,
 `htmlformcontrolscollection.html` and `radionodelist.html` from P1a's
 collections directory.
 
+**As built, P3a** (MODERN_WEB.md § 0f's P3a, as built, is the record): the
+first bullet whole, the controls' reflections as one table of HTML's
+rules, with `indeterminate` libpage's and drawn by yonder, and each
+control's `form` and `labels`; and two form-owner rules WPT's
+`form_attribute.html` found wrong (an empty `form` attribute, a control in
+no document). `reflection-forms.html` and four of the oracle's directories
+run now, nothing excluded. P3b is the rest: the form's members and its
+collections, and the label, fieldset, legend and output, whose `htmlFor`
+and `control` most of `the-label-element`'s failures wait on.
+
+**As built, P3b** (MODERN_WEB.md § 0f's P3b, as built, is the record): the
+rest of the phase, as listed, with the form's `elements` holding HTML's
+listed elements, the form a legacy platform object, and Node's `baseURI`
+beside it; an output's reset and the form's past names map are DEBTS.md
+rows.
+
 ### P4 — constraint validation, whole (49 members and `ValidityState`)
 
 (b) to 99.6% distinctive.
+
+Built in two PRs (MODERN_WEB.md § 0f's P4a, as built). **P4a**: every
+member, `invalid` and the report, and every flag but three. **P4b**:
+`rangeUnderflow`, `rangeOverflow` and `stepMismatch`, which read the date
+and time types as numbers, as P5's `valueAsNumber` does.
 
 - `ValidityState` (its 11 flags), and `willValidate`, `validity`,
   `validationMessage`, `checkValidity`, `reportValidity` and
@@ -587,8 +608,8 @@ Oracle: `the-input-element`'s `input-valueasnumber*.html`,
   elements (whose `rows`, `insertRow` and the rest are tree verbs, the
   largest part) and the obsolete `HTMLFontElement`, `HTMLDirectoryElement`
   and `HTMLMenuElement`. Appendix A lists all 36.
-- Machinery: a kind per tag in `node_prototype_kind`, which wants a table
-  rather than the `if` chain it is today.
+- Machinery: a kind per tag in `node.c`'s `d_node_kind`, a table
+  (`kTagKinds`) since P6a, where it was an `if` chain.
 - Size: M, the tables most of it.
 
 Oracle: `html/dom` (fetched) `reflection-grouping.html`, `reflection-text.html`,

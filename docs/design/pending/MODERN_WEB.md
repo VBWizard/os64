@@ -372,6 +372,16 @@ says once modules run. With modules and import maps in, the census said it
 `ReadableStream`, and its loading placeholders stay where that code would
 have filled them. Chris bookmarked custom elements to follow 0f.
 
+**Browser-own, between slices (2026-10-28).** Two fixes that are not
+platform surface but gate what the platform work can show on the P5, each
+designed in HEAP_BINS.md and booked in DEBTS.md: the CSS parser's scratch
+kept by its owner across a cascade's reads (§ Browser layout, size S,
+libgarb) and size-class bins in the userland heap (§ Heap, size M, Chris's
+malloc). The measurement: a 22,415-rule page spent 8 of its 11.7 s of
+layout in the heap's first-fit walk, one walk per rule, and the window's
+thread holds 7% of a core idle on the same walk. Order: the scratch first,
+the bins when heap.c is opened; neither makes the other optional.
+
 ## How the slices run side by side (2026-10-21)
 
 Chris opened the arc on 2026-10-21 with a week's model usage to spend and
@@ -3914,6 +3924,686 @@ read 0. A press on a field, or a focus a person's event moves to it, is now
 the person's choice of its caret whether or not the caret moved, and the
 next flush publishes it; a script's `focus()` chooses nothing. Two mutants,
 each caught: the group is 31.
+
+**Codex, round 3**: clean.
+
+### 0f's P3a, as built
+
+P3's first PR (INTERFACES_FORMS.md § P3): the members of input, textarea,
+select and button. The form, fieldset, label, legend and output, and the
+form's collections, are P3b's.
+
+- **The reflections are one table** (libdom `controls.c`). Most of what the
+  four controls add is a content attribute an IDL attribute reflects by
+  one of HTML's rules (§ 2.6.1): a string; a URL, read resolved, and as
+  written when it does not resolve; a boolean; an enumerated attribute,
+  read as its canonical keyword, ASCII case-blind, with a missing and an
+  invalid default of its own; and the integers, each with its default and
+  its answer to a value out of range (a negative `maxLength` set throws, a
+  zero `size` set throws, a zero `cols` set takes the default). A row is a
+  member, its attribute, its rule and the interfaces it is on, and one
+  accessor reads them all, so a member called on another interface is a
+  TypeError, as WebIDL's brand check is. `formAction` reads the document's
+  URL when its attribute is missing or empty. `name`, `type`, `value` and
+  select's `multiple` and `size` were every page's or P1a's already.
+- **The members that are no plain reflection**: textarea's `defaultValue`
+  (its child text, set as textContent is) and `textLength` (code units of
+  its value); `autocomplete`, read through HTML's autofill grammar
+  (`section-*`, shipping or billing, a contact kind for a contact field, the
+  field, `webauthn`; `on` and `off` alone, but not on a hidden input), its
+  tokens lowercased; an image button's `width` and `height`, which are its
+  attributes here and 0 on any other input (DEBTS.md); each control's
+  `form`, its form owner; and `labels`, a live NodeList made once, of the
+  labels in the control's tree whose labeled control it is, that tree's
+  root included, so a label holding a control in no document labels it.
+  `d_label_control` is HTML's labeled control, which P3b's
+  `label.control` will answer from.
+- **`indeterminate`** is libpage's (`os64_page_node_set_indeterminate`): a
+  flag with no attribute, which a clone copies (WPT's `cloning-steps.html`
+  says so where memory said otherwise). A click clears a checkbox's, a
+  person's in yonder and a script's `click()` alike, and a cancelled click
+  puts it back with the box. yonder draws it as a bar across the box, on a
+  checkbox and on no radio, through libui's checkbox's new third look.
+- **The form owner's rules**, which WPT's `form_attribute.html` caught: no
+  ID is empty, so `form=""` names no form, even beside a form whose id is
+  empty; and a control in no document belongs to its ancestor form
+  whatever its form attribute says. libdom's `d_form_owner` and libpage's
+  radio groups follow both; libpage's model already did, since its map of
+  IDs holds no empty one.
+
+**Numbers.**
+
+- **WPT**: `html/dom/reflection-forms.html`, excluded until this phase,
+  5,776 of 8,817, 2,095 of them `[required]`; four directories added to
+  `tools/wpt_fetch.sh`, each with its `[required]` the passes that fail
+  with the switch off: `form-control-infrastructure` 0 → 66 of 121,
+  `the-textarea-element` 8 → 30 of 42, `the-button-element` 19 → 20 of 111,
+  `the-label-element` 47 → 52 of 169; and P2's two, `the-input-element`
+  842 → 916 of 2,000 and `textfieldselection` 449 → 461. Every page runs:
+  the plan's exclusions by name (pickers, `commandfor`, testdriver's
+  clicks) are not needed, since each reaches a verdict. The other 40
+  directories with expectations lose nothing. What still fails
+  in P3a's scope: the reflection pages' `"\0"` cases (a string the binding
+  is handed loses its U+0000) and two `formAction` defaults that WPT's
+  harness judges by `localName`, which Element lacks (both DEBTS.md); the
+  rest is P3b's (`htmlFor`, `label.control`, fieldset, output, the form's
+  members), P4's validity, or no interface's (meter, progress, object).
+- **Hosts**, on `userland` with SVG's #368 and #369 in: libpage 254,184
+  (indeterminate: default, published,
+  the revision, a clone, a person's tick of a checkbox and not a radio, a
+  script's checked set; and the empty form attribute in the model and a
+  radio group), its 3 failures the sheet census's, which counts an SVG
+  `style` since #368 while its case still expects six; DOM 15,783 and
+  111,223, 0 failed (every rule of the table, the
+  brand check, defaultValue, textLength, indeterminate through a click and
+  a cancelled one, autocomplete's grammar, width and height, form by
+  ancestor and attribute, labels live and in tree order, and with the
+  switch off none of them); scripted page 8,258 (the bar drawn on a
+  checkbox and no radio, a person's click clearing it, a cancelled one
+  putting it back); yonder 2,028; libui's text 152 and 1,645 (the
+  checkbox's third look, set without its callback and cleared by a click);
+  appearance passes.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3a group): 32,
+  each caught. One was first missed: libui's checkbox clearing its own
+  third look on a click, which yonder's sync from the model clears again
+  after it, so no yonder case could see it; libui's text host holds it
+  now, and the harness runs a Python suite with its flags. A 33rd was
+  dropped as no mutant at all: a guard in the model's form owner against
+  an empty ID, which its map of IDs never holds; the guard went with it.
+- **QEMU**: a served page with two checkboxes and a radio made
+  indeterminate by script, a field and its label: the bar drawn on both
+  checkboxes and not the radio; the page reading `maxLength`, `labels`,
+  `form` and `size` as written; Tab and Space on the first box tick it,
+  clear the bar, and its change listener reads `checked=true
+  indeterminate=false`.
+
+**Codex, round 1**: three findings. Fixed: an input's `formMethod` did not
+know `dialog`, which `formmethod` shares with a form's `method` on every
+submit button (WPT's table for input lists only get and post, so the
+oracle never asked); and an empty `for` matched an empty `id`, where no ID
+is empty. Booked: URL reflections resolve against the window's document,
+not the element's own, which mixin.c's reflections share (DEBTS.md). Two
+mutants, each caught: the group is 34.
+
+### Element names, as built
+
+What P3a found missing (§ 0f's P3a, as built): Element's `localName`,
+`namespaceURI` and `prefix`, in the node row beside getRootNode
+(libdom `mixin.c`, `element_names`). `localName` is the name libhtml keeps,
+`namespaceURI` its namespace's (`os64_html_namespace_uri`) and `prefix`
+libhtml's, each null for none; a binding document holds only HTML, SVG and
+MathML elements, so `prefix` is null on every element a script can reach
+today, and a prefixed name `createElementNS` is given keeps its prefix in
+its name (DEBTS.md's row on prefixed names). With them WPT's reflection
+harness sees `formAction`'s default as the document's URL, which P3a's two
+failures waited on.
+
+**Numbers.** WPT: 69 new passes in six directories, 68 of them
+`[required]` (each fails with the switch off): `dom/nodes` +54,
+`html/dom` +8, `dom/events` +4, `html/browsers/the-window-object`,
+`the-option-element` and `the-select-element` +1 each; nothing lost. The
+DOM host's chain shape and switch-off checks hold the three names; three
+mutants in `tools/test_interfaces_mutants.py`, each caught. `css/cssom`'s
+`serialize-all-longhands.html` "Computed style" fails on `userland`
+without this change (SVG's computed longhands), and is left for its own
+fix.
+
+### 0f's P3b, as built
+
+P3's second PR (INTERFACES_FORMS.md § P3): the form's own members and its
+collections, and the label, fieldset, legend and output.
+
+- **Four kinds of their own**: HTMLLabelElement, HTMLFieldSetElement,
+  HTMLLegendElement and HTMLOutputElement, made by the interfaces row
+  (`d_node_kind`, the classic interface table).
+- **Their reflections are P3a's table's rows** (libdom `controls.c`): the
+  form's `acceptCharset`, `action` (the document's URL when missing or
+  empty, as formAction's), `autocomplete` (on or off, `on` by default),
+  `enctype` and its `encoding`, `method` (get, post, dialog; `get` by
+  default), `noValidate` and `target`; a fieldset's `disabled` and
+  `name`, an output's `name`, a label's `htmlFor`, a legend's `align`; and
+  P3a's `form` and `labels` reach a fieldset and an output.
+- **The rest** (libdom `forms.c`, a row of its own): a form's `length` and
+  `rel` and `relList` (mixin.c's, a link's, whose `supports` names nothing
+  yonder acts on for a form); a label's `control` (P3a's
+  `d_label_control`) and `form` (its control's form owner); a fieldset's
+  `type` and `elements` (a live collection of its listed descendants); a
+  legend's `form` (its fieldset parent's); and an output's `value`,
+  `defaultValue`, `type` and `htmlFor`, a DOMTokenList over `for` (the
+  DOMTokenLists now say which attribute they are over, `D_TOKENS_*`). An
+  output keeps HTML's default value override on its wrapper's record.
+- **A form's controls** (libdom `collection.c`): `elements` lists HTML's
+  listed elements (fieldsets, outputs and objects with them, an image
+  button left out, which a fieldset's `elements` keeps: `d_listed`, a
+  classic fix both ways) and is an
+  HTMLFormControlsCollection, whose `namedItem`, and named access on it and
+  on the form, answer a RadioNodeList for a name two or more controls
+  share (HTMLCollection's own `namedItem`, called on it, stays the
+  first): a live NodeList, one a form and a name, whose `value` is its
+  first checked radio button's and sets the first of that value. A
+  NodeList has no named properties (`node_list`), which also corrects
+  P3a's `labels` and `getElementsByName`.
+- **The form as a legacy platform object**, with the switch on: `form[i]`
+  is its i-th control; a control's name hides the prototype's member of
+  that name ([LegacyOverrideBuiltIns]: an input named `submit` is
+  `form.submit`, as in every browser); its own names are its indices and,
+  not enumerable, its controls' ids and names, a name an index or an
+  expando already spells listed once; no index is defined on it, one it has no control for yet
+  included (it has no indexed setter), and an index or a name it has is
+  not redefined or deleted.
+- **Beside them**: Node's `baseURI` (and an Attr's), which WPT's form
+  pages resolve their expectations against: the node's document's base
+  URL with its fragment, which resolution never keeps (libpage's
+  `os64_page_base_url_in`), a document a script made included, whose own
+  `<base>` counts against its fallback, about:blank;
+  `autocomplete="webauthn"`
+  alone; and, classic fixes both ways, `requestSubmit(submitter)` held to
+  HTML (no submit button: a TypeError; another form's: NotFoundError; the
+  submission the submitter's), with a form in no document submitting
+  nothing, not even its event.
+
+**Numbers.**
+
+- **WPT**: five directories join the run (`tools/wpt_fetch.sh`):
+  `the-form-element` 114 passes (81 of them on `userland` before this
+  change), `the-fieldset-element` 14 (9), `the-legend-element` 5 (0),
+  `the-output-element` 2 (0) and `common-dom-interfaces/collections` 53
+  (41); their `[required]` lines, 88, 5, 5, 2 and 37, are every pass that
+  fails with the switch off, the earlier phases' among them. And
+  `the-label-element` +20, `form-control-infrastructure` +40 and
+  `html/dom`'s `reflection-forms.html` +508, all `[required]`. Nothing
+  lost, here or in P3a's directories; with the switch off, no required
+  line passes.
+- **Hosts**, 0 failed, on `userland` with #374 in: DOM 17,215 and
+  113,265 (the four kinds, every reflection rule above, `elements` and
+  `length`, `form[i]`, RadioNodeList's identity and value, the legacy
+  platform object, the output's override, `baseURI` and its fragment,
+  `requestSubmit`'s refusals; and with the switch off, none of it); the
+  scripted page 8,429; yonder 2,028; libpage 254,199 (the document base
+  URL, a fragment's every source).
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 30,
+  each caught — a rule of the table (method's default, autocomplete's), an
+  output's labels, the listed elements (a fieldset's image button too),
+  form[i], the names over builtins, the own names (an index's or an
+  expando's spelling once), redefinition (an index it has no control for
+  too) and deletion, `baseURI`'s fragment (libdom's and libpage's) and a
+  made document's base, the controls collection and RadioNodeList (made
+  once, radios only, the value set, the base namedItem the first), a
+  NodeList's names, the output's override both ways, a label's form, the
+  submitter's two refusals and a detached form.
+
+### The page's style sheets, as built — 2026-10-27
+
+Not a phase of 0f's: the record of a real page's failure asked for it.
+Google's sign-in script loads late CSS, counts `document.styleSheets` to
+see its sheet arrive, and finds it by its `ownerNode`; yonder had no
+`styleSheets`, so the script died reading `.length` of undefined
+(replayed with the FAILED line's place, #381) and nothing it wires,
+the Next button among them, was ever wired. Chris ruled the slice
+2026-10-27, as long as it was not a whole day.
+
+- **`document.styleSheets`** (libdom `collection.c`): a live
+  StyleSheetList, made once a document, a collection of the query kind
+  SHEETS. Which nodes have a sheet is libpage's rule, the one the cascade
+  ranks by, now public (`os64_page_names_sheet`): a `style`, HTML's or
+  SVG's, and a `link` whose `rel` holds `stylesheet` and not `alternate`,
+  with an `href` and not `disabled`; neither of a type other than CSS.
+  Its entries are sheets, not nodes; `length`, `item()` and its indices,
+  iterable, no names.
+- **A sheet** (libdom `sheets.c`, a row of its own): a CSSStyleSheet over
+  StyleSheet, one a `style` or `link`, made once and kept on the node's
+  record. It says `type`, `href` (a link's, resolved as the page resolves
+  it; a style's null), `ownerNode`, `title` (null for none or empty),
+  `disabled` (false), `parentStyleSheet` and `ownerRule` (null). A node
+  that no longer names a sheet, or is in no document, has none (`sheet`
+  null), and its sheet no `ownerNode`.
+- **LinkStyle's `sheet`** on a link and a style, which made the style
+  element a kind of its own: HTMLStyleElement (the interfaces row).
+- What a sheet holds is not here: no `cssRules`, no `media` list, and
+  `disabled` cannot be set (DEBTS.md).
+
+**Numbers.** WPT: `css/cssom` +34, all `[required]` (StyleSheet's
+properties, StyleSheetList, the document extensions, titles); and
+`html/semantics/document-metadata/the-style-element` joins the run
+(`tools/wpt_fetch.sh`), 16 passes, 14 of them `[required]`; nothing lost
+in `the-link-element`, `css/cssom-view` or `html/dom`, and with the switch
+off no required line passes. `css/cssom`'s `serialize-all-longhands.html`
+"Computed style" fails on `userland` without this change, as P3a found.
+Hosts, 0 failed: DOM 17,337 and 114,000 (the interfaces, the list live
+and made once, a style's and a link's sheet, an alternate sheet and
+another language naming none, a removed style's, the brand; with the
+switch off, none of it). Mutants (`tools/test_interfaces_mutants.py`,
+its group for this slice): 9, each caught.
+
+### 0f's P4a, as built — 2026-10-28
+
+P4's first PR (INTERFACES_FORMS.md § P4): constraint validation's API
+whole, and every flag but range and step. A real page asked for it first:
+Google's sign-in reads `input.validity.badInput` when Next is pressed, and
+with no `validity` it threw on every press.
+
+- **One judge** (libpage `submit.c`'s `judge`, public as
+  `os64_page_node_validity`): every flag of a control from the node and
+  the live state, so a control no model holds (WPT judges detached
+  clones) is judged, and the same judge a submission's validation asks
+  control by control. It says `valueMissing` (a field, while it can be
+  typed into; a box, a radio group and a file whatever their mutability;
+  a list's placeholder; a radio with no name is in no group, as browsers
+  answer), `typeMismatch` (`email` and its lists, `url` as a scheme check:
+  DEBTS.md), `tooLong`/`tooShort` on a person's edit, `badInput` (a
+  person's text a number or a date type could not hold, recorded by the
+  state and cleared by any other value and by a reset), and `customError`
+  (a message kept on the node's record, kept by a reset, not copied by a
+  clone). `patternMismatch` is the caller's: HTML's pattern is the
+  engine's regular expression. `readonly` bars any input it is spelled
+  on, as browsers do and WPT holds them to, though it takes effect only on
+  the text-like types (a ruling made here: the model barred only those).
+- **The binding** (libdom `validity.c`, a row of its own): the pattern
+  compiled alone with `v`, then `^(?:pattern)$`, by the RegExp taken
+  before any page ran; ValidityState, made once an element and read live;
+  `willValidate`, `validity`, `validationMessage`, `checkValidity`,
+  `reportValidity` and `setCustomValidity` on input, select, textarea,
+  button, fieldset and output; a form's `checkValidity` and
+  `reportValidity`; `invalid`, cancelable and not bubbling, and
+  `oninvalid` (the handler mask is 64 bits now: the 33rd event kind).
+- **Submission validates before `submit`**: `requestSubmit()` and a
+  submit button's `click()` (window.c's `submit`), and a person's button
+  and Enter (yonder's `page_validates`, through `os64_dom_form_validate`
+  as a task whose validation is one call through the wrapper, so the
+  pattern and the invalid listeners run under the task's budget, as a
+  script's `checkValidity()` runs them; by the submitter libpage would
+  take, now public as
+  `os64_page_submitter`). It is validated once, as HTML does: what a
+  submit listener changes after it cannot refuse the submission, so the
+  model, told (`os64_page_activate_validated`), does not judge it again;
+  and a form being submitted cannot be submitted again from its own
+  invalid or submit listener (HTML's firing-submission-events flag). A
+  report (ruling 5) is the host's
+  (`OS64_DOM_ACTIVATE_REPORT`): the control focused, its sentence on the
+  status line; the model's own refusal says the control's sentence too.
+- **libjs patch 0014**: the pinned engine applied the `v` flag's class
+  rules to every atom outside a class, so `new RegExp("a/b", "v")` threw
+  and every pattern with a slash or a hyphen was no constraint. The rules
+  now hold where ES2024 puts them (UPSTREAM_REVIEW.md).
+- **Left**: range and step (P4b); a pattern in a submission the model
+  judges alone; `:invalid`; an image button's events (DEBTS.md).
+
+**Numbers.**
+
+- **WPT**: `html/semantics/forms/constraints` joins the run
+  (`tools/wpt_fetch.sh`): 755 passes of 921, 754 `[required]` (one passes
+  either way); what fails is range and step, `:invalid`, an element in no
+  namespace, `object`, `execCommand`, `getClientRects` and named access.
+  `the-input-element` +17, `the-select-element` +11, `the-button-element`
+  +11, `the-fieldset-element` +10, `the-textarea-element` +3,
+  `the-form-element` +2, `the-output-element` +1 and the window object's
+  `oninvalid` +1, all `[required]`. Nothing lost there, or in `html/dom`,
+  `dom/events`, `dom/nodes`, `html/webappapis/scripting` and P3's other
+  directories; `dom/nodes`' 14 and `dom/events`' 1 new passes are P3b's
+  and the style sheets', recorded now. With the switch off no required
+  line passes.
+- **Hosts**, 0 failed: DOM 17,810 and 115,923; the scripted page 8,567;
+  yonder 2,028; libpage 254,235; libjs's runtime 1,285 and 6,115.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 62,
+  each caught — the judge (an unnamed radio, a group's tick, readonly's
+  bar both ways and a select's, a fieldset's legend, a placeholder's text
+  without its scripts, mutability for a field and not a box, an email list
+  and a label, a URL's scheme and host, where a pattern applies and an
+  empty value, an email list matched address by address, bad input's
+  record, person, white space, reset and type change, the custom message
+  kept, judged and said and cut between
+  characters, a NUL in an address, a submission judging every flag and
+  not again once validated, a submitter for a button or Enter alone); the
+  binding (the pattern matched,
+  anchored, compiled alone, with `v`; invalid's bubbling and
+  cancelability; checkValidity's event; a barred control; ValidityState
+  made once and `valid`; a barred control's message, and a long custom
+  one whole; setCustomValidity; a form's own controls; the report;
+  formnovalidate both in the binding and for the host; submit() and
+  requestSubmit(); no submission inside a form's own, in the binding and
+  for the host, its validation and its submit event; a person's
+  validation under the task's budget; oninvalid); and
+  yonder (an onsubmit attribute alone validated before it runs; a button
+  and Enter validated, and
+  not again by the model, the report's focus and sentence, the refusal's
+  sentence). `tools/test_yonder_loop_mutants.py`'s two that this moved are
+  re-anchored, and caught.
+
+### 0f's P4b, as built — 2026-10-28
+
+P4's second PR: `rangeUnderflow`, `rangeOverflow` and `stepMismatch`,
+which P4a left reading false.
+
+- **Each type read as a number** (libpage `value.c`'s `p_input_number`,
+  HTML's "convert a string to a number", which `valueAsNumber` can share):
+  a number and a range as themselves; a date as milliseconds since
+  1970-01-01, a month as months since January 1970, a week as its
+  Monday's milliseconds, a time as milliseconds since midnight, a local
+  date and time as both. The year is read whole, not as the residue the
+  syntax check keeps, through 275760, where a Date's range ends and a
+  double still holds every millisecond (a later year the sanitizer keeps
+  is judged by nothing: DEBTS.md). A number's and a range's strings are read by HTML's lenient
+  rules for floating-point values, as range.c's sanitizer reads min, max
+  and step: a stricter judge put a range's own value off its grid.
+- **The flags** (`submit.c`'s `range_flags`, the judge's, so a
+  submission's validation obeys them too): below a min that converts,
+  above a max that does (a range's default to 0 and 100, and a range's max
+  below its min taken as its min, as Blink takes it, since the value
+  sits at the min and no slider moves it lower); a time whose max
+  is below its min wraps past midnight and is out of range only between
+  the two. The step draws a grid from its base (the min, else the value
+  attribute, else the type's default, a week's the Monday 1969-12-29),
+  each type's scale and default step applied, `any` drawing none; whether
+  a value is on it is judged in exact decimal, the scale multiplied there
+  too (`range.c`'s arithmetic, `p_step_aligned`), as `step=1e-12` against
+  `-12345678.9` and a time's `step=16.1` need. A range's value, which its
+  sanitizer chose on the grid and held as the nearest double, is on the
+  grid when it is that double (a step of seventeen digits, or one finer
+  than the value's precision, puts the point between doubles); a number a
+  script or a person gave is judged as given, as WPT's `step=3e-15`
+  against 17 asks. No step judges a range pinned at its min. A bound's time fraction is read at
+  any length, its first three digits kept.
+- **The sentences**: "Value must be greater than or equal to 2." for a
+  number, "Value must be 2000-01-02 or later." for a date: a date's bound
+  as the page wrote it, a number's as the number it was read as ("5px"
+  says 5); and "Value must be 22:00 or later, or 02:00 or earlier." for a
+  time whose range wraps, which no other type does.
+
+**Numbers.** WPT: `constraints` +140, all `[required]`, 895 of 921; what
+fails is `:invalid`, an element in no namespace, `object`, `execCommand`,
+`getClientRects` and named access. Nothing new or lost in P3's and P4a's
+other directories; with the switch off no required line passes. Hosts, 0
+failed: libpage 254,277 (42 range and step cases across the types); DOM
+17,810 and 115,923. Mutants (`tools/test_interfaces_mutants.py`, its P4b
+group): 21, each caught — a date's, a month's, a week's and a time
+fraction's conversion, the year's bound, a number read leniently, a
+week's step base, a time's wrap and its sentence (and a date's that does
+not wrap), `step=any`, the step base from the min and from the value
+attribute, the exact remainder and the scale multiplied exactly, a
+range's max below its min and its pinned value's step, a range's grid
+point held as a double and only a range's, a bound's long time fraction,
+and a number's bound as read.
+
+### 0f's P5, as built — 2026-10-28
+
+HTMLInputElement's value as a number: `valueAsNumber`, `valueAsDate`,
+`stepUp(n)` and `stepDown(n)` (HTML § 4.10.5.4), over P4b's conversions.
+
+- **One reader of min, max and step** (libpage `value.c`'s
+  `p_input_limits`): the validity judge's `range_flags` and the steps read
+  the same numbers, a range's defaults and its pinned max among them.
+- **A number spelled for its type** (`p_input_spell`), Blink's rules: a
+  date, a local date and time, a month and a week round to the nearest
+  millisecond (or month), a time takes the floor of its place in the day,
+  exact for any double (2.7343337071894478e26 is 10:54:10.944); a week is
+  the ISO week holding the day; years 1 to 275760, the years a value's
+  number is read through, and anything else is the empty value (Blink's
+  last day is 275760-09-13). A month's Date is its first midnight.
+- **The steps** (`range.c`'s `p_step_by`), in exact decimal over each
+  double's shortest spelling, as WPT's 1.2 − 0.3 = 0.9 needs. Rulings, the
+  engines over the spec's text where they agree and WPT with them: an
+  off-grid value's move onto the grid is one of the n steps (Blink and
+  Gecko); the guard against moving the wrong way reads the signed count,
+  so `stepDown(-1)` moves up (both engines; the spec names the method);
+  and a value that did not convert skips that guard (Blink, and WPT's
+  `input-stepdown-02`). Where the engines part — Blink checks the count
+  left after the snap — the spec and Gecko are followed: `stepDown()` on
+  4 with min 5 and step 2 leaves 4.
+- **The binding** (`controls.c`): `valueAsNumber` converts first, then
+  refuses infinity (TypeError), then a type it does not apply to
+  (InvalidStateError), NaN emptying the value; `valueAsDate` takes
+  WebIDL's `object?` first (undefined is null, any other primitive a
+  TypeError), then whether it applies, then a Date's time value through
+  the `getTime` taken before any page ran (`d_intrinsic`, now shared with
+  the validity row's RegExp), which refuses any other object. A value
+  past a Date's range reads as null, not an invalid Date. `stepUp` and
+  `stepDown` take `n` by ToInt32, and refuse `step=any` as having no
+  allowed value step.
+
+**Numbers.** WPT: `the-input-element` +235, all `[required]`, 1,168
+passing; every case in the phase's oracle passes but
+`datetime-local-valueasdate.html`, which reaches its input by named
+access. Nothing new or lost in `constraints` (895) or `html/dom` (6,374);
+with the switch off no required line passes. Hosts, 0 failed: libpage
+254,352 (75 value-as cases); DOM 17,802 and 116,116. Read cold once: two
+code findings (`undefined` and a primitive given to `valueAsDate`), one
+edge (an invalid Date for late 275760), and four of text, all fixed.
+Mutants (`tools/test_interfaces_mutants.py`, its P5 group): 28, each
+caught — a time's exactness and its negative fraction, a day rounded and
+floored, the last year spelled, a week's year and weekday, a month as a
+count and as a Date, which types take a Date, NaN and infinity, the snap
+as a step, the guard both ways, the max's grid clamp, no grid between
+the limits, a carry across words, `step=any`, stepDown's sign, and the
+binding's getTime, its order of errors, undefined, null, a Date past the
+range, a number not a Date, and `n`'s default.
+Two rules have no mutant a test can see: a spelled year below 1 (the
+value sanitizer empties it either way), and the min's clamp onto a grid
+it is off (only a range's default min can be, and its sanitizer
+re-snaps). P4b's group was re-anchored onto `p_input_limits`.
+
+### 0f's P6a, as built — 2026-10-28
+
+P6's first PR: the element kinds whose members are reflections, every
+interface of the plan's 36 a prototype (34 new; template and style had
+theirs), and their members but the table kinds' tree verbs and a
+map's `areas`, which are P6b's. The brief is in the opus kit.
+
+- **HTML's element interface by tag** (`node.c`'s `d_node_kind`, a table
+  where an `if` chain was): h1-h6 one kind, ins and del, q and
+  blockquote, td and th, col and colgroup, the three table sections, pre
+  with listing and xmp; the obsolete names HTML gives HTMLUnknownElement,
+  and math and svg in HTML's namespace; a name libhtml does not know is
+  HTMLUnknownElement unless it is a valid custom element name, which is
+  HTMLElement.
+- **A set of kinds is a uint64_t** (`D_KIND`): the 32-bit masks the tables
+  built (`1u << D_PROTO_*`, and `1u << kind` over every kind) would have
+  overflowed. A static assertion holds the kinds to 64 (P6a leaves 63);
+  slice 6's SVG interfaces will need another representation.
+- **One reflection engine.** controls.c's rules (`d_reflection_get`,
+  `d_reflection_set`) serve `elements.c`'s rows too, with four more:
+  LegacyNullToEmptyString (a body's colors, a table's), a long with its
+  default (`ol.start` 1), a span's clamp to 1-1000 and a row span's to
+  0-65534 (read clamped, set as any unsigned), and base's `href`, read
+  against the document's own URL and that URL when it is missing.
+- **One row per member and interface**, the WebIDL shape, so an
+  accessor's brand is its own interface: div's `align` getter called on a
+  p is a TypeError. (controls.c's shared rows are not; DEBTS.md.)
+- Beside the rows: a title's `text` (its child text, set as textContent
+  is), and a body's WindowEventHandlers, which are window's as its other
+  window-reflecting handlers already were. An area's `href` is a row of
+  its own, a URL as the anchor's is, so that it exists with the switch
+  alone.
+- **Left, and booked** (DEBTS.md § Classic browser scripting): an area's
+  `relList` and the hyperlink members of an area and an anchor; a style's
+  `disabled`, whose sheet is never disabled; a template's declarative
+  shadow DOM members.
+
+**Numbers.** WPT: `html/dom`'s eight reflection pages for these kinds,
+excluded until the phase that names them, now run: 29,000 passes, 5,038
+of them `[required]` (the rest pass with the switch off too, and 11 more
+are subtests whose names hold a line break, which a line of the
+expectation file cannot spell, so they cannot be required); what fails
+of P6's own members is a NUL set through a string (U+FFFD, as every
+reflection page has it) and every URL reflection, whose expected value
+the harness builds from an anchor's `protocol` and `host`, which yonder
+lacks. `dom/events` +56, `dom/nodes` +61 (four renamed: a heading now
+prints as HTMLHeadingElement), `url` +1 and `xhr` +1, each `[required]`;
+the other directories unchanged. `css/cssom`'s serialize-all-longhands
+"Computed style" fails on the branch P6 is built on as well, unrelated.
+Hosts, 0 failed: DOM 19,894 and 125,221, jQuery among them; yonder's
+scripted pages 8,892. Read cold once: an area's `href` had joined a
+row that exists with the switch off, a base without `href` kept the
+document URL's fragment, and a second copy of the rules for parsing
+integers (now one, `d_parse_integer`); four of text. All fixed. Mutants
+(`tools/test_interfaces_mutants.py`, its P6a group): 17, each caught —
+kinds in 32 bits, an unknown name and a reserved one, h6's and
+listing's kinds, the span's clamp and the row span's floor, a long's
+sign and its overflow, null as "null", a base's fragment, the brand,
+a canvas's default, scope as a string, a title's text, the body's
+handlers, and an area's `href` without the switch. Five anchors the
+rewrites moved were re-anchored (one in `test_dom_mutants.py`, whose
+harness does not build: DEBTS.md).
+
+### 0f's P6b, as built — 2026-10-28
+
+P6's second PR, and its last: what of the 36 interfaces is not a
+reflection. A table's `caption`, `tHead` and `tFoot`, read and replaced
+(WebIDL's TypeError for an element of another interface, HTML's
+HierarchyRequestError for a section of the wrong tag), with their create
+and delete verbs; its `tBodies` and `createTBody`; `rows` on a table and
+a section and `cells` on a row, each with its insert and delete verbs
+(an index below -1 is an IndexSizeError, and so is one past the count
+for an insert, at or past it for a delete); a row's
+`rowIndex` and `sectionRowIndex`; a cell's `cellIndex`; a map's `areas`.
+
+- **The collections are live queries** (`collection.c`'s table kinds,
+  `d_table_query`), made once and kept on the owner's entry
+  ([SameObject]). A table's rows are HTML's three groups — a thead's,
+  then the table's own and its tbodies', then a tfoot's — each in tree
+  order, which a walk a group gives; a nested table's rows are its own.
+- **A verb reads the collection a page reads** (`d_query_items`), so
+  `insertRow(i)` and `rows[i]` cannot disagree, and changes the tree
+  through `d_tree_change`, appendChild's door (scripts a moved caption
+  carries connect as they would). What it makes joins the owner's tree
+  at once, and with it the owner's node document, so a table in a
+  document of its own fills that document.
+- A table with no rows takes `insertRow`'s row in its last tbody, or in
+  a new one; `insertRow(-1)` appends to the last row's parent, a tfoot's
+  when it has rows.
+- **Booked** (DEBTS.md): a collection's own property names list its
+  indices and not its names.
+
+**Numbers.** WPT: `html/semantics/tabular-data`, fetched for this phase,
++102, all `[required]`, 120 passing. What fails is elsewhere's: an element
+in no namespace, DOMParser, a window's named access, a prefixed HTML
+element (DEBTS.md), a collection's property names, a table of tens of
+thousands of rows past the HTML arena, and `caption-methods.html`, whose page waits for an
+iframe's srcdoc to load, which the runner does not, so the page fails
+whole. `dom/nodes` +4 and `collections` +5, pages that reach a cell
+through `tBodies`, `rows` and `cells`, each required; every other
+directory unchanged. Hosts, 0 failed: DOM 20,075 and 126,128; yonder's
+scripted pages 8,926; userland builds. Read cold once: a row's or cell's
+index threw for a table no script had touched (its collection wanted the
+owner's wrapper, which a parsed table lacks; eight of WPT's
+`sectionRowIndex` subtests are that), `undefined` given to a part's
+setter threw where WebIDL makes it null, and the table kinds' match
+fell to the rows' rule for any kind not named; one of text. All fixed.
+Mutants (`tools/test_interfaces_mutants.py`, its P6b group): 14, each
+caught — the rows' groups and a foot's place in them, a nested table's
+rows, a map's areas below its children, [SameObject], deleting the last
+for -1, a row's new tbody, -1's parent, a head before the caption, a
+body set as a head, the brand, a cell outside a row, an untouched
+owner, and undefined as null. Two pieces the first run found no test
+could see are gone: the before-itself guard (libhtml's insert already
+reads a node as its own reference so) and a node-document record for
+what a verb makes (it joins the owner's tree at once).
+
+### 0f's P7, as built — 2026-10-28
+
+The window's own objects as their interfaces': `location`, `history` and
+`navigator` are a Location, a History and a Navigator. The brief is in
+the opus kit.
+
+- **One row reshapes what the classic install made** (`window.c`'s
+  `d_window_objects_install`, after the history row), so the surface
+  without the switch does not move. The classic install now makes each
+  object over an empty prototype level of its own, as every node kind
+  has a prototype either way, so the chains have the same levels with the
+  switch on or off; the row makes each level its interface's prototype
+  object.
+- **History's and Navigator's members move to their prototypes**, the
+  objects keeping none of their own, each named and an operation
+  enumerable as WebIDL makes them (`go`'s length is 0: its delta is
+  optional). **Location's stay on the location**, [LegacyUnforgeable]:
+  unconfigurable, an operation unwritable, with its own `valueOf`
+  (Object.prototype's) and `Symbol.toPrimitive` (undefined), as HTML's
+  "Location object setup" defines them. Each interface object is an
+  Illegal constructor.
+- **Brand checks**: a Location's member called on anything but the
+  location, and a History's on anything but the history object, is a
+  TypeError (`d_same_object`), with the switch or without; Navigator's
+  getters already checked.
+- **The oracle needed two things of the runner**: WPT's `interfaces/`,
+  now fetched, and `/resources/WebIDLParser.js`, which WPT's server
+  rewrites to the parser's own file and the runner now serves so. With
+  both, every directory's idlharness page runs, not only `html/dom`'s.
+- **Booked** (DEBTS.md): the location's exotic internal methods
+  (preventExtensions throws, an immutable prototype) and its
+  `ancestorOrigins`; Navigator's missing members (`language`, `onLine`,
+  `cookieEnabled`, NavigatorID's constants and the rest). Paid in
+  passing: P6a had given the body WindowEventHandlers, and the DEBTS row
+  that said it had none is now its remainder (`onerror`, and a frameset).
+
+**Numbers.** WPT: `html/browsers/history/the-location-interface`, new
+here, 42 passing, 22 `[required]` (with P7's, the Modern Web's earlier
+fragment and history work); `html/dom`'s idlharness page, excluded until
+this phase, +222. The idlharness pages elsewhere, which run now:
+`css/cssom` +119, `css/cssom-view` +147, `encoding` +34, `hr-time` +25,
+`html/webappapis/scripting` +281, `url` +50, `user-timing` +30, `xhr`
++139 (its timeout tests' sometime passes left out), and
+`the-window-object` +1 (the location's unforgeable `hash`). Each fails
+with the switch off; nothing lost (`css/cssom`'s serialize-all-longhands
+loss predates this and is kept on record). Hosts, 0 failed: DOM 20,222
+and 126,669; yonder's scripted pages 8,913; userland builds. Read cold
+once: no code defect; the Modern Web table's promise that the chains'
+levels are the same either way was broken (a prototype level made only
+with the switch), now kept by the classic install's empty levels; wrong
+section numbers, half-true comments, and the oracle's exotic Location
+unbooked; all fixed. Mutants (`tools/test_interfaces_mutants.py`, its
+P7 group): 10, each caught — the location's unforgeability, members left
+on the objects, the level without the switch, the three brand checks,
+the own valueOf, the names, enumerable operations, and go's length.
+
+### Node's members, as built — 2026-10-28
+
+A bridge between P7 and P8, for two corpus pages: one whose head
+react-helmet keeps, comparing its tags with `isEqualNode`, which threw
+there, and a sign-in page whose script stopped at
+`compareDocumentPosition`. Node's
+`isSameNode`, `isEqualNode`, `compareDocumentPosition` and `normalize`,
+which DEBTS.md had booked together.
+
+- **One function answers each comparison on Node's prototype and on
+  Attr's** (`compare.c`, its own row), since either side may be an Attr,
+  which libhtml holds as a name and value on its element: an operand is a
+  tree node or an Attr's view (`d_attr_view`), the element standing in
+  the tree for it. Attr's prototype keeps shadowing Node's whole.
+- **Equality** is DOM's: names, namespace, prefix, attributes in any
+  order, data, a doctype's IDs, then the children, walked side by side
+  without recursion. A template's contents are not its children, so
+  they are not compared.
+- **compareDocumentPosition's one choice the standard leaves open**: two
+  trees are ordered by their roots' addresses (a detached Attr's own
+  entry standing for a root), consistent both ways round. Two Attrs of
+  one element are in the order of its attribute list, as DOM's steps
+  walk it.
+- **normalize** (the node row, `mixin.c`; an Attr's does nothing) sets a
+  run's first text node's data before removing the rest, through
+  `d_tree_change`, so a failure part way loses no text.
+- **Booked** (DEBTS.md): the row narrows to Node's three namespace
+  lookups, and the CDATA section, processing instruction and Document
+  constructor that WPT's `dom/common.js` needs before the
+  compareDocumentPosition page runs at all.
+
+**Numbers.** WPT `dom/nodes` +15 (Node-isEqualNode 6, Node-isSameNode
+6, Node-normalize 3), each `[required]`, failing with the switch off;
+every other directory unmoved (`css/cssom`'s serialize-all-longhands loss
+predates this and is kept on record). Hosts, 0 failed: DOM 20,092 and
+126,892; yonder's scripted pages 8,927; userland builds. Mutants
+(`tools/test_interfaces_mutants.py`, its group for these members): 19,
+each caught — equality's names, namespaces, attributes and their
+namespaces and values, the children, a sibling more, an Attr's namespace
+and value; the attribute list's order, the
+disconnected order, an element containing its Attr, an ancestor first,
+siblings' order, a null compareDocumentPosition argument, the Attr
+shadow; and normalize's empties, its joins and its descent. An element's
+prefix is compared and has no case: only an XML document's elements have
+one, a script's having its whole name instead (DEBTS.md, a prefixed name).
+Read cold once: no code defect; the order of two Attrs claimed as the
+implementation's choice where DOM's steps fix it, the Attr-receiver
+divergence not naming the comparisons, and equality's names and
+namespaces untested; all fixed. The sign-in page's replay no longer
+stops at compareDocumentPosition.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 

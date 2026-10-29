@@ -26,6 +26,19 @@ LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c
 LIBDOM_SRCS += libdom/options.c
 # 0f P2's core: the text controls' selection and the window's Selection.
 LIBDOM_SRCS += libdom/selection.c
+# 0f P3a: the controls' reflections, form owner and labels.
+LIBDOM_SRCS += libdom/controls.c
+# 0f P6a: the element kinds whose members are reflections.
+LIBDOM_SRCS += libdom/elements.c
+# 0f P6b: the tables' tree verbs and collections.
+LIBDOM_SRCS += libdom/tables.c
+# 0f P3b: the form's, label's, fieldset's, legend's and output's own members.
+LIBDOM_SRCS += libdom/forms.c
+# 0f P4: constraint validation.
+LIBDOM_SRCS += libdom/validity.c
+# Node's comparisons: isSameNode, isEqualNode, compareDocumentPosition.
+LIBDOM_SRCS += libdom/compare.c
+LIBDOM_SRCS += libdom/sheets.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))

@@ -14,11 +14,11 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "keydown", "keypress", "keyup", "input", "change", "submit", "reset",
     "focus", "blur", "load", "scroll", "resize", "popstate", "hashchange", "online", "offline",
     "languagechange", "error", "unhandledrejection", "rejectionhandled", "readystatechange",
-    "visibilitychange", "prerenderingchange", "DOMContentLoaded", "message", "messageerror"
+    "visibilitychange", "prerenderingchange", "DOMContentLoaded", "message", "messageerror", "invalid"
 };
-/* A page's handler attributes are a bit per kind in a uint32_t
+/* A page's handler attributes are a bit per kind in a uint64_t
  * (os64_dom_handler_attributes, attribute_mask). */
-_Static_assert(D_EVENT_COUNT <= 32, "the handler-attribute mask holds a bit per event kind");
+_Static_assert(D_EVENT_COUNT <= 64, "the handler-attribute mask holds a bit per event kind");
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
 
@@ -176,6 +176,7 @@ static void first_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
     char text[OS64_JS_MESSAGE_CAP + 1];
     d_error_text(dom, ctx, error, text, sizeof(text));
     out->diagnostic_truncated = os64_strcopy(out->message, sizeof(out->message), text) >= sizeof(out->message);
+    out->diagnostic_truncated |= d_error_stack(ctx, error, out->stack_trace, sizeof(out->stack_trace));
 }
 
 /* An exception the binding caught itself: the first is kept for the task's
@@ -947,8 +948,16 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
         *outcome = changed;
         return outcome->status;
     }
+    /* A person's submit at a form: the form is being submitted (window.c's
+     * submit's flag), so a submission its listener asks of it does nothing,
+     * rather than send it a second time beside the person's. */
+    bool submitting = node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
+        node->tag == OS64_HTML_TAG_FORM && os64_strcmp(ev->type, "submit") == 0;
+    struct DClicking self = {node, dom->submitting};
+    if (submitting) dom->submitting = &self;
     if (os64_dom_listens(dom, ev->type))
         d_host_dispatch(dom, node, NULL, ev->type, host_event, (void *)ev, prevented, outcome);
+    if (submitting) dom->submitting = self.next;
     if (changed.status != OS64_JS_OK) {
         d_outcome_fold(&changed, outcome);
         *outcome = changed;
@@ -958,15 +967,15 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
 
 /* Attributes are counted once per tree version: a walk of the connected tree
  * for on<type> names. Listener and property counts are kept as they change. */
-uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc)
+uint64_t os64_dom_handler_attributes(const os64_html_document_t *doc)
 {
-    uint32_t mask = 0;
+    uint64_t mask = 0;
     const os64_html_node_t *root = doc != NULL ? doc->document : NULL;
     for (const os64_html_node_t *at = root; at != NULL;) {
         if (at->kind == OS64_HTML_ELEMENT)
             for (const os64_html_attr_t *attr = at->attrs; attr != NULL; attr = attr->next) {
                 int kind = handler_kind(attr->name);
-                if (kind >= 0) mask |= 1u << kind;
+                if (kind >= 0) mask |= UINT64_C(1) << kind;
             }
         if (at->first_child != NULL) { at = at->first_child; continue; }
         while (at != NULL && at != root && at->next == NULL) at = at->parent;
@@ -975,24 +984,24 @@ uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc)
     return mask;
 }
 
-static uint32_t attribute_mask(os64_dom_t *dom)
+static uint64_t attribute_mask(os64_dom_t *dom)
 {
     uint64_t version = os64_html_version(dom->document);
     if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;
-    uint32_t mask = os64_dom_handler_attributes(dom->document);
+    uint64_t mask = os64_dom_handler_attributes(dom->document);
     // With the switch off the arc's types' attributes are no handlers.
     if (!dom->options.modern)
-        for (int kind = D_EVENT_SCROLL; kind < D_EVENT_COUNT; kind++) mask &= ~(1u << kind);
+        for (int kind = D_EVENT_SCROLL; kind < D_EVENT_COUNT; kind++) mask &= ~(UINT64_C(1) << kind);
     dom->attribute_mask = mask;
     dom->attribute_version = version;
     dom->attribute_scanned = true;
     return mask;
 }
 
-uint32_t os64_dom_handler_bit(const char *type)
+uint64_t os64_dom_handler_bit(const char *type)
 {
     int kind = type != NULL ? d_event_kind(type) : -1;
-    return content_attribute(kind) ? 1u << kind : 0;
+    return content_attribute(kind) ? UINT64_C(1) << kind : 0;
 }
 
 bool os64_dom_listens(os64_dom_t *dom, const char *type)
@@ -1000,7 +1009,7 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type)
     if (dom == NULL || dom->closed || type == NULL) return false;
     int kind = d_event_kind(type);
     if (kind < 0) return true;
-    return dom->listen_counts[kind] != 0 || (attribute_mask(dom) & (1u << kind)) != 0;
+    return dom->listen_counts[kind] != 0 || (attribute_mask(dom) & (UINT64_C(1) << kind)) != 0;
 }
 
 /* SCRIPT SURFACE. */

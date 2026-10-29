@@ -31,7 +31,17 @@ static const DModernRow kModern[] = {
                            "HTMLTextAreaElement", "HTMLSelectElement", "HTMLOptionElement",
                            "HTMLOptGroupElement", "HTMLTemplateElement", "HTMLButtonElement",
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
-                           "HTMLLinkElement", NULL},
+                           "HTMLLinkElement", "HTMLLabelElement", "HTMLFieldSetElement",
+                           "HTMLLegendElement", "HTMLOutputElement", "HTMLStyleElement",
+                           "HTMLMetaElement", "HTMLCanvasElement", "HTMLUnknownElement", "HTMLTimeElement",
+                           "HTMLDivElement", "HTMLBodyElement", "HTMLOListElement", "HTMLHeadElement",
+                           "HTMLDataElement", "HTMLLIElement", "HTMLAreaElement", "HTMLBaseElement",
+                           "HTMLMapElement", "HTMLModElement", "HTMLQuoteElement", "HTMLTableCellElement",
+                           "HTMLTableColElement", "HTMLTableElement", "HTMLTableRowElement",
+                           "HTMLTableSectionElement", "HTMLUListElement", "HTMLBRElement", "HTMLDListElement",
+                           "HTMLDirectoryElement", "HTMLFontElement", "HTMLHRElement", "HTMLHeadingElement",
+                           "HTMLHtmlElement", "HTMLMenuElement", "HTMLParagraphElement", "HTMLPreElement",
+                           "HTMLSpanElement", "HTMLTableCaptionElement", "HTMLTitleElement", NULL},
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
@@ -43,6 +53,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"getComputedStyle", "CSSStyleDeclaration", NULL}, d_computed_install},
     {(const char *const[]){"onpopstate", "onhashchange", "PopStateEvent", "HashChangeEvent", NULL},
      d_history_install},
+    /* 0f's P7: location, history and navigator as their interfaces', after
+     * the history row, whose members History.prototype takes. */
+    {(const char *const[]){"Location", "History", "Navigator", NULL}, d_window_objects_install},
     {(const char *const[]){"localStorage", "sessionStorage", "Storage", NULL}, d_storage_install},
     {(const char *const[]){"performance", "Performance", "PerformanceEntry", "PerformanceMark",
                            "PerformanceMeasure", "PerformanceTiming", "PerformanceNavigation", NULL},
@@ -92,6 +105,30 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"Option", "HTMLOptionsCollection", NULL}, d_options_install},
     /* 0f's P2 core: the text controls' members, and the Selection. */
     {(const char *const[]){"getSelection", "Selection", NULL}, d_selection_install},
+    /* 0f's P3a: the controls' reflections and state, members of the
+     * interfaces row's control prototypes and none of window's. */
+    {(const char *const[]){NULL}, d_controls_install},
+    /* 0f's P6a: the element kinds whose members are reflections, members
+     * of the interfaces row's prototypes and none of window's. */
+    {(const char *const[]){NULL}, d_elements_install},
+    /* 0f's P6b: the tables' tree verbs and collections, and a map's
+     * areas, over the interfaces row's HTMLCollection. */
+    {(const char *const[]){NULL}, d_tables_install},
+    /* Node's comparisons, members of Node's and Attr's prototypes and none
+     * of window's. */
+    {(const char *const[]){NULL}, d_compare_install},
+    /* 0f's P3b: a form's controls collection and RadioNodeList, over the
+     * interfaces row's HTMLCollection and NodeList; and the form's,
+     * label's, fieldset's, legend's and output's own members. */
+    {(const char *const[]){"HTMLFormControlsCollection", "RadioNodeList", NULL}, d_form_collections_install},
+    {(const char *const[]){NULL}, d_forms_install},
+    /* 0f's P4: constraint validation, members of the interfaces row's
+     * control and form prototypes, and ValidityState and oninvalid. */
+    {(const char *const[]){"ValidityState", "oninvalid", NULL}, d_validity_install},
+    /* The page's style sheets: StyleSheetList, StyleSheet and
+     * CSSStyleSheet, document.styleSheets, and a link's and a style's
+     * `sheet` (sheets.c), after the interfaces row's HTMLStyleElement. */
+    {(const char *const[]){"StyleSheetList", "StyleSheet", "CSSStyleSheet", NULL}, d_sheets_install},
     /* Import maps: HTMLScriptElement.supports, a member of the interfaces
      * row's HTMLScriptElement and none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_import_map_install},

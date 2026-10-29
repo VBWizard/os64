@@ -105,7 +105,7 @@ struct yonder_scripts {
     // attribute has no runtime until an event one of them names.
     uint64_t handlers_version;
     bool handlers_scanned;
-    uint32_t handlers;
+    uint64_t handlers;
     char note[256];
     // The whole address of the script the last task ran, NULL when it was
     // an inline script, an event or a timer (yonder_scripts_task_address).
@@ -253,16 +253,19 @@ static void broken(void *opaque, const char *sentence)
     yonder_diag_failed(s->options.diag, "page", sentence);
 }
 
-// A rejection the task left beyond the failure its outcome carries
-// (libdom's options.failed): a FAILED line under the key the outcome's
-// gets (yonder.c's task_said), the script's whole address when the task
-// is a `src` script's.
-static void failed(void *opaque, const char *task, const char *message)
+// A failure the task left beyond the one its outcome carries (libdom's
+// options.failed: a rejection, or an error the binding reported): a FAILED
+// line under the key the outcome's gets (yonder.c's task_said), the
+// script's whole address when the task is a `src` script's, and said as
+// that one is, with where it happened (yonder_scripts_failure).
+static void failed(void *opaque, const char *task, const char *message, const char *stack)
 {
     yonder_scripts_t *s = opaque;
     char key[OS64_DOM_URL_MAX + 16];
     os64_snprintf(key, sizeof(key), "script %s", s->task_address != NULL ? s->task_address : task);
-    yonder_diag_failed(s->options.diag, key, message);
+    char failure[OS64_JS_MESSAGE_CAP + OS64_DOM_URL_MAX + 64];
+    yonder_scripts_failure(s, s->task_address, message, stack, failure, sizeof(failure));
+    yonder_diag_failed(s->options.diag, key, failure);
 }
 
 static uint64_t now_ms(void *opaque)
@@ -1375,7 +1378,7 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
 
 // Which types the document's on<type> attributes name (libdom's own walk):
 // one walk per tree version, and only while the page has no runtime.
-static uint32_t handler_types(yonder_scripts_t *s)
+static uint64_t handler_types(yonder_scripts_t *s)
 {
     uint64_t version = os64_html_version(s->doc);
     if (s->handlers_scanned && s->handlers_version == version)
@@ -1427,6 +1430,46 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     if (heard)
         judged(s, out);
     return out->status;
+}
+
+bool yonder_scripts_form_validate(yonder_scripts_t *s, const os64_html_node_t *form,
+                                  const os64_html_node_t *submitter, bool *valid, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    *valid = true;
+    if (s != NULL) {
+        s->task_address = NULL;
+        s->task_us = -1;
+    }
+    if (s == NULL || s->dead)
+        return false;
+    s->written = 0;
+    if (s->dom == NULL) {
+        // A page all handlers makes its runtime for an invalid handler, and
+        // for a submit handler too: HTML fires submit only at a valid form,
+        // so the page validates before that handler runs.
+        if ((handler_types(s) & (os64_dom_handler_bit("invalid") | os64_dom_handler_bit("submit"))) == 0)
+            return false;
+        if (!ensure_runtime(s, out)) {
+            retire(s);
+            return true;
+        }
+    }
+    bool ran = false;
+    os64_dom_form_validate(s->dom, form, submitter, valid, &ran, out);
+    if (ran)
+        judged(s, out);
+    return ran;
+}
+
+bool yonder_scripts_report_message(const yonder_scripts_t *s, const os64_html_node_t *node, char *out, size_t cap)
+{
+    if (s == NULL || s->dom == NULL) {
+        if (out != NULL && cap != 0)
+            out[0] = '\0';
+        return false;
+    }
+    return os64_dom_report_message(s->dom, node, out, cap);
 }
 
 bool yonder_scripts_listens(yonder_scripts_t *s, const char *type)
@@ -1563,6 +1606,38 @@ uint64_t yonder_scripts_written(const yonder_scripts_t *s)
 const char *yonder_scripts_task_address(const yonder_scripts_t *s)
 {
     return s != NULL ? s->task_address : NULL;
+}
+
+void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const char *message, const char *stack,
+                            char *out, size_t cap)
+{
+    os64_dom_frame_t frame;
+    if (!os64_dom_stack_frame(stack, &frame)) {
+        os64_strcopy(out, cap, message);
+        return;
+    }
+    bool page = false;
+    const char *address = s != NULL ? os64_dom_frame_script(s->dom, &frame, &page) : NULL;
+    // A classic script's file is the binding's name for it, a module's its
+    // own address (modules.c compiles it under its URL).
+    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&
+        os64_memcmp(own, frame.file, frame.file_length) == 0)
+        address = own;
+    // The place: the line and column alone in the task's own script.
+    const char *file = frame.file;
+    size_t file_length = frame.file_length;
+    if (address != NULL && own != NULL && os64_streq(address, own)) {
+        file_length = 0;
+    } else if (address != NULL) {
+        file = address;
+        file_length = os64_strlen(address);
+    } else if (page) {
+        file = "inline";
+        file_length = os64_strlen(file);
+    }
+    os64_snprintf(out, cap, "%s, at %.*s%s%.*s%s%u:%u", message, (int)frame.function_length,
+                  frame.function != NULL ? frame.function : "", frame.function != NULL ? " " : "", (int)file_length,
+                  file, file_length != 0 ? ":" : "", frame.line, frame.column);
 }
 
 int64_t yonder_scripts_task_us(const yonder_scripts_t *s)

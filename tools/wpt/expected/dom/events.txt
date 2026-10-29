@@ -10,6 +10,70 @@
 CustomEvent.html	initCustomEvent's default parameter values.
 Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
 EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (CustomEvent).
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+Event-dispatch-click.html	disabled checkbox still has activation behavior
+Event-dispatch-click.html	disabled checkbox still has activation behavior, part 2
+Event-dispatch-click.html	disabled radio still has activation behavior
+event-disabled-dynamic.html	disabled is honored properly in presence of dynamic changes
+# 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): the element kinds, a
+# body's handlers among them. Each fails with the switch off.
+Body-FrameSet-Event-Handlers.html	Enumerate HTMLBodyElement.onblur
+Body-FrameSet-Event-Handlers.html	Set HTMLBodyElement.onblur
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <A></A>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <DETAILS><SUMMARY></SUMMARY></DETAILS>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><BUTTON type=reset></BUTTON></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><BUTTON type=submit></BUTTON></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><INPUT type=image></INPUT></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><INPUT type=reset></INPUT></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><INPUT type=submit></INPUT></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <INPUT type=checkbox></INPUT>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <INPUT type=radio></INPUT>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <LABEL><BUTTON type=button></BUTTON></LABEL>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <LABEL><INPUT type=checkbox></INPUT><SPAN></SPAN></LABEL>, only child should be activated.
+passive-by-default.html	mousewheel listener is non-passive by default for HTMLDivElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for Document
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for Window
+passive-by-default.html	mousewheel listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive by default for Document
+passive-by-default.html	touchend listener is non-passive by default for HTMLBodyElement
+passive-by-default.html	touchend listener is non-passive by default for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive by default for HTMLHtmlElement
+passive-by-default.html	touchend listener is non-passive by default for Window
+passive-by-default.html	touchend listener is non-passive with {passive:false} for Document
+passive-by-default.html	touchend listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	touchend listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	touchend listener is non-passive with {passive:false} for Window
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for Document
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for HTMLBodyElement
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for HTMLHtmlElement
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for Window
+passive-by-default.html	touchmove listener is non-passive by default for HTMLDivElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for Document
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for Window
+passive-by-default.html	touchmove listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	touchstart listener is non-passive by default for HTMLDivElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for Document
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for Window
+passive-by-default.html	touchstart listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	wheel listener is non-passive by default for HTMLDivElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for Document
+passive-by-default.html	wheel listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for Window
+passive-by-default.html	wheel listener is non-passive with {passive:undefined} for HTMLDivElement
 [excluded]
 Event-dispatch-on-disabled-elements.html	needs test_driver input, which the runner does not have
 Event-dispatch-redispatch.html	needs test_driver input, which the runner does not have
@@ -135,6 +199,8 @@ AddEventListenerOptions-signal.any.html	Aborting from a nested listener should r
 AddEventListenerOptions-signal.any.html	Adding then aborting a listener in another listener does not call it
 AddEventListenerOptions-signal.any.html	Passing an AbortSignal to addEventListener does not prevent removeEventListener
 AddEventListenerOptions-signal.any.html	Removing a once listener works with a passed signal
+Body-FrameSet-Event-Handlers.html	Enumerate HTMLBodyElement.onblur
+Body-FrameSet-Event-Handlers.html	Set HTMLBodyElement.onblur
 CustomEvent.html	CustomEvent dispatching.
 CustomEvent.html	First parameter to initCustomEvent should be mandatory.
 CustomEvent.html	initCustomEvent's default parameter values.
@@ -181,11 +247,15 @@ Event-dispatch-bubbles-true.html	In window.document with click event
 Event-dispatch-bubbles-true.html	In window.document with load event
 Event-dispatch-click.html	basic with click()
 Event-dispatch-click.html	basic with wrong event class
+Event-dispatch-click.html	disabled checkbox still has activation behavior
+Event-dispatch-click.html	disabled checkbox still has activation behavior, part 2
+Event-dispatch-click.html	disabled radio still has activation behavior
 Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress onchange
 Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress oninput
 Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress onchange
 Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress oninput
 Event-dispatch-click.html	disconnected checkbox should be checked
+Event-dispatch-click.html	disconnected form should not submit
 Event-dispatch-click.html	disconnected radio should be checked
 Event-dispatch-click.tentative.html	disabled checkbox should not be checked from label click
 Event-dispatch-click.tentative.html	disabled radio should not be checked from label click
@@ -213,6 +283,17 @@ Event-dispatch-single-activation-behavior.html	When clicking child <A></A> of pa
 Event-dispatch-single-activation-behavior.html	When clicking child <A></A> of parent <INPUT type=radio></INPUT>, only child should be activated.
 Event-dispatch-single-activation-behavior.html	When clicking child <A></A> of parent <LABEL><BUTTON type=button></BUTTON></LABEL>, only child should be activated.
 Event-dispatch-single-activation-behavior.html	When clicking child <A></A> of parent <LABEL><INPUT type=checkbox></INPUT><SPAN></SPAN></LABEL>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <A></A>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <DETAILS><SUMMARY></SUMMARY></DETAILS>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><BUTTON type=reset></BUTTON></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><BUTTON type=submit></BUTTON></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><INPUT type=image></INPUT></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><INPUT type=reset></INPUT></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <FORM><INPUT type=submit></INPUT></FORM>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <INPUT type=checkbox></INPUT>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <INPUT type=radio></INPUT>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <LABEL><BUTTON type=button></BUTTON></LABEL>, only child should be activated.
+Event-dispatch-single-activation-behavior.html	When clicking child <AREA></AREA> of parent <LABEL><INPUT type=checkbox></INPUT><SPAN></SPAN></LABEL>, only child should be activated.
 Event-dispatch-single-activation-behavior.html	When clicking child <FORM><BUTTON type=reset></BUTTON></FORM> of parent <A></A>, only child should be activated.
 Event-dispatch-single-activation-behavior.html	When clicking child <FORM><BUTTON type=reset></BUTTON></FORM> of parent <AREA></AREA>, only child should be activated.
 Event-dispatch-single-activation-behavior.html	When clicking child <FORM><BUTTON type=reset></BUTTON></FORM> of parent <DETAILS><SUMMARY></SUMMARY></DETAILS>, only child should be activated.
@@ -383,6 +464,7 @@ KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (crea
 element-click.html	dynamic querySelectorAll, toggle async
 element-click.html	dynamic querySelectorAll, toggle sync
 element-click.html	static querySelectorAll
+event-disabled-dynamic.html	disabled is honored properly in presence of dynamic changes
 event-global-event-targets.html	An event target's _document property does not affect window.event
 event-global-event-targets.html	window.event is set when dispatching on AbortSignal
 event-global-event-targets.html	window.event is set when dispatching on EventTarget
@@ -406,6 +488,49 @@ non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchstar
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic wheel event with interface Event is not cancelable
 passive-by-default-non-node.html	wheel listeners on EventTarget are not passive by default
 passive-by-default-non-node.html	wheel listeners on Performance are not passive by default
+passive-by-default.html	mousewheel listener is non-passive by default for HTMLDivElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for Document
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	mousewheel listener is non-passive with {passive:false} for Window
+passive-by-default.html	mousewheel listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive by default for Document
+passive-by-default.html	touchend listener is non-passive by default for HTMLBodyElement
+passive-by-default.html	touchend listener is non-passive by default for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive by default for HTMLHtmlElement
+passive-by-default.html	touchend listener is non-passive by default for Window
+passive-by-default.html	touchend listener is non-passive with {passive:false} for Document
+passive-by-default.html	touchend listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	touchend listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	touchend listener is non-passive with {passive:false} for Window
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for Document
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for HTMLBodyElement
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for HTMLHtmlElement
+passive-by-default.html	touchend listener is non-passive with {passive:undefined} for Window
+passive-by-default.html	touchmove listener is non-passive by default for HTMLDivElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for Document
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	touchmove listener is non-passive with {passive:false} for Window
+passive-by-default.html	touchmove listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	touchstart listener is non-passive by default for HTMLDivElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for Document
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	touchstart listener is non-passive with {passive:false} for Window
+passive-by-default.html	touchstart listener is non-passive with {passive:undefined} for HTMLDivElement
+passive-by-default.html	wheel listener is non-passive by default for HTMLDivElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for Document
+passive-by-default.html	wheel listener is non-passive with {passive:false} for HTMLBodyElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for HTMLDivElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for HTMLHtmlElement
+passive-by-default.html	wheel listener is non-passive with {passive:false} for Window
+passive-by-default.html	wheel listener is non-passive with {passive:undefined} for HTMLDivElement
 preventDefault-during-activation-behavior.html	behavior of preventDefault during activation behavior
 remove-all-listeners.html	Nested usage of once listeners should work.
 remove-all-listeners.html	Removing all listeners and then adding a new one should work.

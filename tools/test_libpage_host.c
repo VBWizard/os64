@@ -230,7 +230,7 @@ static PStep steps[] = {
     {"I3", "a required radio group needs one ticked", false},
     {"I4", "a required select needs a real option", false},
     {"I5", "readonly bars a control from validation", false},
-    {"I9", "readonly bars nothing where readonly does not apply", false},
+    {"I9", "readonly bars an input of any type, applying or not", false},
     {"I6", "disabled bars a control from validation", false},
     {"I7", "maxlength applies to what a person typed", false},
     {"I8", "validation runs before the method is looked at", false},
@@ -591,6 +591,33 @@ static void sheets_walk_cases(void)
         fclose(list);
 }
 
+// HTML's document base URL (os64_page_base_url_in): the base resolution
+// uses, with the fragment it never reads.
+static void base_url_cases(void)
+{
+    static const struct { const char *html, *url, *want; } kCases[] = {
+        {"<p>x</p>", "https://a.test/dir/page#top", "https://a.test/dir/page#top"},
+        {"<p>x</p>", "https://a.test/dir/page", "https://a.test/dir/page"},
+        {"<base href=/other/x#anchor>", "https://a.test/dir/page#top", "https://a.test/other/x#anchor"},
+        {"<base href=/other/x>", "https://a.test/dir/page#top", "https://a.test/other/x"},
+        {"<base href=''>", "https://a.test/dir/page#top", "https://a.test/dir/page"},
+        {"<base href='#mine'>", "https://a.test/dir/page#top", "https://a.test/dir/page#mine"},
+        {"<base href='http://[bad'>", "https://a.test/dir/page#top", "https://a.test/dir/page#top"},
+    };
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        checks++;
+        os64_html_document_t *doc = parse(kCases[i].html, "utf-8");
+        char base[256];
+        if (doc == NULL || !os64_page_base_url_in(doc, NULL, kCases[i].url, base, sizeof(base)) ||
+            strcmp(base, kCases[i].want) != 0)
+            fail("base url", "case %zu: %s, not %s", i, doc != NULL ? base : "(no document)", kCases[i].want);
+        checks++;
+        if (doc != NULL && os64_page_base_url_in(doc, NULL, kCases[i].url, base, 4))
+            fail("base url", "case %zu fit into four bytes", i);
+        os64_html_document_free(doc);
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "--rebuild-live-state-free") == 0) {
@@ -631,6 +658,7 @@ int main(int argc, char **argv)
         review3_cases();
         script_submit_cases();
         sheets_walk_cases();
+        base_url_cases();
     }
     if (sweep)
         allocation_sweep();

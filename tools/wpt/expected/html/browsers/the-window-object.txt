@@ -9,6 +9,15 @@
 # Window.prototype (P3c), and fail whole; open-close and named-access-*
 # wait for P3.
 noopener-noreferrer-BarProp.window.html	All bars visible
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by DOMParser are not exposed
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): window's oninvalid. It fails
+# with the switch off.
+window-properties.https.html	Window attribute: oninvalid
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): the location's
+# [LegacyUnforgeable] members. Fails with the switch off.
+proxy-getOwnPropertyDescriptor.html	Location target, no trap, [LegacyUnforgeable] "hash" attribute
 [excluded]
 [passing]
 Document-defaultView.html	Document created with HTML DOMParser
@@ -38,6 +47,7 @@ named-access-on-the-window-object/id-non-html-elements.html	An element in the SV
 named-access-on-the-window-object/name-attribute-elements.html	Only elements with specific local names may be returned if their name attribute matches (negative test)
 named-access-on-the-window-object/nested-context.html	A named property that matches any element that contains a nested browsing context, must return the WindowProxy of that context
 named-access-on-the-window-object/prototype.html	Property on Object.prototype.
+named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by DOMParser are not exposed
 named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by createHTMLDocument() are not exposed
 named-access-on-the-window-object/scoped-to-associated-document.html	Ids set after insertion into another document are not exposed
 named-access-on-the-window-object/strict-mode-redefine-readonly-property.html	Adding/removing form with a name referring to a non-configurable property
@@ -45,6 +55,7 @@ named-access-on-the-window-object/window-null-names.html	Named access with null 
 noopener-noreferrer-BarProp.window.html	All bars visible
 proxy-getOwnPropertyDescriptor.html	Document proxy target, custom trap, non-existent value attribute
 proxy-getOwnPropertyDescriptor.html	Location proxy target, forwarding trap, [LegacyUnforgeable] "reload" method
+proxy-getOwnPropertyDescriptor.html	Location target, no trap, [LegacyUnforgeable] "hash" attribute
 proxy-getOwnPropertyDescriptor.html	Window proxy target, custom trap, "onclick" event handler attribute
 proxy-getOwnPropertyDescriptor.html	Window target, forwarding trap, [LegacyUnforgeable] "document" attribute
 window-aliases.html	frames should be the global object
@@ -105,6 +116,7 @@ window-properties.https.html	Window attribute: onerror
 window-properties.https.html	Window attribute: onfocus
 window-properties.https.html	Window attribute: onhashchange
 window-properties.https.html	Window attribute: oninput
+window-properties.https.html	Window attribute: oninvalid
 window-properties.https.html	Window attribute: onkeydown
 window-properties.https.html	Window attribute: onkeypress
 window-properties.https.html	Window attribute: onkeyup

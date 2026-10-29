@@ -1,0 +1,18 @@
+# WPT's html/semantics/forms/the-output-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-output-element --update
+# rewrites [passing].
+[required]
+# 0f's phases (MODERN_WEB.md § 0f's P3b, as built), this directory joining
+# the run whole with P3b: each line fails with the switch off, the earlier
+# phases' members among them. The passes not listed pass either way.
+mutations.window.html	Descendant mutations and output.value and .defaultValue
+output.html	output value and defaultValue
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+output-setcustomvalidity.html	output setCustomValidity is correct
+[excluded]
+[passing]
+mutations.window.html	Descendant mutations and output.value and .defaultValue
+output-setcustomvalidity.html	output setCustomValidity is correct
+output.html	output value and defaultValue

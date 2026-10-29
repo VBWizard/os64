@@ -227,6 +227,151 @@ setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argume
 # window.onerror. Each fails with the switch off.
 thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using addEventListener) goes to window.onerror
 thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using onload) goes to window.onerror
+# 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): a base's href, which a
+# page sets. Fails with the switch off.
+open-url-base-inserted.htm	XMLHttpRequest: open() resolving URLs - insert <base>
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+idlharness.any.html	Document includes DocumentOrShadowRoot: member names are unique
+idlharness.any.html	Document includes GlobalEventHandlers: member names are unique
+idlharness.any.html	Document includes NonElementParentNode: member names are unique
+idlharness.any.html	Document includes ParentNode: member names are unique
+idlharness.any.html	Document includes XPathEvaluatorBase: member names are unique
+idlharness.any.html	FormData interface object length
+idlharness.any.html	FormData interface object name
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: existence and properties of interface object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData must be primary interface of new FormData()
+idlharness.any.html	FormData must be primary interface of new FormData(form)
+idlharness.any.html	Partial interface Document: member names are unique
+idlharness.any.html	Partial interface Document[2]: member names are unique
+idlharness.any.html	ProgressEvent interface object length
+idlharness.any.html	ProgressEvent interface object name
+idlharness.any.html	ProgressEvent interface: existence and properties of interface object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "lengthComputable" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "loaded" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "total" with the proper type
+idlharness.any.html	ProgressEvent must be primary interface of new ProgressEvent("type")
+idlharness.any.html	Stringification of (new XMLHttpRequest()).upload
+idlharness.any.html	Stringification of new FormData()
+idlharness.any.html	Stringification of new FormData(form)
+idlharness.any.html	Stringification of new ProgressEvent("type")
+idlharness.any.html	Stringification of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequest interface object length
+idlharness.any.html	XMLHttpRequest interface object name
+idlharness.any.html	XMLHttpRequest interface: calling getResponseHeader(ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString, boolean, optional USVString?, optional USVString?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling overrideMimeType(DOMString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling send(optional (Document or XMLHttpRequestBodyInit)?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling setRequestHeader(ByteString, ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface object
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "DONE" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "HEADERS_RECEIVED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "LOADING" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "OPENED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "UNSENT" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "abort()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getAllResponseHeaders()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getResponseHeader(ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "onreadystatechange" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString, boolean, optional USVString?, optional USVString?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "overrideMimeType(DOMString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "readyState" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "response" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseType" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseURL" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseXML" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "send(optional (Document or XMLHttpRequestBodyInit)?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "setRequestHeader(ByteString, ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "status" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "statusText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "timeout" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "upload" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "withCredentials" with the proper type
+idlharness.any.html	XMLHttpRequest must be primary interface of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequestEventTarget interface object length
+idlharness.any.html	XMLHttpRequestEventTarget interface object name
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestUpload interface object length
+idlharness.any.html	XMLHttpRequestUpload interface object name
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestUpload must be primary interface of (new XMLHttpRequest()).upload
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 [excluded]
 [passing]
 XMLHttpRequest-withCredentials.any.html	can also be set in OPEN state
@@ -370,6 +515,145 @@ headers-normalize-response.htm	Header value: hello\\0world
 historical.html	Support for responseType = moz-blob
 historical.html	Support for responseType = moz-chunked-arraybuffer
 historical.html	Support for responseType = moz-chunked-text
+idlharness.any.html	Document includes DocumentOrShadowRoot: member names are unique
+idlharness.any.html	Document includes GlobalEventHandlers: member names are unique
+idlharness.any.html	Document includes NonElementParentNode: member names are unique
+idlharness.any.html	Document includes ParentNode: member names are unique
+idlharness.any.html	Document includes XPathEvaluatorBase: member names are unique
+idlharness.any.html	FormData interface object length
+idlharness.any.html	FormData interface object name
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling append(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling delete(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling get(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling getAll(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling has(USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, Blob, optional USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData() with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: calling set(USVString, USVString) on new FormData(form) with too few arguments must throw TypeError
+idlharness.any.html	FormData interface: existence and properties of interface object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	FormData interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData() must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "delete(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "get(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "has(USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, Blob, optional USVString)" with the proper type
+idlharness.any.html	FormData interface: new FormData(form) must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	FormData must be primary interface of new FormData()
+idlharness.any.html	FormData must be primary interface of new FormData(form)
+idlharness.any.html	Partial interface Document: member names are unique
+idlharness.any.html	Partial interface Document[2]: member names are unique
+idlharness.any.html	ProgressEvent interface object length
+idlharness.any.html	ProgressEvent interface object name
+idlharness.any.html	ProgressEvent interface: existence and properties of interface object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	ProgressEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "lengthComputable" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "loaded" with the proper type
+idlharness.any.html	ProgressEvent interface: new ProgressEvent("type") must inherit property "total" with the proper type
+idlharness.any.html	ProgressEvent must be primary interface of new ProgressEvent("type")
+idlharness.any.html	Stringification of (new XMLHttpRequest()).upload
+idlharness.any.html	Stringification of new FormData()
+idlharness.any.html	Stringification of new FormData(form)
+idlharness.any.html	Stringification of new ProgressEvent("type")
+idlharness.any.html	Stringification of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequest interface object length
+idlharness.any.html	XMLHttpRequest interface object name
+idlharness.any.html	XMLHttpRequest interface: calling getResponseHeader(ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling open(ByteString, USVString, boolean, optional USVString?, optional USVString?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling overrideMimeType(DOMString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling send(optional (Document or XMLHttpRequestBodyInit)?) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: calling setRequestHeader(ByteString, ByteString) on new XMLHttpRequest() with too few arguments must throw TypeError
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface object
+idlharness.any.html	XMLHttpRequest interface: constant DONE on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant HEADERS_RECEIVED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface object
+idlharness.any.html	XMLHttpRequest interface: constant LOADING on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface object
+idlharness.any.html	XMLHttpRequest interface: constant OPENED on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface object
+idlharness.any.html	XMLHttpRequest interface: constant UNSENT on interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequest interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "DONE" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "HEADERS_RECEIVED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "LOADING" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "OPENED" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "UNSENT" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "abort()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getAllResponseHeaders()" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "getResponseHeader(ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "onreadystatechange" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "open(ByteString, USVString, boolean, optional USVString?, optional USVString?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "overrideMimeType(DOMString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "readyState" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "response" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseType" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseURL" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "responseXML" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "send(optional (Document or XMLHttpRequestBodyInit)?)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "setRequestHeader(ByteString, ByteString)" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "status" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "statusText" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "timeout" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "upload" with the proper type
+idlharness.any.html	XMLHttpRequest interface: new XMLHttpRequest() must inherit property "withCredentials" with the proper type
+idlharness.any.html	XMLHttpRequest must be primary interface of new XMLHttpRequest()
+idlharness.any.html	XMLHttpRequestEventTarget interface object length
+idlharness.any.html	XMLHttpRequestEventTarget interface object name
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: (new XMLHttpRequest()).upload must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestEventTarget interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onabort" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onerror" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onload" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadend" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onloadstart" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "onprogress" with the proper type
+idlharness.any.html	XMLHttpRequestEventTarget interface: new XMLHttpRequest() must inherit property "ontimeout" with the proper type
+idlharness.any.html	XMLHttpRequestUpload interface object length
+idlharness.any.html	XMLHttpRequestUpload interface object name
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	XMLHttpRequestUpload interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	XMLHttpRequestUpload must be primary interface of (new XMLHttpRequest()).upload
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 json.any.html	Ensure UTF-16 results in an error
 json.any.html	Ensure the correct JSON parser is used
 loadstart-and-state.html	abort() during loadstart
@@ -406,6 +690,7 @@ open-send-during-abort.htm	XMLHttpRequest: open() during abort()
 open-send-open.htm	XMLHttpRequest: open() - send() - open()
 open-sync-open-send.htm	XMLHttpRequest: open() (sync) - send() - open()
 open-url-base-inserted-after-open.htm	XMLHttpRequest: open() resolving URLs - insert <base> after open()
+open-url-base-inserted.htm	XMLHttpRequest: open() resolving URLs - insert <base>
 open-url-base.htm	XMLHttpRequest: open() resolving URLs - <base>
 open-url-fragment.htm	XMLHttpRequest: open() resolving URLs - fragment identifier
 open-user-password-non-same-origin.htm	XMLHttpRequest: open() - user/pass argument and non same-origin URL doesn't throw

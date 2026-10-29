@@ -1,0 +1,218 @@
+# WPT's html/semantics/forms/the-form-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-form-element --update
+# rewrites [passing].
+[required]
+# 0f's phases (MODERN_WEB.md § 0f's P3b, as built), this directory joining
+# the run whole with P3b: each line fails with the switch off, the earlier
+# phases' members among them. The passes not listed pass either way.
+form-action-reflection-with-base-url.html	An action URL should be resolved relative to the document's base URL (not the document's URL)
+form-action-reflection.html	An action URL should be resolved relative to the document's base URL (= the document's URL in this case)
+form-action.html	Forms
+form-autocomplete.html	Serialize combinations of section, mode, contact, and field
+form-autocomplete.html	Serialize combinations of section, mode, contact, field, and credential
+form-autocomplete.html	Test 'wearing the autofill anchor mantle' with off/on
+form-autocomplete.html	Test maximum number of tokens
+form-autocomplete.html	Test whitespace-only attribute value
+form-autocomplete.html	Unknown field
+form-autocomplete.html	additional-name is an allowed autocomplete field name
+form-autocomplete.html	address-level1 is an allowed autocomplete field name
+form-autocomplete.html	address-level2 is an allowed autocomplete field name
+form-autocomplete.html	address-level3 is an allowed autocomplete field name
+form-autocomplete.html	address-level4 is an allowed autocomplete field name
+form-autocomplete.html	address-line1 is an allowed autocomplete field name
+form-autocomplete.html	address-line2 is an allowed autocomplete field name
+form-autocomplete.html	address-line3 is an allowed autocomplete field name
+form-autocomplete.html	bday is an allowed autocomplete field name
+form-autocomplete.html	bday-day is an allowed autocomplete field name
+form-autocomplete.html	bday-month is an allowed autocomplete field name
+form-autocomplete.html	bday-year is an allowed autocomplete field name
+form-autocomplete.html	cc-additional-name is an allowed autocomplete field name
+form-autocomplete.html	cc-csc is an allowed autocomplete field name
+form-autocomplete.html	cc-exp is an allowed autocomplete field name
+form-autocomplete.html	cc-exp-month is an allowed autocomplete field name
+form-autocomplete.html	cc-exp-year is an allowed autocomplete field name
+form-autocomplete.html	cc-family-name is an allowed autocomplete field name
+form-autocomplete.html	cc-given-name is an allowed autocomplete field name
+form-autocomplete.html	cc-name is an allowed autocomplete field name
+form-autocomplete.html	cc-number is an allowed autocomplete field name
+form-autocomplete.html	cc-type is an allowed autocomplete field name
+form-autocomplete.html	country is an allowed autocomplete field name
+form-autocomplete.html	country-name is an allowed autocomplete field name
+form-autocomplete.html	current-password is an allowed autocomplete field name
+form-autocomplete.html	email is an allowed autocomplete field name
+form-autocomplete.html	family-name is an allowed autocomplete field name
+form-autocomplete.html	form autocomplete attribute invalid
+form-autocomplete.html	form autocomplete attribute missing
+form-autocomplete.html	form autocomplete attribute off
+form-autocomplete.html	form autocomplete attribute on
+form-autocomplete.html	given-name is an allowed autocomplete field name
+form-autocomplete.html	honorific-prefix is an allowed autocomplete field name
+form-autocomplete.html	honorific-suffix is an allowed autocomplete field name
+form-autocomplete.html	impp is an allowed autocomplete field name
+form-autocomplete.html	language is an allowed autocomplete field name
+form-autocomplete.html	name is an allowed autocomplete field name
+form-autocomplete.html	new-password is an allowed autocomplete field name
+form-autocomplete.html	nickname is an allowed autocomplete field name
+form-autocomplete.html	off is an allowed autocomplete field name
+form-autocomplete.html	on is an allowed autocomplete field name
+form-autocomplete.html	one-time-code is an allowed autocomplete field name
+form-autocomplete.html	organization is an allowed autocomplete field name
+form-autocomplete.html	organization-title is an allowed autocomplete field name
+form-autocomplete.html	photo is an allowed autocomplete field name
+form-autocomplete.html	postal-code is an allowed autocomplete field name
+form-autocomplete.html	sex is an allowed autocomplete field name
+form-autocomplete.html	street-address is an allowed autocomplete field name
+form-autocomplete.html	tel is an allowed autocomplete field name
+form-autocomplete.html	tel-area-code is an allowed autocomplete field name
+form-autocomplete.html	tel-country-code is an allowed autocomplete field name
+form-autocomplete.html	tel-extension is an allowed autocomplete field name
+form-autocomplete.html	tel-local is an allowed autocomplete field name
+form-autocomplete.html	tel-local-prefix is an allowed autocomplete field name
+form-autocomplete.html	tel-local-suffix is an allowed autocomplete field name
+form-autocomplete.html	tel-national is an allowed autocomplete field name
+form-autocomplete.html	transaction-amount is an allowed autocomplete field name
+form-autocomplete.html	transaction-currency is an allowed autocomplete field name
+form-autocomplete.html	url is an allowed autocomplete field name
+form-autocomplete.html	username is an allowed autocomplete field name
+form-autocomplete.html	webauthn is an allowed autocomplete field name
+form-elements-interfaces-01.html	Testing interface HTMLCollection
+form-elements-interfaces-01.html	Testing interface HTMLFormControlsCollection
+form-elements-nameditem-01.html	RadioNodeList should exist
+form-elements-nameditem-01.html	elements collection should include fieldsets
+form-elements-nameditem-01.html	elements collection should return elements or RadioNodeLists
+form-indexed-element.html	Trying to delete an indexed property name should never work
+form-indexed-element.html	form.elements should be accessed correctly by index
+form-indexed-property-names.html	form indexed property names
+form-length.html	Forms
+form-nameditem.html	Named elements should override builtins
+form-nameditem.html	Named items outside the form should not be returned (no children)
+form-nameditem.html	Named items outside the form should not be returned (one child)
+form-nameditem.html	The form attribute should be taken into account for named getters (multiple elements)
+form-nameditem.html	The form attribute should be taken into account for named getters (single element)
+form-nameditem.html	Trying to set an expando that would shadow an already-existing named property
+form-requestsubmit.html	Passing a submit button not owned by the context object should throw
+form-requestsubmit.html	The constructed FormData object should not contain an entry for the submit button that was used to submit the form.
+form-requestsubmit.html	Using requestSubmit on a disabled button (via disabled attribute) should trigger submit but not be visible in FormData
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+form-checkvalidity.html	Forms
+form-requestsubmit.html	requestSubmit() doesn't run interactive validation reentrantly
+[excluded]
+[passing]
+form-action-reflection-with-base-url.html	A missing action content attribute should cause the IDL attribute to return the document's URL (not the document's base URL)
+form-action-reflection-with-base-url.html	An action URL should be resolved relative to the document's base URL (not the document's URL)
+form-action-reflection-with-base-url.html	An empty-string action content attribute should cause the IDL attribute to return the document's URL (not the document's base URL)
+form-action-reflection.html	A missing action content attribute should cause the IDL attribute to return the document's URL (= the document's base URL in this case)
+form-action-reflection.html	An action URL should be resolved relative to the document's base URL (= the document's URL in this case)
+form-action-reflection.html	An empty-string action content attribute should cause the IDL attribute to return the document's URL (= the document's base URL in this case)
+form-action.html	Forms
+form-attribute-form-owner.html	clicking a button with .click() should trigger a submit (form connected via 'form' attribute)
+form-autocomplete.html	Serialize combinations of section, mode, contact, and field
+form-autocomplete.html	Serialize combinations of section, mode, contact, field, and credential
+form-autocomplete.html	Test 'wearing the autofill anchor mantle' with off/on
+form-autocomplete.html	Test maximum number of tokens
+form-autocomplete.html	Test whitespace-only attribute value
+form-autocomplete.html	Unknown field
+form-autocomplete.html	additional-name is an allowed autocomplete field name
+form-autocomplete.html	address-level1 is an allowed autocomplete field name
+form-autocomplete.html	address-level2 is an allowed autocomplete field name
+form-autocomplete.html	address-level3 is an allowed autocomplete field name
+form-autocomplete.html	address-level4 is an allowed autocomplete field name
+form-autocomplete.html	address-line1 is an allowed autocomplete field name
+form-autocomplete.html	address-line2 is an allowed autocomplete field name
+form-autocomplete.html	address-line3 is an allowed autocomplete field name
+form-autocomplete.html	bday is an allowed autocomplete field name
+form-autocomplete.html	bday-day is an allowed autocomplete field name
+form-autocomplete.html	bday-month is an allowed autocomplete field name
+form-autocomplete.html	bday-year is an allowed autocomplete field name
+form-autocomplete.html	cc-additional-name is an allowed autocomplete field name
+form-autocomplete.html	cc-csc is an allowed autocomplete field name
+form-autocomplete.html	cc-exp is an allowed autocomplete field name
+form-autocomplete.html	cc-exp-month is an allowed autocomplete field name
+form-autocomplete.html	cc-exp-year is an allowed autocomplete field name
+form-autocomplete.html	cc-family-name is an allowed autocomplete field name
+form-autocomplete.html	cc-given-name is an allowed autocomplete field name
+form-autocomplete.html	cc-name is an allowed autocomplete field name
+form-autocomplete.html	cc-number is an allowed autocomplete field name
+form-autocomplete.html	cc-type is an allowed autocomplete field name
+form-autocomplete.html	country is an allowed autocomplete field name
+form-autocomplete.html	country-name is an allowed autocomplete field name
+form-autocomplete.html	current-password is an allowed autocomplete field name
+form-autocomplete.html	email is an allowed autocomplete field name
+form-autocomplete.html	family-name is an allowed autocomplete field name
+form-autocomplete.html	form autocomplete attribute invalid
+form-autocomplete.html	form autocomplete attribute missing
+form-autocomplete.html	form autocomplete attribute off
+form-autocomplete.html	form autocomplete attribute on
+form-autocomplete.html	given-name is an allowed autocomplete field name
+form-autocomplete.html	honorific-prefix is an allowed autocomplete field name
+form-autocomplete.html	honorific-suffix is an allowed autocomplete field name
+form-autocomplete.html	impp is an allowed autocomplete field name
+form-autocomplete.html	language is an allowed autocomplete field name
+form-autocomplete.html	name is an allowed autocomplete field name
+form-autocomplete.html	new-password is an allowed autocomplete field name
+form-autocomplete.html	nickname is an allowed autocomplete field name
+form-autocomplete.html	off is an allowed autocomplete field name
+form-autocomplete.html	on is an allowed autocomplete field name
+form-autocomplete.html	one-time-code is an allowed autocomplete field name
+form-autocomplete.html	organization is an allowed autocomplete field name
+form-autocomplete.html	organization-title is an allowed autocomplete field name
+form-autocomplete.html	photo is an allowed autocomplete field name
+form-autocomplete.html	postal-code is an allowed autocomplete field name
+form-autocomplete.html	sex is an allowed autocomplete field name
+form-autocomplete.html	street-address is an allowed autocomplete field name
+form-autocomplete.html	tel is an allowed autocomplete field name
+form-autocomplete.html	tel-area-code is an allowed autocomplete field name
+form-autocomplete.html	tel-country-code is an allowed autocomplete field name
+form-autocomplete.html	tel-extension is an allowed autocomplete field name
+form-autocomplete.html	tel-local is an allowed autocomplete field name
+form-autocomplete.html	tel-local-prefix is an allowed autocomplete field name
+form-autocomplete.html	tel-local-suffix is an allowed autocomplete field name
+form-autocomplete.html	tel-national is an allowed autocomplete field name
+form-autocomplete.html	transaction-amount is an allowed autocomplete field name
+form-autocomplete.html	transaction-currency is an allowed autocomplete field name
+form-autocomplete.html	url is an allowed autocomplete field name
+form-autocomplete.html	username is an allowed autocomplete field name
+form-autocomplete.html	webauthn is an allowed autocomplete field name
+form-checkvalidity.html	Forms
+form-elements-filter.html	form.elements must contain all listed elements with the form owner
+form-elements-form-owner.html	`form.elements` should update on form ID changes
+form-elements-interfaces-01.html	Testing interface HTMLCollection
+form-elements-interfaces-01.html	Testing interface HTMLFormControlsCollection
+form-elements-interfaces-01.html	form.elements: interfaces
+form-elements-matches.html	form.elements should include elements whose name starts with a number
+form-elements-matches.html	input type=image should not be present in the form.elements collection
+form-elements-nameditem-01.html	RadioNodeList should exist
+form-elements-nameditem-01.html	elements collection should include fieldsets
+form-elements-nameditem-01.html	elements collection should return elements or RadioNodeLists
+form-elements-nameditem-02.html	form.elements should work correctly in the face of table syntax errors
+form-elements-sameobject.html	[SameObject] should apply to 'elements' attr on <form>
+form-indexed-element.html	Trying to delete an indexed property name should never work
+form-indexed-element.html	form.elements should be accessed correctly by index
+form-indexed-property-names.html	form indexed property names
+form-length.html	Forms
+form-nameditem.html	All listed elements except input type=image should be present in the form
+form-nameditem.html	Calling item() on the NodeList returned from the named getter should work
+form-nameditem.html	Forms should not have a namedItem method
+form-nameditem.html	Forms should not have an item method
+form-nameditem.html	Indexed getter on the NodeList returned from the named getter should work
+form-nameditem.html	Input should only be a named property on the innermost form that contains it
+form-nameditem.html	Invoking a legacycaller on the NodeList returned from the named getter should not work
+form-nameditem.html	Name for a single element should work
+form-nameditem.html	Named elements should override builtins
+form-nameditem.html	Named items outside the form should not be returned (no children)
+form-nameditem.html	Named items outside the form should not be returned (one child)
+form-nameditem.html	The form attribute should be taken into account for named getters (multiple elements)
+form-nameditem.html	The form attribute should be taken into account for named getters (single element)
+form-nameditem.html	Trying to set a non-configurable expando that shadows a named property that gets added later
+form-nameditem.html	Trying to set an expando that shadows a named property that gets added later
+form-nameditem.html	Trying to set an expando that would shadow an already-existing named property
+form-requestsubmit.html	Passing a submit button not owned by the context object should throw
+form-requestsubmit.html	Passing an element which is not a submit button should throw
+form-requestsubmit.html	The constructed FormData object should not contain an entry for the submit button that was used to submit the form.
+form-requestsubmit.html	Using requestSubmit on a disabled button (via disabled attribute) should trigger submit but not be visible in FormData
+form-requestsubmit.html	requestSubmit() doesn't run form submission reentrantly
+form-requestsubmit.html	requestSubmit() doesn't run interactive validation reentrantly
+form-requestsubmit.html	requestSubmit() for a disconnected form should not submit the form
+form-requestsubmit.html	requestSubmit() should accept button[type=submit], input[type=submit], and input[type=image]

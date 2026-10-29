@@ -396,9 +396,10 @@ switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`,
 `languagechange`, `error`, `unhandledrejection`, `rejectionhandled`,
 `message` and `messageerror`) are window's. For the ones every element has a
 property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
-`<body onload>` and `document.body.onload` alike; for the others it is so
-from the body's content attribute only, since the body has no such IDL
-property (`document.body.onpopstate` is an ordinary expando; DEBTS.md).
+`<body onload>` and `document.body.onload` alike, and for the others
+HTMLBodyElement has them too (0f's P6a's WindowEventHandlers), but for
+`error`: no element has `onerror` here, so `document.body.onerror` is an
+ordinary expando, and only the content attribute is window's (DEBTS.md).
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
@@ -461,9 +462,15 @@ submit button fires `submit` at its form and, uncancelled, asks for the
 submission; a reset button fires `reset`. An element already being
 clicked ignores another `click()` until its own finishes (HTML's
 click-in-progress flag); another element can still be clicked from its
-listener. `form.submit()` asks without a `submit` event, `requestSubmit()` with one, and `reset()` fires `reset`. A
-reset not cancelled, `focus()` and `blur()` reach the host through
-`options.activate`, which records them.
+listener. `form.submit()` asks without a `submit` event, `requestSubmit()` with one, and `reset()` fires `reset`.
+With the Modern Web switch on, a submit button's click and
+`requestSubmit()` first validate the form's constraints, unless the
+submitter's `formnovalidate` or the form's `novalidate` says not to, and
+stop before `submit` when they fail (§ The Modern Web's surface, the
+validity row); `form.submit()` validates nothing. A reset not cancelled,
+`focus()`, `blur()` and a control's constraint problem reported
+(OS64_DOM_ACTIVATE_REPORT, whose sentence `os64_dom_report_message`
+keeps) reach the host through `options.activate`, which records them.
 
 ## Script elements
 
@@ -616,7 +623,8 @@ whose dispatch path is itself. A tree verb handed an Attr refuses it as DOM
 does (HierarchyRequestError to insert one, NotFoundError as a reference or
 to remove one, `contains` false); a `Node.prototype` member called on an
 Attr itself is the TypeError "an Attr is a Node with no place in the tree"
-(DIVERGENCES.md).
+(DIVERGENCES.md), but for the comparisons (`compare.c`), whose one
+function is Node's and Attr's both.
 
 **The map holds no snapshot either.** `length`, `item(i)`, the indices
 (live, read-only) and the names (each attribute's qualified name, an HTML
@@ -750,7 +758,16 @@ which do nothing, the window being the person's to raise; `matchMedia`,
 `CSSStyleDeclaration` interface, which names the style object's prototype
 and which the computed declaration's inherits; and
 `onpopstate`, `onhashchange`, `PopStateEvent` and `HashChangeEvent`, with
-`pushState`, `replaceState`, `state` and `scrollRestoration` on history).
+`pushState`, `replaceState`, `state` and `scrollRestoration` on history;
+and `Location`, `History` and `Navigator`, the window's own objects as
+their interfaces' (0f's P7, `window.c`'s `d_window_objects_install`):
+History's and Navigator's members moved to their prototypes, named and
+an operation enumerable as WebIDL makes them; Location's left on the
+location, [LegacyUnforgeable], with its own `valueOf` and
+`Symbol.toPrimitive`, its prototype holding no member. Each object is made
+over a prototype level of its own, empty without the switch, so its chain
+has the same levels either way, and each member checks that it is called
+on its object, with the switch or without).
 With the switch off none of those names exists, nor
 `document.scrollingElement`, `document.defaultView` or an element's
 `onscroll`; the arc's handler types' content attributes are not handlers
@@ -1201,7 +1218,18 @@ as one counted line as the task closes (`and <n> more unhandled
 rejections`), so what a page's flood costs the host is not the page's to
 size, and none goes unrecorded. An
 exception's outcome is libjs's diagnostic as before, whatever an error
-listener did with its event.
+listener did with its event. A failure carries the stack its value has:
+libjs's diagnostic takes an exception's, and the binding takes a
+rejection's reason's and an error's it reported itself (an Error's own
+`stack`, read as a data property so no page code runs, `d_error_stack`)
+into the outcome's `stack_trace`, and gives it to `options.failed`
+beside the message. A DOMException carries none here, nor does a thrown
+primitive (DEBTS.md). A host finds where a failure happened with
+`os64_dom_stack_frame` (a stack's first frame that names a place in a
+script) and `os64_dom_frame_script` (the address of the script that
+frame's file names, or the page's own), rather than reading the engine's
+text itself; yonder's record is the first such host
+(YONDER_DIAGNOSTICS.md).
 
 **The interfaces.** `new ErrorEvent(type, {message, filename, lineno, colno,
 error})` and `new PromiseRejectionEvent(type, {promise, reason})` read
@@ -1375,7 +1403,16 @@ answers it with the Attr itself; Text's `wholeText` (the data of the run
 of text siblings it is in) and `splitText(offset)` (the offset in UTF-16
 code units; the tail a new text node, the next sibling when there is a
 parent; the node shortened first and given its data back if the insertion
-fails).
+fails); Element's `localName`, `namespaceURI` and `prefix` (libhtml's name,
+`os64_html_namespace_uri`, libhtml's prefix, each null for none); and
+Node's `baseURI`, its node document's base URL, its fragment kept
+(`d_base_uri`, over libpage's `os64_page_base_url_in`; a document with no
+window has about:blank for a fallback, and its own `<base>` counts), which
+Attr's prototype shadows with the same answer; and Node's `normalize()`,
+which removes the empty text nodes among a node's descendants and makes
+each run of adjacent ones its first, given the run's data (that node's
+data set before the rest of the run is removed, so a failure part way
+loses no text). An Attr's has no children to join.
 
 **The select row** (`options.c`, which names `Option` on window): an
 option's `value` (its attribute, else its text), `text` (its descendant
@@ -1406,3 +1443,116 @@ for HTMLCollection's, which it inherits (INTERFACES_FORMS.md § P1b).
 factory function: its `prototype` is HTMLOptionElement's, and every
 argument is converted before the option is made. A select's own indices
 (`select[0]`) are a DEBTS.md row (§ Classic browser scripting).
+
+**The controls row** (`controls.c`, naming nothing on window): input's,
+textarea's, select's and button's reflections, and the form's, label's,
+fieldset's, legend's and output's, as one table of rows, each
+a member, its content attribute, which of HTML's reflection rules reads
+it (string, URL, boolean, enumerated with its missing and invalid
+defaults, and the integer kinds with their defaults and range errors) and
+the interfaces it is on; one accessor reads every row, and a row's member
+called on another interface is a TypeError. Beside them textarea's
+`defaultValue` and `textLength`, `autocomplete` through HTML's autofill
+grammar, input's `width`, `height` and `indeterminate` (libpage's
+`os64_page_node_set_indeterminate`), input's `valueAsNumber`,
+`valueAsDate`, `stepUp` and `stepDown` (libpage's
+`os64_page_node_value_as`, `os64_page_node_set_value_as` and
+`os64_page_node_step`; a Date read by the `getTime` taken before any page
+ran, which refuses anything that is no Date), and the `form` (`d_form_owner`) of
+every control, fieldset and output and the `labels` of every control and
+output: a live NodeList made once (the collection kind LABELS), of the
+labels whose labeled control (`d_label_control`) the element is, walked
+from its tree's root.
+
+**The elements row** (`elements.c`, naming nothing on window;
+MODERN_WEB.md § 0f's P6a). The element kinds HTML gives an interface
+whose members are reflections: a prototype kind each (the interfaces row
+names them), chosen by HTML's element-interface rule from a table by tag
+(`node.c`'s `d_node_kind`: h1-h6 one kind, td and th one, listing and xmp
+a pre, the obsolete names HTMLUnknownElement, and a name libhtml does not
+know HTMLUnknownElement unless it is a valid custom element name). Its
+members are rows read by the controls row's rules (`d_reflection_get` and
+`d_reflection_set`: strings, LegacyNullToEmptyString, URLs and base's
+href against the document's own URL, booleans, enumerations, longs, the
+unsigned kinds and a span's and a row span's clamps), one row per member
+and interface, so each accessor's brand is its own interface. Beside
+them a title's `text` and a body's WindowEventHandlers, which are
+window's. A set of kinds is a uint64_t (`D_KIND`); a static assertion
+holds the kinds to 64.
+
+**The tables row** (`tables.c`, naming nothing on window; MODERN_WEB.md
+§ 0f's P6b). A table's `caption`, `tHead` and `tFoot`, read and replaced,
+and their create and delete verbs; its `tBodies` and `createTBody`; its
+`rows`, a section's and a row's `cells`, each with its insert and delete
+verbs; a row's `rowIndex` and `sectionRowIndex` and a cell's `cellIndex`;
+and a map's `areas`. The collections are `collection.c`'s table kinds
+(`d_table_query`), live and made once on the owner's entry; a table's
+rows are in HTML's order, a thead's first and a tfoot's last. A verb
+reads the collection a page reads (`d_query_items`), so the two agree on
+every index, and changes the tree through `d_tree_change`, the door
+appendChild takes; an element it makes joins the owner's tree at once,
+and with it the owner's node document.
+
+**The comparisons row** (`compare.c`, naming nothing on window; MODERN_WEB.md
+§ Node's members, as built). Node's `isSameNode`, `isEqualNode` and
+`compareDocumentPosition`, one function on Node's prototype and on Attr's,
+since either side of each may be an Attr: an operand is a tree node or an
+Attr's view (`attr.c`'s `d_attr_view`: its element, names and value), the
+element standing in the tree for the Attr. Equality is DOM's, walked side
+by side in tree order rather than by recursion; a template's contents are
+not its children, so they are not compared. Two Attrs of one element are
+in the order of its attribute list, as DOM's steps walk it; two nodes in
+different trees are ordered by the addresses of their roots (a detached
+Attr's own entry standing for a root), the one order DOM leaves open,
+asking only that it be consistent.
+
+**The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
+window, and nothing else). `collection.c`'s: a form's `elements` is an
+HTMLFormControlsCollection, over a collection's, of its listed elements
+but an image button (`d_listed`); its `namedItem`, and named access on it and on the form,
+answer a RadioNodeList for a name two or more controls share (HTMLCollection's
+own `namedItem`, called on it, the first), a live NodeList made once a
+form and a name (`d_radio_list`), whose `value` reads
+its first checked radio button's and sets the first of that value; a
+NodeList answers no names (`node_list`). `forms.c`'s: a form's `length`,
+`rel` and `relList`; a label's `control` and `form`; a fieldset's `type`
+and `elements` (the collection kind FIELDSET, its listed descendants, an
+image button among them); a legend's `form`; an
+output's `value`, `defaultValue` (its override kept on its wrapper's
+record), `type` and `htmlFor`. With the switch on the form is a legacy
+platform object (classic.c's exotic): `form[i]`, names over its
+prototype's members, its indices and names its own, and none of them
+redefined or deleted; nor is an index it has no control for defined, as it
+has no indexed setter.
+
+**The style sheets row** (`sheets.c`, naming StyleSheetList, StyleSheet
+and CSSStyleSheet on window; MODERN_WEB.md § The page's style sheets).
+`document.styleSheets` is a live collection of the query kind SHEETS,
+made once a document (`d_style_sheets`), over StyleSheetList's own
+prototype (`length`, `item()`, iterable, no names): the nodes libpage's
+rule says name a sheet (`os64_page_names_sheet`, the cascade's rule),
+each answered as its CSSStyleSheet (`d_sheet`), not the node. A sheet is
+made once a node and kept on its record; it answers `type`, `href`,
+`ownerNode`, `title`, `disabled`, `parentStyleSheet` and `ownerRule`,
+and nothing it holds. A link's and a style's `sheet` is that sheet while
+the node names one in a document, else null, and the sheet then has no
+`ownerNode`; the style element is a kind of its own for it
+(HTMLStyleElement).
+
+**The validity row** (`validity.c`, naming ValidityState and oninvalid on
+window; MODERN_WEB.md § 0f's P4a). libpage judges a control
+(`os64_page_node_validity`) from the node and the live state, the judge a
+submission's validation asks too, so a control no page holds is judged.
+The binding matches its `pattern` with the engine: compiled alone with
+the `v` flag first, then `^(?:pattern)$`, by the RegExp constructor and
+`exec` taken before any page ran, a pattern that does not compile being
+no constraint. A ValidityState is made once an element and read live;
+`willValidate`, `validity`, `validationMessage`, `checkValidity`,
+`reportValidity` and `setCustomValidity` are on input, select, textarea,
+button, fieldset and output, and a form's `checkValidity` and
+`reportValidity` (`d_form_validate`) collect its invalid submittable
+controls in tree order before firing `invalid` (cancelable, not bubbling)
+at each. A report is the host's: `os64_dom_form_validate` runs a person's
+submission's validation as a task, before the host fires `submit`, as one
+call through the wrapper (`os64_js_call` of the binding's own function), so
+its pattern and its invalid listeners run under the task's budget.

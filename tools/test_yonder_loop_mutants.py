@@ -118,8 +118,8 @@ mutants = [
      '    key.type = "keydown";\n    if (page_event(&key, target))\n        return true;',
      '    key.type = "keydown";\n    (void)page_event(&key, target);', WINDOW),
     ('input-submit-cancels', YONDER,
-     '            if (!plain_event("submit", true, true, control_form(control)))\n                form_send(',
-     '            (void)plain_event("submit", true, true, control_form(control));\n            form_send(', WINDOW),
+     '            if (!plain_event("submit", true, true, control_form(control)))\n                form_send_as(',
+     '            (void)plain_event("submit", true, true, control_form(control));\n            form_send_as(', WINDOW),
     ('input-focus', YONDER,
      '    input_queue(IN_FOCUS, fw->node, NULL, 0, 0, false);',
      '    (void)fw;', WINDOW),
@@ -138,8 +138,8 @@ mutants = [
      '\t\tif (tf->on_change)\n\t\t\ttf->on_change(tf, tf->edit_user);', LIBUI),
     # libpage's form.submit()
     ('libpage-script-submit-not-validated', ACTIVATE,
-     '    if (what.how == OS64_PAGE_ACTIVATE_FORM)\n        novalidate = true;',
-     '', PAGE),
+     '    if (what.how == OS64_PAGE_ACTIVATE_FORM || validated)\n        novalidate = true;',
+     '    if (validated)\n        novalidate = true;', PAGE),
     # Fable rd on D7b: the parse first, a fragment kept, a runtime at its event
     ('stream-task-before-the-parse', YONDER,
      '    if (yonder_scripts_connected_pending(host))\n        return stream_connected();\n    if (g.stream.stopped) {',

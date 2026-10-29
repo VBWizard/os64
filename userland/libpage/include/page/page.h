@@ -228,6 +228,9 @@ typedef struct {
     bool required;
     bool multiple;          // SELECT, and `multiple` on a file input
     bool checked;           // CHECKBOX / RADIO, now, a person's tick included
+    // Its indeterminate flag (os64_page_node_set_indeterminate), any input's;
+    // HTML shows only a checkbox's.
+    bool indeterminate;
     // The page spelled a `value` attribute at all. A tick with none sends
     // `on`, the standard's default, but one that says `value=""` asked for
     // an empty answer, and sending `on` for it picks a different branch on
@@ -367,6 +370,15 @@ const char *os64_page_base(const os64_page_t *page);
 // there was no memory to look.
 bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url, char *out,
                        size_t cap);
+// HTML's document base URL, which a script reads as `baseURI`: that base
+// with a fragment, as resolution never has one. The document's own when
+// there is no `<base href>`, or it will not resolve; else the base's, as
+// the page wrote it, after the document's address for `<base href="#x">`.
+// `root` is the document whose base it is, when that is not `doc`'s own
+// but another libhtml keeps beside it (one a script made), at
+// `document_url`; NULL for `doc`'s own.
+bool os64_page_base_url_in(const os64_html_document_t *doc, const os64_html_node_t *root,
+                           const char *document_url, char *out, size_t cap);
 // `reference` resolved against `base` by the rule the page resolves its own
 // by, canonical — for an address a page's resources name in turn, as a
 // style sheet's @import does against the sheet's own address. False when
@@ -455,6 +467,9 @@ typedef struct {
     const char *media;
 } os64_page_sheet_t;
 
+// Whether `node` names a sheet by the rule above, as its tree stands now,
+// its `href` left unresolved: what a script's document.styleSheets lists.
+bool os64_page_names_sheet(const os64_html_node_t *node);
 int32_t os64_page_nsheets(const os64_page_t *page);
 const os64_page_sheet_t *os64_page_sheet(const os64_page_t *page, int32_t i);
 // The sheets `doc` names as its tree stands now, by the rule above and in
@@ -497,7 +512,8 @@ os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
 // into a tick's, a button's or a hidden field's value; a `disabled` control
 // takes no edit at all, and a `readonly` one takes no text; a disabled option
 // cannot be chosen. The rule lives here and not in each face because a rule
-// every face must remember is a rule some face forgets.
+// every face must remember is a rule some face forgets. A tick of a
+// checkbox also clears its indeterminate flag, as a person's click does.
 //
 // Clearing a one-line single-choice list's choice hands the answer to its
 // first enabled option, which is the selection rule the standard applies
@@ -608,6 +624,102 @@ int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t 
                                bool *on);
 int64_t os64_page_node_selected_index(os64_page_state_t *state,
                                       const os64_html_node_t *node, int32_t *index);
+// An input's indeterminate flag (HTML § 4.10.5): false until a script sets
+// it; no attribute stands for it, and a clone copies it. A person's
+// tick of a checkbox (os64_page_set_checked) clears it. Setting it changes
+// the control-state revision when it changes. WRONG_KIND for a node that
+// is not an input; NO_MEMORY when its record cannot be kept, and then
+// nothing changes.
+int64_t os64_page_node_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool *on);
+int64_t os64_page_node_set_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool on);
+// An input's value as a number (HTML § 4.10.5.4), by node: valueAsNumber,
+// valueAsDate, stepUp and stepDown, over the conversions an input's min,
+// max and step are read by. `applies` says whether the member applies to
+// the input's type, which the binding answers with NaN, null or an
+// InvalidStateError when it does not; nothing changes then. WRONG_KIND for
+// a node that is not an input, or a foreign one; NO_MEMORY as
+// os64_page_node_value and os64_page_node_set_value.
+typedef enum { OS64_PAGE_AS_NUMBER, OS64_PAGE_AS_DATE } os64_page_as_t;
+// The value's number, NaN when it does not convert: valueAsNumber's (a
+// month a count of months since January 1970), or the time value of
+// valueAsDate's Date (a month its first midnight, UTC). valueAsNumber
+// applies to number, range and the date and time types, valueAsDate to
+// date, month, week and time.
+int64_t os64_page_node_value_as(os64_page_state_t *state, const os64_html_node_t *node, os64_page_as_t as,
+                                double *number, bool *applies);
+// Setting it: the type's string for `number`, through
+// os64_page_node_set_value; the empty string for NaN, and for a number
+// the type cannot spell (a date before year 1 or after 275760, the years
+// the value's number is read through; Blink's last is 275760-09-13). An
+// infinite number is the caller's TypeError, and WRONG_KIND here.
+int64_t os64_page_node_set_value_as(os64_page_state_t *state, const os64_html_node_t *node, os64_page_as_t as,
+                                    double number, bool *applies);
+// stepUp(n), or stepDown(n) when `down`. They apply to valueAsNumber's
+// types, and not to an input whose step is `any`, which has no allowed
+// value step (the same InvalidStateError). A step past the min or the max
+// stops at the grid point inside it; one with no grid point between them,
+// one that would move a number the wrong way, or one past the largest
+// double changes nothing.
+int64_t os64_page_node_step(os64_page_state_t *state, const os64_html_node_t *node, int32_t n, bool down,
+                            bool *applies);
+// Constraint validation (HTML § 4.10.20), by node, judged from the node and
+// the live state, so a control no model holds (one a script made and never
+// attached) is judged too. One judge answers these verbs and a submission's
+// validation (os64_page_activate), which asks it control by control.
+//
+// The flags, one per ValidityState member that is not `valid`.
+enum {
+    OS64_PAGE_VALIDITY_MISSING = 1u << 0,
+    OS64_PAGE_VALIDITY_TYPE = 1u << 1,
+    OS64_PAGE_VALIDITY_PATTERN = 1u << 2,
+    OS64_PAGE_VALIDITY_TOO_LONG = 1u << 3,
+    OS64_PAGE_VALIDITY_TOO_SHORT = 1u << 4,
+    OS64_PAGE_VALIDITY_UNDERFLOW = 1u << 5,
+    OS64_PAGE_VALIDITY_OVERFLOW = 1u << 6,
+    OS64_PAGE_VALIDITY_STEP = 1u << 7,
+    OS64_PAGE_VALIDITY_BAD_INPUT = 1u << 8,
+    OS64_PAGE_VALIDITY_CUSTOM = 1u << 9,
+};
+// HTML's pattern is a regular expression of the script engine's (§
+// 4.10.5.3.6), so the caller matches it: 1 when `value` (UTF-8, `len`
+// bytes) matches the whole of `pattern`, 0 when it does not, -1 when the
+// pattern does not compile, which HTML judges as no constraint. A NULL
+// matcher judges no pattern, as the model's own validation of a
+// submission does (os64_page_activate).
+typedef int (*os64_page_pattern_t)(void *opaque, const char *pattern, const char *value, size_t len);
+// willValidate: whether the node is a candidate for constraint validation —
+// an input, textarea, select or button not barred (a type that is not a
+// field, a button that does not submit, disabled, an input or textarea
+// with `readonly` whatever the input's type, in a datalist). False for a
+// fieldset or an output, which have
+// only a custom validity. WRONG_KIND for any other node or a foreign one.
+int64_t os64_page_node_will_validate(os64_page_state_t *state, const os64_html_node_t *node, bool *will);
+// The node's flags. A barred control has its flags still (a disabled
+// control keeps its custom error), but for valueMissing, which a field a
+// person cannot type into does not suffer; willValidate decides whether
+// they count.
+// May read the value, so NO_MEMORY as os64_page_node_value; WRONG_KIND as
+// will_validate.
+int64_t os64_page_node_validity(os64_page_state_t *state, const os64_html_node_t *node, os64_page_pattern_t matcher,
+                                void *opaque, uint32_t *flags);
+// The sentence for `flags`' first flag in ValidityState's order, or the
+// custom message when CUSTOM is among them, into `out` (cut to `cap`
+// between characters, terminated); "" for no flags. Plain ASCII apart from
+// a custom message, which is the page's own UTF-8 and may hold a NUL that
+// ends it here: os64_page_node_custom_validity has its whole bytes.
+int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_html_node_t *node, uint32_t flags,
+                                          char *out, size_t cap);
+// setCustomValidity: the node's custom message, "" for none, kept until
+// set again (a reset keeps it; a clone does not copy it). Input, textarea,
+// select, button, fieldset and output; WRONG_KIND for any other node;
+// NO_MEMORY when it cannot be kept, and then the old one stays.
+int64_t os64_page_node_set_custom_validity(os64_page_state_t *state, const os64_html_node_t *node,
+                                           const char *utf8, size_t len);
+// The custom message as it was set, all `len` bytes ("" and 0 for none),
+// borrowed until it is set again or the state is freed. WRONG_KIND as
+// will_validate.
+int64_t os64_page_node_custom_validity(os64_page_state_t *state, const os64_html_node_t *node, const char **message,
+                                       size_t *len);
 // A text control's selection (HTML § 4.10.6), by node, in UTF-16 code
 // units of its value: collapsed at 0 until something moves it; at the
 // value's end once a value that differs is set; else where a script, or
@@ -721,7 +833,21 @@ typedef struct {
 // REFUSED.
 os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t what,
                                        os64_page_request_t *out);
+// The same for a submission the page's scripts validated before its submit
+// event (os64_dom_form_validate, or the binding's own submit): HTML
+// validates once, there, so what a submit listener changes after it cannot
+// refuse the submission, and the model does not validate it again.
+os64_page_verdict_t os64_page_activate_validated(const os64_page_t *page, os64_page_what_t what,
+                                                 os64_page_request_t *out);
 void os64_page_request_free(os64_page_request_t *request);
+// The submitter os64_page_activate would take for a button pressed or Enter
+// in a field (its own first question, asked alone): the control's index, -1
+// when the form submits itself. False when the ask would submit nothing,
+// and for any ask but those two (a form submitting itself has no
+// submitter; a link or a refresh is no submission). A host that
+// validates a person's submission before its submit event asks it, so the
+// validation knows the submission is happening and whose it is.
+bool os64_page_submitter(const os64_page_t *page, os64_page_what_t what, int32_t *submitter);
 
 #pragma GCC visibility pop
 

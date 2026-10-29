@@ -311,11 +311,12 @@ dropdown inside it is ordinary.
   and a fragment link read a sticky box where the flow put it, which is
   its place in the document.
 - **Covered.** `flow_box_covered(tree, box, scroll)` answers whether the
-  pointer cannot reach `box`: `flow_hit` at its centre answers neither it
-  nor anything inside it (ruling 9), so a face that draws live widgets
+  pointer cannot reach `box`: a hit at its centre answers neither it nor
+  anything inside it, a box that draws nothing there passed over (ruling
+  9 and its amendment), so a face that draws live widgets
   over the page — yonder's form controls — hides one that is covered and
-  draws its frame, as `forms_place` already does for one that is not
-  wholly in view. A text field under a fixed header must not draw over the
+  draws its frame, as `forms_place` does for one none of which is in the
+  view (one only partly in it is clipped to it). A text field under a fixed header must not draw over the
   header and take its click. Paid in P2, where overlap becomes common;
   owed from P1.
 
@@ -492,6 +493,28 @@ he said, not a CSS one — and Fable ruled as he had recommended:
    9's case, a field under a fixed header, one `visibility: hidden`, and
    leaves usable a field a floating label or a corner icon only touches;
    it gives up a header crossing a field short of its centre.
+
+   **Amended (Chris, 2026-10-26): a box covers only where it draws.**
+   `flow_box_covered`'s hit passes a box that draws nothing of its own at
+   the control's centre, unless it is the control or inside it: one of
+   opacity 0 (`unpainted`), and one whose background is transparent, at a
+   point inside its borders that no inset shadow or outline of its falls
+   on (text, a marker, a picture and a control draw what they hold). The receipt: a major sign-in page's email field lies
+   under two boxes the size of the whole field, its outline (a 1px border
+   round a transparent box) and its focus ring (the same, at `opacity: 0`
+   until the field is focused), neither with `pointer-events: none`. A
+   browser's pointer does land on them, and the page's script answers the
+   click by focusing the field; the ruling as written hid the widget, so
+   the field took no click, showed no caret and could not take a `focus()`
+   either, and the page could not be used. The first form of this
+   amendment passed only the invisible box, which left the outline
+   covering the field; it is the same rule, made whole. The ruling's
+   purpose stands untouched: a header, a dialog, a picture, a text, or
+   anything else that draws over a control still covers it. What is given
+   up: a page that lays an empty box over a field to keep the pointer off
+   it now finds the field usable here. Ruling 6's exception keeps its
+   meaning: an invisible control is still drawn, and still the target its
+   own hit is asked for.
 
 ## Booked, with their triggers
 

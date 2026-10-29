@@ -212,6 +212,43 @@ unsupported-encodings.any.html	utf-32be with no BOM should decode as UTF-8
 unsupported-encodings.any.html	utf-32le with BOM should decode as UTF-16LE
 unsupported-encodings.any.html	utf-32le with no BOM should decode as UTF-8
 unsupported-encodings.any.html	utf-7 should not be supported
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+idlharness.any.html	Stringification of new TextDecoder()
+idlharness.any.html	Stringification of new TextEncoder()
+idlharness.any.html	TextDecoder includes TextDecoderCommon: member names are unique
+idlharness.any.html	TextDecoder interface object length
+idlharness.any.html	TextDecoder interface object name
+idlharness.any.html	TextDecoder interface: calling decode(optional AllowSharedBufferSource, optional TextDecodeOptions) on new TextDecoder() with too few arguments must throw TypeError
+idlharness.any.html	TextDecoder interface: existence and properties of interface object
+idlharness.any.html	TextDecoder interface: existence and properties of interface prototype object
+idlharness.any.html	TextDecoder interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	TextDecoder interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "decode(optional AllowSharedBufferSource, optional TextDecodeOptions)" with the proper type
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "encoding" with the proper type
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "fatal" with the proper type
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "ignoreBOM" with the proper type
+idlharness.any.html	TextDecoder must be primary interface of new TextDecoder()
+idlharness.any.html	TextDecoderStream includes GenericTransformStream: member names are unique
+idlharness.any.html	TextDecoderStream includes TextDecoderCommon: member names are unique
+idlharness.any.html	TextEncoder includes TextEncoderCommon: member names are unique
+idlharness.any.html	TextEncoder interface object length
+idlharness.any.html	TextEncoder interface object name
+idlharness.any.html	TextEncoder interface: calling encode(optional USVString) on new TextEncoder() with too few arguments must throw TypeError
+idlharness.any.html	TextEncoder interface: calling encodeInto(USVString, Uint8Array) on new TextEncoder() with too few arguments must throw TypeError
+idlharness.any.html	TextEncoder interface: existence and properties of interface object
+idlharness.any.html	TextEncoder interface: existence and properties of interface prototype object
+idlharness.any.html	TextEncoder interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	TextEncoder interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	TextEncoder interface: new TextEncoder() must inherit property "encode(optional USVString)" with the proper type
+idlharness.any.html	TextEncoder interface: new TextEncoder() must inherit property "encodeInto(USVString, Uint8Array)" with the proper type
+idlharness.any.html	TextEncoder interface: new TextEncoder() must inherit property "encoding" with the proper type
+idlharness.any.html	TextEncoder must be primary interface of new TextEncoder()
+idlharness.any.html	TextEncoderStream includes GenericTransformStream: member names are unique
+idlharness.any.html	TextEncoderStream includes TextEncoderCommon: member names are unique
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 [excluded]
 big5-encoder.html	a legacy multi-byte encoding's table: out of slice 1a's scope (TextDecoder decodes UTF-8, UTF-16 and windows-1252)
 iso-2022-jp-decoder.any.html	a legacy multi-byte encoding's table: out of slice 1a's scope (TextDecoder decodes UTF-8, UTF-16 and windows-1252)
@@ -4917,6 +4954,40 @@ encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination len
 encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination length 3, offset 4, filler 0
 encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination length 3, offset 4, filler 128
 encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination length 3, offset 4, filler random
+idlharness.any.html	Stringification of new TextDecoder()
+idlharness.any.html	Stringification of new TextEncoder()
+idlharness.any.html	TextDecoder includes TextDecoderCommon: member names are unique
+idlharness.any.html	TextDecoder interface object length
+idlharness.any.html	TextDecoder interface object name
+idlharness.any.html	TextDecoder interface: calling decode(optional AllowSharedBufferSource, optional TextDecodeOptions) on new TextDecoder() with too few arguments must throw TypeError
+idlharness.any.html	TextDecoder interface: existence and properties of interface object
+idlharness.any.html	TextDecoder interface: existence and properties of interface prototype object
+idlharness.any.html	TextDecoder interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	TextDecoder interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "decode(optional AllowSharedBufferSource, optional TextDecodeOptions)" with the proper type
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "encoding" with the proper type
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "fatal" with the proper type
+idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit property "ignoreBOM" with the proper type
+idlharness.any.html	TextDecoder must be primary interface of new TextDecoder()
+idlharness.any.html	TextDecoderStream includes GenericTransformStream: member names are unique
+idlharness.any.html	TextDecoderStream includes TextDecoderCommon: member names are unique
+idlharness.any.html	TextEncoder includes TextEncoderCommon: member names are unique
+idlharness.any.html	TextEncoder interface object length
+idlharness.any.html	TextEncoder interface object name
+idlharness.any.html	TextEncoder interface: calling encode(optional USVString) on new TextEncoder() with too few arguments must throw TypeError
+idlharness.any.html	TextEncoder interface: calling encodeInto(USVString, Uint8Array) on new TextEncoder() with too few arguments must throw TypeError
+idlharness.any.html	TextEncoder interface: existence and properties of interface object
+idlharness.any.html	TextEncoder interface: existence and properties of interface prototype object
+idlharness.any.html	TextEncoder interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	TextEncoder interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	TextEncoder interface: new TextEncoder() must inherit property "encode(optional USVString)" with the proper type
+idlharness.any.html	TextEncoder interface: new TextEncoder() must inherit property "encodeInto(USVString, Uint8Array)" with the proper type
+idlharness.any.html	TextEncoder interface: new TextEncoder() must inherit property "encoding" with the proper type
+idlharness.any.html	TextEncoder must be primary interface of new TextEncoder()
+idlharness.any.html	TextEncoderStream includes GenericTransformStream: member names are unique
+idlharness.any.html	TextEncoderStream includes TextEncoderCommon: member names are unique
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 replacement-encodings.any.html	csiso2022kr - empty input decodes to empty output.
 replacement-encodings.any.html	hz-gb-2312 - empty input decodes to empty output.
 replacement-encodings.any.html	iso-2022-cn - empty input decodes to empty output.

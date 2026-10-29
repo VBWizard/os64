@@ -2383,7 +2383,7 @@ scripts sit above its links, so the third stop, deep in the body after
 eleven slices, was the first look that found them, and a model of that tree
 cost 77-104 ms in the guest. libpage now exports the walk instead:
 `os64_page_sheets_in` lists the sheets by the same predicate the model uses
-(`sheet_wanted`, one rule for both) in the model's order, without building
+(`os64_page_names_sheet`, one rule for both) in the model's order, without building
 one, and its host suite holds the walk against the model on the HTML
 corpus. It costs 1-15 ms on the whole page, so it runs after every slice as
 well as at every stop and the end. Wikipedia's links went out after the

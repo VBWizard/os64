@@ -7,13 +7,23 @@
 
 #define REPORT_URL "https://example.test/dir/page.html"
 
-/* What options.failed heard: each `task: message`, joined by `|`. */
-static char report_failed[1024];
-static void report_failed_hook(void *opaque, const char *task, const char *message)
+/* What options.failed heard: each `task: message`, joined by `|`; and the
+ * place of each one's stack (os64_dom_stack_frame), `line:col` or `-`,
+ * joined the same way. */
+static char report_failed[1024], report_failed_at[256];
+static void report_failed_hook(void *opaque, const char *task, const char *message, const char *stack)
 {
     check(opaque == NULL, "report: the failed hook's host context is the options'");
+    check(stack != NULL, "report: the failed hook is always given a stack, \"\" for none");
     size_t at = strlen(report_failed);
     snprintf(report_failed + at, sizeof(report_failed) - at, "%s%s: %s", at ? "|" : "", task, message);
+    os64_dom_frame_t frame;
+    at = strlen(report_failed_at);
+    if (stack != NULL && os64_dom_stack_frame(stack, &frame))
+        snprintf(report_failed_at + at, sizeof(report_failed_at) - at, "%s%u:%u", at ? "|" : "", frame.line,
+                 frame.column);
+    else
+        snprintf(report_failed_at + at, sizeof(report_failed_at) - at, "%s-", at ? "|" : "");
 }
 
 static os64_dom_options_t report_options(bool modern)
@@ -609,9 +619,9 @@ static void dom_report_close_cases(void)
  * that counts the rest. */
 static size_t bound_calls;
 static char bound_last[160];
-static void bound_hook(void *opaque, const char *task, const char *message)
+static void bound_hook(void *opaque, const char *task, const char *message, const char *stack)
 {
-    (void)opaque; (void)task;
+    (void)opaque; (void)task; (void)stack;
     bound_calls++;
     snprintf(bound_last, sizeof(bound_last), "%s", message);
 }
@@ -699,8 +709,92 @@ static void dom_report_sweep_cases(void)
         }
 }
 
+/* A stack's first placed frame (os64_dom_stack_frame), and the stacks the
+ * failures the binding writes itself carry: a listener's error, an
+ * unhandled rejection, and one told to the host beside the outcome. */
+static bool frame_is(const char *stack, const char *function, const char *file, uint32_t line, uint32_t column)
+{
+    os64_dom_frame_t frame;
+    if (!os64_dom_stack_frame(stack, &frame)) return file == NULL;
+    bool named = function == NULL ? frame.function == NULL && frame.function_length == 0
+        : frame.function != NULL && frame.function_length == strlen(function) &&
+          !memcmp(frame.function, function, frame.function_length);
+    return file != NULL && named && frame.file_length == strlen(file) && !memcmp(frame.file, file, frame.file_length) &&
+           frame.line == line && frame.column == column;
+}
+
+static void dom_report_frame_cases(void)
+{
+    check(frame_is("    at f (os64-script:3:12:5)\n    at os64-script:3:20:1\n", "f", "os64-script:3", 12, 5),
+          "frame: the first frame, its function, file, line and column");
+    check(frame_is("    at Array.prototype.map (native)\n    at <anonymous> (os64-script:0:4:9)\n", NULL,
+                   "os64-script:0", 4, 9),
+          "frame: a native frame is passed over, and an anonymous function has no name");
+    check(frame_is("    at <eval> (os64-script:0:1:7)\n", NULL, "os64-script:0", 1, 7),
+          "frame: nor has a script's own code");
+    check(frame_is("    at os64-script:2:7:3\n", NULL, "os64-script:2", 7, 3),
+          "frame: a script that did not compile, its file alone");
+    check(frame_is("    at get value (os64-script:1:2:3)\n", "get value", "os64-script:1", 2, 3),
+          "frame: a name with a space in it");
+    check(frame_is("    at <input>:1:1\n    at parse (native)\n    at f (os64-script:3:1:9)\n", "f", "os64-script:3", 1, 9) &&
+          frame_is("    at <body>:1:1\n    at g (os64-script:4:2:5)\n", "g", "os64-script:4", 2, 5),
+          "frame: JSON text names no place: the script that parsed it does");
+    check(frame_is("    at render (<input>:12:5)\n    at draw (os64-script:3:1:900)\n", "render", "<input>", 12, 5),
+          "frame: but a function running in eval'd code is where it failed");
+    check(frame_is("    at f (os64-script:3:12", NULL, NULL, 0, 0) &&
+          frame_is("    at f (os64-script:3:12:5)\n    at g (os64-scr", "f", "os64-script:3", 12, 5),
+          "frame: a line the cap cut short is no frame");
+    check(frame_is("    at f (os64-script:1)\n    at g (native)\n", NULL, NULL, 0, 0) &&
+          frame_is("", NULL, NULL, 0, 0) && frame_is(NULL, NULL, NULL, 0, 0),
+          "frame: none that names a line, an empty stack and none at all");
+
+    os64_dom_options_t options = report_options(true);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    bool prevented;
+    os64_dom_event_t resize = {.type = "resize"};
+    dom_script(&f, "addEventListener('resize',function(){\n  throw new Error('listener')},{once:true})",
+               "frame: a listener that throws");
+    os64_dom_frame_t frame;
+    check(os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome) == OS64_JS_EXCEPTION &&
+          !strcmp(outcome.message, "Error: listener") && os64_dom_stack_frame(outcome.stack_trace, &frame) &&
+          frame.line == 2,
+          "frame: a listener's error carries its stack, whose first frame is the line that threw");
+    report_failed[0] = report_failed_at[0] = '\0';
+    check(report_script(&f, "Promise.reject(new Error('one'));\n\n  Promise.reject(new Error('two'));Promise.reject(3)",
+                        "page.html#inline-2", NULL, &outcome) == OS64_JS_UNHANDLED_REJECTION &&
+          os64_dom_stack_frame(outcome.stack_trace, &frame) && frame.line == 1,
+          "frame: a rejection's outcome carries its reason's stack");
+    check(!strcmp(report_failed, "page.html#inline-2: unhandled rejection: Error: two|"
+                                 "page.html#inline-2: unhandled rejection: 3") &&
+          !strncmp(report_failed_at, "3:", 2) && strstr(report_failed_at, "|-") != NULL,
+          "frame: and one told to the host its own, a primitive none");
+    dom_script(&f, "globalThis.d=document.createElement('div');d.addEventListener('x',()=>{\n\n  throw Error('nested')})",
+               "frame: a nested listener that throws");
+    report_failed[0] = report_failed_at[0] = '\0';
+    check(report_script(&f, "d.dispatchEvent(new Event('x'));throw Error('own')", "page.html#inline-3", NULL,
+                        &outcome) == OS64_JS_EXCEPTION &&
+          !strcmp(report_failed, "page.html#inline-3: Error: nested") && !strncmp(report_failed_at, "3:", 2),
+          "frame: an error the binding reported itself carries its stack, told beside the script's own");
+    bool page = false;
+    check(os64_dom_stack_frame(outcome.stack_trace, &frame) && os64_dom_frame_script(f.binding, &frame, &page) == NULL &&
+          page, "frame: an inline script's frame names the page");
+    check(report_script(&f, "throw new Error('lib')", "lib.js", "https://example.test/js/lib.js", &outcome) ==
+          OS64_JS_EXCEPTION && os64_dom_stack_frame(outcome.stack_trace, &frame) &&
+          os64_dom_frame_script(f.binding, &frame, &page) != NULL &&
+          !strcmp(os64_dom_frame_script(f.binding, &frame, &page), "https://example.test/js/lib.js") && !page,
+          "frame: a src script's frame names its address");
+    check(os64_dom_stack_frame("    at onclick (onclick attribute:1:2)\n", &frame) &&
+          os64_dom_frame_script(f.binding, &frame, &page) == NULL && !page,
+          "frame: and a file that is none of the binding's names, none");
+    report_failed[0] = report_failed_at[0] = '\0';
+    fixture_free(&f);
+}
+
 static void dom_report_cases(void)
 {
+    dom_report_frame_cases();
     dom_report_error_cases();
     dom_report_muting_cases();
     dom_report_nested_cases();

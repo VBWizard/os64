@@ -1,7 +1,13 @@
-// Exact decimal grid arithmetic for Range state. Shortest binary64 strings
-// need at most 17 significant digits and exponents from -324 through 308.
-// Aligning their coefficients, including a midpoint, fits in 80 base-1e9
-// limbs. Storage and division work are bounded independently of input length.
+// Exact decimal grid arithmetic: a range's sanitized value, every type's
+// stepMismatch (p_step_aligned) and stepUp and stepDown (p_step_by).
+// Shortest binary64 strings need at most 17 significant digits and
+// exponents from -324 through 308. Aligning their coefficients takes at
+// most 633 digits, a midpoint one more; a step's count, at most 2^31,
+// adds ten to the stride it multiplies, and a sum one more: all inside 80
+// base-1e9 limbs. A scale of at most 604800000 adds nine digits only to
+// the date and time types, whose values are bounded integers of
+// milliseconds and lie far inside the capacity. Storage and division work
+// are bounded independently of input length.
 #include "internal.h"
 #include "os64/fmt.h"
 
@@ -42,6 +48,8 @@ static int compare(const RDecimal *a, const RDecimal *b)
     return a->negative ? -cmp : cmp;
 }
 
+// By any uint32: a multiplier past the base leaves a carry past it too,
+// spread over the words above.
 static void multiply(RDecimal *a, uint32_t by)
 {
     uint64_t carry = 0;
@@ -50,8 +58,10 @@ static void multiply(RDecimal *a, uint32_t by)
         a->word[i] = (uint32_t)(product % R_BASE);
         carry = product / R_BASE;
     }
-    if (carry != 0)
-        a->word[a->used++] = (uint32_t)carry;
+    while (carry != 0) {
+        a->word[a->used++] = (uint32_t)(carry % R_BASE);
+        carry /= R_BASE;
+    }
     tidy(a);
 }
 
@@ -212,8 +222,9 @@ static bool to_double(const RDecimal *a, double *out)
             at += (size_t)os64_snprintf(text+at,sizeof(text)-at,"%09u",a->word[i]);
     }
     os64_snprintf(text+at,sizeof(text)-at,"e%d",a->exponent);
-    // Grid candidates stay between finite bounds. The midpoint scale was
-    // reserved before arithmetic, so this conversion has a finite result.
+    // False past the largest double, which a step can reach. A range's
+    // grid candidates stay between finite bounds, and its midpoint's scale
+    // was reserved before arithmetic, so the sanitizer's never is.
     return p_number_parse(text,true,out);
 }
 
@@ -268,4 +279,80 @@ const char *p_range_value(PArena *arena, const os64_html_node_t *node,
     if (valid && result==value) {*len=os64_strlen(raw);return raw;}
     char text[32];*len=p_number_spell(result,text);
     return p_arena_copy(arena,text,*len);
+}
+
+bool p_step_aligned(double value, double base, double step, uint32_t scale, bool held)
+{
+    RDecimal chosen=from_double(value), origin=from_double(base), stride=from_double(step);
+    // The scale multiplies in decimal: 16.1 seconds is exactly 16100 ms,
+    // where the binary product is not.
+    multiply(&stride,scale);
+    int exponent=chosen.exponent;
+    if (origin.exponent < exponent) exponent=origin.exponent;
+    if (stride.exponent < exponent) exponent=stride.exponent;
+    align(&chosen,exponent);align(&origin,exponent);align(&stride,exponent);
+    RDecimal rem=range_remainder(subtract(chosen,origin),&stride);
+    if (rem.used == 0 || !held)
+        return rem.used == 0;
+    // A grid point a double cannot hold is held as the double nearest it,
+    // as p_range_value holds the one it chooses: a range's value that is
+    // that double is on the grid. A step finer than the value's precision
+    // is the same case, every grid point near it rounding to it. Only a
+    // value the sanitizer chose is read so: a number a script or a person
+    // gave is judged as given.
+    RDecimal below=subtract(chosen,rem), above=add(below,&stride);
+    double near=0;
+    return (to_double(&below,&near) && near == value) || (to_double(&above,&near) && near == value);
+}
+
+bool p_step_by(double value, bool valid, const PLimits *limits, int64_t count, double *out)
+{
+    RDecimal chosen=from_double(valid ? value : 0), origin=from_double(limits->base),
+             stride=from_double(limits->step), low=from_double(limits->min), high=from_double(limits->max);
+    multiply(&stride,limits->scale);
+    int exponent=chosen.exponent;
+    const RDecimal *all[]={&origin,&stride,&low,&high};
+    for (int i=0;i<4;i++)
+        if (all[i]->exponent < exponent) exponent=all[i]->exponent;
+    align(&chosen,exponent);align(&origin,exponent);align(&stride,exponent);
+    align(&low,exponent);align(&high,exponent);
+    // The grid's top point within the max; none at or above the min is no
+    // value to step to, which a min above the max never has.
+    RDecimal top=high;
+    if (limits->has_max) {
+        RDecimal over=range_remainder(subtract(high,origin),&stride);
+        top=subtract(high,over);
+        if (limits->has_min && compare(&top,&low) < 0)
+            return false;
+    }
+    RDecimal before=chosen;
+    int64_t left=count;
+    RDecimal rem=range_remainder(subtract(chosen,origin),&stride);
+    if (rem.used != 0 && left != 0) {
+        chosen=subtract(chosen,rem);
+        if (left > 0) {
+            chosen=add(chosen,&stride);
+            left--;
+        } else {
+            left++;
+        }
+    }
+    if (left != 0) {
+        RDecimal delta=stride;
+        multiply(&delta,(uint32_t)(left < 0 ? -left : left));
+        delta.negative=left < 0 && delta.used != 0;
+        chosen=add(chosen,&delta);
+    }
+    if (limits->has_min && compare(&chosen,&low) < 0) {
+        RDecimal under=range_remainder(subtract(low,origin),&stride);
+        chosen=subtract(low,under);
+        if (under.used != 0)
+            chosen=add(chosen,&stride);
+    }
+    if (limits->has_max && compare(&chosen,&high) > 0)
+        chosen=top;
+    if (valid && ((count < 0 && compare(&chosen,&before) > 0) || (count > 0 && compare(&chosen,&before) < 0)))
+        return false;
+    // A result past the largest double spells nothing, and nothing changes.
+    return to_double(&chosen,out);
 }

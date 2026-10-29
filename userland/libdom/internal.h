@@ -16,6 +16,14 @@ typedef struct DValue DValue;
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
+/* A link in a chain of nodes on the C stack: the elements being clicked
+ * (window.c's click) and the forms being submitted (window.c's submit,
+ * validity.c's os64_dom_form_validate, and a host's submit event at a form
+ * in os64_dom_dispatch). */
+struct DClicking {
+    const os64_html_node_t *node;
+    const struct DClicking *next;
+};
 typedef struct DScript DScript;
 typedef struct DRequest DRequest;
 typedef struct DClone DClone;
@@ -36,8 +44,53 @@ enum {
     D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_ATTR, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_OPTION, D_PROTO_OPTGROUP,
-    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_TEMPLATE, D_PROTO_COUNT
+    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_TEMPLATE,
+    D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT, D_PROTO_STYLE,
+    /* The element kinds whose members are reflections (0f's P6). */
+    D_PROTO_META, D_PROTO_CANVAS, D_PROTO_UNKNOWN, D_PROTO_TIME, D_PROTO_DIV, D_PROTO_BODY, D_PROTO_OLIST,
+    D_PROTO_HEAD, D_PROTO_DATA, D_PROTO_LI, D_PROTO_AREA, D_PROTO_BASE, D_PROTO_MAP, D_PROTO_MOD, D_PROTO_QUOTE,
+    D_PROTO_TABLE_CELL, D_PROTO_TABLE_COL, D_PROTO_TABLE, D_PROTO_TABLE_ROW, D_PROTO_TABLE_SECTION, D_PROTO_ULIST,
+    D_PROTO_BR, D_PROTO_DLIST, D_PROTO_DIRECTORY, D_PROTO_FONT, D_PROTO_HR, D_PROTO_HEADING, D_PROTO_HTML,
+    D_PROTO_MENU, D_PROTO_PARAGRAPH, D_PROTO_PRE, D_PROTO_SPAN, D_PROTO_TABLE_CAPTION, D_PROTO_TITLE,
+    D_PROTO_COUNT
 };
+/* A set of kinds is a uint64_t, bit `kind` for each (D_KIND): the tables
+ * that put a member on some kinds' prototypes. More kinds than its bits
+ * need another representation. */
+_Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
+#define D_KIND(kind) ((uint64_t)1 << (kind))
+/* The kind of `node`'s wrapper: its prototype's (node.c). */
+int d_node_kind(const os64_html_node_t *node);
+/* A content attribute reflected as an IDL attribute (HTML § 2.6.1), by
+ * one of HTML's rules: a string (null as "null", or as "" for WebIDL's
+ * LegacyNullToEmptyString); a URL, read resolved, and base's href, read
+ * against the document's own URL; a form's action; a boolean; an
+ * enumerated one; and the integers, each with its own default and its own
+ * answer to a value out of range — a non-negative long, a long, the
+ * unsigned kinds, and a span's and a row span's clamps. A row is a member
+ * on the kinds `on` names; d_reflection_get and d_reflection_set
+ * (controls.c) read every rule. */
+enum { K_STRING, K_STRING_NULL_EMPTY, K_URL, K_BASE_URL, K_FORM_ACTION, K_BOOLEAN, K_ENUM, K_LIMITED_LONG,
+       K_LONG, K_UNSIGNED, K_LIMITED_UNSIGNED, K_UNSIGNED_FALLBACK, K_SPAN, K_ROW_SPAN };
+typedef struct {
+    const char *property, *attribute;
+    uint8_t kind;
+    uint64_t on;
+    /* An enumerated attribute's keywords, and what it reads as missing and
+     * as a value that is none of them. */
+    const char *const *keywords;
+    const char *missing, *invalid;
+    /* An integer's default (a long's as an int32_t). */
+    uint32_t number;
+} DReflection;
+JSValue d_reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const DReflection *row);
+/* HTML § 2.3.4.1, the rules for parsing integers: ASCII whitespace, a
+ * sign, digits. False when there is no integer or it is past a long's
+ * range (mixin.c). */
+bool d_parse_integer(const char *text, int32_t *out);
+/* Each setter converts its value before it reads anything of the tree. */
+JSValue d_reflection_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const DReflection *row,
+                         JSValueConst value);
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
  * for the node kinds, CharacterData's for TEXT and COMMENT, Element's for
  * HTMLElement and SVG, HTMLElement's for the HTML kinds; -1 for Node, which
@@ -48,7 +101,8 @@ int d_proto_parent(int kind);
  * binding fires at window for a script's failures (report.c);
  * readystatechange, which the binding fires itself (document.c); message
  * and messageerror, which a posted message's task fires at window
- * (message.c); and online, offline, languagechange, visibilitychange and
+ * (message.c); invalid, which constraint validation fires at a control
+ * (validity.c); and online, offline, languagechange, visibilitychange and
  * prerenderingchange, whose handlers exist though nothing here ever fires
  * them (browsing.c and document.c say why). A script may listen for any
  * other type. The handler
@@ -67,7 +121,7 @@ enum {
     D_EVENT_LANGUAGECHANGE, D_EVENT_ERROR, D_EVENT_UNHANDLEDREJECTION,
     D_EVENT_REJECTIONHANDLED, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
     D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED, D_EVENT_MESSAGE, D_EVENT_MESSAGEERROR,
-    D_EVENT_COUNT
+    D_EVENT_INVALID, D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
@@ -80,12 +134,32 @@ struct DValue {
     DValue *next, *hash_next;
     const os64_html_node_t *node, *target;
     os64_dom_t *dom;
-    DValue *style, *class_list, *rel_list, *dataset, *attributes;
+    DValue *style, *class_list, *rel_list, *for_list, *dataset, *attributes;
     /* An Attr's own entry: its record (attr.c). */
     struct DAttr *attr;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
+    /* A labelable element's labels, made once ([SameObject]). */
+    DQuery *labels;
+    /* A table's rows (`members`) and tBodies, a section's rows, a row's
+     * cells and a map's areas, each made once ([SameObject], tables.c). */
+    DQuery *members, *bodies;
+    /* A document's styleSheets, made once ([SameObject]), and a `style` or
+     * `link`'s CSSStyleSheet, made once (sheets.c). */
+    DQuery *style_sheets;
+    DValue *sheet;
+    /* A control's, fieldset's or output's ValidityState, made once
+     * ([SameObject], validity.c). */
+    DValue *validity;
+    /* A form's RadioNodeLists, one a name, each made once
+     * (d_radio_list), as browsers answer `form.r === form.r`. */
+    DQuery *radio_lists;
+    /* An output's default value override (HTML § 4.10.12): its text when
+     * `output_default_set`, d_alloc'd; else it has none. */
+    char *output_default;
+    size_t output_default_len;
+    bool output_default_set;
     DListener *listeners, *last_listener;
     /* The document the node was made in, copied from or last taken out of,
      * when that is not the window's (implementation.c); NULL is the
@@ -96,8 +170,8 @@ struct DValue {
      * kind of document it is. */
     DValue *implementation;
     uint8_t document_type;
-    /* A DOMTokenList's own entry: over `rel` (a relList), not `class`. */
-    bool rel_tokens;
+    /* A DOMTokenList's own entry: the attribute it is over (D_TOKENS_*). */
+    uint8_t tokens;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -127,6 +201,11 @@ struct DQuery {
     uint64_t version;
     uint64_t state_version;     /* SELECTED_OPTIONS: the control state it was read at */
     bool descendants, elements;
+    /* A NodeList (as_node_list): its entries are reached by index alone,
+     * with no named properties, whatever its kind. */
+    bool node_list;
+    /* The next of its form's RadioNodeLists (DValue.radio_lists). */
+    DQuery *radio_next;
 };
 /* One addEventListener registration, or a target's on<type> handler slot.
  * The callback is a C-held engine value, drained with the registry. A
@@ -200,6 +279,31 @@ struct os64_dom {
     /* HTMLOptionsCollection's prototype (options.c), over a collection's;
      * NULL with the modern switch off. */
     DValue *options_prototype;
+    /* HTMLFormControlsCollection's prototype, over a collection's, and
+     * RadioNodeList's, over a NodeList's (collection.c, 0f's P3b); NULL
+     * with the modern switch off. */
+    DValue *controls_prototype, *radio_prototype;
+    /* A form's names are being listed for its ordinary keys alone
+     * (classic.c's node_names asking the engine). */
+    bool listing_names;
+    /* StyleSheetList's prototype (collection.c) and CSSStyleSheet's
+     * (sheets.c); NULL with the modern switch off. */
+    DValue *sheet_list_prototype, *sheet_prototype;
+    /* Constraint validation (validity.c): ValidityState's prototype; the
+     * RegExp constructor and RegExp.prototype.exec, taken before any page
+     * ran, which judge a control's pattern; the native function a person's
+     * submission's validation is called through (os64_dom_form_validate);
+     * and the control last reported to the person, with its message, which
+     * the host reads after the task (os64_dom_report_message). NULL with
+     * the modern switch off. */
+    DValue *validity_prototype, *regexp, *regexp_exec, *validate;
+    const os64_html_node_t *reported;
+    char reported_message[256];
+    /* Date.prototype.getTime, taken before any page ran: valueAsDate's
+     * setter reads a Date's time value with it, and anything that is no
+     * Date throws its TypeError (controls.c). NULL with the modern switch
+     * off. */
+    DValue *date_get_time;
     /* The window's Selection (selection.c), the one getSelection answers;
      * NULL with the modern switch off. */
     DValue *selection;
@@ -227,7 +331,7 @@ struct os64_dom {
     /* Listener and timer callbacks are the registry's other two lists. */
     size_t listeners_held, timers_held;
     uint32_t listen_counts[D_EVENT_COUNT];
-    uint32_t attribute_mask;
+    uint64_t attribute_mask;
     uint64_t attribute_version;
     bool attribute_scanned;
     unsigned dispatching;
@@ -252,8 +356,9 @@ struct os64_dom {
     size_t timer_count;
     uint32_t timer_id, timer_nesting;
     /* HTML's click-in-progress flags, one link per element.click() on the
-     * C stack (window.c). */
-    const struct DClicking *clicking;
+     * C stack (window.c); and a form's firing-submission-events flags, one
+     * link per form whose validation or submit event is running. */
+    const struct DClicking *clicking, *submitting;
     DScript *scripts[64];
     char *url;
     DNavigation navigation;
@@ -439,6 +544,14 @@ int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at);
 JSValue d_html_error(JSContext *ctx, int64_t status);
 JSValue d_page_error(JSContext *ctx, int64_t status);
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value);
+/* The function `name` of `from`, taken at install, before any page ran,
+ * and kept for the binding's life (the registry owns the reference
+ * d_retain is given): the engine's own, whatever a page later puts there.
+ * NULL, with a TypeError pending, when it is no function. */
+DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const char *name);
+/* Whether `value` is the very object `held` holds (false for NULL): the
+ * brand check of a member of an object the binding makes one of. */
+bool d_same_object(JSValueConst value, const DValue *held);
 int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic);
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
@@ -627,6 +740,9 @@ bool d_attribute_name_valid(const char *text);
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before);
 int64_t d_remove(os64_dom_t *dom, os64_html_node_t *node);
+/* The node after `node` in tree order among `root`'s descendants, NULL
+ * past the last (node.c). */
+const os64_html_node_t *d_walk_next(const os64_html_node_t *root, const os64_html_node_t *node);
 int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                    os64_html_node_t *old);
 int64_t d_replace_content(os64_dom_t *dom, os64_html_node_t *parent,
@@ -654,15 +770,43 @@ enum {
     D_ADJACENT_HTML, D_ADJACENT_ELEMENT, D_ADJACENT_TEXT,
     D_ATTRIBUTE_NAMES, D_TOGGLE_ATTR, D_HAS_ATTRS,
     /* The node row's (mixin.c d_nodes_install, behind the modern switch). */
-    D_ROOT_NODE
+    D_ROOT_NODE, D_NORMALIZE
 };
 /* OPTIONS and SELECTED_OPTIONS are a select's list of options (libpage's
  * walk, os64_page_option_next) and the ones of it that are selected; the
- * second also changes with control state, not only with the tree. */
+ * second also changes with control state, not only with the tree. LABELS
+ * are the labels whose labeled control is the query's owner, walked from
+ * the root of the owner's tree, that root included (d_labels). FIELDSET is
+ * a fieldset's listed elements (d_listed) among its descendants. SHEETS is
+ * a document's style sheets, by libpage's rule (os64_page_names_sheet),
+ * whose entries are each node's CSSStyleSheet (d_sheet), not the node.
+ * The table kinds (0f's P6b, d_table_query): TBODIES a table's tbody
+ * children; TABLE_ROWS a table's rows, its tr children and its sections'
+ * (thead, tbody, tfoot children of it), the thead's first and the tfoot's
+ * last, each group in tree order (HTML § 4.9.1); SECTION_ROWS a section's
+ * tr children; CELLS a row's td and th children; AREAS a map's area
+ * descendants. */
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
-       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS };
+       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS,
+       D_QUERY_FIELDSET, D_QUERY_SHEETS, D_QUERY_TBODIES, D_QUERY_TABLE_ROWS, D_QUERY_SECTION_ROWS,
+       D_QUERY_CELLS, D_QUERY_AREAS };
+/* The live HTMLCollection of a table kind (above) that `owner` has,
+ * made once ([SameObject]) and kept on its entry; NULL with an exception
+ * pending. Its object is the query's entry's value. */
+DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *owner, unsigned kind);
+/* A query's nodes as they are now, refreshed: borrowed until the query's
+ * next refresh. False with an exception pending. */
+bool d_query_items(DQuery *query, JSContext *ctx, const os64_html_node_t *const **nodes, size_t *count);
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
+/* One of HTML § 4.10.2's listed elements, which a fieldset's `elements`
+ * lists, and a form's all but an image button: button, fieldset, input,
+ * object, output, select, textarea. */
+bool d_listed(const os64_html_node_t *node);
+/* A form's controls as its `elements` lists them, where it looks for them
+ * (classic.c): the `index`th, NULL past the last; *count, when not NULL,
+ * how many there are. */
+const os64_html_node_t *d_form_control(const os64_html_node_t *form, uint32_t index, uint32_t *count);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -691,6 +835,9 @@ int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* Location, History and Navigator as interfaces, over the objects the
+ * classic install made (window.c, 0f's P7). */
+int d_window_objects_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The view's records freed, after the engine (os64_dom_free). */
 void d_view_free(os64_dom_t *dom);
 int d_storage_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -792,6 +939,10 @@ JSValue d_rejection_event_new(os64_dom_t *dom, JSContext *ctx, const char *type,
  * message, a primitive's own spelling, and for any other object a fixed
  * phrase. */
 void d_error_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char *out, size_t cap);
+/* An Error's own `stack` into `out` (an outcome's stack_trace), read as a
+ * data property so no page code runs, "" for anything else; true when it
+ * was cut short. */
+bool d_error_stack(JSContext *ctx, JSValueConst error, char *out, size_t cap);
 /* The DOMException's own name and message (exception.c), borrowed; false
  * for a value that is not one. */
 bool d_dom_exception_fields(JSValueConst value, const char **name, const char **message);
@@ -1008,17 +1159,85 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
  * (event.c). LIBDOM.md § P1-Da's rows is the record. ── */
 int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
-/* ── 0f's P1a (INTERFACES_FORMS.md): Node's getRootNode and Text's own
- * members (mixin.c), and Attr's getRootNode beside them (attr.c), whose
- * shadow covers Node.prototype whole. ── */
+/* ── The node row (0f's P1a and after; INTERFACES_FORMS.md): Node's
+ * getRootNode, baseURI and normalize, Text's own members and Element's
+ * names (mixin.c), and Attr's answers to Node's three beside them
+ * (attr.c), whose shadow covers Node.prototype whole. ── */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
-int d_attr_root_install(os64_dom_t *dom, JSContext *ctx);
+int d_attr_nodes_install(os64_dom_t *dom, JSContext *ctx);
+/* Node's `baseURI` for a node of a document (mixin.c): that document's base
+ * URL, about:blank for one with no window. */
+JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* The select's, option's and optgroup's members, HTMLOptionsCollection's
  * prototype and the Option factory (options.c). */
 int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The text controls' selection members and the window's Selection
  * (selection.c, 0f's P2 core). */
 int d_selection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* `len` bytes of UTF-8 in UTF-16 code units, the unit a script counts a
+ * string's length in (selection.c). */
+uint32_t d_utf16_length(const char *text, size_t len);
+/* The controls' reflections and state: input's, textarea's, select's and
+ * button's (controls.c, 0f's P3a). */
+int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* An element's child text content (DOM § 4.4): its Text children's data,
+ * in order (controls.c). */
+JSValue d_child_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+/* The element kinds whose members are reflections, and a title's text and
+ * a body's window-reflecting handlers (elements.c, 0f's P6a). */
+int d_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The tables' tree verbs and collections, and a map's areas (tables.c,
+ * 0f's P6b). */
+int d_tables_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* Node's comparisons, isSameNode, isEqualNode and compareDocumentPosition,
+ * on Node's prototype and Attr's (compare.c). */
+int d_compare_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A label's labeled control (HTML § 4.10.4): the labelable element its
+ * `for` names, when the first element of its tree with that ID is one;
+ * without `for`, its first labelable descendant. NULL for none, or for a
+ * node that is not an HTML label. */
+const os64_html_node_t *d_label_control(const os64_html_node_t *label);
+/* A labelable element's labels (controls.c's `labels`): a live NodeList,
+ * made once, of the labels in its tree whose labeled control it is
+ * (collection.c). */
+JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *control);
+/* A form's controls named `name` (collection.c): with the modern switch
+ * on, its live RadioNodeList of that name, made once; with it off, a new
+ * collection of them. */
+JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, const char *name);
+/* HTMLFormControlsCollection and RadioNodeList (collection.c, 0f's P3b). */
+int d_form_collections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A document's styleSheets (collection.c): its live StyleSheetList, made
+ * once. */
+JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document);
+/* StyleSheetList's prototype and interface (collection.c). */
+int d_sheet_list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A `style` or `link`'s CSSStyleSheet (sheets.c), made once, whether or
+ * not the node names a sheet now. */
+JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+/* document.styleSheets, StyleSheet, CSSStyleSheet and LinkStyle's `sheet`
+ * (sheets.c): one row of the Modern Web table. */
+int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A form's constraint validation (HTML § 4.10.20.2, validity.c): every
+ * invalid control it owns gets an `invalid` event, and when `report` the
+ * first whose event nobody cancelled is reported to the person. 1 valid,
+ * 0 invalid, -1 with an exception pending. With the modern switch off a
+ * form is valid here, and the model's own judge (libpage) is the only one. */
+int d_form_validate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, bool report);
+/* ValidityState, the controls' constraint validation members and the
+ * form's, and oninvalid (validity.c): one row of the Modern Web table. */
+int d_validity_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The form's, label's, fieldset's, legend's and output's own members
+ * (forms.c, 0f's P3b). */
+int d_forms_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* What a DOMTokenList is over: `class` (a classList), `rel` (a relList),
+ * `for` (an output's htmlFor). */
+enum { D_TOKENS_CLASS, D_TOKENS_REL, D_TOKENS_FOR };
+/* An output's htmlFor (mixin.c): a DOMTokenList over `for`, made once. */
+JSValue d_for_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+/* A form's relList and rel (mixin.c): installed on its prototype as a
+ * link's are. */
+int d_form_rel_install(os64_dom_t *dom, JSContext *ctx);
 /* HTMLScriptElement.supports (importmap.c). */
 int d_import_map_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* HTMLOptionsCollection's indexed setter (HTML § 2.6.2.2), for the
@@ -1119,6 +1338,22 @@ int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *na
                    const char *value, size_t length, bool remove);
 /* Whether a value is an Attr of this binding. */
 bool d_is_attr(os64_dom_t *dom, JSValueConst value);
+/* An Attr as Node's comparisons read it: the entry that is its identity,
+ * its element (NULL while detached), its qualified name, namespace (NULL:
+ * none) and local name, and its value, `length` bytes. Read at the call,
+ * so good until page code runs. */
+typedef struct {
+    const DValue *entry;
+    const os64_html_node_t *element;
+    const char *name, *ns, *local, *value;
+    size_t length;
+} DAttrView;
+/* 1 with *view filled when `value` is an Attr, 0 when it is not, -1 with
+ * the exception thrown. */
+int d_attr_view(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DAttrView *view);
+/* A name's local part (DOM § 4.9.2): after the first colon of a name in a
+ * namespace; the whole name of one in none, colons and all. */
+const char *d_attr_local(const char *name, const char *ns);
 /* Element.attributes, the Attr members and the attribute-node methods of
  * Document and Element: the classic surface, on every page. */
 int d_attr_classic(os64_dom_t *dom, JSContext *ctx);

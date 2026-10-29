@@ -148,6 +148,23 @@ DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value)
     return entry;
 }
 
+bool d_same_object(JSValueConst value, const DValue *held)
+{
+    return held != NULL && JS_IsObject(value) && JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(held->value);
+}
+
+DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const char *name)
+{
+    JSValue value = JS_GetPropertyStr(ctx, from, name);
+    if (JS_IsException(value)) return NULL;
+    if (!JS_IsFunction(ctx, value)) {
+        JS_FreeValue(ctx, value);
+        JS_ThrowTypeError(ctx, "Missing intrinsic %s", name);
+        return NULL;
+    }
+    return d_retain(dom, ctx, value);
+}
+
 int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic)
 {
@@ -486,6 +503,7 @@ void os64_dom_free(os64_dom_t *dom)
         DValue *next = entry->next;
         d_event_free(dom, entry);
         d_attr_free(dom, entry);
+        d_free(dom, entry->output_default);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);
         if (entry->target != NULL)

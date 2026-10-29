@@ -1,0 +1,232 @@
+# WPT's html/semantics/tabular-data in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/tabular-data --update
+# rewrites [passing].
+[required]
+# 0f's P6 (MODERN_WEB.md § 0f's P6b, as built): added whole by P6b, the
+# tables' tree verbs and collections over P6a's element kinds. Each fails
+# with the switch off; the passes not listed pass either way.
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells whose parent is a tr with non td/th sibling, cellIndex should skip those non td/th siblings.
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells whose parent is a tr, cellIndex should be the index.
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells whose parent is not a tr, cellIndex should be -1.
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells without a parent, cellIndex should be -1.
+attributes-common-to-td-and-th-elements/cellIndex.html	cellIndex should exist.
+the-caption-element/caption_001.html	caption IDL attribute is null
+the-caption-element/caption_001.html	caption of the third table element should be null
+the-caption-element/caption_001.html	dynamically removing caption on a table
+the-caption-element/caption_001.html	first caption element child of the first table element
+the-caption-element/caption_001.html	setting caption on a table
+the-table-element/createTBody.html	A tbody and a tfoot child node
+the-table-element/createTBody.html	A tbody and a thead child node
+the-table-element/createTBody.html	A tbody node inside a tfoot child node
+the-table-element/createTBody.html	A tbody node inside a tfoot child node after a tbody child node
+the-table-element/createTBody.html	A tbody node inside a thead child node
+the-table-element/createTBody.html	A tbody node inside a thead child node after a tbody child node
+the-table-element/createTBody.html	A tfoot and a tbody child node
+the-table-element/createTBody.html	A thead and a tbody child node
+the-table-element/createTBody.html	No child nodes
+the-table-element/createTBody.html	One tbody child node
+the-table-element/createTBody.html	Two nested tbody child nodes
+the-table-element/createTBody.html	Two tbody child nodes
+the-table-element/createTBody.html	Two tbody child nodes and a div
+the-table-element/delete-caption.html	deleteCaption()
+the-table-element/delete-caption.html	deleteCaption() delete only caption on table
+the-table-element/delete-caption.html	deleteCaption() does not delete captions in descendent tables
+the-table-element/delete-caption.html	deleteCaption() does not throw any exceptions when called on a table without a caption
+the-table-element/delete-caption.html	deleteCaption() handles captions from different namespaces
+the-table-element/delete-caption.html	deleteCaption() returns undefined
+the-table-element/insertRow-method-01.html	insertRow(): INDEX_SIZE_ERR
+the-table-element/insertRow-method-02.html	insertRow should insert a tbody element
+the-table-element/insertRow-method-02.html	insertRow should insert a tr element
+the-table-element/insertRow-method-02.html	insertRow(): Empty table
+the-table-element/insertRow-method-02.html	table should start out empty
+the-table-element/insertRow-method-03.html	insertRow should insert a tr element before the second row
+the-table-element/insertRow-method-03.html	table should start out with two rows
+the-table-element/insertRow-tfoot-before-tbody.html	insertRow(-1) should put the element in the tfoot, if it exists (i.e. the parent of the last tr in rows)
+the-table-element/parentless-props.html	td.cellIndex should return -1 when the td is not inside a tr
+the-table-element/parentless-props.html	tr.sectionRowIndex should return -1 when the tr is not inside a parent
+the-table-element/remove-row.html	check normal deleteRow
+the-table-element/remove-row.html	check normal deleteRow bis
+the-table-element/remove-row.html	deleteRow function invalid argument
+the-table-element/remove-row.html	deleteRow function invalid argument bis
+the-table-element/remove-row.html	deleteRow(-1) with no rows
+the-table-element/remove-row.html	deleteRow(0) with no rows
+the-table-element/tFoot.html	tFoot tests
+the-table-element/tHead.html	tHead tests
+the-table-element/tHead.html	tHead tests 1
+the-table-element/table-insertRow.html	insertRow should insert into a tbody, not into a tfoot, if table.rows is empty
+the-table-element/table-insertRow.html	insertRow should insert into a tbody, not into a thead, if table.rows is empty
+the-table-element/table-rows-live-move.html	table.rows should reflect row moves immediately
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(-1)
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(-1) with no rows
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(-2)
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(0)
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(0) with no rows
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(rows.length)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow()
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(-1)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(-2)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(0)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(rows.length + 1)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(rows.length)
+the-tbody-element/rows.html	'tbody' element, 'rows' attribute
+the-tfoot-element/rows.html	'tfoot' element, 'rows' attribute
+the-thead-element/rows.html	'thead' element, 'rows' attribute
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(-1)
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(-1) with no cells
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(-2)
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(0)
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(0) with no cells
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(cells.length)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell()
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(-1)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(-2)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(0)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(cells.length + 1)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(cells.length)
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 1
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 2
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 3
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 4
+the-tr-element/sectionRowIndex.html	Row in script-created div in table
+the-tr-element/sectionRowIndex.html	Row in script-created nested table
+the-tr-element/sectionRowIndex.html	Row in script-created table
+the-tr-element/sectionRowIndex.html	Row in script-created tbody in nested table
+the-tr-element/sectionRowIndex.html	Row in script-created tbody in table
+the-tr-element/sectionRowIndex.html	Row in script-created td in tr in tbody in table
+the-tr-element/sectionRowIndex.html	Row in script-created tfoot in nested table
+the-tr-element/sectionRowIndex.html	Row in script-created tfoot in table
+the-tr-element/sectionRowIndex.html	Row in script-created thead in nested table
+the-tr-element/sectionRowIndex.html	Row in script-created thead in table
+the-tr-element/sectionRowIndex.html	Row in script-created tr in tbody in table
+the-tr-element/sectionRowIndex.html	Other row in implicit tbody in HTML
+the-tr-element/sectionRowIndex.html	Row in explicit tbody in HTML
+the-tr-element/sectionRowIndex.html	Row in explicit tbody in nested table in HTML
+the-tr-element/sectionRowIndex.html	Row in implicit tbody in HTML
+the-tr-element/sectionRowIndex.html	Row in implicit tbody in nested table in HTML
+the-tr-element/sectionRowIndex.html	Row in tfoot in HTML
+the-tr-element/sectionRowIndex.html	Row in thead in HTML
+the-tr-element/sectionRowIndex.html	Row in thead in nested table in HTML
+[excluded]
+[passing]
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells whose parent is a tr with non td/th sibling, cellIndex should skip those non td/th siblings.
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells whose parent is a tr, cellIndex should be the index.
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells whose parent is not a tr, cellIndex should be -1.
+attributes-common-to-td-and-th-elements/cellIndex.html	For cells without a parent, cellIndex should be -1.
+attributes-common-to-td-and-th-elements/cellIndex.html	cellIndex should exist.
+historical.html	table.onsort should not be supported
+historical.html	table.sortable should not be supported
+historical.html	table.stopSorting should not be supported
+historical.html	th.sort should not be supported
+historical.html	th.sorted should not be supported
+processing-model-1/col-span-limits.html	colspan must be clamped to [1, 1000] when parsing attributes
+processing-model-1/col-span-limits.html	colspan must be clamped to [1, 1000] when set via script
+processing-model-1/col-span-limits.html	column span must be clamped to [1, 1000] when set via script
+processing-model-1/rowspan-0-quirks.html	clientHeight
+processing-model-1/rowspan-0-quirks.html	rowSpan
+processing-model-1/rowspan-0.html	clientHeight
+processing-model-1/rowspan-0.html	rowSpan
+processing-model-1/span-limits.html	colspan of 1000 must work
+processing-model-1/span-limits.html	colspan of 1001 must be treated as 1000
+processing-model-1/span-limits.html	rowspan must be clamped to [0, 65534] when parsing attributes
+processing-model-1/span-limits.html	rowspan must be clamped to [0, 65534] when set via script
+the-caption-element/caption_001.html	caption IDL attribute is null
+the-caption-element/caption_001.html	caption of the third table element should be null
+the-caption-element/caption_001.html	dynamically removing caption on a table
+the-caption-element/caption_001.html	first caption element child of the first table element
+the-caption-element/caption_001.html	setting caption on a table
+the-table-element/createTBody.html	A tbody and a tfoot child node
+the-table-element/createTBody.html	A tbody and a thead child node
+the-table-element/createTBody.html	A tbody node inside a tfoot child node
+the-table-element/createTBody.html	A tbody node inside a tfoot child node after a tbody child node
+the-table-element/createTBody.html	A tbody node inside a thead child node
+the-table-element/createTBody.html	A tbody node inside a thead child node after a tbody child node
+the-table-element/createTBody.html	A tfoot and a tbody child node
+the-table-element/createTBody.html	A thead and a tbody child node
+the-table-element/createTBody.html	No child nodes
+the-table-element/createTBody.html	One tbody child node
+the-table-element/createTBody.html	Two nested tbody child nodes
+the-table-element/createTBody.html	Two tbody child nodes
+the-table-element/createTBody.html	Two tbody child nodes and a div
+the-table-element/delete-caption.html	deleteCaption()
+the-table-element/delete-caption.html	deleteCaption() delete only caption on table
+the-table-element/delete-caption.html	deleteCaption() does not delete captions in descendent tables
+the-table-element/delete-caption.html	deleteCaption() does not throw any exceptions when called on a table without a caption
+the-table-element/delete-caption.html	deleteCaption() handles captions from different namespaces
+the-table-element/delete-caption.html	deleteCaption() returns undefined
+the-table-element/insertRow-method-01.html	insertRow(): INDEX_SIZE_ERR
+the-table-element/insertRow-method-02.html	insertRow should insert a tbody element
+the-table-element/insertRow-method-02.html	insertRow should insert a tr element
+the-table-element/insertRow-method-02.html	insertRow(): Empty table
+the-table-element/insertRow-method-02.html	table should start out empty
+the-table-element/insertRow-method-03.html	insertRow should insert a tr element before the second row
+the-table-element/insertRow-method-03.html	insertRow(): non-empty table
+the-table-element/insertRow-method-03.html	table should start out with two rows
+the-table-element/insertRow-tfoot-before-tbody.html	insertRow(-1) should put the element in the tfoot, if it exists (i.e. the parent of the last tr in rows)
+the-table-element/parentless-props.html	td.cellIndex should return -1 when the td is not inside a tr
+the-table-element/parentless-props.html	td.headers should return an empty DOMTokenList when the td is not inside a tr
+the-table-element/parentless-props.html	tr.sectionRowIndex should return -1 when the tr is not inside a parent
+the-table-element/remove-row.html	check normal deleteRow
+the-table-element/remove-row.html	check normal deleteRow bis
+the-table-element/remove-row.html	deleteRow function invalid argument
+the-table-element/remove-row.html	deleteRow function invalid argument bis
+the-table-element/remove-row.html	deleteRow(-1) with no rows
+the-table-element/remove-row.html	deleteRow(0) with no rows
+the-table-element/tFoot.html	tFoot tests
+the-table-element/tHead.html	tHead tests
+the-table-element/tHead.html	tHead tests 1
+the-table-element/table-insertRow.html	insertRow should insert into a tbody, not into a tfoot, if table.rows is empty
+the-table-element/table-insertRow.html	insertRow should insert into a tbody, not into a thead, if table.rows is empty
+the-table-element/table-rows-live-move.html	table.rows should reflect row moves immediately
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(-1)
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(-1) with no rows
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(-2)
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(0)
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(0) with no rows
+the-tbody-element/deleteRow.html	HTMLTableSectionElement deleteRow(rows.length)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow()
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(-1)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(-2)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(0)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(rows.length + 1)
+the-tbody-element/insertRow.html	HTMLTableSectionElement insertRow(rows.length)
+the-tbody-element/rows.html	'tbody' element, 'rows' attribute
+the-tfoot-element/rows.html	'tfoot' element, 'rows' attribute
+the-thead-element/rows.html	'thead' element, 'rows' attribute
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(-1)
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(-1) with no cells
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(-2)
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(0)
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(0) with no cells
+the-tr-element/deleteCell.html	HTMLTableRowElement deleteCell(cells.length)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell()
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(-1)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(-2)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(0)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(cells.length + 1)
+the-tr-element/insertCell.html	HTMLTableRowElement insertCell(cells.length)
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 1
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 2
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 3
+the-tr-element/rowIndex.html	HTMLTableRowElement.rowIndex 4
+the-tr-element/sectionRowIndex.html	Other row in implicit tbody in HTML
+the-tr-element/sectionRowIndex.html	Row in explicit tbody in HTML
+the-tr-element/sectionRowIndex.html	Row in explicit tbody in nested table in HTML
+the-tr-element/sectionRowIndex.html	Row in implicit tbody in HTML
+the-tr-element/sectionRowIndex.html	Row in implicit tbody in nested table in HTML
+the-tr-element/sectionRowIndex.html	Row in script-created div in table
+the-tr-element/sectionRowIndex.html	Row in script-created nested table
+the-tr-element/sectionRowIndex.html	Row in script-created table
+the-tr-element/sectionRowIndex.html	Row in script-created tbody in nested table
+the-tr-element/sectionRowIndex.html	Row in script-created tbody in table
+the-tr-element/sectionRowIndex.html	Row in script-created td in tr in tbody in table
+the-tr-element/sectionRowIndex.html	Row in script-created tfoot in nested table
+the-tr-element/sectionRowIndex.html	Row in script-created tfoot in table
+the-tr-element/sectionRowIndex.html	Row in script-created thead in nested table
+the-tr-element/sectionRowIndex.html	Row in script-created thead in table
+the-tr-element/sectionRowIndex.html	Row in script-created tr in tbody in table
+the-tr-element/sectionRowIndex.html	Row in tfoot in HTML
+the-tr-element/sectionRowIndex.html	Row in thead in HTML
+the-tr-element/sectionRowIndex.html	Row in thead in nested table in HTML

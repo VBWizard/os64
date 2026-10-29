@@ -29,6 +29,15 @@ static inline os64_font_role_t ui_role(const os64_ui_widget_t *w, os64_font_role
 {
 	return w && w->app_face ? OS64_UI_FONT_APP : usual;
 }
+// Whether a widget holds the point: inside its bounds, and inside its clip
+// when it is `clipped`. What is clipped away is not there to be pressed, to
+// be released over or to be chosen from.
+static inline bool ui_widget_holds(const os64_ui_widget_t *w, int32_t x, int32_t y)
+{
+	os64_gui_rect_t r = w->bounds, c = w->clip;
+	return x >= r.x && y >= r.y && (int64_t)x < (int64_t)r.x + r.w && (int64_t)y < (int64_t)r.y + r.h &&
+	       (!w->clipped || (x >= c.x && y >= c.y && (int64_t)x < (int64_t)c.x + c.w && (int64_t)y < (int64_t)c.y + c.h));
+}
 // os64_ui_control_min_height for a control drawn in `role`.
 __attribute__((visibility("hidden")))
 int32_t ui_control_min_height(os64_ui_t *ui, os64_font_role_t role);

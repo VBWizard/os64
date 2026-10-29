@@ -176,7 +176,7 @@ static int pointer_index(const os64_ui_listbox_t *list, const os64_ui_theme_t *t
                           int x, int y)
 {
     os64_gui_rect_t r = list->w.bounds;
-    if (x < r.x + 2 || x >= r.x + r.w - 2 || y < r.y + 2) return -1;
+    if (!ui_widget_holds(&list->w, x, y) || x < r.x + 2 || x >= r.x + r.w - 2 || y < r.y + 2) return -1;
     int row = (y - r.y - 2) / row_height(list, t);
     size_t index = list->top + (size_t)row;
     return row < os64_ui_listbox_rows(list, t) && index < list->count ? (int)index : -1;

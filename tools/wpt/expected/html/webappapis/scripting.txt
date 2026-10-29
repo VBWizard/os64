@@ -91,11 +91,576 @@ events/messageevent-constructor.https.html	MessageEvent constructor called as no
 events/messageevent-constructor.https.html	Passing null for ports member
 events/messageevent-constructor.https.html	initMessageEvent operation default parameter values
 events/messageevent-constructor.https.html	ports attribute should be a FrozenArray
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+events/event-handler-all-global-events.html	onblur: dispatching an Event at a <meta> element must trigger element.onblur
+events/event-handler-all-global-events.html	onblur: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onblur: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onblur: the default value must be null
+events/event-handler-all-global-events.html	onchange: dispatching an Event at a <meta> element must trigger element.onchange
+events/event-handler-all-global-events.html	onchange: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onchange: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onchange: the default value must be null
+events/event-handler-all-global-events.html	onclick: dispatching an Event at a <meta> element must trigger element.onclick
+events/event-handler-all-global-events.html	onclick: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onclick: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onclick: the default value must be null
+events/event-handler-all-global-events.html	onfocus: dispatching an Event at a <meta> element must trigger element.onfocus
+events/event-handler-all-global-events.html	onfocus: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onfocus: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onfocus: the default value must be null
+events/event-handler-all-global-events.html	oninput: dispatching an Event at a <meta> element must trigger element.oninput
+events/event-handler-all-global-events.html	oninput: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	oninput: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	oninput: the default value must be null
+events/event-handler-all-global-events.html	oninvalid: dispatching an Event at a <meta> element must trigger element.oninvalid
+events/event-handler-all-global-events.html	oninvalid: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	oninvalid: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	oninvalid: the default value must be null
+events/event-handler-all-global-events.html	onkeydown: dispatching an Event at a <meta> element must trigger element.onkeydown
+events/event-handler-all-global-events.html	onkeydown: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onkeydown: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onkeydown: the default value must be null
+events/event-handler-all-global-events.html	onkeypress: dispatching an Event at a <meta> element must trigger element.onkeypress
+events/event-handler-all-global-events.html	onkeypress: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onkeypress: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onkeypress: the default value must be null
+events/event-handler-all-global-events.html	onkeyup: dispatching an Event at a <meta> element must trigger element.onkeyup
+events/event-handler-all-global-events.html	onkeyup: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onkeyup: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onkeyup: the default value must be null
+events/event-handler-all-global-events.html	onload: dispatching an Event at a <meta> element must trigger element.onload
+events/event-handler-all-global-events.html	onload: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onload: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onload: the default value must be null
+events/event-handler-all-global-events.html	onmousedown: dispatching an Event at a <meta> element must trigger element.onmousedown
+events/event-handler-all-global-events.html	onmousedown: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmousedown: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmousedown: the default value must be null
+events/event-handler-all-global-events.html	onmousemove: dispatching an Event at a <meta> element must trigger element.onmousemove
+events/event-handler-all-global-events.html	onmousemove: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmousemove: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmousemove: the default value must be null
+events/event-handler-all-global-events.html	onmouseout: dispatching an Event at a <meta> element must trigger element.onmouseout
+events/event-handler-all-global-events.html	onmouseout: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmouseout: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmouseout: the default value must be null
+events/event-handler-all-global-events.html	onmouseover: dispatching an Event at a <meta> element must trigger element.onmouseover
+events/event-handler-all-global-events.html	onmouseover: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmouseover: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmouseover: the default value must be null
+events/event-handler-all-global-events.html	onmouseup: dispatching an Event at a <meta> element must trigger element.onmouseup
+events/event-handler-all-global-events.html	onmouseup: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmouseup: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmouseup: the default value must be null
+events/event-handler-all-global-events.html	onreset: dispatching an Event at a <meta> element must trigger element.onreset
+events/event-handler-all-global-events.html	onreset: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onreset: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onreset: the default value must be null
+events/event-handler-all-global-events.html	onresize: dispatching an Event at a <meta> element must trigger element.onresize
+events/event-handler-all-global-events.html	onresize: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onresize: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onresize: the default value must be null
+events/event-handler-all-global-events.html	onscroll: dispatching an Event at a <meta> element must trigger element.onscroll
+events/event-handler-all-global-events.html	onscroll: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onscroll: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onscroll: the default value must be null
+events/event-handler-all-global-events.html	onsubmit: dispatching an Event at a <meta> element must trigger element.onsubmit
+events/event-handler-all-global-events.html	onsubmit: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onsubmit: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onsubmit: the default value must be null
+events/event-handler-attributes-body-alt.html	not shadowed change (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed click (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed input (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed invalid (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed keydown (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed keypress (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed keyup (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mousedown (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mousemove (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mouseout (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mouseover (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mouseup (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed reset (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed submit (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed blur (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed blur removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed focus (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed focus removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed hashchange (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed hashchange removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed languagechange (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed languagechange removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed load (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed load removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed message (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed message removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed messageerror (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed messageerror removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed offline (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed offline removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed online (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed online removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed popstate (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed popstate removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed rejectionhandled (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed rejectionhandled removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed resize (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed resize removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed scroll (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed scroll removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed unhandledrejection (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed unhandledrejection removal (document.createElement("body"))
+events/event-handler-attributes-body-window.html	not shadowed change (document.body)
+events/event-handler-attributes-body-window.html	not shadowed click (document.body)
+events/event-handler-attributes-body-window.html	not shadowed input (document.body)
+events/event-handler-attributes-body-window.html	not shadowed invalid (document.body)
+events/event-handler-attributes-body-window.html	not shadowed keydown (document.body)
+events/event-handler-attributes-body-window.html	not shadowed keypress (document.body)
+events/event-handler-attributes-body-window.html	not shadowed keyup (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mousedown (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mousemove (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mouseout (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mouseover (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mouseup (document.body)
+events/event-handler-attributes-body-window.html	not shadowed reset (document.body)
+events/event-handler-attributes-body-window.html	not shadowed submit (document.body)
+events/event-handler-attributes-body-window.html	shadowed blur (document.body)
+events/event-handler-attributes-body-window.html	shadowed blur on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed blur removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed focus (document.body)
+events/event-handler-attributes-body-window.html	shadowed focus on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed focus removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed hashchange (document.body)
+events/event-handler-attributes-body-window.html	shadowed hashchange on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed hashchange removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed languagechange (document.body)
+events/event-handler-attributes-body-window.html	shadowed languagechange on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed languagechange removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed load (document.body)
+events/event-handler-attributes-body-window.html	shadowed load on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed load removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed message (document.body)
+events/event-handler-attributes-body-window.html	shadowed message on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed message removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed messageerror (document.body)
+events/event-handler-attributes-body-window.html	shadowed messageerror on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed messageerror removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed offline (document.body)
+events/event-handler-attributes-body-window.html	shadowed offline on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed offline removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed online (document.body)
+events/event-handler-attributes-body-window.html	shadowed online on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed online removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed popstate (document.body)
+events/event-handler-attributes-body-window.html	shadowed popstate on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed popstate removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed rejectionhandled (document.body)
+events/event-handler-attributes-body-window.html	shadowed rejectionhandled on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed rejectionhandled removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed resize (document.body)
+events/event-handler-attributes-body-window.html	shadowed resize on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed resize removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed scroll (document.body)
+events/event-handler-attributes-body-window.html	shadowed scroll on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed scroll removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed unhandledrejection (document.body)
+events/event-handler-attributes-body-window.html	shadowed unhandledrejection removal (document.body)
+events/event-handler-attributes-window.html	not shadowed change (window)
+events/event-handler-attributes-window.html	not shadowed click (window)
+events/event-handler-attributes-window.html	not shadowed input (window)
+events/event-handler-attributes-window.html	not shadowed invalid (window)
+events/event-handler-attributes-window.html	not shadowed keydown (window)
+events/event-handler-attributes-window.html	not shadowed keypress (window)
+events/event-handler-attributes-window.html	not shadowed keyup (window)
+events/event-handler-attributes-window.html	not shadowed mousedown (window)
+events/event-handler-attributes-window.html	not shadowed mousemove (window)
+events/event-handler-attributes-window.html	not shadowed mouseout (window)
+events/event-handler-attributes-window.html	not shadowed mouseover (window)
+events/event-handler-attributes-window.html	not shadowed mouseup (window)
+events/event-handler-attributes-window.html	not shadowed reset (window)
+events/event-handler-attributes-window.html	not shadowed submit (window)
+events/event-handler-attributes-window.html	shadowed blur (window)
+events/event-handler-attributes-window.html	shadowed blur removal (window)
+events/event-handler-attributes-window.html	shadowed focus (window)
+events/event-handler-attributes-window.html	shadowed focus removal (window)
+events/event-handler-attributes-window.html	shadowed hashchange (window)
+events/event-handler-attributes-window.html	shadowed hashchange removal (window)
+events/event-handler-attributes-window.html	shadowed languagechange (window)
+events/event-handler-attributes-window.html	shadowed languagechange removal (window)
+events/event-handler-attributes-window.html	shadowed load (window)
+events/event-handler-attributes-window.html	shadowed load removal (window)
+events/event-handler-attributes-window.html	shadowed message (window)
+events/event-handler-attributes-window.html	shadowed message removal (window)
+events/event-handler-attributes-window.html	shadowed messageerror (window)
+events/event-handler-attributes-window.html	shadowed messageerror removal (window)
+events/event-handler-attributes-window.html	shadowed offline (window)
+events/event-handler-attributes-window.html	shadowed offline removal (window)
+events/event-handler-attributes-window.html	shadowed online (window)
+events/event-handler-attributes-window.html	shadowed online removal (window)
+events/event-handler-attributes-window.html	shadowed popstate (window)
+events/event-handler-attributes-window.html	shadowed popstate removal (window)
+events/event-handler-attributes-window.html	shadowed rejectionhandled (window)
+events/event-handler-attributes-window.html	shadowed rejectionhandled removal (window)
+events/event-handler-attributes-window.html	shadowed resize (window)
+events/event-handler-attributes-window.html	shadowed resize removal (window)
+events/event-handler-attributes-window.html	shadowed scroll (window)
+events/event-handler-attributes-window.html	shadowed scroll removal (window)
+events/event-handler-attributes-window.html	shadowed unhandledrejection (window)
+events/event-handler-attributes-window.html	shadowed unhandledrejection removal (window)
+events/event-handler-attributes-windowless-body.html	Ignore setting of blur window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of blur window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of focus window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of focus window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of hashchange window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of languagechange window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of load window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of load window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of message window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of messageerror window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of offline window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of online window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of popstate window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of rejectionhandled window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of resize window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of resize window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of scroll window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of scroll window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of unhandledrejection window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the blur event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the blur event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the focus event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the focus event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the hashchange event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the languagechange event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the load event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the load event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the message event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the messageerror event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the offline event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the online event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the popstate event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the rejectionhandled event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the resize event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the resize event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the scroll event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the scroll event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the unhandledrejection event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	change is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	change is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	click is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	click is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	input is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	input is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	invalid is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	invalid is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	keydown is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	keydown is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	keypress is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	keypress is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	keyup is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	keyup is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mousedown is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mousedown is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mousemove is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mousemove is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mouseout is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mouseout is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mouseover is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mouseover is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mouseup is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mouseup is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	reset is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	reset is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless frameset
 [excluded]
 [passing]
 event-loops/microtask_after_script.html	Microtask immediately after script
 event-loops/task_microtask_ordering.html	Basic task and microtask ordering
 events/body-onload.html	body.onload should set the window.onload handler
+events/event-handler-all-global-events.html	onblur: dispatching an Event at a <meta> element must trigger element.onblur
+events/event-handler-all-global-events.html	onblur: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onblur: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onblur: the default value must be null
+events/event-handler-all-global-events.html	onchange: dispatching an Event at a <meta> element must trigger element.onchange
+events/event-handler-all-global-events.html	onchange: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onchange: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onchange: the default value must be null
+events/event-handler-all-global-events.html	onclick: dispatching an Event at a <meta> element must trigger element.onclick
+events/event-handler-all-global-events.html	onclick: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onclick: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onclick: the default value must be null
+events/event-handler-all-global-events.html	onfocus: dispatching an Event at a <meta> element must trigger element.onfocus
+events/event-handler-all-global-events.html	onfocus: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onfocus: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onfocus: the default value must be null
+events/event-handler-all-global-events.html	oninput: dispatching an Event at a <meta> element must trigger element.oninput
+events/event-handler-all-global-events.html	oninput: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	oninput: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	oninput: the default value must be null
+events/event-handler-all-global-events.html	oninvalid: dispatching an Event at a <meta> element must trigger element.oninvalid
+events/event-handler-all-global-events.html	oninvalid: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	oninvalid: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	oninvalid: the default value must be null
+events/event-handler-all-global-events.html	onkeydown: dispatching an Event at a <meta> element must trigger element.onkeydown
+events/event-handler-all-global-events.html	onkeydown: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onkeydown: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onkeydown: the default value must be null
+events/event-handler-all-global-events.html	onkeypress: dispatching an Event at a <meta> element must trigger element.onkeypress
+events/event-handler-all-global-events.html	onkeypress: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onkeypress: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onkeypress: the default value must be null
+events/event-handler-all-global-events.html	onkeyup: dispatching an Event at a <meta> element must trigger element.onkeyup
+events/event-handler-all-global-events.html	onkeyup: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onkeyup: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onkeyup: the default value must be null
+events/event-handler-all-global-events.html	onload: dispatching an Event at a <meta> element must trigger element.onload
+events/event-handler-all-global-events.html	onload: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onload: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onload: the default value must be null
+events/event-handler-all-global-events.html	onmousedown: dispatching an Event at a <meta> element must trigger element.onmousedown
+events/event-handler-all-global-events.html	onmousedown: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmousedown: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmousedown: the default value must be null
+events/event-handler-all-global-events.html	onmousemove: dispatching an Event at a <meta> element must trigger element.onmousemove
+events/event-handler-all-global-events.html	onmousemove: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmousemove: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmousemove: the default value must be null
+events/event-handler-all-global-events.html	onmouseout: dispatching an Event at a <meta> element must trigger element.onmouseout
+events/event-handler-all-global-events.html	onmouseout: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmouseout: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmouseout: the default value must be null
+events/event-handler-all-global-events.html	onmouseover: dispatching an Event at a <meta> element must trigger element.onmouseover
+events/event-handler-all-global-events.html	onmouseover: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmouseover: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmouseover: the default value must be null
+events/event-handler-all-global-events.html	onmouseup: dispatching an Event at a <meta> element must trigger element.onmouseup
+events/event-handler-all-global-events.html	onmouseup: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onmouseup: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onmouseup: the default value must be null
+events/event-handler-all-global-events.html	onreset: dispatching an Event at a <meta> element must trigger element.onreset
+events/event-handler-all-global-events.html	onreset: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onreset: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onreset: the default value must be null
+events/event-handler-all-global-events.html	onresize: dispatching an Event at a <meta> element must trigger element.onresize
+events/event-handler-all-global-events.html	onresize: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onresize: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onresize: the default value must be null
+events/event-handler-all-global-events.html	onscroll: dispatching an Event at a <meta> element must trigger element.onscroll
+events/event-handler-all-global-events.html	onscroll: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onscroll: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onscroll: the default value must be null
+events/event-handler-all-global-events.html	onsubmit: dispatching an Event at a <meta> element must trigger element.onsubmit
+events/event-handler-all-global-events.html	onsubmit: the content attribute must be compiled into a function as the corresponding property
+events/event-handler-all-global-events.html	onsubmit: the content attribute must execute when an event is dispatched
+events/event-handler-all-global-events.html	onsubmit: the default value must be null
+events/event-handler-attributes-body-alt.html	not shadowed change (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed click (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed input (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed invalid (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed keydown (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed keypress (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed keyup (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mousedown (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mousemove (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mouseout (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mouseover (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed mouseup (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed reset (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	not shadowed submit (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed blur (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed blur removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed focus (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed focus removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed hashchange (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed hashchange removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed languagechange (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed languagechange removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed load (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed load removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed message (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed message removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed messageerror (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed messageerror removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed offline (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed offline removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed online (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed online removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed popstate (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed popstate removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed rejectionhandled (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed rejectionhandled removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed resize (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed resize removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed scroll (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed scroll removal (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed unhandledrejection (document.createElement("body"))
+events/event-handler-attributes-body-alt.html	shadowed unhandledrejection removal (document.createElement("body"))
+events/event-handler-attributes-body-window.html	not shadowed change (document.body)
+events/event-handler-attributes-body-window.html	not shadowed click (document.body)
+events/event-handler-attributes-body-window.html	not shadowed input (document.body)
+events/event-handler-attributes-body-window.html	not shadowed invalid (document.body)
+events/event-handler-attributes-body-window.html	not shadowed keydown (document.body)
+events/event-handler-attributes-body-window.html	not shadowed keypress (document.body)
+events/event-handler-attributes-body-window.html	not shadowed keyup (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mousedown (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mousemove (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mouseout (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mouseover (document.body)
+events/event-handler-attributes-body-window.html	not shadowed mouseup (document.body)
+events/event-handler-attributes-body-window.html	not shadowed reset (document.body)
+events/event-handler-attributes-body-window.html	not shadowed submit (document.body)
+events/event-handler-attributes-body-window.html	shadowed blur (document.body)
+events/event-handler-attributes-body-window.html	shadowed blur on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed blur removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed focus (document.body)
+events/event-handler-attributes-body-window.html	shadowed focus on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed focus removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed hashchange (document.body)
+events/event-handler-attributes-body-window.html	shadowed hashchange on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed hashchange removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed languagechange (document.body)
+events/event-handler-attributes-body-window.html	shadowed languagechange on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed languagechange removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed load (document.body)
+events/event-handler-attributes-body-window.html	shadowed load on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed load removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed message (document.body)
+events/event-handler-attributes-body-window.html	shadowed message on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed message removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed messageerror (document.body)
+events/event-handler-attributes-body-window.html	shadowed messageerror on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed messageerror removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed offline (document.body)
+events/event-handler-attributes-body-window.html	shadowed offline on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed offline removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed online (document.body)
+events/event-handler-attributes-body-window.html	shadowed online on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed online removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed popstate (document.body)
+events/event-handler-attributes-body-window.html	shadowed popstate on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed popstate removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed rejectionhandled (document.body)
+events/event-handler-attributes-body-window.html	shadowed rejectionhandled on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed rejectionhandled removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed resize (document.body)
+events/event-handler-attributes-body-window.html	shadowed resize on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed resize removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed scroll (document.body)
+events/event-handler-attributes-body-window.html	shadowed scroll on body fires when event dispatched on window
+events/event-handler-attributes-body-window.html	shadowed scroll removal (document.body)
+events/event-handler-attributes-body-window.html	shadowed unhandledrejection (document.body)
+events/event-handler-attributes-body-window.html	shadowed unhandledrejection removal (document.body)
+events/event-handler-attributes-window.html	not shadowed change (window)
+events/event-handler-attributes-window.html	not shadowed click (window)
+events/event-handler-attributes-window.html	not shadowed input (window)
+events/event-handler-attributes-window.html	not shadowed invalid (window)
+events/event-handler-attributes-window.html	not shadowed keydown (window)
+events/event-handler-attributes-window.html	not shadowed keypress (window)
+events/event-handler-attributes-window.html	not shadowed keyup (window)
+events/event-handler-attributes-window.html	not shadowed mousedown (window)
+events/event-handler-attributes-window.html	not shadowed mousemove (window)
+events/event-handler-attributes-window.html	not shadowed mouseout (window)
+events/event-handler-attributes-window.html	not shadowed mouseover (window)
+events/event-handler-attributes-window.html	not shadowed mouseup (window)
+events/event-handler-attributes-window.html	not shadowed reset (window)
+events/event-handler-attributes-window.html	not shadowed submit (window)
+events/event-handler-attributes-window.html	shadowed blur (window)
+events/event-handler-attributes-window.html	shadowed blur removal (window)
+events/event-handler-attributes-window.html	shadowed focus (window)
+events/event-handler-attributes-window.html	shadowed focus removal (window)
+events/event-handler-attributes-window.html	shadowed hashchange (window)
+events/event-handler-attributes-window.html	shadowed hashchange removal (window)
+events/event-handler-attributes-window.html	shadowed languagechange (window)
+events/event-handler-attributes-window.html	shadowed languagechange removal (window)
+events/event-handler-attributes-window.html	shadowed load (window)
+events/event-handler-attributes-window.html	shadowed load removal (window)
+events/event-handler-attributes-window.html	shadowed message (window)
+events/event-handler-attributes-window.html	shadowed message removal (window)
+events/event-handler-attributes-window.html	shadowed messageerror (window)
+events/event-handler-attributes-window.html	shadowed messageerror removal (window)
+events/event-handler-attributes-window.html	shadowed offline (window)
+events/event-handler-attributes-window.html	shadowed offline removal (window)
+events/event-handler-attributes-window.html	shadowed online (window)
+events/event-handler-attributes-window.html	shadowed online removal (window)
+events/event-handler-attributes-window.html	shadowed popstate (window)
+events/event-handler-attributes-window.html	shadowed popstate removal (window)
+events/event-handler-attributes-window.html	shadowed rejectionhandled (window)
+events/event-handler-attributes-window.html	shadowed rejectionhandled removal (window)
+events/event-handler-attributes-window.html	shadowed resize (window)
+events/event-handler-attributes-window.html	shadowed resize removal (window)
+events/event-handler-attributes-window.html	shadowed scroll (window)
+events/event-handler-attributes-window.html	shadowed scroll removal (window)
+events/event-handler-attributes-window.html	shadowed unhandledrejection (window)
+events/event-handler-attributes-window.html	shadowed unhandledrejection removal (window)
+events/event-handler-attributes-windowless-body.html	Ignore setting of blur window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of blur window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of focus window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of focus window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of hashchange window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of languagechange window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of load window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of load window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of message window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of messageerror window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of offline window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of online window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of popstate window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of rejectionhandled window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of resize window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of resize window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of scroll window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Ignore setting of scroll window event handlers on windowless frameset
+events/event-handler-attributes-windowless-body.html	Ignore setting of unhandledrejection window event handlers on windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the blur event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the blur event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the focus event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the focus event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the hashchange event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the languagechange event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the load event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the load event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the message event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the messageerror event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the offline event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the online event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the popstate event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the rejectionhandled event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the resize event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the resize event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the scroll event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	Return null when getting the scroll event handler of a windowless frameset
+events/event-handler-attributes-windowless-body.html	Return null when getting the unhandledrejection event handler of a windowless body
+events/event-handler-attributes-windowless-body.html	change is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	change is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	click is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	click is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	input is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	input is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	invalid is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	invalid is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	keydown is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	keydown is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	keypress is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	keypress is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	keyup is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	keyup is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mousedown is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mousedown is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mousemove is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mousemove is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mouseout is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mouseout is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mouseover is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mouseover is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	mouseup is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	mouseup is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	reset is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	reset is unaffected on a windowless frameset
+events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless body
+events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless frameset
 events/event-handler-javascript.html	Event handlers starting with 'javascript:' should treat that as a label.
 events/event-handler-no-browsing-context.html	Event handler IDL attribute runs on an element in a DOMParser document
 events/event-handler-no-browsing-context.html	Event handler IDL attribute runs on an element in a createHTMLDocument document

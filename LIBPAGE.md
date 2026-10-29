@@ -208,7 +208,7 @@ segments removed. Two more answers come off the
 same kind of scratch page, for a document still being parsed, so they
 cannot disagree with the model that will be built when it ends:
 `os64_page_sheets_in` lists the sheets the tree names by the model's own
-rule and order (one predicate, `sheet_wanted`, serves both, and the host
+rule and order (one predicate, `os64_page_names_sheet`, serves both, and the host
 suite holds the walk against the model on the corpus), and
 `os64_page_base_in` answers the base a model would have, which a `style`
 element's `@import` resolves against.
@@ -325,17 +325,41 @@ verbatim (then the line-break rule of D at submission); `number` and the
 date family sanitised to the empty string when the value does not parse
 as the type requires; `checkbox`/`radio`/`submit`/`image`/`button` as D
 says. Anything not listed is `text`, which is the
-standard's own fallback for an unknown type.
+standard's own fallback for an unknown type. The number and date types'
+values are also numbers, both ways (0f's P5): `os64_page_node_value_as`
+reads one as family I's judge does, `os64_page_node_set_value_as` spells
+a number as the type's string and sets it (empty for one the type cannot
+spell, a date outside years 1 to 275760), and `os64_page_node_step` is
+`stepUp` and `stepDown`, in exact decimal over min, max and step as the
+judge reads them.
 
 **I. Constraint validation** (§4.10.20). One door: `page_validate(page,
 form, submitter)`, run before the entry list unless the form's `novalidate`
 or the submitter's `formnovalidate` says not to. A form that does not
 validate is NOTHING, with the first failing control reported so a face can
-put the cursor on it. Draft one honours `required` (empty text-like value,
-no checked radio in a required group, no selected option in a required
-`select`) and `maxlength`/`minlength` on the dirty value. **Booked**:
-`pattern`, `min`/`max`/`step`, the typed-value checks (`email`, `url`,
-`number`); each is one predicate in this one door when it comes.
+put the cursor on it. It asks, control by control, the judge a script's
+`validity` asks too (`os64_page_node_validity`, 0f's P4): from the node
+and the live state, so a control no model holds is judged as well. The
+judge says `required` (empty field, a required group with nothing ticked
+— a radio with no name is in no group — a list whose only pick is its
+placeholder, an unticked box), the typed values (`email` and its lists,
+`url`), `maxlength`/`minlength` on a person's dirty value, `min`, `max`
+and `step` over the value read as a number (a date as milliseconds, a
+month as months since 1970, a week as its Monday, a time as milliseconds
+since midnight; a time whose max is below its min wraps past midnight),
+the step judged in exact decimal from its base (the min, else the value
+attribute, else the type's default), a person's text a number or date
+type could not hold, and a custom message.
+`pattern` is the engine's regular expression, so the caller matches it;
+the model's own submission has none, and judges no pattern. A
+submission the page's scripts already validated, before its submit event,
+says so (`os64_page_activate_validated`) and is not validated again, as
+HTML validates once; any other (scripts off, the Modern Web switch off,
+no runtime yet, an image button) is validated here without its pattern,
+except a form that submits itself (`form.submit()`, which validates
+nothing; and `requestSubmit()` with no submitter, which the binding
+validated with the switch on and nothing validates with it off).
+**Booked**: that pattern (DEBTS.md § libpage).
 
 **K. The navigation a document declares** (the `refresh` pragma directive
 and its shared declarative refresh steps). One door:
@@ -645,10 +669,9 @@ marked throwaway.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | `file` inputs with a file | no face can pick one | the graphical browser's file dialog |
-| Constraint validation beyond `required`/length | typed-value families are their own table | the first page whose `pattern` matters |
 | Cookie storage, referrer policy | navigator-owned; libfetch provides per-hop header hooks | the first site that needs a session |
 | An SVG or MathML `a` is not a link | a foreign element is not an HTML one however it is spelled, and no text face draws SVG. The walk DESCENDS into foreign subtrees, so HTML inside a `foreignObject` is still seen; it is the foreign element itself that is passed over | the graphical browser, which draws SVG and will meet a link inside one |
-| `pattern`, `min`/`max`/`step`, and the typed-value checks | family I's draft one, as this document booked it | the first page whose `pattern` matters |
+| `pattern` in a submission the model judges alone | libpage has no regular expressions, and HTML's pattern is the engine's | a page whose scripts do not run that needs its pattern kept |
 
 ## What the consumers owe
 

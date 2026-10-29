@@ -25,7 +25,8 @@ static void dom_classic_cases(void)
         "assert(i instanceof HTMLInputElement&&i instanceof Element&&!(b instanceof HTMLInputElement));"
         "assert(frag instanceof DocumentFragment&&document.createTextNode('t') instanceof CharacterData);"
         "assert(new Image() instanceof HTMLImageElement&&Image.prototype===HTMLImageElement.prototype);"
-        "assert(Object.getPrototypeOf(b)===HTMLElement.prototype&&b.constructor===HTMLElement);"
+        "assert(Object.getPrototypeOf(b)===HTMLBodyElement.prototype&&b.constructor===HTMLBodyElement);"
+        "assert(Object.getPrototypeOf(HTMLBodyElement.prototype)===HTMLElement.prototype);"
         "assert(Object.getPrototypeOf(HTMLElement.prototype)===Element.prototype);"
         "assert(Object.getPrototypeOf(HTMLInputElement.prototype)===HTMLElement.prototype);"
         "assert(Object.getPrototypeOf(Element.prototype)===Node.prototype);"
@@ -45,7 +46,7 @@ static void dom_classic_cases(void)
         "assert(d.writable&&d.configurable&&!d.enumerable);"
         "d=Object.getOwnPropertyDescriptor(Element,'prototype');"
         "assert(!d.writable&&!d.configurable&&!d.enumerable);"
-        "assert(typeof HTMLDivElement==='undefined'&&typeof SVGSVGElement==='undefined');"
+        "assert(typeof HTMLDialogElement==='undefined'&&typeof SVGSVGElement==='undefined');"
         /* Text and Comment: each its own prototype under CharacterData, and
          * a constructor (DOM § 4.11, § 4.14) */
         "var tn=document.createTextNode('t'),cn=document.createComment('c');"

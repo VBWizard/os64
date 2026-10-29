@@ -39,6 +39,23 @@ bool d_named_match(const os64_html_node_t *node, const char *name)
     return (id != NULL && os64_streq(id->value, name)) || (named != NULL && os64_streq(named->value, name));
 }
 
+bool d_listed(const os64_html_node_t *node)
+{
+    if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML) return false;
+    switch (node->tag) {
+    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_FIELDSET: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_OBJECT:
+    case OS64_HTML_TAG_OUTPUT: case OS64_HTML_TAG_SELECT: case OS64_HTML_TAG_TEXTAREA:
+        return true;
+    default: return false;
+    }
+}
+
+static bool image_button(const os64_html_node_t *node)
+{
+    const os64_html_attr_t *type = node->tag == OS64_HTML_TAG_INPUT ? os64_html_attr(node, "type") : NULL;
+    return type != NULL && os64_streq_nocase(type->value, "image");
+}
+
 bool d_classic_match(const os64_html_node_t *root,
                       const os64_html_node_t *node, unsigned kind)
 {
@@ -49,9 +66,11 @@ bool d_classic_match(const os64_html_node_t *root,
     case D_QUERY_DOCUMENT_NAMES:
         return node->tag == OS64_HTML_TAG_FORM || node->tag == OS64_HTML_TAG_IMG;
     case D_QUERY_CONTROLS:
-        return (node->tag == OS64_HTML_TAG_INPUT || node->tag == OS64_HTML_TAG_SELECT ||
-                node->tag == OS64_HTML_TAG_TEXTAREA || node->tag == OS64_HTML_TAG_BUTTON) &&
-               d_form_owner(node) == root;
+        /* A form's listed elements (HTML § 4.10.2) it owns, but an image
+         * button, which a form's `elements` leaves out and a fieldset's
+         * does not. */
+        return d_listed(node) && !image_button(node) && d_form_owner(node) == root;
+    case D_QUERY_FIELDSET: return d_listed(node);
     default: return true;
     }
 }
@@ -69,8 +88,28 @@ JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx,
         // The search covers the document so controls with form= participate.
         // Its owner remains separate from the traversal root.
         if (kind == D_QUERY_CONTROLS) (*slot)->owner = node;
+        // With the modern switch on, an HTMLFormControlsCollection.
+        if (kind == D_QUERY_CONTROLS && dom->controls_prototype != NULL &&
+            JS_SetPrototype(ctx, value, dom->controls_prototype->value) < 0) {
+            JS_FreeValue(ctx, value);
+            return JS_EXCEPTION;
+        }
     }
     return value;
+}
+
+const os64_html_node_t *d_form_control(const os64_html_node_t *form, uint32_t index, uint32_t *count)
+{
+    const os64_html_node_t *search = dom_root(form), *found = NULL;
+    uint32_t seen = 0;
+    for (const os64_html_node_t *at = search; at != NULL; at = next_node(at, search))
+        if (d_classic_match(form, at, D_QUERY_CONTROLS)) {
+            if (seen == index) found = at;
+            seen++;
+            if (found != NULL && count == NULL) break;
+        }
+    if (count != NULL) *count = seen;
+    return found;
 }
 
 static int named_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst object, JSAtom atom)
@@ -83,11 +122,34 @@ static int named_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCon
     if (root->kind == OS64_HTML_DOCUMENT) kind = D_QUERY_DOCUMENT_NAMES;
     else if (root->tag == OS64_HTML_TAG_FORM && root->ns == OS64_HTML_NS_HTML) kind = D_QUERY_CONTROLS;
     else return 0;
-    JSValue prototype = JS_GetPrototype(ctx, object);
-    if (JS_IsException(prototype)) return -1;
-    int reserved = JS_IsNull(prototype) ? 0 : JS_HasProperty(ctx, prototype, atom);
-    JS_FreeValue(ctx, prototype);
-    if (reserved != 0) return reserved < 0 ? -1 : 0;
+    /* A form's indexed getter (HTML § 4.10.3), with the modern switch on:
+     * form[i] is its `elements`' i-th, asked before its prototype is, as
+     * WebIDL asks an index. */
+    uint32_t index;
+    int numeric = kind == D_QUERY_CONTROLS && entry->dom->controls_prototype != NULL
+        ? d_index_key(ctx, atom, &index) : 0;
+    if (numeric < 0) return -1;
+    if (numeric) {
+        const os64_html_node_t *found = d_form_control(root, index, NULL);
+        if (found == NULL) return 0;
+        if (desc != NULL) {
+            JSValue value = d_wrap(entry->dom, ctx, found);
+            if (JS_IsException(value)) return -1;
+            *desc = (JSPropertyDescriptor){.flags = JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE,
+                .value = value, .getter = JS_UNDEFINED, .setter = JS_UNDEFINED};
+        }
+        return 1;
+    }
+    /* A form is [LegacyOverrideBuiltIns] with the modern switch on: a
+     * control's name hides the prototype's member of that name (an input
+     * named `submit` is form.submit), as every browser has it. */
+    if (!(kind == D_QUERY_CONTROLS && entry->dom->controls_prototype != NULL)) {
+        JSValue prototype = JS_GetPrototype(ctx, object);
+        if (JS_IsException(prototype)) return -1;
+        int reserved = JS_IsNull(prototype) ? 0 : JS_HasProperty(ctx, prototype, atom);
+        JS_FreeValue(ctx, prototype);
+        if (reserved != 0) return reserved < 0 ? -1 : 0;
+    }
     JSValue key = JS_AtomToValue(ctx, atom);
     if (JS_IsException(key)) return -1;
     if (!JS_IsString(key)) { JS_FreeValue(ctx, key); return 0; }
@@ -105,10 +167,11 @@ static int named_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCon
     if (count == 0) { JS_FreeCString(ctx, name); return 0; }
     JSValue value = JS_UNDEFINED;
     if (desc != NULL) {
-        value = count == 1 ? d_wrap(entry->dom, ctx, first) : d_special_collection(entry->dom, ctx, search, kind, name);
-        if (!JS_IsException(value) && count > 1) {
-            DQuery *query = JS_GetOpaque(value, entry->dom->collection_class);
-            query->owner = root;
+        if (count == 1) value = d_wrap(entry->dom, ctx, first);
+        else if (kind == D_QUERY_CONTROLS) value = d_radio_list(entry->dom, ctx, root, name);
+        else {
+            value = d_special_collection(entry->dom, ctx, search, kind, name);
+            if (!JS_IsException(value)) ((DQuery *)JS_GetOpaque(value, entry->dom->collection_class))->owner = root;
         }
     }
     JS_FreeCString(ctx, name);
@@ -118,7 +181,113 @@ static int named_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCon
     return 1;
 }
 
-JSClassExoticMethods d_node_exotic = {.get_own_property = named_property};
+/* A form whose indices and names are its controls': the modern switch's
+ * (HTML § 4.10.3, a legacy platform object with no setter). */
+static DValue *modern_form(JSValueConst object)
+{
+    JSClassID id;
+    DValue *entry = JS_GetAnyOpaque(object, &id);
+    return entry != NULL && entry->node != NULL && entry->node->kind == OS64_HTML_ELEMENT &&
+                   entry->node->ns == OS64_HTML_NS_HTML && entry->node->tag == OS64_HTML_TAG_FORM &&
+                   entry->dom->controls_prototype != NULL ? entry : NULL;
+}
+
+/* A form's own names: its controls' indices, then each id and name they
+ * carry, once, not enumerable ([LegacyUnenumerableNamedProperties]). Any
+ * other node has none of its own here. The engine lists an object's
+ * ordinary keys beside these and does not merge them, so a name the form
+ * already has as one (an expando made before the control came) is left
+ * to the engine's list. */
+static int node_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *length, JSValueConst object)
+{
+    *table = NULL;
+    *length = 0;
+    DValue *entry = modern_form(object);
+    /* The ask below, for the ordinary keys alone. */
+    if (entry != NULL && entry->dom->listing_names) return 0;
+    if (entry == NULL || !d_context(entry->dom, ctx, OS64_JS_ABI_ID)) return entry == NULL ? 0 : -1;
+    uint32_t count = 0;
+    (void)d_form_control(entry->node, UINT32_MAX, &count);
+    if (count > (UINT32_MAX - 1) / 3 || (size_t)count * 3 > SIZE_MAX / sizeof(JSPropertyEnum)) {
+        d_error(ctx, "QuotaExceededError", "Too many form controls");
+        return -1;
+    }
+    JSPropertyEnum *own = NULL;
+    uint32_t own_count = 0;
+    entry->dom->listing_names = true;
+    int listed = JS_GetOwnPropertyNames(ctx, &own, &own_count, object, JS_GPN_STRING_MASK);
+    entry->dom->listing_names = false;
+    if (listed < 0) return -1;
+    JSPropertyEnum *entries = count != 0 ? js_malloc(ctx, (size_t)count * 3 * sizeof(*entries)) : NULL;
+    uint32_t n = 0;
+    if (count != 0 && entries == NULL) goto fail;
+    for (uint32_t i = 0; i < count; i++) {
+        entries[n].is_enumerable = true;
+        entries[n].atom = JS_NewAtomUInt32(ctx, i);
+        if (entries[n].atom == JS_ATOM_NULL) goto fail;
+        n++;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        const os64_html_node_t *control = d_form_control(entry->node, i, NULL);
+        const char *const names[] = {"id", "name"};
+        for (int k = 0; control != NULL && k < 2; k++) {
+            const os64_html_attr_t *attr = os64_html_attr(control, names[k]);
+            if (attr == NULL || attr->value[0] == '\0') continue;
+            JSAtom atom = JS_NewAtom(ctx, attr->value);
+            if (atom == JS_ATOM_NULL) goto fail;
+            /* A name an index spells (`name=0`) is that index's key. */
+            bool seen = false;
+            for (uint32_t s = 0; s < n && !seen; s++) seen = entries[s].atom == atom;
+            for (uint32_t s = 0; s < own_count && !seen; s++) seen = own[s].atom == atom;
+            if (seen) {
+                JS_FreeAtom(ctx, atom);
+                continue;
+            }
+            entries[n].is_enumerable = false;
+            entries[n].atom = atom;
+            n++;
+        }
+    }
+    JS_FreePropertyEnum(ctx, own, own_count);
+    *table = entries;
+    *length = n;
+    return 0;
+fail:
+    while (n != 0) JS_FreeAtom(ctx, entries[--n].atom);
+    js_free(ctx, entries);
+    JS_FreePropertyEnum(ctx, own, own_count);
+    return -1;
+}
+
+/* A form's index or name is not a node's to redefine or delete: refused,
+ * as a nonextensible object refuses one (a TypeError where the caller
+ * asked for one); anything else is an ordinary property. A form has no
+ * indexed setter, so any index at all is refused a definition, one it has
+ * no control for yet included (WebIDL § 3.9.3), or a property defined
+ * there would shadow its control once it had one; only one it has is
+ * refused a delete. */
+static int node_define(JSContext *ctx, JSValueConst object, JSAtom atom, JSValueConst value, JSValueConst getter,
+                       JSValueConst setter, int flags)
+{
+    DValue *entry = modern_form(object);
+    uint32_t index;
+    int numeric = entry != NULL ? d_index_key(ctx, atom, &index) : 0;
+    int named = numeric == 0 && entry != NULL ? named_property(ctx, NULL, object, atom) : 0;
+    if (numeric < 0 || named < 0) return -1;
+    return JS_DefineProperty(ctx, numeric || named ? entry->dom->index_guard->value : object, atom, value, getter,
+                             setter, flags | JS_PROP_NO_EXOTIC);
+}
+
+static int node_delete(JSContext *ctx, JSValueConst object, JSAtom atom)
+{
+    int named = modern_form(object) != NULL ? named_property(ctx, NULL, object, atom) : 0;
+    return named < 0 ? -1 : !named;
+}
+
+JSClassExoticMethods d_node_exotic = {
+    .get_own_property = named_property, .get_own_property_names = node_names,
+    .define_own_property = node_define, .delete_property = node_delete,
+};
 
 enum { C_IMAGES, C_FORMS, C_ELEMENTS, C_STYLE, C_TITLE, C_NAME, C_SRC, C_WIDTH, C_HEIGHT,
        C_CAPTURE, C_IMAGE, C_NAVIGATOR, C_USER_AGENT, C_APP_NAME, C_APP_VERSION, C_PLATFORM, C_CURRENT_EVENT, C_LEGACY_ARGUMENTS,
@@ -443,7 +612,25 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLTemplateElement", D_PROTO_TEMPLATE},
         {"HTMLButtonElement", D_PROTO_BUTTON}, {"HTMLImageElement", D_PROTO_IMAGE},
         {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
-        {"HTMLLinkElement", D_PROTO_LINK},
+        {"HTMLLinkElement", D_PROTO_LINK}, {"HTMLLabelElement", D_PROTO_LABEL},
+        {"HTMLFieldSetElement", D_PROTO_FIELDSET}, {"HTMLLegendElement", D_PROTO_LEGEND},
+        {"HTMLOutputElement", D_PROTO_OUTPUT}, {"HTMLStyleElement", D_PROTO_STYLE},
+        {"HTMLMetaElement", D_PROTO_META}, {"HTMLCanvasElement", D_PROTO_CANVAS},
+        {"HTMLUnknownElement", D_PROTO_UNKNOWN}, {"HTMLTimeElement", D_PROTO_TIME},
+        {"HTMLDivElement", D_PROTO_DIV}, {"HTMLBodyElement", D_PROTO_BODY},
+        {"HTMLOListElement", D_PROTO_OLIST}, {"HTMLHeadElement", D_PROTO_HEAD},
+        {"HTMLDataElement", D_PROTO_DATA}, {"HTMLLIElement", D_PROTO_LI}, {"HTMLAreaElement", D_PROTO_AREA},
+        {"HTMLBaseElement", D_PROTO_BASE}, {"HTMLMapElement", D_PROTO_MAP}, {"HTMLModElement", D_PROTO_MOD},
+        {"HTMLQuoteElement", D_PROTO_QUOTE}, {"HTMLTableCellElement", D_PROTO_TABLE_CELL},
+        {"HTMLTableColElement", D_PROTO_TABLE_COL}, {"HTMLTableElement", D_PROTO_TABLE},
+        {"HTMLTableRowElement", D_PROTO_TABLE_ROW}, {"HTMLTableSectionElement", D_PROTO_TABLE_SECTION},
+        {"HTMLUListElement", D_PROTO_ULIST}, {"HTMLBRElement", D_PROTO_BR}, {"HTMLDListElement", D_PROTO_DLIST},
+        {"HTMLDirectoryElement", D_PROTO_DIRECTORY}, {"HTMLFontElement", D_PROTO_FONT},
+        {"HTMLHRElement", D_PROTO_HR}, {"HTMLHeadingElement", D_PROTO_HEADING},
+        {"HTMLHtmlElement", D_PROTO_HTML}, {"HTMLMenuElement", D_PROTO_MENU},
+        {"HTMLParagraphElement", D_PROTO_PARAGRAPH}, {"HTMLPreElement", D_PROTO_PRE},
+        {"HTMLSpanElement", D_PROTO_SPAN}, {"HTMLTableCaptionElement", D_PROTO_TABLE_CAPTION},
+        {"HTMLTitleElement", D_PROTO_TITLE},
     };
     /* HTMLIFrameElement's is the frames row's (frames.c), with its members:
      * IFRAME.md's HTMLIFrameElement is one row. */
@@ -550,7 +737,12 @@ int d_interface_class(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSCl
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_style_install(dom, ctx) < 0) return -1;
-    JSValue object = JS_NewObject(ctx);
+    /* Over a prototype level of its own, which the Modern Web's row makes
+     * Navigator.prototype (window.c's d_window_objects_install). */
+    JSValue level = JS_NewObject(ctx);
+    if (JS_IsException(level)) return -1;
+    JSValue object = JS_NewObjectProto(ctx, level);
+    JS_FreeValue(ctx, level);
     dom->navigator = d_retain(dom,ctx,object);
     if (dom->navigator == NULL) return -1;
     const char *names[] = {"userAgent","appName","appVersion","platform"};

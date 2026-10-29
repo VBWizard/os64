@@ -181,6 +181,25 @@ rejections after it are a line each, and the rest one line counting them,
 first failure, as it always has. A record finds a line by its key, so a
 page that fails without end costs each failure a few probes.
 
+A script's FAILED line says where it failed: the first frame of its stack
+that names a place in a script, after the message (`scripts.c`'s
+`yonder_scripts_failure`, over libdom's `os64_dom_stack_frame`). In the
+failing task's own `src` script, classic or module, that is the line and
+column, `TypeError: cannot read property 'length' of undefined, at Xa
+1:23456`, which finds the place in a minified script that is one line
+long; in another script's function, that script's address before them,
+`at boom https://site/lib.js:2:7`; in one of the page's classic inline
+scripts, `inline`, `at inline:3:1`; and anywhere else, the engine's own
+name for the file (`at onclick onclick attribute:2:5`; an inline
+module's item name; `<input>` for a function made by eval or `new
+Function`). A script's own code and an anonymous function have no name
+there. Text that did not parse is no script's place: `JSON.parse` given a
+page of HTML fails at the line that called it, and so does an eval of
+source that does not compile. A failure whose value has no stack (a
+DOMException, a thrown primitive) says its message alone (DEBTS.md). The
+same message at two places is two lines; the status line says the
+message alone, as before.
+
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 
 A page with `@font-face` rules, or one whose layout asked for a family,

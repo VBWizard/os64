@@ -303,6 +303,7 @@ bool p_document_url(os64_page_t *page, const char *text)
     if (raw == NULL)
         return false;
     page->document_url = raw;
+    page->document_fragment = os64_strchr(clean, '#');
     os64_page_reason_t refused = OS64_PAGE_REASON_OK;
     const char *canonical = NULL;
     if (p_canonical(page, raw, &canonical, &refused))
@@ -344,12 +345,15 @@ static const char *find_base(const os64_html_node_t *n)
 
 bool p_base(os64_page_t *page)
 {
-    // With no base of its own a page resolves against where it came from.
+    // With no base of its own a page resolves against where it came from,
+    // and that address, its fragment included, is its base URL.
     page->base_url = page->document_url;
+    page->base_fragment = page->document_fragment;
     page->base = page->document;
     page->base_hierarchical = page->document_hierarchical;
 
-    const os64_html_node_t *root = page->doc != NULL ? page->doc->document : NULL;
+    const os64_html_node_t *root = page->base_root != NULL ? page->base_root
+                                   : page->doc != NULL ? page->doc->document : NULL;
     if (root == NULL && page->doc != NULL)
         root = page->doc->html;
     const char *href = find_base(root);
@@ -360,8 +364,12 @@ bool p_base(os64_page_t *page)
     char *head = clean != NULL ? without_fragment(page, clean) : NULL;
     if (head == NULL)
         return false;
-    if (head[0] == '\0')
-        return true;   // `<base href="">` is the document's own address
+    if (head[0] == '\0') {
+        // `<base href="">` is the document's own address, and
+        // `<base href="#x">` that address with its own fragment.
+        page->base_fragment = os64_strchr(clean, '#');
+        return true;
+    }
 
     const char *resolved = NULL;
     os64_page_reason_t refused = OS64_PAGE_REASON_OK;
@@ -378,6 +386,7 @@ bool p_base(os64_page_t *page)
         return refused != OS64_PAGE_REASON_NO_MEMORY;
 
     page->base_url = resolved;
+    page->base_fragment = os64_strchr(clean, '#');
     page->base_hierarchical = parse_address(resolved, &page->base) == OS64_URL_OK;
     if (page->base_hierarchical && page->base.port != 0 &&
         page->base.port == p_default_port(page->base.scheme))
@@ -506,6 +515,25 @@ bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url
     page->doc = doc;
     bool ok = p_document_url(page, document_url) && p_base(page) && page->base_url != NULL &&
               (size_t)os64_snprintf(out, cap, "%s", page->base_url) < cap;
+    p_arena_free(&page->arena);
+    os64_free(page);
+    return ok;
+}
+
+bool os64_page_base_url_in(const os64_html_document_t *doc, const os64_html_node_t *root,
+                           const char *document_url, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0)
+        return false;
+    // A scratch page, as os64_page_resolve_in makes one.
+    os64_page_t *page = os64_calloc(1, sizeof(*page));
+    if (page == NULL)
+        return false;
+    page->doc = doc;
+    page->base_root = root;
+    bool ok = p_document_url(page, document_url) && p_base(page) && page->base_url != NULL &&
+              (size_t)os64_snprintf(out, cap, "%s%s", page->base_url,
+                                    page->base_fragment != NULL ? page->base_fragment : "") < cap;
     p_arena_free(&page->arena);
     os64_free(page);
     return ok;
