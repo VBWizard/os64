@@ -104,10 +104,10 @@ struct DCustomState {
     /* Nodes define's candidate walks visited, for the page's record. */
     uint64_t visits;
     DWaiting *waiting;
-    /* The last removal's run and the document it left, read by the
-     * insertion that follows it in the same verb (a move is two records,
-     * told at one version), and compared by address alone: a removed node
-     * may be reclaimed before any later record. */
+    /* The last removal-only record's run and the document it left, read by
+     * the insertion that follows it in the same verb (a move is two
+     * records, told at one version), and compared by address alone: a
+     * removed node may be reclaimed before any later record. */
     const os64_html_node_t *moving;
     size_t moving_count;
     uint64_t moving_version;
@@ -380,7 +380,10 @@ static void children_changed(os64_dom_t *dom, const os64_html_change_t *c)
                     if (at->kind == OS64_HTML_ELEMENT && at->ce == OS64_HTML_CE_CUSTOM)
                         enqueue_callback(dom, at, CB_DISCONNECTED, NULL, NULL);
         }
-        if (dom->documents != 0) {
+        /* A removal alone begins a move (a node leaving its parent, a
+         * fragment drained); a replace's removed node goes nowhere, and must
+         * not hide where the node it brings in came from. */
+        if (dom->documents != 0 && c->nadded == 0) {
             s->moving = c->removed;
             s->moving_count = c->nremoved;
             s->moving_version = c->version;
@@ -451,12 +454,9 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r)
      * failed state's HTMLUnknownElement (d_node_kind). */
     JSValue self = d_wrap(dom, ctx, element);
     if (JS_IsException(self)) return report(dom, ctx, d->constructor_script);
-    os64_html_set_ce(dom->document, (os64_html_node_t *)element, OS64_HTML_CE_FAILED);
-    for (const os64_html_attr_t *a = element->attrs; a != NULL; a = a->next) {
-        const char *strings[4] = {d_attr_local(a->name, a->ns), NULL, a->value, a->ns};
-        enqueue_callback(dom, element, CB_ATTRIBUTE, strings, NULL);
-    }
-    if (d_connected(element)) enqueue_callback(dom, element, CB_CONNECTED, NULL, NULL);
+    /* Room on the construction stack before anything is marked or queued:
+     * an upgrade the binding cannot afford leaves the element waiting with
+     * nothing queued for it, and is reported. */
     if (d->depth == d->stack_cap) {
         size_t cap = d->stack_cap != 0 ? d->stack_cap * 2 : 4;
         const os64_html_node_t **stack = d_alloc(dom, cap * sizeof(*stack));
@@ -470,6 +470,12 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r)
         d->stack = stack;
         d->stack_cap = cap;
     }
+    os64_html_set_ce(dom->document, (os64_html_node_t *)element, OS64_HTML_CE_FAILED);
+    for (const os64_html_attr_t *a = element->attrs; a != NULL; a = a->next) {
+        const char *strings[4] = {d_attr_local(a->name, a->ns), NULL, a->value, a->ns};
+        enqueue_callback(dom, element, CB_ATTRIBUTE, strings, NULL);
+    }
+    if (d_connected(element)) enqueue_callback(dom, element, CB_CONNECTED, NULL, NULL);
     d->stack[d->depth++] = element;
     r->constructing = true;
     DScripts before = d_script_enter(dom, d->constructor_script);
@@ -1061,15 +1067,15 @@ static JSValue define(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *a
     reading_free(dom, ctx, &reading);
     if (d == NULL) goto done;
     /* The window's document's elements of that name, in tree order, each
-     * queued for an upgrade, which runs before define returns. */
-    if (d_reactions_push(dom, ctx) < 0) goto done;
+     * queued for an upgrade on define's own element queue (its caller's
+     * [CEReactions]), which runs them as define returns: after the promise
+     * below is resolved, as the standard orders the two. */
     const os64_html_node_t *document = window_document(dom);
     for (const os64_html_node_t *at = document; at != NULL; at = d_walk_next(document, at)) {
         s->visits++;
         if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))
             try_upgrade(dom, at);
     }
-    if (d_reactions_pop(dom, ctx) < 0) goto done;
     /* Last, the promise whenDefined handed out for it. */
     for (DWaiting **link = &s->waiting; *link != NULL; link = &(*link)->next) {
         DWaiting *w = *link;

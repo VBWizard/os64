@@ -34,6 +34,42 @@ static void custom_parser_insert(DomFixture *f, const char *name, const char *id
           "custom: an element inserted between tasks");
 }
 
+/* Every binding allocation define and its upgrade make, failed in turn: a
+ * callback never runs for an element whose constructor did not (Codex
+ * #407), and nothing is left behind. */
+static void custom_allocation_cases(void)
+{
+    static const char kDefine[] =
+        "class S extends HTMLElement{constructor(){super();L.push('ctor')}"
+        "static get observedAttributes(){return['a']}attributeChangedCallback(){L.push('attr')}"
+        "connectedCallback(){L.push('conn')}};customElements.define('x-s',S);";
+    size_t cuts = 0;
+    for (size_t cut = 1;; cut++) {
+        DomFixture f = fixture_new(NULL);
+        if (!fixture_ready(&f)) return;
+        custom_script(&f, "window.L=[];document.getElementById('box').innerHTML='<x-s a=1></x-s>';",
+                      "custom-cut-setup");
+        size_t target = dom_attempts + cut;
+        dom_fail_at = target;
+        os64_js_outcome_t outcome;
+        os64_js_run(f.runtime, kDefine, sizeof(kDefine) - 1, "custom-cut.js", &outcome);
+        dom_fail_at = 0;
+        bool reached = dom_attempts >= target;
+        os64_dom_script_ended(f.binding, "custom-cut.js", &outcome);
+        for (int i = 0; i < 8 && outcome.jobs_pending; i++)
+            os64_js_drain_jobs(f.runtime, UINT64_MAX, &outcome);
+        if (os64_dom_reactions_owed(f.binding)) os64_dom_reactions_run(f.binding, &outcome);
+        custom_script(&f, CE_ASSERT
+            "var c=L.indexOf('ctor');"
+            "assert(L.every(function(x){return x==='ctor'||c>=0}),'a callback without its constructor: '+L.join());",
+            "custom-cut-check");
+        fixture_free(&f);
+        if (!reached) break;
+        cuts++;
+    }
+    check(cuts > 4, "custom: define and its upgrade were failed at each of their allocations");
+}
+
 static void dom_custom_cases(void)
 {
     DomFixture f = fixture_new(NULL);
@@ -238,8 +274,25 @@ static void dom_custom_cases(void)
         "otherDoc.body.appendChild(document.querySelector('x-ad'));",
         "custom-adopt-move");
     custom_script(&f, CE_ASSERT
-        "assert(L.join('|')==='disc|adopted true true|conn false',L.join('|'));",
+        "assert(L.join('|')==='disc|adopted true true|conn false',L.join('|'));L=[];"
+        /* Back by a replace: its removed node does not hide where the
+         * node it brings in came from. */
+        "var victim=document.createElement('p');document.body.appendChild(victim);"
+        "document.body.replaceChild(otherDoc.querySelector('x-ad'),victim);",
         "custom-adopted");
+    custom_script(&f, CE_ASSERT
+        "assert(L.join('|')==='disc|adopted false false|conn true',L.join('|'));",
+        "custom-adopted-back");
+    /* whenDefined's promise is resolved before define's upgrades run, so
+     * its handlers come before what a constructor queued (Codex #407). */
+    custom_script(&f, CE_ASSERT
+        "window.order=[];document.getElementById('box').innerHTML='<x-order></x-order>';"
+        "customElements.whenDefined('x-order').then(function(){order.push('defined')});"
+        "class Order extends HTMLElement{constructor(){super();Promise.resolve().then(function(){order.push('constructed')})}};"
+        "customElements.define('x-order',Order);",
+        "custom-when-defined-order");
+    custom_script(&f, CE_ASSERT "assert(order.join()==='defined,constructed',order.join());",
+                  "custom-when-defined-ordered");
 
     /* Between tasks: a change the parser would make queues an upgrade with
      * no checkpoint coming. It is owed, due now on the timer clock, and the
@@ -288,5 +341,6 @@ static void dom_custom_cases(void)
     custom_parser_insert(&f, "x-late", "off");
     check(!os64_dom_reactions_owed(f.binding), "custom: nothing is owed with the switch off");
     fixture_free(&f);
+    custom_allocation_cases();
 }
 #undef CE_ASSERT

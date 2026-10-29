@@ -266,6 +266,28 @@ mutants = [
      '        else if (false && yonder_scripts_custom_failure(scripts, custom[c].name, why, sizeof(why))) {', [WINDOW]),
     ('js-turn-open-task', JS_C, '    return runtime != NULL && (runtime->active || runtime->turn);',
      '    return runtime != NULL && runtime->active;', [JSRT]),
+    # Codex #407's three: define's upgrades after its promise, a replace's
+    # removed node not hiding the adopted one's source, and nothing queued
+    # for an upgrade the construction stack cannot afford.
+    ('ce-define-promise-first', CUSTOM_C,
+     '    const os64_html_node_t *document = window_document(dom);\n'
+     '    for (const os64_html_node_t *at = document; at != NULL; at = d_walk_next(document, at)) {\n'
+     '        s->visits++;\n'
+     '        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))\n'
+     '            try_upgrade(dom, at);\n    }\n',
+     '    if (d_reactions_push(dom, ctx) < 0) goto done;\n'
+     '    const os64_html_node_t *document = window_document(dom);\n'
+     '    for (const os64_html_node_t *at = document; at != NULL; at = d_walk_next(document, at)) {\n'
+     '        s->visits++;\n'
+     '        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))\n'
+     '            try_upgrade(dom, at);\n    }\n'
+     '    if (d_reactions_pop(dom, ctx) < 0) goto done;\n', [DOMC]),
+    ('ce-replace-keeps-source', CUSTOM_C, 'if (dom->documents != 0 && c->nadded == 0) {', 'if (dom->documents != 0) {',
+     [DOMC]),
+    ('ce-stack-before-queue', CUSTOM_C,
+     '        if (stack == NULL) {\n            JS_FreeValue(ctx, self);',
+     '        if (stack == NULL) {\n            if (d_connected(element)) enqueue_callback(dom, element, CB_CONNECTED, NULL, NULL);\n'
+     '            JS_FreeValue(ctx, self);', [DOMC]),
     ('census-failed-apart', YONDER_C,
      '                while (c < ncustom && !(custom[c].failed == (n->ce == OS64_HTML_CE_FAILED) &&\n'
      '                                        os64_streq(custom[c].name, n->name)))',
@@ -290,9 +312,12 @@ for name, rel, old, new, harnesses in mutants:
         with log.open('w') as out:
             for harness in harnesses:
                 script, *flags = harness.split()
+                # tools/mutants_parallel.py gives a worker's whole baseline, every
+                # suite named here in turn, this one deadline: the full DOM host
+                # among them takes most of it.
                 try:
                     result = subprocess.run(['bash', str(root / script), *flags], cwd=root, stdout=out, stderr=out,
-                                            timeout=900)
+                                            timeout=2400)
                     codes.append(result.returncode)
                 except subprocess.TimeoutExpired:
                     codes.append('timeout')

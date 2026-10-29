@@ -237,7 +237,9 @@ as a reason, not as a count.
   Because `define` is `[CEReactions]`, they are constructed before it
   returns.
 - Last, a pending `whenDefined` promise for the name resolves with the
-  constructor.
+  constructor. That is before the upgrades run, which happens as `define`
+  returns, so the promise's handlers come before anything a constructor
+  queued.
 - The candidate walk covers the whole document for each name. A hundred
   defines over 10,000 nodes is a million visits, which is milliseconds.
   The page record carries the walk's total, so this is measured and not
