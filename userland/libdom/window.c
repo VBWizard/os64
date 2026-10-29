@@ -441,15 +441,21 @@ static bool disabled(const os64_html_node_t *node)
         os64_html_attr(node, "disabled") != NULL;
 }
 
-/* Fire a plain event a script's action raises, inside the script's task. */
-static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const char *type,
-                bool bubbles, bool cancelable)
+/* Fire `event` (taken; JS_EXCEPTION when it could not be made), which a
+ * script's action raises, inside the script's task. */
+static int fire_made(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValue event)
 {
-    JSValue event = d_event_new(dom, ctx, type, bubbles, cancelable, false);
     if (JS_IsException(event)) return -1;
     int result = d_dispatch(dom, ctx, event, node);
     JS_FreeValue(ctx, event);
     return result;
+}
+
+/* Fire a plain event a script's action raises. */
+static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const char *type,
+                bool bubbles, bool cancelable)
+{
+    return fire_made(dom, ctx, node, d_event_new(dom, ctx, type, bubbles, cancelable, false));
 }
 
 /* What the host performs for an element: focus and blur, which move the
@@ -469,8 +475,9 @@ enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
 /* A form's submission: unless the script called submit() itself, HTML
  * validates the form's constraints (validity.c, with the Modern Web switch
  * on; skipped by the submitter's formnovalidate or the form's novalidate),
- * and stops when they fail, then fires submit at the form; a submit nobody
- * cancelled becomes the ask. A
+ * and stops when they fail, then fires submit at the form (a SubmitEvent
+ * whose submitter is the button, null for a submission with none, with the
+ * switch on); a submit nobody cancelled becomes the ask. A
  * form in a document with no window, or in no document, cannot navigate,
  * and HTML submits nothing from it, not even the event. */
 static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
@@ -491,7 +498,7 @@ static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
     bool novalidate = (submitter != NULL && os64_html_attr(submitter, "formnovalidate") != NULL) ||
         os64_html_attr(form, "novalidate") != NULL;
     int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
-    int result = valid > 0 ? fire(dom, ctx, form, "submit", true, true) : valid < 0 ? -1 : 1;
+    int result = valid > 0 ? fire_made(dom, ctx, form, d_submit_event_new(dom, ctx, submitter)) : valid < 0 ? -1 : 1;
     dom->submitting = self.next;
     if (valid > 0 && result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
     return result;
@@ -504,40 +511,60 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
     return result;
 }
 
-/* element.click() is a synthetic click: the event, then the element's
- * activation behaviour unless a listener cancelled it. A checkbox or radio
- * changes before its click is dispatched and is put back when the click is
- * cancelled (HTML's legacy-pre-activation behaviour); a checkbox's
- * indeterminate flag is cleared with it, and put back with it. */
-static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+/* A CLICK'S ACTIVATION (DOM § 2.9, HTML's activation behaviours): which
+ * elements have one, and its halves either side of the click's listeners.
+ * A link with an href, a button, and an input that is a checkbox, a radio
+ * or a button of any kind have one (one that may then do nothing: a button
+ * with no form). Before the listeners, a checkbox or radio changes, its
+ * state kept (HTML's legacy-pre-activation behaviour), a checkbox's
+ * indeterminate flag cleared with it; after them, a cancelled click puts it
+ * back (legacy-canceled-activation), and one nobody cancelled runs the
+ * activation behaviour: a changed box's input and change, a link
+ * followed, a form submitted or reset (not by a disabled button). Both
+ * element.click() and a MouseEvent click a script dispatches come here
+ * (event.c's dispatch); a host's click is the host's own to act on. */
+bool d_activation_has(const os64_html_node_t *node)
+{
+    if (html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA))
+        return os64_html_attr(node, "href") != NULL;
+    if (html_element(node, OS64_HTML_TAG_BUTTON)) return true;
+    return html_element(node, OS64_HTML_TAG_INPUT) &&
+        (type_is(node, "checkbox", false) || type_is(node, "radio", false) || type_is(node, "submit", false) ||
+         type_is(node, "image", false) || type_is(node, "reset", false) || type_is(node, "button", false));
+}
+
+int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, DActivation *saved)
 {
     bool radio = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "radio", false);
     bool checkbox = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "checkbox", false);
-    bool checkable = radio || checkbox;
-    bool was = false, was_indeterminate = false;
-    if (checkable) {
-        int64_t status = os64_page_node_checked(dom->state, node, &was);
-        if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &was_indeterminate);
-        if (status >= 0) status = os64_page_node_set_checked(dom->state, node, radio ? true : !was);
-        if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);
-        if (status < 0) { d_page_error(ctx, status); return -1; }
-    }
-    int result = fire(dom, ctx, node, "click", true, true);
-    if (result < 0) return result;
-    if (checkable) {
+    *saved = (DActivation){radio || checkbox, checkbox, false, false};
+    if (!saved->checkable) return 0;
+    int64_t status = os64_page_node_checked(dom->state, node, &saved->was);
+    if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &saved->was_indeterminate);
+    if (status >= 0) status = os64_page_node_set_checked(dom->state, node, radio ? true : !saved->was);
+    if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);
+    if (status < 0) { d_page_error(ctx, status); return -1; }
+    return 0;
+}
+
+int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool canceled,
+                       const DActivation *saved)
+{
+    if (saved->checkable) {
         bool now = false;
-        if (result == 0) {
-            int64_t status = os64_page_node_set_checked(dom->state, node, was);
-            if (status >= 0 && checkbox)
-                status = os64_page_node_set_indeterminate(dom->state, node, was_indeterminate);
+        int result = 1;
+        if (canceled) {
+            int64_t status = os64_page_node_set_checked(dom->state, node, saved->was);
+            if (status >= 0 && saved->checkbox)
+                status = os64_page_node_set_indeterminate(dom->state, node, saved->was_indeterminate);
             if (status < 0) { d_page_error(ctx, status); return -1; }
-        } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != was) {
+        } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != saved->was) {
             result = fire(dom, ctx, node, "input", true, false);
             if (result >= 0) result = fire(dom, ctx, node, "change", true, false);
         }
         return result;
     }
-    if (result == 0) return 0;
+    if (canceled) return 0;
     if ((html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA)) &&
         os64_html_attr(node, "href") != NULL) {
         /* A link in a document with no window cannot navigate. */
@@ -547,10 +574,26 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     bool button = html_element(node, OS64_HTML_TAG_BUTTON);
     bool input = html_element(node, OS64_HTML_TAG_INPUT);
     const os64_html_node_t *form = d_form_owner(node);
-    if (form == NULL) return 1;
+    if (form == NULL || disabled(node)) return 1;
     if (submit_button(node)) return submit(dom, ctx, form, node, true);
     if ((button || input) && type_is(node, "reset", false)) return reset(dom, ctx, form);
     return 1;
+}
+
+/* element.click() is a synthetic click. With the switch on it is a
+ * MouseEvent (d_click_event_new), whose dispatch runs the activation, the
+ * element's or, for one with none, its nearest ancestor's. With it off it
+ * is a plain Event, which no dispatch activates, so the element's own
+ * activation runs here, around it, as before the arc. */
+static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+{
+    if (dom->ui_prototypes[D_UI_MOUSE] != NULL)
+        return fire_made(dom, ctx, node, d_click_event_new(dom, ctx, node));
+    DActivation saved;
+    if (d_activation_before(dom, ctx, node, &saved) < 0) return -1;
+    int result = fire(dom, ctx, node, "click", true, true);
+    if (result < 0) return result;
+    return d_activation_after(dom, ctx, node, result == 0, &saved);
 }
 
 /* HTML's click-in-progress flag: an onclick that clicks its own element

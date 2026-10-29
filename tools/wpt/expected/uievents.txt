@@ -1,0 +1,36 @@
+# WPT's uievents in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh uievents --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+idlharness.window.html	Partial dictionary KeyboardEventInit: member names are unique
+idlharness.window.html	Partial dictionary KeyboardEventInit: original dictionary defined
+idlharness.window.html	Partial dictionary UIEventInit: member names are unique
+idlharness.window.html	Partial dictionary UIEventInit: original dictionary defined
+idlharness.window.html	Partial interface CompositionEvent: member names are unique
+idlharness.window.html	Partial interface CompositionEvent: original interface defined
+idlharness.window.html	Partial interface KeyboardEvent: member names are unique
+idlharness.window.html	Partial interface KeyboardEvent: original interface defined
+idlharness.window.html	Partial interface KeyboardEvent[2]: member names are unique
+idlharness.window.html	Partial interface KeyboardEvent[2]: original interface defined
+idlharness.window.html	Partial interface UIEvent: member names are unique
+idlharness.window.html	Partial interface UIEvent: original interface defined
+idlharness.window.html	Partial interface UIEvent[2]: member names are unique
+idlharness.window.html	Partial interface UIEvent[2]: original interface defined
+idlharness.window.html	Partial interface Window: member names are unique
+idlharness.window.html	Window includes AnimationFrameProvider: member names are unique
+idlharness.window.html	Window includes GlobalEventHandlers: member names are unique
+idlharness.window.html	Window includes WindowEventHandlers: member names are unique
+idlharness.window.html	Window includes WindowLocalStorage: member names are unique
+idlharness.window.html	Window includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.window.html	Window includes WindowSessionStorage: member names are unique
+idlharness.window.html	idl_test setup
+idlharness.window.html	idl_test validation
+legacy-domevents-tests/approved/stopImmediatePropagation.effect.html	Test Description: stopImmediatePropagation() prevents other event listeners from being triggered and, unlike Event.stopPropagation(), its effect must be immediate. Once it has been called, further calls to this method have no additional effect.
+legacy-domevents-tests/approved/stopPropagation.deferred.effect.html	Test Description: stopPropagation() prevents other event listeners from being triggered but its effect must be deferred until all event listeners attached on the Event.currentTarget have been triggered.
+legacy-domevents-tests/submissions/Microsoft/converted/EventListener.dispatch.new.event.html	Test Description: Implementations of the DOM event model must be reentrant. Event listeners may perform actions that cause additional events to be dispatched. Such events are handled in a synchronous manner, the event propagation that causes the event listener to be triggered must resume only after the event dispatch of the new event is completed.
+mouse/synthetic-mouse-enter-leave-over-out-button-state-after-target-removed.tentative.html?buttonType=LEFT&button=0&buttons=1	Setup event listeners and wait for load
+mouse/synthetic-mouse-enter-leave-over-out-button-state-after-target-removed.tentative.html?buttonType=MIDDLE&button=1&buttons=4	Setup event listeners and wait for load
+textInput/api.html	initTextEvent() no arguments

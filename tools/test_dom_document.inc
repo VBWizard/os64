@@ -461,11 +461,15 @@ static void dom_document_create_event_cases(void)
     if (!fixture_ready(&f)) return;
     dom_script(&f, STORAGE_ASSERT
         "function proto(n){return Object.getPrototypeOf(document.createEvent(n))}"
-        "for(const n of ['Event','events','HTMLEVENTS','SVGEvents','UIEvent','UIEvents','MouseEvent','MOUSEEVENTS',"
-        "'KeyboardEvent','FocusEvent','CompositionEvent','DragEvent','StorageEvent','TextEvent',"
+        "for(const n of ['Event','events','HTMLEVENTS','SVGEvents','DragEvent','StorageEvent','TextEvent',"
         "'BeforeUnloadEvent','DeviceMotionEvent','DeviceOrientationEvent'])assert(proto(n)===Event.prototype,n);"
         "assert(proto('customevent')===CustomEvent.prototype&&proto('HashChangeEvent')===HashChangeEvent.prototype);"
         "assert(proto('messageEVENT')===MessageEvent.prototype,'MessageEvent, P2b\\'s');"
+        "for(const [n,i] of [['UIEvent',UIEvent],['uievents',UIEvent],['MouseEvent',MouseEvent],"
+        "['MOUSEEVENTS',MouseEvent],['KeyboardEvent',KeyboardEvent],['FocusEvent',FocusEvent],"
+        "['CompositionEvent',CompositionEvent]])assert(proto(n)===i.prototype,'P8: '+n);"
+        "throws('NotSupportedError',()=>document.createEvent('InputEvent'));"
+        "throws('NotSupportedError',()=>document.createEvent('SubmitEvent'));"
         "const h=document.createEvent('hashchangeevent');assert(h.newURL===''&&h.oldURL===''&&h.type==='');"
         "for(const n of ['foo','TouchEvent','touchevent','PopStateEvent','ProgressEvent','MediaQueryListEvent',"
         "'CustomEvents','KeyboardEvents','U\\u0130Event','U\\u0131Event','Event\\u0000','','MouseEvent '])"

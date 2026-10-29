@@ -85,6 +85,7 @@ WPT_DIRS=(
     html/infrastructure/common-dom-interfaces/collections
     html/semantics/tabular-data
     interfaces
+    uievents
 )
 
 top=$(git rev-parse --show-toplevel)

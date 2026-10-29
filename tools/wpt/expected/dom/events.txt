@@ -12,9 +12,8 @@ Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
 EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (CustomEvent).
 # The node row's element names (MODERN_WEB.md § Element names, as built):
 # localName, namespaceURI and prefix. Each fails with the switch off.
-Event-dispatch-click.html	disabled checkbox still has activation behavior
-Event-dispatch-click.html	disabled checkbox still has activation behavior, part 2
-Event-dispatch-click.html	disabled radio still has activation behavior
+# (Event-dispatch-click.html's three were here; the page is excluded since
+# 0f's P8, and the DOM host holds what they asked: modern-on-ui-events.)
 event-disabled-dynamic.html	disabled is honored properly in presence of dynamic changes
 # 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): the element kinds, a
 # body's handlers among them. Each fails with the switch off.
@@ -75,6 +74,7 @@ passive-by-default.html	wheel listener is non-passive with {passive:false} for H
 passive-by-default.html	wheel listener is non-passive with {passive:false} for Window
 passive-by-default.html	wheel listener is non-passive with {passive:undefined} for HTMLDivElement
 [excluded]
+Event-dispatch-click.html	one test clicks a javascript: link while the page loads and waits for it, which yonder never follows (DEBTS.md, a link a script follows before its page is shown), so the page times out whole
 Event-dispatch-on-disabled-elements.html	needs test_driver input, which the runner does not have
 Event-dispatch-redispatch.html	needs test_driver input, which the runner does not have
 Event-dispatch-throwing-multiple-globals.html	needs a frame (IFRAME.md, Tier 1)

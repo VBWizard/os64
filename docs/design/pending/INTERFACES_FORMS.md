@@ -639,6 +639,11 @@ and `html/semantics/document-metadata/the-meta-element`.
   events (0e's handler hazard). Size: M.
 - Oracle: add `uievents/constructors`.
 
+**As built** (MODERN_WEB.md § 0f's P8, as built, is the record): the
+oracle took `uievents` whole, its constructors directory being two pages,
+and DOM's activation moved into the dispatch with it, since a MouseEvent
+click a page dispatches is what WPT and pages ask the new constructor for.
+
 ### What the plan leaves, and why
 
 - **The APIs whose interface objects pages ask for most**, none a prototype

@@ -38,7 +38,9 @@ typedef struct {
     /* A ProgressEvent's (XHR § 4): its three attributes. */
     bool progress, length_computable;
     double loaded, total;
-    /* An ErrorEvent's (HTML § 8.1.4.6): its error, message and filename as
+    /* detail[] holds one interface's values, as each says: an ErrorEvent's,
+     * a PromiseRejectionEvent's, a MessageEvent's, or a UI event's (below).
+     * An ErrorEvent's (HTML § 8.1.4.6): its error, message and filename as
      * detail[0], [1] and [2] (the two strings, strings), and its lineno and
      * colno; a PromiseRejectionEvent's: its promise and reason as detail[0]
      * and [1]; a MessageEvent's (HTML § 9.3.2): its data, origin,
@@ -51,6 +53,21 @@ typedef struct {
      * the event. */
     bool custom;
     JSValue custom_detail;
+    /* A UI event's (UI Events; HTML § 4.10.21.3's SubmitEvent): which
+     * interface it is (D_UI_*), and its attributes. Its view, its
+     * relatedTarget (a SubmitEvent's submitter) and two strings (a
+     * KeyboardEvent's key and code, an InputEvent's data, null or a string,
+     * and inputType, a CompositionEvent's data) are detail[0] to [3]
+     * (U_VIEW on), traced with the event; the rest are here. `which` is
+     * UIEventInit's; `modifiers` a bit each in EventModifierInit's member
+     * order (kModifiers). */
+    uint8_t ui;
+    int32_t ui_detail;
+    uint32_t which, location, char_code, key_code;
+    uint16_t modifiers, buttons;
+    int16_t button;
+    bool repeat, composing;
+    double screen_x, screen_y, client_x, client_y, page_x, page_y;
 } DEvent;
 
 int d_event_kind(const char *type)
@@ -726,10 +743,29 @@ static bool element_has_handler(const os64_dom_t *dom, const os64_html_node_t *n
         !(body_like(node) && window_reflecting(kind)) && handler_attribute(node, kind) != NULL;
 }
 
+/* DOM § 2.9's activation target: for a click a script dispatches as a
+ * MouseEvent at a node, the node when it has activation behaviour, else,
+ * for a click that bubbles, its nearest ancestor that has (window.c's
+ * d_activation_has); NULL for every other dispatch. A host's click is the
+ * host's own to act on, after its dispatch, and a plain Event named click
+ * activates nothing. */
+static const os64_html_node_t *activation_target(const Dispatch *d, const os64_html_node_t *node)
+{
+    if (d->host != NULL || node == NULL || d->event->ui != D_UI_MOUSE || os64_strcmp(d->event->type, "click") != 0)
+        return NULL;
+    if (d_activation_has(node)) return node;
+    for (const os64_html_node_t *at = node->parent; d->event->bubbles && at != NULL; at = at->parent)
+        if (d_activation_has(at)) return at;
+    return NULL;
+}
+
 /* The DOM Standard's dispatch, for one event at one target: the path is the
  * target's ancestors and, past the document, window (except for load);
  * capture down, the target, then bubble up when the event bubbles. A plain
- * target is a path of one. */
+ * target is a path of one. A click's activation (activation_target) runs
+ * its first half before the listeners and its second once the dispatch is
+ * over, the event's phase, current target and flags already reset, as
+ * DOM's steps order them. */
 static int dispatch(Dispatch *d, const os64_html_node_t *node)
 {
     os64_dom_t *dom = d->dom;
@@ -772,7 +808,9 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     dom->current_event = &active;
     event->dispatching = true;
     dom->dispatching++;
-    int result = 0;
+    const os64_html_node_t *activation = activation_target(d, node);
+    DActivation saved = {false, false, false, false};
+    int result = activation != NULL && d_activation_before(dom, ctx, activation, &saved) < 0 ? -1 : 0;
     for (size_t i = count; result == 0 && i > 1; i--)
         result = invoke_target(d, path[i - 1], PHASE_CAPTURING, true);
     if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, true);
@@ -791,6 +829,9 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     sweep(dom);
     /* sweep walks the registry; a collectable target is not on it. */
     if (d->plain != NULL && d->plain->engine_held && dom->dispatching == 0) unlink_removed(dom, d->plain);
+    if (activation != NULL && result == 0 &&
+        d_activation_after(dom, ctx, activation, event->canceled, &saved) < 0)
+        result = -1;
     return result < 0 ? -1 : event->canceled ? 0 : 1;
 }
 
@@ -828,11 +869,13 @@ static bool define_bool(JSContext *ctx, JSValueConst object, const char *name, b
                                      JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE) >= 0;
 }
 
-/* The fields a mouse or key event carries, as plain data. The old web reads
- * keyCode and which; key is the modern spelling of the same key. */
+/* The fields a mouse or key event carries, as plain data, with the Modern
+ * Web switch off (with it on they are a MouseEvent's and a KeyboardEvent's,
+ * ui_host_event). The old web reads keyCode and which; key is the modern
+ * spelling of the same key. */
 static bool event_fields(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_dom_event_t *ev)
 {
-    if (ev->kind == OS64_DOM_EVENT_PLAIN) return true;
+    if (ev->kind != OS64_DOM_EVENT_MOUSE && ev->kind != OS64_DOM_EVENT_KEY) return true;
     bool ok = define_bool(ctx, object, "shiftKey", ev->shift) && define_bool(ctx, object, "ctrlKey", ev->ctrl) &&
         define_bool(ctx, object, "altKey", ev->alt) && define_bool(ctx, object, "metaKey", ev->meta);
     if (ok && ev->kind == OS64_DOM_EVENT_MOUSE) {
@@ -910,11 +953,16 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     return d_task_finish(dom, outcome);
 }
 
-/* A host event as os64_dom_event_t describes it: an Event with its mouse
- * or key fields. */
+static int ui_kind_of(os64_dom_event_kind_t kind);
+static JSValue ui_host_event(os64_dom_t *dom, JSContext *ctx, const os64_dom_event_t *ev, int kind);
+
+/* A host event as os64_dom_event_t describes it: the UI event its kind
+ * names, with the switch on; else an Event with its mouse or key fields. */
 static JSValue host_event(os64_dom_t *dom, JSContext *ctx, void *arg)
 {
     const os64_dom_event_t *ev = arg;
+    int kind = ui_kind_of(ev->kind);
+    if (kind != D_UI_NONE && dom->ui_prototypes[kind] != NULL) return ui_host_event(dom, ctx, ev, kind);
     JSValue object = d_event_new(dom, ctx, ev->type, ev->bubbles, ev->cancelable, true);
     if (!JS_IsException(object) && !event_fields(dom, ctx, object, ev)) {
         JS_FreeValue(ctx, object);
@@ -1353,52 +1401,70 @@ JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
  * that initEvent (or its interface's own init) must set up first. A name
  * not on the table is a NotSupportedError. A name on it is made as the
  * interface it names where this binding has that interface: Event,
- * CustomEvent, HashChangeEvent, MessageEvent. Every other name on the table
- * names an interface this browser has not built (MouseEvent, UIEvent,
- * KeyboardEvent and the rest), and makes a plain Event, which is what every name made
- * before the table was read: `createEvent('MouseEvents')` followed by
- * initEvent is how pages have long dispatched a synthetic click, and
- * refusing the name would break them where today they work (MODERN_WEB.md
- * § P1-Da, as built, says how many). TouchEvent is the exception: DOM puts
+ * CustomEvent, HashChangeEvent, MessageEvent, and the UI events (UIEvent,
+ * MouseEvent, KeyboardEvent, FocusEvent, CompositionEvent). Every other
+ * name on the table names an interface this browser has not built
+ * (BeforeUnloadEvent, DragEvent, StorageEvent, TextEvent and the device
+ * events), and makes a plain Event, which is what every name made before
+ * the table was read: createEvent followed by initEvent is how pages have
+ * long made their events, and refusing a name would break them where today
+ * they work (MODERN_WEB.md § P1-Da, as built, says how many). TouchEvent is the exception: DOM puts
  * it on the table only where the legacy touch APIs are exposed, which a
  * desktop browser does not do (WINDOW_DOCUMENT.md, `ontouchstart` (e)),
  * and a page that makes one has asked "is this a phone?". With the Modern
  * Web switch off the argument is not read and every call makes a plain
  * Event, as before the arc. */
-enum { C_REFUSED, C_EVENT, C_CUSTOM, C_HASHCHANGE, C_MESSAGE, C_UNBUILT };
+/* C_UI is a UI event, the table's `ui` naming which. */
+enum { C_REFUSED, C_EVENT, C_CUSTOM, C_HASHCHANGE, C_MESSAGE, C_UNBUILT, C_UI };
 
 static int message_defaults(os64_dom_t *dom, JSContext *ctx, DEvent *event);
+static int ui_defaults(os64_dom_t *dom, JSContext *ctx, DEvent *event, int kind);
 
-static int creatable(const char *name)
+static int creatable(const char *name, int *ui)
 {
-    static const struct { const char *name; int as; } kTable[] = {
-        {"beforeunloadevent", C_UNBUILT}, {"compositionevent", C_UNBUILT}, {"customevent", C_CUSTOM},
-        {"devicemotionevent", C_UNBUILT}, {"deviceorientationevent", C_UNBUILT}, {"dragevent", C_UNBUILT},
-        {"event", C_EVENT}, {"events", C_EVENT}, {"focusevent", C_UNBUILT}, {"hashchangeevent", C_HASHCHANGE},
-        {"htmlevents", C_EVENT}, {"keyboardevent", C_UNBUILT}, {"messageevent", C_MESSAGE},
-        {"mouseevent", C_UNBUILT}, {"mouseevents", C_UNBUILT}, {"storageevent", C_UNBUILT},
-        {"svgevents", C_EVENT}, {"textevent", C_UNBUILT}, {"touchevent", C_REFUSED},
-        {"uievent", C_UNBUILT}, {"uievents", C_UNBUILT},
+    static const struct { const char *name; int as, ui; } kTable[] = {
+        {"beforeunloadevent", C_UNBUILT, 0}, {"compositionevent", C_UI, D_UI_COMPOSITION},
+        {"customevent", C_CUSTOM, 0}, {"devicemotionevent", C_UNBUILT, 0},
+        {"deviceorientationevent", C_UNBUILT, 0}, {"dragevent", C_UNBUILT, 0}, {"event", C_EVENT, 0},
+        {"events", C_EVENT, 0}, {"focusevent", C_UI, D_UI_FOCUS}, {"hashchangeevent", C_HASHCHANGE, 0},
+        {"htmlevents", C_EVENT, 0}, {"keyboardevent", C_UI, D_UI_KEYBOARD}, {"messageevent", C_MESSAGE, 0},
+        {"mouseevent", C_UI, D_UI_MOUSE}, {"mouseevents", C_UI, D_UI_MOUSE}, {"storageevent", C_UNBUILT, 0},
+        {"svgevents", C_EVENT, 0}, {"textevent", C_UNBUILT, 0}, {"touchevent", C_REFUSED, 0},
+        {"uievent", C_UI, D_UI_EVENT}, {"uievents", C_UI, D_UI_EVENT},
     };
     for (size_t i = 0; i < sizeof(kTable) / sizeof(kTable[0]); i++) {
         const char *a = name, *b = kTable[i].name;
         while (*a != '\0' && *b != '\0' && (*a >= 'A' && *a <= 'Z' ? *a + ('a' - 'A') : *a) == *b) { a++; b++; }
-        if (*a == '\0' && *b == '\0') return kTable[i].as;
+        if (*a == '\0' && *b == '\0') {
+            *ui = kTable[i].ui;
+            return kTable[i].as;
+        }
     }
     return C_REFUSED;
 }
 
 static JSValue create_event(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
 {
-    int as = C_EVENT;
+    int as = C_EVENT, ui = D_UI_NONE;
     if (dom->options.modern) {
         if (argc < 1) return JS_ThrowTypeError(ctx, "createEvent needs an interface's name");
         DString name = {0};
         if (!d_string(dom, ctx, argv[0], &name)) return JS_EXCEPTION;
         /* d_string makes a NUL U+FFFD, which no name on the table holds. */
-        as = creatable(name.data);
+        as = creatable(name.data, &ui);
         d_string_free(dom, &name);
         if (as == C_REFUSED) return d_error(ctx, "NotSupportedError", "createEvent does not know that interface");
+    }
+    if (as == C_UI && dom->ui_prototypes[ui] != NULL) {
+        JSValue object = d_event_new_proto(dom, ctx, dom->ui_prototypes[ui]->value, "", false, false, false);
+        if (JS_IsException(object)) return object;
+        DEvent *event = JS_GetOpaque(object, dom->event_class);
+        event->initialized = false;
+        if (ui_defaults(dom, ctx, event, ui) < 0) {
+            JS_FreeValue(ctx, object);
+            return JS_EXCEPTION;
+        }
+        return object;
     }
     JSValueConst prototype = as == C_CUSTOM && dom->custom_prototype != NULL ? dom->custom_prototype->value
                            : as == C_HASHCHANGE && dom->hashchange_prototype != NULL ? dom->hashchange_prototype->value
@@ -2261,6 +2327,624 @@ int d_message_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
     JS_FreeValue(ctx, event_interface);
     if (JS_IsException(interface)) return -1;
     return JS_DefinePropertyValueStr(ctx, global, "MessageEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+/* UI EVENTS (UI Events § 3 to 5 and its legacy § 8; HTML § 4.10.21.3's
+ * SubmitEvent; CSSOM View § 12's MouseEvent, whose coordinates are doubles
+ * and which has pageX and pageY): UIEvent and the five that inherit it, and
+ * SubmitEvent, which inherits Event. Their attributes are the Event's own
+ * record, so dispatch needs nothing new. A Modern Web row: with the switch
+ * off none of them exists, and a host's mouse and key events carry their
+ * fields as data (event_fields). The interfaces a person here has no way
+ * to fire are absent: PointerEvent above all, whose existence makes pointer
+ * libraries stop listening for mouse events (WINDOW_DOCUMENT.md § The
+ * handler hazard), and WheelEvent, DragEvent and TextEvent. 0f's P8
+ * (INTERFACES_FORMS.md). */
+
+/* Where a UI event keeps its values in the record's detail[]. */
+enum { U_VIEW, U_RELATED, U_TEXT, U_TEXT2 };
+
+static const char *const kUINames[D_UI_KINDS] = {
+    "", "UIEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "InputEvent", "CompositionEvent", "SubmitEvent"
+};
+
+/* EventModifierInit's members in its order, which is the order WebIDL reads
+ * them in, each with the key getModifierState names it by. Bit i of
+ * DEvent.modifiers is the table's row i. */
+static const struct { const char *init, *key; } kModifiers[] = {
+    {"altKey", "Alt"}, {"ctrlKey", "Control"}, {"metaKey", "Meta"}, {"modifierAltGraph", "AltGraph"},
+    {"modifierCapsLock", "CapsLock"}, {"modifierFn", "Fn"}, {"modifierFnLock", "FnLock"},
+    {"modifierHyper", "Hyper"}, {"modifierNumLock", "NumLock"}, {"modifierScrollLock", "ScrollLock"},
+    {"modifierSuper", "Super"}, {"modifierSymbol", "Symbol"}, {"modifierSymbolLock", "SymbolLock"},
+    {"shiftKey", "Shift"}
+};
+_Static_assert(sizeof(kModifiers) / sizeof(kModifiers[0]) <= 16, "the modifiers are a uint16_t's bits");
+/* The four the old spellings (ctrlKey and the rest) read: their rows. */
+enum { MOD_ALT = 0, MOD_CTRL = 1, MOD_META = 2, MOD_SHIFT = 13 };
+
+/* The members, each on its interface's prototype; a getter or method's
+ * magic is its interface (D_UI_*) times 256 plus the member. */
+enum {
+    UM_VIEW, UM_DETAIL, UM_WHICH, UM_INIT_UI,
+    UM_SCREEN_X, UM_SCREEN_Y, UM_CLIENT_X, UM_CLIENT_Y, UM_PAGE_X, UM_PAGE_Y, UM_BUTTON, UM_BUTTONS,
+    UM_RELATED, UM_ALT, UM_CTRL, UM_META, UM_SHIFT, UM_MODIFIER_STATE, UM_INIT_MOUSE,
+    UM_KEY, UM_CODE, UM_LOCATION, UM_REPEAT, UM_COMPOSING, UM_CHAR_CODE, UM_KEY_CODE, UM_INIT_KEYBOARD,
+    UM_DATA, UM_INPUT_TYPE, UM_DATA_TRANSFER, UM_TARGET_RANGES, UM_INIT_COMPOSITION
+};
+
+/* What a dictionary member or an init method's argument sets, each
+ * converted as its IDL type says. The _LONG coordinates are
+ * initMouseEvent's, longs where the dictionary's are doubles. */
+enum {
+    F_DETAIL, F_VIEW, F_WHICH, F_MODIFIER, F_BUTTON, F_BUTTONS, F_CLIENT_X, F_CLIENT_Y, F_RELATED,
+    F_SCREEN_X, F_SCREEN_Y, F_SCREEN_X_LONG, F_SCREEN_Y_LONG, F_CLIENT_X_LONG, F_CLIENT_Y_LONG,
+    F_CHAR_CODE, F_CODE, F_COMPOSING, F_KEY, F_KEY_CODE, F_LOCATION, F_REPEAT,
+    F_INPUT_DATA, F_DATA_TRANSFER, F_INPUT_TYPE, F_TARGET_RANGES, F_DATA, F_SUBMITTER
+};
+typedef struct { const char *name; uint8_t field, bit; } DUIMember;
+
+/* Each init dictionary's own members, in WebIDL's reading order (by name;
+ * a legacy partial dictionary's members join theirs). UIEventInit's come
+ * before an inheriting one's, and EventModifierInit's (kModifiers) between
+ * them for a MouseEventInit or a KeyboardEventInit. */
+static const DUIMember kUIInit[] = {{"detail", F_DETAIL, 0}, {"view", F_VIEW, 0}, {"which", F_WHICH, 0}};
+static const DUIMember kMouseInit[] = {
+    {"button", F_BUTTON, 0}, {"buttons", F_BUTTONS, 0}, {"clientX", F_CLIENT_X, 0}, {"clientY", F_CLIENT_Y, 0},
+    {"relatedTarget", F_RELATED, 0}, {"screenX", F_SCREEN_X, 0}, {"screenY", F_SCREEN_Y, 0}
+};
+static const DUIMember kKeyboardInit[] = {
+    {"charCode", F_CHAR_CODE, 0}, {"code", F_CODE, 0}, {"isComposing", F_COMPOSING, 0}, {"key", F_KEY, 0},
+    {"keyCode", F_KEY_CODE, 0}, {"location", F_LOCATION, 0}, {"repeat", F_REPEAT, 0}
+};
+static const DUIMember kFocusInit[] = {{"relatedTarget", F_RELATED, 0}};
+static const DUIMember kInputInit[] = {
+    {"data", F_INPUT_DATA, 0}, {"dataTransfer", F_DATA_TRANSFER, 0}, {"inputType", F_INPUT_TYPE, 0},
+    {"isComposing", F_COMPOSING, 0}, {"targetRanges", F_TARGET_RANGES, 0}
+};
+static const DUIMember kCompositionInit[] = {{"data", F_DATA, 0}};
+static const DUIMember kSubmitInit[] = {{"submitter", F_SUBMITTER, 0}};
+
+/* The legacy init methods' arguments after cancelableArg, in order. */
+static const DUIMember kUIArgs[] = {{NULL, F_VIEW, 0}, {NULL, F_DETAIL, 0}};
+static const DUIMember kMouseArgs[] = {
+    {NULL, F_VIEW, 0}, {NULL, F_DETAIL, 0}, {NULL, F_SCREEN_X_LONG, 0}, {NULL, F_SCREEN_Y_LONG, 0},
+    {NULL, F_CLIENT_X_LONG, 0}, {NULL, F_CLIENT_Y_LONG, 0}, {NULL, F_MODIFIER, MOD_CTRL},
+    {NULL, F_MODIFIER, MOD_ALT}, {NULL, F_MODIFIER, MOD_SHIFT}, {NULL, F_MODIFIER, MOD_META},
+    {NULL, F_BUTTON, 0}, {NULL, F_RELATED, 0}
+};
+static const DUIMember kKeyboardArgs[] = {
+    {NULL, F_VIEW, 0}, {NULL, F_KEY, 0}, {NULL, F_LOCATION, 0}, {NULL, F_MODIFIER, MOD_CTRL},
+    {NULL, F_MODIFIER, MOD_ALT}, {NULL, F_MODIFIER, MOD_SHIFT}, {NULL, F_MODIFIER, MOD_META}
+};
+static const DUIMember kCompositionArgs[] = {{NULL, F_VIEW, 0}, {NULL, F_DATA, 0}};
+
+/* Whether `event` is a `kind`: a UIEvent is any of the five that inherit
+ * it too, D_UI_EVENT to D_UI_COMPOSITION in internal.h's order. */
+static bool ui_implements(const DEvent *event, int kind)
+{
+    if (kind == D_UI_EVENT) return event->ui >= D_UI_EVENT && event->ui <= D_UI_COMPOSITION;
+    return event->ui == kind;
+}
+
+static void ui_set(JSContext *ctx, DEvent *event, int slot, JSValue value)
+{
+    JS_FreeValue(ctx, event->detail[slot]);
+    event->detail[slot] = value;
+}
+
+/* A UI event's record as `kind`'s defaults leave it: its view and
+ * relatedTarget null, its strings "" (an InputEvent's data null). -1 with
+ * an exception pending. */
+static int ui_defaults(os64_dom_t *dom, JSContext *ctx, DEvent *event, int kind)
+{
+    (void)dom;
+    bool texts = kind == D_UI_KEYBOARD || kind == D_UI_INPUT || kind == D_UI_COMPOSITION;
+    JSValue first = !texts ? JS_UNDEFINED : kind == D_UI_INPUT ? JS_NULL : JS_NewString(ctx, "");
+    JSValue second = kind == D_UI_KEYBOARD || kind == D_UI_INPUT ? JS_NewString(ctx, "") : JS_UNDEFINED;
+    if (JS_IsException(first) || JS_IsException(second)) {
+        JS_FreeValue(ctx, first);
+        JS_FreeValue(ctx, second);
+        return -1;
+    }
+    event->ui = (uint8_t)kind;
+    ui_set(ctx, event, U_VIEW, JS_NULL);
+    ui_set(ctx, event, U_RELATED, JS_NULL);
+    ui_set(ctx, event, U_TEXT, first);
+    ui_set(ctx, event, U_TEXT2, second);
+    return 0;
+}
+
+/* Window? (a view): the window, or null for undefined and null. */
+static JSValue ui_view(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
+    if (JS_IsObject(value) && JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(dom->window->value))
+        return JS_DupValue(ctx, value);
+    return JS_ThrowTypeError(ctx, "A view is a Window or null");
+}
+
+/* EventTarget? (a relatedTarget): the window, a node or an Attr, a plain
+ * target, or null. */
+static JSValue ui_target(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
+    DValue *entry = NULL;
+    int plain = plain_entry(dom, ctx, value, false, &entry);
+    if (plain < 0) return JS_EXCEPTION;
+    bool target = plain > 0 ||
+        (JS_IsObject(value) && (JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(dom->window->value) ||
+                                JS_GetOpaque(value, dom->node_class) != NULL || d_is_attr(dom, value)));
+    if (!target) return JS_ThrowTypeError(ctx, "A relatedTarget is an EventTarget or null");
+    return JS_DupValue(ctx, value);
+}
+
+/* HTMLElement? (a submitter): an element in HTML's namespace, or null. */
+static JSValue ui_submitter(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
+    DValue *entry = JS_IsObject(value) ? JS_GetOpaque(value, dom->node_class) : NULL;
+    const os64_html_node_t *node = entry != NULL ? entry->node : NULL;
+    if (node == NULL || node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML)
+        return JS_ThrowTypeError(ctx, "A submitter is an HTML element or null");
+    return JS_DupValue(ctx, value);
+}
+
+/* A restricted double: finite, or a TypeError. */
+static int ui_double(JSContext *ctx, JSValueConst value, double *out)
+{
+    if (JS_ToFloat64(ctx, out, value) < 0) return -1;
+    if (*out != *out || *out - *out != 0) {
+        JS_ThrowTypeError(ctx, "A coordinate is a finite number");
+        return -1;
+    }
+    return 0;
+}
+
+/* One member or argument, `value`, converted as `field`'s IDL type says
+ * and set on `event` (`bit`: F_MODIFIER's row). -1 with an exception
+ * pending and the event as it was. */
+static int ui_field(os64_dom_t *dom, JSContext *ctx, DEvent *event, int field, int bit, JSValueConst value)
+{
+    int32_t n = 0;
+    int slot = U_TEXT;
+    JSValue string;
+    switch (field) {
+    case F_DETAIL: return JS_ToInt32(ctx, &event->ui_detail, value);
+    case F_WHICH: return JS_ToUint32(ctx, &event->which, value);
+    case F_CHAR_CODE: return JS_ToUint32(ctx, &event->char_code, value);
+    case F_KEY_CODE: return JS_ToUint32(ctx, &event->key_code, value);
+    case F_LOCATION: return JS_ToUint32(ctx, &event->location, value);
+    case F_BUTTON: case F_BUTTONS:
+    case F_SCREEN_X_LONG: case F_SCREEN_Y_LONG: case F_CLIENT_X_LONG: case F_CLIENT_Y_LONG:
+        if (JS_ToInt32(ctx, &n, value) < 0) return -1;
+        if (field == F_BUTTON) event->button = (int16_t)n;
+        else if (field == F_BUTTONS) event->buttons = (uint16_t)n;
+        else if (field == F_SCREEN_X_LONG) event->screen_x = n;
+        else if (field == F_SCREEN_Y_LONG) event->screen_y = n;
+        else if (field == F_CLIENT_X_LONG) event->client_x = n;
+        else event->client_y = n;
+        return 0;
+    case F_SCREEN_X: return ui_double(ctx, value, &event->screen_x);
+    case F_SCREEN_Y: return ui_double(ctx, value, &event->screen_y);
+    case F_CLIENT_X: return ui_double(ctx, value, &event->client_x);
+    case F_CLIENT_Y: return ui_double(ctx, value, &event->client_y);
+    case F_MODIFIER: case F_COMPOSING: case F_REPEAT: {
+        int flag = JS_ToBool(ctx, value);
+        if (flag < 0) return -1;
+        if (field == F_COMPOSING) event->composing = flag != 0;
+        else if (field == F_REPEAT) event->repeat = flag != 0;
+        else event->modifiers = (uint16_t)(flag ? event->modifiers | 1u << bit : event->modifiers & ~(1u << bit));
+        return 0;
+    }
+    case F_DATA_TRANSFER:
+        if (JS_IsNull(value)) return 0;
+        JS_ThrowTypeError(ctx, "An InputEvent's dataTransfer is a DataTransfer, which this browser does not have");
+        return -1;
+    case F_TARGET_RANGES: {
+        JSValue *items;
+        size_t count;
+        if (d_sequence(dom, ctx, value, D_SEQUENCE_MAX, &items, &count) < 0) return -1;
+        d_sequence_free(ctx, items, count);
+        if (count == 0) return 0;
+        JS_ThrowTypeError(ctx, "An InputEvent's targetRanges are StaticRanges, which this browser does not have");
+        return -1;
+    }
+    case F_VIEW: string = ui_view(dom, ctx, value); slot = U_VIEW; break;
+    case F_RELATED: string = ui_target(dom, ctx, value); slot = U_RELATED; break;
+    case F_SUBMITTER: string = ui_submitter(dom, ctx, value); slot = U_RELATED; break;
+    case F_INPUT_DATA: string = JS_IsNull(value) ? JS_NULL : JS_ToString(ctx, value); break;
+    case F_CODE: case F_INPUT_TYPE: string = JS_ToString(ctx, value); slot = U_TEXT2; break;
+    default: string = JS_ToString(ctx, value); break;     /* F_KEY, F_DATA */
+    }
+    if (JS_IsException(string)) return -1;
+    ui_set(ctx, event, slot, string);
+    return 0;
+}
+
+/* `init`'s members in `members`, each read and converted before the next
+ * is read; one undefined keeps its default. */
+static int ui_read(os64_dom_t *dom, JSContext *ctx, DEvent *event, JSValueConst init, const DUIMember *members,
+                   size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        JSValue value = JS_GetPropertyStr(ctx, init, members[i].name);
+        if (JS_IsException(value)) return -1;
+        int result = JS_IsUndefined(value) ? 0 : ui_field(dom, ctx, event, members[i].field, members[i].bit, value);
+        JS_FreeValue(ctx, value);
+        if (result < 0) return -1;
+    }
+    return 0;
+}
+
+/* A UI event's init dictionary past EventInit, as WebIDL reads an inherited
+ * one: UIEventInit's members, then EventModifierInit's for a mouse or key
+ * event, then its own. */
+static int ui_read_init(os64_dom_t *dom, JSContext *ctx, DEvent *event, JSValueConst init, int kind)
+{
+    if (kind != D_UI_SUBMIT && ui_read(dom, ctx, event, init, kUIInit, sizeof(kUIInit) / sizeof(kUIInit[0])) < 0)
+        return -1;
+    for (size_t i = 0; (kind == D_UI_MOUSE || kind == D_UI_KEYBOARD) && i < sizeof(kModifiers) / sizeof(kModifiers[0]);
+         i++) {
+        const DUIMember modifier = {kModifiers[i].init, F_MODIFIER, (uint8_t)i};
+        if (ui_read(dom, ctx, event, init, &modifier, 1) < 0) return -1;
+    }
+    switch (kind) {
+    case D_UI_MOUSE: return ui_read(dom, ctx, event, init, kMouseInit, sizeof(kMouseInit) / sizeof(kMouseInit[0]));
+    case D_UI_KEYBOARD:
+        return ui_read(dom, ctx, event, init, kKeyboardInit, sizeof(kKeyboardInit) / sizeof(kKeyboardInit[0]));
+    case D_UI_FOCUS: return ui_read(dom, ctx, event, init, kFocusInit, 1);
+    case D_UI_INPUT: return ui_read(dom, ctx, event, init, kInputInit, sizeof(kInputInit) / sizeof(kInputInit[0]));
+    case D_UI_COMPOSITION: return ui_read(dom, ctx, event, init, kCompositionInit, 1);
+    case D_UI_SUBMIT: return ui_read(dom, ctx, event, init, kSubmitInit, 1);
+    default: return 0;
+    }
+}
+
+/* new UIEvent(type, init) and the rest: the Event made (EventInit's
+ * members read), then the record's defaults, then the rest of the
+ * dictionary. pageX and pageY are clientX and clientY: CSSOM View adds the
+ * view's scroll offset outside a dispatch, which this binding leaves out
+ * (DEBTS.md). */
+static JSValue ui_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv, int kind)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue object = constructed_event(dom, ctx, new_target, argc, argv, dom->ui_prototypes[kind]->value);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    int result = ui_defaults(dom, ctx, event, kind);
+    if (result == 0 && argc > 1 && JS_IsObject(argv[1])) result = ui_read_init(dom, ctx, event, argv[1], kind);
+    if (result < 0) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    event->page_x = event->client_x;
+    event->page_y = event->client_y;
+    return object;
+}
+
+static JSValue ui_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_EVENT);
+}
+static JSValue mouse_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_MOUSE);
+}
+static JSValue keyboard_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_KEYBOARD);
+}
+static JSValue focus_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_FOCUS);
+}
+static JSValue input_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_INPUT);
+}
+static JSValue composition_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_COMPOSITION);
+}
+static JSValue submit_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return ui_construct(ctx, new_target, argc, argv, D_UI_SUBMIT);
+}
+
+/* One of an init method's arguments, converted into `from`, moved onto
+ * `to`. */
+static void ui_take(JSContext *ctx, DEvent *to, DEvent *from, int field, int bit)
+{
+    int slot = -1;
+    switch (field) {
+    case F_VIEW: slot = U_VIEW; break;
+    case F_RELATED: slot = U_RELATED; break;
+    case F_KEY: case F_DATA: slot = U_TEXT; break;
+    case F_DETAIL: to->ui_detail = from->ui_detail; break;
+    case F_SCREEN_X_LONG: to->screen_x = from->screen_x; break;
+    case F_SCREEN_Y_LONG: to->screen_y = from->screen_y; break;
+    case F_CLIENT_X_LONG: to->client_x = from->client_x; break;
+    case F_CLIENT_Y_LONG: to->client_y = from->client_y; break;
+    case F_BUTTON: to->button = from->button; break;
+    case F_LOCATION: to->location = from->location; break;
+    case F_MODIFIER:
+        to->modifiers = (uint16_t)((to->modifiers & ~(1u << bit)) | (from->modifiers & 1u << bit));
+        break;
+    default: break;
+    }
+    if (slot < 0) return;
+    ui_set(ctx, to, slot, from->detail[slot]);
+    from->detail[slot] = JS_UNDEFINED;
+}
+
+/* initUIEvent, initMouseEvent, initKeyboardEvent, initCompositionEvent
+ * (UI Events § 8): every argument converted, in order, an argument left
+ * out taking its default (a view and relatedTarget null, a string "",
+ * zero, false), before the event changes, so one that throws leaves it as
+ * it was; during a dispatch it then does nothing. Each sets what its
+ * arguments name and nothing else, initMouseEvent's pageX and pageY being
+ * its clientX and clientY. */
+static JSValue ui_init(os64_dom_t *dom, JSContext *ctx, DEvent *event, int argc, JSValueConst *argv, int member)
+{
+    const DUIMember *args = member == UM_INIT_MOUSE ? kMouseArgs
+                          : member == UM_INIT_KEYBOARD ? kKeyboardArgs
+                          : member == UM_INIT_COMPOSITION ? kCompositionArgs : kUIArgs;
+    size_t count = member == UM_INIT_MOUSE ? sizeof(kMouseArgs) / sizeof(kMouseArgs[0])
+                 : member == UM_INIT_KEYBOARD ? sizeof(kKeyboardArgs) / sizeof(kKeyboardArgs[0])
+                 : member == UM_INIT_COMPOSITION ? sizeof(kCompositionArgs) / sizeof(kCompositionArgs[0])
+                 : sizeof(kUIArgs) / sizeof(kUIArgs[0]);
+    const char *who = member == UM_INIT_MOUSE ? "initMouseEvent" : member == UM_INIT_KEYBOARD ? "initKeyboardEvent"
+                    : member == UM_INIT_COMPOSITION ? "initCompositionEvent" : "initUIEvent";
+    DInit init;
+    if (event_init_read(ctx, argc, argv, who, &init) < 0) return JS_EXCEPTION;
+    DEvent next;
+    os64_memset(&next, 0, sizeof(next));
+    for (int i = 0; i < D_EVENT_DETAILS; i++) next.detail[i] = JS_NULL;
+    next.detail[U_TEXT] = JS_NewString(ctx, "");
+    bool failed = JS_IsException(next.detail[U_TEXT]);
+    for (size_t i = 0; !failed && i < count; i++) {
+        int at = 3 + (int)i;
+        if (at < argc && !JS_IsUndefined(argv[at]))
+            failed = ui_field(dom, ctx, &next, args[i].field, args[i].bit, argv[at]) < 0;
+    }
+    if (!failed && !event->dispatching) {
+        event_init_set(ctx, event, &init);
+        for (size_t i = 0; i < count; i++) ui_take(ctx, event, &next, args[i].field, args[i].bit);
+        if (member == UM_INIT_MOUSE) {
+            event->page_x = event->client_x;
+            event->page_y = event->client_y;
+        }
+    }
+    js_free(ctx, init.type);
+    for (int i = 0; i < D_EVENT_DETAILS; i++) JS_FreeValue(ctx, next.detail[i]);
+    return failed ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+static JSValue ui_modifier_state(JSContext *ctx, const DEvent *event, int argc, JSValueConst *argv)
+{
+    if (argc < 1) return JS_ThrowTypeError(ctx, "getModifierState needs a key");
+    size_t length;
+    const char *key = JS_ToCStringLen(ctx, &length, argv[0]);
+    if (key == NULL) return JS_EXCEPTION;
+    bool on = false;
+    for (size_t i = 0; i < sizeof(kModifiers) / sizeof(kModifiers[0]); i++)
+        if (os64_strlen(kModifiers[i].key) == length && os64_strcmp(key, kModifiers[i].key) == 0)
+            on = (event->modifiers & 1u << i) != 0;
+    JS_FreeCString(ctx, key);
+    return JS_NewBool(ctx, on);
+}
+
+static JSValue ui_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    int kind = magic >> 8, member = magic & 0xff;
+    DEvent *event = JS_GetOpaque(self, dom->event_class);
+    if (event == NULL || !ui_implements(event, kind)) return JS_ThrowTypeError(ctx, "Expected a %s", kUINames[kind]);
+    switch (member) {
+    case UM_VIEW: return JS_DupValue(ctx, event->detail[U_VIEW]);
+    case UM_DETAIL: return JS_NewInt32(ctx, event->ui_detail);
+    case UM_WHICH: return JS_NewUint32(ctx, event->which);
+    case UM_SCREEN_X: return JS_NewFloat64(ctx, event->screen_x);
+    case UM_SCREEN_Y: return JS_NewFloat64(ctx, event->screen_y);
+    case UM_CLIENT_X: return JS_NewFloat64(ctx, event->client_x);
+    case UM_CLIENT_Y: return JS_NewFloat64(ctx, event->client_y);
+    case UM_PAGE_X: return JS_NewFloat64(ctx, event->page_x);
+    case UM_PAGE_Y: return JS_NewFloat64(ctx, event->page_y);
+    case UM_BUTTON: return JS_NewInt32(ctx, event->button);
+    case UM_BUTTONS: return JS_NewInt32(ctx, event->buttons);
+    case UM_RELATED: return JS_DupValue(ctx, event->detail[U_RELATED]);
+    case UM_ALT: return JS_NewBool(ctx, (event->modifiers & 1u << MOD_ALT) != 0);
+    case UM_CTRL: return JS_NewBool(ctx, (event->modifiers & 1u << MOD_CTRL) != 0);
+    case UM_META: return JS_NewBool(ctx, (event->modifiers & 1u << MOD_META) != 0);
+    case UM_SHIFT: return JS_NewBool(ctx, (event->modifiers & 1u << MOD_SHIFT) != 0);
+    case UM_MODIFIER_STATE: return ui_modifier_state(ctx, event, argc, argv);
+    case UM_KEY: case UM_DATA: return JS_DupValue(ctx, event->detail[U_TEXT]);
+    case UM_CODE: case UM_INPUT_TYPE: return JS_DupValue(ctx, event->detail[U_TEXT2]);
+    case UM_LOCATION: return JS_NewUint32(ctx, event->location);
+    case UM_REPEAT: return JS_NewBool(ctx, event->repeat);
+    case UM_COMPOSING: return JS_NewBool(ctx, event->composing);
+    case UM_CHAR_CODE: return JS_NewUint32(ctx, event->char_code);
+    case UM_KEY_CODE: return JS_NewUint32(ctx, event->key_code);
+    case UM_DATA_TRANSFER: return JS_NULL;
+    case UM_TARGET_RANGES: return JS_NewArray(ctx);
+    case UM_INIT_UI: case UM_INIT_MOUSE: case UM_INIT_KEYBOARD: case UM_INIT_COMPOSITION:
+        return ui_init(dom, ctx, event, argc, argv, member);
+    default: return JS_ThrowTypeError(ctx, "Unknown UI event member");
+    }
+}
+
+static int ui_kind_of(os64_dom_event_kind_t kind)
+{
+    switch (kind) {
+    case OS64_DOM_EVENT_MOUSE: return D_UI_MOUSE;
+    case OS64_DOM_EVENT_KEY: return D_UI_KEYBOARD;
+    case OS64_DOM_EVENT_FOCUS: return D_UI_FOCUS;
+    case OS64_DOM_EVENT_INPUT: return D_UI_INPUT;
+    case OS64_DOM_EVENT_SUBMIT: return D_UI_SUBMIT;
+    default: return D_UI_NONE;
+    }
+}
+
+/* A host event as the UI event its kind names, trusted: its view the
+ * window (a SubmitEvent has none), its other node its relatedTarget or
+ * submitter. A mouse event's `which` is its button's, one up, and a key
+ * event's its keyCode, as Blink answers (UI Events § 8.3 leaves both to
+ * the browser). An InputEvent's data is null and its inputType "": the
+ * host does not say what the edit was (DEBTS.md), and a KeyboardEvent's
+ * code is "" for the same reason. */
+static JSValue ui_host_event(os64_dom_t *dom, JSContext *ctx, const os64_dom_event_t *ev, int kind)
+{
+    JSValue object = d_event_new_proto(dom, ctx, dom->ui_prototypes[kind]->value, ev->type, ev->bubbles,
+                                       ev->cancelable, true);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    JSValue related = JS_NULL, key = JS_UNDEFINED;
+    bool failed = ui_defaults(dom, ctx, event, kind) < 0;
+    if (!failed && ev->related != NULL) related = d_wrap(dom, ctx, ev->related);
+    if (!failed && kind == D_UI_KEYBOARD) key = JS_NewString(ctx, ev->key != NULL ? ev->key : "");
+    if (failed || JS_IsException(related) || JS_IsException(key)) {
+        JS_FreeValue(ctx, related);
+        JS_FreeValue(ctx, key);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    if (kind != D_UI_SUBMIT) ui_set(ctx, event, U_VIEW, JS_DupValue(ctx, dom->window->value));
+    ui_set(ctx, event, U_RELATED, related);
+    event->ui_detail = ev->detail;
+    if (kind == D_UI_MOUSE || kind == D_UI_KEYBOARD)
+        event->modifiers = (uint16_t)((ev->alt ? 1u << MOD_ALT : 0) | (ev->ctrl ? 1u << MOD_CTRL : 0) |
+                                      (ev->meta ? 1u << MOD_META : 0) | (ev->shift ? 1u << MOD_SHIFT : 0));
+    if (kind == D_UI_MOUSE) {
+        event->screen_x = ev->screen_x;
+        event->screen_y = ev->screen_y;
+        event->client_x = ev->client_x;
+        event->client_y = ev->client_y;
+        event->page_x = ev->page_coordinates ? ev->page_x : ev->client_x;
+        event->page_y = ev->page_coordinates ? ev->page_y : ev->client_y;
+        event->button = (int16_t)ev->button;
+        event->buttons = ev->buttons;
+        event->which = (uint32_t)(ev->button + 1);
+    }
+    if (kind == D_UI_KEYBOARD) {
+        ui_set(ctx, event, U_TEXT, key);
+        event->key_code = ev->key_code;
+        event->char_code = ev->char_code;
+        event->which = ev->key_code;
+    }
+    return object;
+}
+
+JSValue d_click_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+{
+    if (dom->ui_prototypes[D_UI_MOUSE] == NULL) return d_event_new(dom, ctx, "click", true, true, false);
+    JSValue object = d_event_new_proto(dom, ctx, dom->ui_prototypes[D_UI_MOUSE]->value, "click", true, true, false);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    if (ui_defaults(dom, ctx, event, D_UI_MOUSE) < 0) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    if (d_window_document(dom, node)) ui_set(ctx, event, U_VIEW, JS_DupValue(ctx, dom->window->value));
+    return object;
+}
+
+JSValue d_submit_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *submitter)
+{
+    if (dom->ui_prototypes[D_UI_SUBMIT] == NULL) return d_event_new(dom, ctx, "submit", true, true, false);
+    JSValue object = d_event_new_proto(dom, ctx, dom->ui_prototypes[D_UI_SUBMIT]->value, "submit", true, true,
+                                       false);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    JSValue by = submitter != NULL ? d_wrap(dom, ctx, submitter) : JS_NULL;
+    if (JS_IsException(by) || ui_defaults(dom, ctx, event, D_UI_SUBMIT) < 0) {
+        JS_FreeValue(ctx, by);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    ui_set(ctx, event, U_RELATED, by);
+    return object;
+}
+
+int d_ui_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    static const struct { uint8_t kind, member; const char *name; int8_t argc; } kMembers[] = {
+        /* argc -1: an attribute. */
+        {D_UI_EVENT, UM_VIEW, "view", -1}, {D_UI_EVENT, UM_DETAIL, "detail", -1},
+        {D_UI_EVENT, UM_WHICH, "which", -1}, {D_UI_EVENT, UM_INIT_UI, "initUIEvent", 1},
+        {D_UI_MOUSE, UM_SCREEN_X, "screenX", -1}, {D_UI_MOUSE, UM_SCREEN_Y, "screenY", -1},
+        {D_UI_MOUSE, UM_CLIENT_X, "clientX", -1}, {D_UI_MOUSE, UM_CLIENT_Y, "clientY", -1},
+        {D_UI_MOUSE, UM_CLIENT_X, "x", -1}, {D_UI_MOUSE, UM_CLIENT_Y, "y", -1},
+        {D_UI_MOUSE, UM_PAGE_X, "pageX", -1}, {D_UI_MOUSE, UM_PAGE_Y, "pageY", -1},
+        {D_UI_MOUSE, UM_CTRL, "ctrlKey", -1}, {D_UI_MOUSE, UM_SHIFT, "shiftKey", -1},
+        {D_UI_MOUSE, UM_ALT, "altKey", -1}, {D_UI_MOUSE, UM_META, "metaKey", -1},
+        {D_UI_MOUSE, UM_BUTTON, "button", -1}, {D_UI_MOUSE, UM_BUTTONS, "buttons", -1},
+        {D_UI_MOUSE, UM_RELATED, "relatedTarget", -1}, {D_UI_MOUSE, UM_MODIFIER_STATE, "getModifierState", 1},
+        {D_UI_MOUSE, UM_INIT_MOUSE, "initMouseEvent", 1},
+        {D_UI_KEYBOARD, UM_KEY, "key", -1}, {D_UI_KEYBOARD, UM_CODE, "code", -1},
+        {D_UI_KEYBOARD, UM_LOCATION, "location", -1}, {D_UI_KEYBOARD, UM_CTRL, "ctrlKey", -1},
+        {D_UI_KEYBOARD, UM_SHIFT, "shiftKey", -1}, {D_UI_KEYBOARD, UM_ALT, "altKey", -1},
+        {D_UI_KEYBOARD, UM_META, "metaKey", -1}, {D_UI_KEYBOARD, UM_REPEAT, "repeat", -1},
+        {D_UI_KEYBOARD, UM_COMPOSING, "isComposing", -1}, {D_UI_KEYBOARD, UM_CHAR_CODE, "charCode", -1},
+        {D_UI_KEYBOARD, UM_KEY_CODE, "keyCode", -1}, {D_UI_KEYBOARD, UM_MODIFIER_STATE, "getModifierState", 1},
+        {D_UI_KEYBOARD, UM_INIT_KEYBOARD, "initKeyboardEvent", 1},
+        {D_UI_FOCUS, UM_RELATED, "relatedTarget", -1},
+        {D_UI_INPUT, UM_DATA, "data", -1}, {D_UI_INPUT, UM_COMPOSING, "isComposing", -1},
+        {D_UI_INPUT, UM_INPUT_TYPE, "inputType", -1}, {D_UI_INPUT, UM_DATA_TRANSFER, "dataTransfer", -1},
+        {D_UI_INPUT, UM_TARGET_RANGES, "getTargetRanges", 0},
+        {D_UI_COMPOSITION, UM_DATA, "data", -1}, {D_UI_COMPOSITION, UM_INIT_COMPOSITION, "initCompositionEvent", 1},
+        {D_UI_SUBMIT, UM_RELATED, "submitter", -1},
+    };
+    static JSCFunction *const kConstructors[D_UI_KINDS] = {
+        NULL, ui_event_constructor, mouse_event_constructor, keyboard_event_constructor, focus_event_constructor,
+        input_event_constructor, composition_event_constructor, submit_event_constructor
+    };
+    JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
+    for (int kind = D_UI_EVENT; kind < D_UI_KINDS; kind++) {
+        JSValueConst parent = kind == D_UI_EVENT || kind == D_UI_SUBMIT ? (JSValueConst)event_prototype
+                                                                          : dom->ui_prototypes[D_UI_EVENT]->value;
+        dom->ui_prototypes[kind] = d_retain(dom, ctx, JS_NewObjectProto(ctx, parent));
+        if (dom->ui_prototypes[kind] == NULL) {
+            JS_FreeValue(ctx, event_prototype);
+            return -1;
+        }
+    }
+    JS_FreeValue(ctx, event_prototype);
+    for (size_t i = 0; i < sizeof(kMembers) / sizeof(kMembers[0]); i++) {
+        JSValueConst prototype = dom->ui_prototypes[kMembers[i].kind]->value;
+        int magic = kMembers[i].kind << 8 | kMembers[i].member;
+        int result = kMembers[i].argc < 0
+            ? d_accessor(dom, ctx, prototype, kMembers[i].name, ui_member, magic, false)
+            : d_method_named(dom, ctx, prototype, kMembers[i].name, ui_member, kMembers[i].argc, magic);
+        if (result < 0) return -1;
+    }
+    /* interfaces[D_UI_NONE] is Event's, which UIEvent and SubmitEvent
+     * inherit. */
+    JSValue interfaces[D_UI_KINDS];
+    for (int kind = 0; kind < D_UI_KINDS; kind++) interfaces[kind] = JS_UNDEFINED;
+    interfaces[D_UI_NONE] = JS_GetPropertyStr(ctx, global, "Event");
+    int result = JS_IsException(interfaces[D_UI_NONE]) ? -1 : 0;
+    for (int kind = D_UI_EVENT; result == 0 && kind < D_UI_KINDS; kind++) {
+        JSValueConst parent = kind == D_UI_EVENT || kind == D_UI_SUBMIT ? interfaces[D_UI_NONE] : interfaces[D_UI_EVENT];
+        interfaces[kind] = d_interface_new(ctx, kUINames[kind], 1, kConstructors[kind],
+                                           dom->ui_prototypes[kind]->value, parent);
+        if (JS_IsException(interfaces[kind]) ||
+            JS_DefinePropertyValueStr(ctx, global, kUINames[kind], JS_DupValue(ctx, interfaces[kind]),
+                                      JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    /* KeyboardEvent's key locations, on its interface and its prototype. */
+    static const char *const kLocations[] = {
+        "DOM_KEY_LOCATION_STANDARD", "DOM_KEY_LOCATION_LEFT", "DOM_KEY_LOCATION_RIGHT", "DOM_KEY_LOCATION_NUMPAD"
+    };
+    JSValueConst holders[] = {interfaces[D_UI_KEYBOARD], dom->ui_prototypes[D_UI_KEYBOARD]->value};
+    for (int i = 0; result == 0 && i < 4; i++)
+        for (int h = 0; result == 0 && h < 2; h++)
+            if (JS_DefinePropertyValueStr(ctx, holders[h], kLocations[i], JS_NewInt32(ctx, i), JS_PROP_ENUMERABLE) < 0)
+                result = -1;
+    for (int kind = 0; kind < D_UI_KINDS; kind++) JS_FreeValue(ctx, interfaces[kind]);
+    return result;
 }
 
 /* ── EventTarget and Window, their names (0f's P1b) ─────────────────────
