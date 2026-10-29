@@ -289,9 +289,11 @@ interface names (§ P1-Da's rows), and with it off makes a plain Event
 whatever it is asked. An event reads `type`, `target`, `srcElement`, `currentTarget`,
 `eventPhase`, `bubbles`, `cancelable`, `defaultPrevented`, `timeStamp` (the
 host's clock), `isTrusted`, and the writable old spellings `returnValue` and
-`cancelBubble`. Host events also carry the mouse fields (`clientX/Y`,
-`pageX/Y`, `screenX/Y`, `button`, `which`, `relatedTarget`) or the key fields
-(`key`, `keyCode`, `charCode`, `which`) and the modifier flags, as data.
+`cancelBubble`. With the switch off, host events also carry the mouse
+fields (`clientX/Y`, `pageX/Y`, `screenX/Y`, `button`, `which`,
+`relatedTarget`) or the key fields (`key`, `keyCode`, `charCode`, `which`)
+and the modifier flags, as data; with it on, each is the UI event its kind
+names, its fields its own record's (§ 0f P1a's rows, the UI events row).
 
 **Where the values live.** A target's listener list hangs off its wrapper
 record, in the order listeners were added; window's off a record of its own;
@@ -455,7 +457,10 @@ reads back the last string a script set, as HTML keeps it, and
 empty; the status line itself is the browser's and shows neither.
 
 **Element actions.** `click()` is a synthetic click: the event, then the
-element's activation unless a listener cancelled it. A checkbox or radio
+element's activation unless a listener cancelled it; with the switch on the
+event is a MouseEvent and its dispatch runs the activation, an element
+with none passing it to its nearest ancestor that has one (§ The Modern
+Web's surface, the UI events row). A checkbox or radio
 changes before its click and is put back when the click is cancelled
 (otherwise `input` and `change` follow); a link asks to be followed; a
 submit button fires `submit` at its form and, uncancelled, asks for the
@@ -1280,12 +1285,14 @@ the document's handler slots (§ Events).
 detail held in the Event's own record and traced with it. With the switch
 on, `document.createEvent` reads DOM's table without regard to ASCII case:
 `Event` (and `Events`, `HTMLEvents`, `SVGEvents`), `CustomEvent`,
-`HashChangeEvent` and `MessageEvent` (§ P2b's rows) are made as
+`HashChangeEvent`, `MessageEvent` (§ P2b's rows) and the UI events (§ 0f
+P1a's rows, the UI events row) are made as
 themselves, a name off the table is a
 NotSupportedError, `TouchEvent` too (a desktop does not expose the legacy
-touch APIs), and the table's names whose interfaces are not built (MouseEvent,
-UIEvent, KeyboardEvent and the rest) make a plain Event, as every name did
-before (MODERN_WEB.md § P1-Da, as built, says why).
+touch APIs), and the table's names whose interfaces are not built
+(BeforeUnloadEvent, DragEvent, StorageEvent, TextEvent and the device
+events) make a plain Event, as every name did before (MODERN_WEB.md §
+P1-Da, as built, says why).
 
 The classic fix beside them is every page's, the switch on or off:
 `document.body`'s setter (HTML § 3.1.4), which replaces the body or appends
@@ -1505,6 +1512,26 @@ in the order of its attribute list, as DOM's steps walk it; two nodes in
 different trees are ordered by the addresses of their roots (a detached
 Attr's own entry standing for a root), the one order DOM leaves open,
 asking only that it be consistent.
+
+**The UI events row** (`event.c`; MODERN_WEB.md § 0f's P8, as built).
+UIEvent, and MouseEvent, KeyboardEvent, FocusEvent, InputEvent and
+CompositionEvent over it, and SubmitEvent over Event, each with its
+constructor, its dictionary read in WebIDL's order, and its legacy init.
+An event's attributes are its Event record's (`DEvent.ui` says which
+interface it is; its view, relatedTarget or submitter and two strings in
+`detail[]`, traced with it), and each getter checks its interface. A host
+event's kind (`os64_dom_event_t`) names its interface: MOUSE, KEY, FOCUS,
+INPUT and SUBMIT, each trusted, its view the window (a SubmitEvent, no UIEvent,
+has none), its other node its relatedTarget or submitter; a plain one is an Event. `element.click()` is a
+MouseEvent, a script's submission a SubmitEvent. **A click's activation**
+(DOM § 2.9) is the dispatch's: a MouseEvent click a script dispatches at a
+node activates the node, or for one that bubbles the nearest ancestor with
+an activation behaviour (`window.c`'s `d_activation_has`), its first half
+before the listeners and its second once the dispatch is over; a host's
+click is the host's to act on, and a plain Event named click activates
+nothing. PointerEvent is absent on purpose (WINDOW_DOCUMENT.md § The handler
+hazard), and so are WheelEvent, DragEvent and TextEvent, which nothing here
+fires.
 
 **The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
 window, and nothing else). `collection.c`'s: a form's `elements` is an

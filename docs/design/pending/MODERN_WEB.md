@@ -4605,6 +4605,62 @@ divergence not naming the comparisons, and equality's names and
 namespaces untested; all fixed. The sign-in page's replay no longer
 stops at compareDocumentPosition.
 
+### 0f's P8, as built — 2026-10-29
+
+The event interfaces (INTERFACES_FORMS.md § P8): yonder's mouse and key
+events were Events with their fields as data, a page's `instanceof
+MouseEvent` a ReferenceError, and `createEvent('MouseEvents')` a plain
+Event with no `initMouseEvent`.
+
+- **Seven interfaces in one row** (`event.c`, LIBDOM.md § the UI events
+  row): UIEvent, and MouseEvent, KeyboardEvent, FocusEvent, InputEvent
+  and CompositionEvent over it; SubmitEvent over Event. Each constructor
+  reads its dictionary in WebIDL's order (EventInit's members, UIEventInit's,
+  EventModifierInit's for a mouse or key event, then its own); each legacy
+  init converts every argument before changing the event, and does nothing
+  during the event's dispatch. An event's attributes are its record's, and
+  each getter checks its interface. `createEvent` makes each as itself.
+- **What yonder tells the binding grew** (`os64_dom_event_t`): FOCUS,
+  INPUT and SUBMIT kinds beside MOUSE and KEY, a click's `detail`, the
+  buttons held, focus's other control and a submission's submitter. A
+  keypress's keyCode is its character's (97 for 'a', as Blink's is) where
+  it was the key's (65), which `which` reads; a classic fix, the switch on
+  or off.
+- **A click's activation moved into the dispatch** (DOM § 2.9), because
+  `dispatchEvent(new MouseEvent('click'))` is the common synthetic click
+  and WPT asks it: a MouseEvent click a script dispatches activates its
+  target, or for one that bubbles the nearest ancestor with an activation
+  behaviour, its first half before the listeners and its second after the
+  dispatch. `element.click()` is such a click; a host's click is the
+  host's to act on, as before, and a plain Event named click activates
+  nothing. With the switch off `click()` activates its element around a
+  plain Event, as before the arc.
+- **Left out on purpose**: PointerEvent (the handler hazard), WheelEvent,
+  DragEvent and TextEvent, which nothing here fires.
+- **Booked** (DEBTS.md): an edit's and a key's details the host does not
+  give (inputType, data, code, location; a keyboard's click says detail
+  1); a script-made MouseEvent's pageX without the scroll, and offsetX and
+  the rest; an attribute's getter's name; and a link a script follows
+  before its page is shown, which goes nowhere. That last one times out
+  WPT's `Event-dispatch-click.html` whole, so the page is excluded, by
+  Chris's ruling, and the DOM host holds its three required tests.
+
+**Numbers.** WPT: `uievents` added to the fetch list (same pin), 29 → 163
+passes of 377 at this branch's base and head; `dom/events` +43,
+`html/semantics/forms/the-input-element` +48, `the-label-element` +34,
+`dom/nodes` +21, `the-button-element` +17, `html/dom` +6,
+`css/cssom-view` +5, `html/webappapis/scripting` +4, the module
+directory +1, each of the 313 `[required]` and failing with the switch
+off; every other directory unmoved but the known sometimes-passes,
+measured over `userland` with SVG's first part merged in. Hosts, 0
+failed: DOM 20,298 and 130,080; yonder's scripted pages 11,709; userland
+builds. Mutants (`tools/test_interfaces_mutants.py`, its P8 group): 41,
+each caught. Read cold once: the activation's ancestor was read after
+the listeners unheld, so a listener that took its subtree out freed it
+(ASan's heap-use-after-free once the test was written; it is held now);
+an init's partly failed conversion, two dictionaries' order and an
+infinite coordinate untested; two comments half true; all fixed.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

@@ -1296,10 +1296,11 @@ typedef enum {
 typedef struct {
     InputKind kind;
     const os64_html_node_t *node;       // held, in `doc`
-    const os64_html_node_t *related;    // held: over/out's other node, a click's link
+    const os64_html_node_t *related;    // held: over/out's other node, a click's link, a focus change's other node
     const os64_html_document_t *doc;
     int32_t x, y;                       // window coordinates, for a mouse event
     uint8_t was;                        // IN_CHECK: the box before the click (WAS_*)
+    bool held;                          // the primary button was down as it was queued
 } Input;
 
 // What a box was before its click, which a cancelled click puts back.
@@ -9766,7 +9767,10 @@ static void input_queue(InputKind kind, const os64_html_node_t *node, const os64
     os64_html_hold(doc, node);
     if (related != NULL)
         os64_html_hold(doc, related);
-    g.inputs[g.ninputs++] = (Input){kind, node, related, doc, x, y, was};
+    // A press is held from its mousedown until its mouseup; the mouseup and
+    // its click are queued before the press is let go.
+    bool held = g.pressed_node != NULL && kind != IN_MOUSEUP && kind != IN_CLICK;
+    g.inputs[g.ninputs++] = (Input){kind, node, related, doc, x, y, was, held};
 }
 
 static void input_release(const Input *in)
@@ -9833,10 +9837,17 @@ static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_
     return element_of(b->node);
 }
 
+// A mouse event of the primary button, the one yonder hands a page: a
+// press, a release and a click count one click (UIEvent's detail), and the
+// button is in `buttons` while it is held.
 static os64_dom_event_t mouse_event(const char *type, bool cancelable, const Input *in)
 {
     os64_dom_event_t ev = {.type = type, .bubbles = true, .cancelable = cancelable,
                            .kind = OS64_DOM_EVENT_MOUSE};
+    bool press = in->kind == IN_MOUSEDOWN || in->kind == IN_MOUSEUP || in->kind == IN_CLICK ||
+                 in->kind == IN_BUTTON || in->kind == IN_CHECK;
+    ev.detail = press ? 1 : 0;
+    ev.buttons = in->held ? 1 : 0;
     uint32_t zoom = g.zoom != 0 ? g.zoom : 1000;
     ev.client_x = clamp32(((int64_t)in->x - g.view.bounds.x)*1000/zoom);
     ev.client_y = clamp32(((int64_t)in->y - g.view.bounds.y)*1000/zoom);
@@ -9877,12 +9888,36 @@ static bool plain_event(const char *type, bool bubbles, bool cancelable, const o
     return page_event(&ev, node);
 }
 
+// An event of `kind` (a FocusEvent, an InputEvent, a SubmitEvent) at `node`,
+// `related` its other node: a focus change's, or a submission's submitter.
+static bool kind_event(const char *type, bool bubbles, bool cancelable, os64_dom_event_kind_t kind,
+                       const os64_html_node_t *node, const os64_html_node_t *related)
+{
+    os64_dom_event_t ev = {.type = type, .bubbles = bubbles, .cancelable = cancelable, .kind = kind,
+                           .related = related};
+    return page_event(&ev, node);
+}
+
 // The form node a control belongs to, for its submit and reset events.
 static const os64_html_node_t *control_form(int32_t control)
 {
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
     const os64_page_form_t *f = c != NULL ? os64_page_form(page_model(&g.page), c->form) : NULL;
     return f != NULL ? f->node : NULL;
+}
+
+// A person's submission from `control`: submit at its form, a SubmitEvent
+// whose submitter is the one libpage's submission takes (none when the form
+// submits itself). True when a listener cancelled it.
+static bool submit_event(int32_t control, os64_page_activation_t how)
+{
+    const os64_page_t *page = page_model(&g.page);
+    os64_page_what_t what = {how, control, 0, 0};
+    int32_t submitter = -1;
+    const os64_page_control_t *by =
+        os64_page_submitter(page, what, &submitter) ? os64_page_control(page, submitter) : NULL;
+    return kind_event("submit", true, true, OS64_DOM_EVENT_SUBMIT, control_form(control),
+                      by != NULL ? by->node : NULL);
 }
 
 // A person's submission from `control` (a button pressed, Enter in a
@@ -9948,39 +9983,45 @@ static void change_if_edited(const os64_html_node_t *node)
 }
 
 // The focus moved between libui's widgets: `blur` and `change` for the
-// control it left, `focus` for the one it reached (neither bubbles).
+// control it left, `focus` for the one it reached (neither bubbles), each
+// naming the other control as its relatedTarget.
 static void focus_follow(void)
 {
     if (g.ui.focus == g.focus_seen)
         return;
     g.focus_seen = g.ui.focus;
-    if (g.focus_node != NULL) {
-        // Judged now, while the value it had at focus is still at hand.
-        const char *text;
-        size_t len;
-        if (editor_text(g.focus_node, &text, &len) &&
-            (len != g.focus_len || os64_memcmp(text, g.focus_value, len) != 0))
-            input_queue(IN_CHANGE, g.focus_node, NULL, 0, 0, false);
-        input_queue(IN_BLUR, g.focus_node, NULL, 0, 0, false);
-        os64_html_release(g.focus_doc, g.focus_node);
-        g.focus_node = NULL;
-    }
     FormWidget *fw = NULL;
     for (int32_t i = 0; i < g.nfw && fw == NULL; i++)
         if (g.fw[i]->w == g.ui.focus)
             fw = g.fw[i];
-    if (fw == NULL || !scripts_live())
-        return;
-    g.focus_doc = page_doc(&g.page);
-    g.focus_node = fw->node;
-    os64_html_hold(g.focus_doc, g.focus_node);
-    const char *text;
-    size_t len = 0;
-    if (!editor_text(fw->node, &text, &len))
-        text = "";
-    g.focus_len = len < sizeof(g.focus_value) ? len : sizeof(g.focus_value) - 1;
-    os64_memcpy(g.focus_value, text, g.focus_len);
-    input_queue(IN_FOCUS, fw->node, NULL, 0, 0, false);
+    const os64_html_node_t *reached = fw != NULL && scripts_live() ? fw->node : NULL;
+    const os64_html_node_t *left = g.focus_node;
+    const os64_html_document_t *left_doc = g.focus_doc;
+    if (left != NULL) {
+        // Judged now, while the value it had at focus is still at hand.
+        const char *text;
+        size_t len;
+        if (editor_text(left, &text, &len) &&
+            (len != g.focus_len || os64_memcmp(text, g.focus_value, len) != 0))
+            input_queue(IN_CHANGE, left, NULL, 0, 0, false);
+        input_queue(IN_BLUR, left, reached, 0, 0, false);
+        g.focus_node = NULL;
+    }
+    if (reached != NULL) {
+        g.focus_doc = page_doc(&g.page);
+        g.focus_node = reached;
+        os64_html_hold(g.focus_doc, g.focus_node);
+        const char *text;
+        size_t len = 0;
+        if (!editor_text(reached, &text, &len))
+            text = "";
+        g.focus_len = len < sizeof(g.focus_value) ? len : sizeof(g.focus_value) - 1;
+        os64_memcpy(g.focus_value, text, g.focus_len);
+        input_queue(IN_FOCUS, reached, left, 0, 0, false);
+    }
+    // Let go only now: the focus event held it as its relatedTarget.
+    if (left != NULL)
+        os64_html_release(left_doc, left);
 }
 
 // What waits, dispatched in order, each with its default action after it.
@@ -10029,7 +10070,6 @@ static void inputs_run(void)
             if (c == NULL)
                 break;
             bool resets = c->resets, submits = c->submits;
-            const char *type = resets ? "reset" : "submit";
             if (!resets && !submits)
                 break;
             bool validated = false;
@@ -10041,7 +10081,8 @@ static void inputs_run(void)
                 if (control < 0)
                     break;
             }
-            if (plain_event(type, true, true, control_form(control)))
+            if (resets ? plain_event("reset", true, true, control_form(control))
+                       : submit_event(control, OS64_PAGE_ACTIVATE_CONTROL))
                 break;
             // The listeners may have rebuilt the page: the button is found
             // again, and is gone if they took it away.
@@ -10060,7 +10101,7 @@ static void inputs_run(void)
             if (!page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT, &validated))
                 break;
             control = os64_page_control_for(page_model(&g.page), in.node);
-            if (!plain_event("submit", true, true, control_form(control)))
+            if (!submit_event(control, OS64_PAGE_ACTIVATE_IMPLICIT))
                 form_send_as(os64_page_control_for(page_model(&g.page), in.node), OS64_PAGE_ACTIVATE_IMPLICIT, NAV_GO,
                              WAY_BY_PERSON, validated);
             break;
@@ -10086,13 +10127,13 @@ static void inputs_run(void)
             plain_event("change", true, false, in.node);
             break;
         case IN_INPUT:
-            plain_event("input", true, false, in.node);
+            kind_event("input", true, false, OS64_DOM_EVENT_INPUT, in.node, NULL);
             break;
         case IN_FOCUS:
-            plain_event("focus", false, false, in.node);
+            kind_event("focus", false, false, OS64_DOM_EVENT_FOCUS, in.node, in.related);
             break;
         case IN_BLUR:
-            plain_event("blur", false, false, in.node);
+            kind_event("blur", false, false, OS64_DOM_EVENT_FOCUS, in.node, in.related);
             break;
         case IN_CHANGE:
             plain_event("change", true, false, in.node);
@@ -10167,8 +10208,11 @@ static bool key_event(const os64_gui_event_t *ev)
         return true;
     if (!printable)
         return false;
+    // A keypress's codes are its character's, keyCode as well as charCode
+    // (Blink's answer, and so which's: 97 for 'a', where keydown says 65).
     key.type = "keypress";
     key.char_code = a;
+    key.key_code = a;
     return page_event(&key, target);
 }
 

@@ -375,6 +375,12 @@ events/event-handler-attributes-windowless-body.html	reset is unaffected on a wi
 events/event-handler-attributes-windowless-body.html	reset is unaffected on a windowless frameset
 events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless body
 events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless frameset
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+events/event-handler-handleEvent-ignored.html	plain object "mouseenter" handler
+events/event-handler-processing-algorithm.html	mouseover listener returning false cancels event (using MouseEvent)
+events/event-handler-processing-algorithm.html	mouseover listener returning true doesn't cancel event (using MouseEvent)
+events/uncompiled_event_handler_with_scripting_disabled.html	when scripting is disabled, the handler is never compiled
 [excluded]
 [passing]
 event-loops/microtask_after_script.html	Microtask immediately after script
@@ -661,6 +667,7 @@ events/event-handler-attributes-windowless-body.html	reset is unaffected on a wi
 events/event-handler-attributes-windowless-body.html	reset is unaffected on a windowless frameset
 events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless body
 events/event-handler-attributes-windowless-body.html	submit is unaffected on a windowless frameset
+events/event-handler-handleEvent-ignored.html	plain object "mouseenter" handler
 events/event-handler-javascript.html	Event handlers starting with 'javascript:' should treat that as a label.
 events/event-handler-no-browsing-context.html	Event handler IDL attribute runs on an element in a DOMParser document
 events/event-handler-no-browsing-context.html	Event handler IDL attribute runs on an element in a createHTMLDocument document
@@ -699,7 +706,9 @@ events/event-handler-processing-algorithm-error/window-synthetic-event.html	erro
 events/event-handler-processing-algorithm.html	blur listener returning false cancels event
 events/event-handler-processing-algorithm.html	click listener returning false cancels event
 events/event-handler-processing-algorithm.html	mouseover listener returning false cancels event (using Event)
+events/event-handler-processing-algorithm.html	mouseover listener returning false cancels event (using MouseEvent)
 events/event-handler-processing-algorithm.html	mouseover listener returning true doesn't cancel event (using Event)
+events/event-handler-processing-algorithm.html	mouseover listener returning true doesn't cancel event (using MouseEvent)
 events/event-handler-removal.window.html	Event handler set through IDL should NOT be deactivated when the content attribute is removed.
 events/event-handler-spec-example.window.html	Event handler listeners should be registered when they are first set to an object value (function "function() {}").
 events/event-handler-spec-example.window.html	Event handler listeners should be registered when they are first set to an object value (object "").
@@ -718,6 +727,7 @@ events/messageevent-constructor.https.html	Passing null for ports member
 events/messageevent-constructor.https.html	Passing null for ports parameter to initMessageEvent
 events/messageevent-constructor.https.html	initMessageEvent operation default parameter values
 events/messageevent-constructor.https.html	ports attribute should be a FrozenArray
+events/uncompiled_event_handler_with_scripting_disabled.html	when scripting is disabled, the handler is never compiled
 processing-model-2/addEventListener.html	window.onerror - addEventListener
 processing-model-2/body-onerror-compile-error-data-url.html	<body onerror> - compile error in <script src=data:...> (column)
 processing-model-2/body-onerror-compile-error.html	<body onerror> - compile error in <script>

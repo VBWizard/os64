@@ -163,6 +163,13 @@ idlharness.html	Window interface: window must inherit property "scrollX" with th
 idlharness.html	Window interface: window must inherit property "scrollY" with the proper type
 idlharness.html	idl_test setup
 idlharness.html	idl_test validation
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "pageX" with the proper type
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "pageY" with the proper type
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "x" with the proper type
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "y" with the proper type
+mouseEvent.html	MouseEvent's x and y must be equal to clientX and clientY.
 [excluded]
 MediaQueryList-addListener-handleEvent.html	needs iframe: resources/matchMedia.js makes each list in one and changes it by resizing it (the lists' events are proved by the DOM and scripted-page hosts)
 MediaQueryList-addListener-removeListener.html	needs iframe: each list is made in one and changed by resizing it
@@ -281,6 +288,10 @@ idlharness.html	MediaQueryListEvent interface: existence and properties of inter
 idlharness.html	MediaQueryListEvent interface: existence and properties of interface prototype object's "constructor" property
 idlharness.html	MediaQueryListEvent interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.html	MediaQueryListEvent must be primary interface of new MediaQueryListEvent("change")
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "pageX" with the proper type
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "pageY" with the proper type
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "x" with the proper type
+idlharness.html	MouseEvent interface: new MouseEvent("foo") must inherit property "y" with the proper type
 idlharness.html	Partial interface Document: member names are unique
 idlharness.html	Partial interface Document: original interface defined
 idlharness.html	Partial interface Document[2]: member names are unique
@@ -366,6 +377,7 @@ idlharness.html	Window interface: window must inherit property "scrollX" with th
 idlharness.html	Window interface: window must inherit property "scrollY" with the proper type
 idlharness.html	idl_test setup
 idlharness.html	idl_test validation
+mouseEvent.html	MouseEvent's x and y must be equal to clientX and clientY.
 offsetParent-body-and-html.html	The offsetParent of 'the body element' is null
 offsetParent-body-and-html.html	The offsetParent of a <html> element which is not the root is computed normally
 offsetParent-body-and-html.html	The offsetParent of the root element is null

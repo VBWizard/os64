@@ -7934,6 +7934,14 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator includes 
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator interface: existence and properties of interface object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkletGlobalScope interface: existence and properties of interface object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	idl_test validation
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object's @@unscopables property
 [excluded]
 access-key-label.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 aria-attribute-reflection-enumerated.tentative.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
@@ -8440,6 +8448,12 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	Storage interface: existe
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Storage interface: existence and properties of interface prototype object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Storage interface: existence and properties of interface prototype object's "constructor" property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Storage interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface object name
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface: existence and properties of interface object

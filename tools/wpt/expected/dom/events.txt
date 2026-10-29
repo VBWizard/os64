@@ -12,9 +12,8 @@ Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
 EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (CustomEvent).
 # The node row's element names (MODERN_WEB.md § Element names, as built):
 # localName, namespaceURI and prefix. Each fails with the switch off.
-Event-dispatch-click.html	disabled checkbox still has activation behavior
-Event-dispatch-click.html	disabled checkbox still has activation behavior, part 2
-Event-dispatch-click.html	disabled radio still has activation behavior
+# (Event-dispatch-click.html's three were here; the page is excluded since
+# 0f's P8, and the DOM host holds what they asked: modern-on-ui-events.)
 event-disabled-dynamic.html	disabled is honored properly in presence of dynamic changes
 # 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): the element kinds, a
 # body's handlers among them. Each fails with the switch off.
@@ -74,7 +73,53 @@ passive-by-default.html	wheel listener is non-passive with {passive:false} for H
 passive-by-default.html	wheel listener is non-passive with {passive:false} for HTMLHtmlElement
 passive-by-default.html	wheel listener is non-passive with {passive:false} for Window
 passive-by-default.html	wheel listener is non-passive with {passive:undefined} for HTMLDivElement
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+Event-dispatch-click.tentative.html	checkbox morphed into another type should not mutate checked state
+Event-dispatch-click.tentative.html	disabled checkbox should not be checked from label click by dispatchEvent
+Event-dispatch-click.tentative.html	disabled radio should not be checked from label click by dispatchEvent
+Event-dispatch-detached-input-and-change.html	attached checkbox should emit input and change events on dispatchEvent(new MouseEvent('click')).
+Event-dispatch-detached-input-and-change.html	attached radio should emit input and change events on dispatchEvent(new MouseEvent('click')).
+Event-init-while-dispatching.html	Calling initKeyboardEvent while dispatching.
+Event-init-while-dispatching.html	Calling initMouseEvent while dispatching.
+Event-init-while-dispatching.html	Calling initUIEvent while dispatching.
+Event-stopPropagation-cancel-bubbling.html	Event-stopPropagation-cancel-bubbling
+Event-subclasses-constructors.html	CompositionEvent constructor (argument with default values)
+Event-subclasses-constructors.html	CompositionEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	CompositionEvent constructor (empty argument)
+Event-subclasses-constructors.html	CompositionEvent constructor (no argument)
+Event-subclasses-constructors.html	CompositionEvent constructor (null argument)
+Event-subclasses-constructors.html	CompositionEvent constructor (undefined argument)
+Event-subclasses-constructors.html	FocusEvent constructor (argument with default values)
+Event-subclasses-constructors.html	FocusEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	FocusEvent constructor (empty argument)
+Event-subclasses-constructors.html	FocusEvent constructor (no argument)
+Event-subclasses-constructors.html	FocusEvent constructor (null argument)
+Event-subclasses-constructors.html	FocusEvent constructor (undefined argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (argument with default values)
+Event-subclasses-constructors.html	KeyboardEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	KeyboardEvent constructor (empty argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (no argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (null argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (undefined argument)
+Event-subclasses-constructors.html	MouseEvent constructor (argument with default values)
+Event-subclasses-constructors.html	MouseEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	MouseEvent constructor (empty argument)
+Event-subclasses-constructors.html	MouseEvent constructor (no argument)
+Event-subclasses-constructors.html	MouseEvent constructor (null argument)
+Event-subclasses-constructors.html	MouseEvent constructor (undefined argument)
+Event-subclasses-constructors.html	UIEvent constructor (argument with default values)
+Event-subclasses-constructors.html	UIEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	UIEvent constructor (empty argument)
+Event-subclasses-constructors.html	UIEvent constructor (no argument)
+Event-subclasses-constructors.html	UIEvent constructor (null argument)
+Event-subclasses-constructors.html	UIEvent constructor (undefined argument)
+Event-subclasses-constructors.html	UIEvent constructor (view argument with wrong type)
+KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (created by constructor)
+KeyEvent-initKeyEvent.html	KeyboardEvent.prototype.initKeyEvent shouldn't be defined
+legacy-pre-activation-behavior.window.html	Use NONE phase during legacy-pre-activation behavior
 [excluded]
+Event-dispatch-click.html	one test clicks a javascript: link while the page loads and waits for it, which yonder never follows (DEBTS.md, a link a script follows before its page is shown), so the page times out whole
 Event-dispatch-on-disabled-elements.html	needs test_driver input, which the runner does not have
 Event-dispatch-redispatch.html	needs test_driver input, which the runner does not have
 Event-dispatch-throwing-multiple-globals.html	needs a frame (IFRAME.md, Tier 1)
@@ -245,24 +290,17 @@ Event-dispatch-bubbles-false.html	In window.document with load event
 Event-dispatch-bubbles-true.html	In DOMImplementation.createHTMLDocument()
 Event-dispatch-bubbles-true.html	In window.document with click event
 Event-dispatch-bubbles-true.html	In window.document with load event
-Event-dispatch-click.html	basic with click()
-Event-dispatch-click.html	basic with wrong event class
-Event-dispatch-click.html	disabled checkbox still has activation behavior
-Event-dispatch-click.html	disabled checkbox still has activation behavior, part 2
-Event-dispatch-click.html	disabled radio still has activation behavior
-Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress onchange
-Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress oninput
-Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress onchange
-Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress oninput
-Event-dispatch-click.html	disconnected checkbox should be checked
-Event-dispatch-click.html	disconnected form should not submit
-Event-dispatch-click.html	disconnected radio should be checked
+Event-dispatch-click.tentative.html	checkbox morphed into another type should not mutate checked state
 Event-dispatch-click.tentative.html	disabled checkbox should not be checked from label click
+Event-dispatch-click.tentative.html	disabled checkbox should not be checked from label click by dispatchEvent
 Event-dispatch-click.tentative.html	disabled radio should not be checked from label click
+Event-dispatch-click.tentative.html	disabled radio should not be checked from label click by dispatchEvent
 Event-dispatch-detached-click.html	Click event can be dispatched to an element that is not in the document.
 Event-dispatch-detached-click.html	Click event on an element not in the document
 Event-dispatch-detached-input-and-change.html	attached checkbox should emit input and change events on click().
+Event-dispatch-detached-input-and-change.html	attached checkbox should emit input and change events on dispatchEvent(new MouseEvent('click')).
 Event-dispatch-detached-input-and-change.html	attached radio should emit input and change events on click().
+Event-dispatch-detached-input-and-change.html	attached radio should emit input and change events on dispatchEvent(new MouseEvent('click')).
 Event-dispatch-handlers-changed.html	 Dispatch additional events inside an event listener 
 Event-dispatch-multiple-cancelBubble.html	Multiple dispatchEvent() and cancelBubble
 Event-dispatch-multiple-stopPropagation.html	 Multiple dispatchEvent() and stopPropagation() 
@@ -380,6 +418,9 @@ Event-dispatch-throwing.html	Throwing in event listener with a single listeners
 Event-dispatch-throwing.html	Throwing in event listener with multiple listeners
 Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
 Event-init-while-dispatching.html	Calling initEvent while dispatching.
+Event-init-while-dispatching.html	Calling initKeyboardEvent while dispatching.
+Event-init-while-dispatching.html	Calling initMouseEvent while dispatching.
+Event-init-while-dispatching.html	Calling initUIEvent while dispatching.
 Event-initEvent.html	Calling initEvent during propagation.
 Event-initEvent.html	Calling initEvent multiple times (getting type).
 Event-initEvent.html	Calling initEvent multiple times (not getting type).
@@ -407,12 +448,44 @@ Event-returnValue.html	returnValue should change returnValue if cancelable is tr
 Event-returnValue.html	returnValue=false should have no effect if cancelable is false.
 Event-returnValue.html	returnValue=true should have no effect once the canceled flag was set.
 Event-stopImmediatePropagation.html	Event's stopImmediatePropagation
+Event-stopPropagation-cancel-bubbling.html	Event-stopPropagation-cancel-bubbling
+Event-subclasses-constructors.html	CompositionEvent constructor (argument with default values)
+Event-subclasses-constructors.html	CompositionEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	CompositionEvent constructor (empty argument)
+Event-subclasses-constructors.html	CompositionEvent constructor (no argument)
+Event-subclasses-constructors.html	CompositionEvent constructor (null argument)
+Event-subclasses-constructors.html	CompositionEvent constructor (undefined argument)
 Event-subclasses-constructors.html	Event constructor (argument with default values)
 Event-subclasses-constructors.html	Event constructor (argument with non-default values)
 Event-subclasses-constructors.html	Event constructor (empty argument)
 Event-subclasses-constructors.html	Event constructor (no argument)
 Event-subclasses-constructors.html	Event constructor (null argument)
 Event-subclasses-constructors.html	Event constructor (undefined argument)
+Event-subclasses-constructors.html	FocusEvent constructor (argument with default values)
+Event-subclasses-constructors.html	FocusEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	FocusEvent constructor (empty argument)
+Event-subclasses-constructors.html	FocusEvent constructor (no argument)
+Event-subclasses-constructors.html	FocusEvent constructor (null argument)
+Event-subclasses-constructors.html	FocusEvent constructor (undefined argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (argument with default values)
+Event-subclasses-constructors.html	KeyboardEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	KeyboardEvent constructor (empty argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (no argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (null argument)
+Event-subclasses-constructors.html	KeyboardEvent constructor (undefined argument)
+Event-subclasses-constructors.html	MouseEvent constructor (argument with default values)
+Event-subclasses-constructors.html	MouseEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	MouseEvent constructor (empty argument)
+Event-subclasses-constructors.html	MouseEvent constructor (no argument)
+Event-subclasses-constructors.html	MouseEvent constructor (null argument)
+Event-subclasses-constructors.html	MouseEvent constructor (undefined argument)
+Event-subclasses-constructors.html	UIEvent constructor (argument with default values)
+Event-subclasses-constructors.html	UIEvent constructor (argument with non-default values)
+Event-subclasses-constructors.html	UIEvent constructor (empty argument)
+Event-subclasses-constructors.html	UIEvent constructor (no argument)
+Event-subclasses-constructors.html	UIEvent constructor (null argument)
+Event-subclasses-constructors.html	UIEvent constructor (undefined argument)
+Event-subclasses-constructors.html	UIEvent constructor (view argument with wrong type)
 Event-type-empty.html	Constructor
 Event-type-empty.html	initEvent
 Event-type.html	Event.type should be initialized by initEvent
@@ -460,7 +533,9 @@ EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an In
 EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (UIEvents).
 EventTarget-removeEventListener.any.html	removing a null event listener should succeed
 EventTarget-window-constructor.html	Modifying window.constructor does not affect event dispatch
+KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (created by constructor)
 KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (created by createEvent("KeyboardEvent")
+KeyEvent-initKeyEvent.html	KeyboardEvent.prototype.initKeyEvent shouldn't be defined
 element-click.html	dynamic querySelectorAll, toggle async
 element-click.html	dynamic querySelectorAll, toggle sync
 element-click.html	static querySelectorAll
@@ -479,6 +554,7 @@ event-handler-attribute-replace-preserves-passive.html	Replacing a wheel event h
 event-handler-attribute-replace-preserves-passive.html	Replacing a wheel event handler attribute on document element via setAttribute preserves its passive flag
 event-src-element-nullable.html	Event srcElement should be nullable
 label-default-action.html	Label default action should not trigger when clicked button removes itself
+legacy-pre-activation-behavior.window.html	Use NONE phase during legacy-pre-activation behavior
 non-cancelable-when-passive/generic-events-stay-cancelable.html	A generic event with only passive listeners remains cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic mousewheel event with interface Event is not cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchcancel event with interface Event is not cancelable

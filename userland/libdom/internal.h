@@ -123,6 +123,14 @@ enum {
     D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED, D_EVENT_MESSAGE, D_EVENT_MESSAGEERROR,
     D_EVENT_INVALID, D_EVENT_COUNT
 };
+/* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
+ * five that inherit it, then HTML's SubmitEvent, which inherits Event. An
+ * event's record says which one it is (D_UI_NONE: none of them), and each
+ * has a prototype on the binding with the Modern Web switch on. */
+enum {
+    D_UI_NONE, D_UI_EVENT, D_UI_MOUSE, D_UI_KEYBOARD, D_UI_FOCUS, D_UI_INPUT, D_UI_COMPOSITION,
+    D_UI_SUBMIT, D_UI_KINDS
+};
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
  * handler slots were first added, and the element's views (its style, its
@@ -518,6 +526,9 @@ struct os64_dom {
     uint32_t idle_handle;
     bool idle_open, idle_fresh, idle_running;
     uint64_t idle_start_ms, idle_start_us, idle_rested_ms;
+    /* 0f's P8: each UI event interface's prototype (event.c), indexed by
+     * D_UI_*; all NULL with the switch off. */
+    DValue *ui_prototypes[D_UI_KINDS];
 };
 #define D_NO_SCRIPT UINT32_MAX
 /* d_callback_script's answer when the runtime must stop: the exception is
@@ -1306,6 +1317,25 @@ void d_idle_free(os64_dom_t *dom);
 int d_message_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 JSValue d_message_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, JSValue data, const char *origin,
                             JSValueConst source);
+/* ── 0f's P8: the UI event interfaces (event.c; INTERFACES_FORMS.md § P8,
+ * LIBDOM.md § Events). ── */
+int d_ui_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The events a script's own action fires (window.c), untrusted, as HTML
+ * makes them: element.click()'s, a MouseEvent whose view is the window when
+ * `node` is in the window's document; and a submission's SubmitEvent, its
+ * submitter `submitter` (NULL: none). A plain Event of the type with the
+ * switch off. */
+JSValue d_click_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+JSValue d_submit_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *submitter);
+/* A click's activation (window.c, which says what each half does): whether
+ * an element has activation behaviour, and the halves before and after the
+ * click's listeners, the second told whether the click was cancelled and
+ * given what the first kept. Each -1 with an exception pending. */
+typedef struct { bool checkable, checkbox, was, was_indeterminate; } DActivation;
+bool d_activation_has(const os64_html_node_t *node);
+int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, DActivation *saved);
+int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool canceled,
+                       const DActivation *saved);
 /* A File's name and lastModified (borrowed); false for a Blob that is no
  * File, and for anything else. d_file_new is d_blob_new's File: `name`
  * (engine memory) taken with the bytes. */

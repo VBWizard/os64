@@ -49,7 +49,12 @@ static const char event_html[] =
     "<div id=first onclick=\"log.push('attribute first')\"></div>"
     "<span id=wrapless onmousedown=\"log.push('ancestor attribute')\"><b id=deep>deep</b></span>"
     "</body></html>";
+static DomFixture event_fixture_switched(const char *html, const char *url, bool modern);
 static DomFixture event_fixture(const char *html, const char *url)
+{
+    return event_fixture_switched(html, url, true);
+}
+static DomFixture event_fixture_switched(const char *html, const char *url, bool modern)
 {
     DomFixture fixture = {0};
     os64_html_options_t html_options = os64_html_options_default();
@@ -63,6 +68,7 @@ static DomFixture event_fixture(const char *html, const char *url)
     config.limits.jobs_per_turn = 100000;
     fixture.runtime = create_fixture(&config);
     os64_dom_options_t options = os64_dom_default_options();
+    options.modern = modern;
     options.url = url;
     options.now_ms = event_now;
     options.script_connected = event_connected;
@@ -322,6 +328,107 @@ static void dom_event_listens_cases(void)
     check(os64_dom_dispatch(f.binding, native_id(f.document->document, "p"), &over, &prevented, &outcome) == OS64_JS_OK,
           "a mouse event dispatches");
     dom_script(&f, DOM_ASSERT "assert(mouse.join()==='7,9,0,1,true',mouse.join())", "listens-mouse.js");
+    fixture_free(&f);
+}
+
+/* 0f's P8: a host event is the UI event its kind names, its fields the
+ * record's (no own properties), with the switch on; with it off a mouse or
+ * key event is an Event with its fields as data, as before, and the kinds
+ * P8 added are plain Events. */
+static void dom_ui_host_cases(void)
+{
+    static const char kPage[] = "<!doctype html><body><p id=p>ui</p><form id=f><button id=b>go</button></form></body>";
+    DomFixture f = event_fixture(kPage, "http://example.test/");
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.seen=[];for(const t of ['mousedown','keypress','focus','input','submit','change'])"
+                   "document.addEventListener(t,e=>seen.push(e),true);", "ui-host-setup.js");
+    os64_js_outcome_t outcome;
+    bool prevented = false;
+    os64_html_node_t *p = native_id(f.document->document, "p");
+    os64_html_node_t *button = native_id(f.document->document, "b");
+    os64_dom_event_t down = plain_event("mousedown", true, true);
+    down.kind = OS64_DOM_EVENT_MOUSE;
+    down.client_x = 3;
+    down.client_y = 4;
+    down.page_coordinates = true;
+    down.page_x = 13;
+    down.page_y = 104;
+    down.screen_x = 30;
+    down.screen_y = 40;
+    down.button = 2;
+    down.buttons = 2;
+    down.detail = 1;
+    down.ctrl = true;
+    os64_dom_event_t press = plain_event("keypress", true, true);
+    press.kind = OS64_DOM_EVENT_KEY;
+    press.key = "a";
+    press.key_code = 97;
+    press.char_code = 97;
+    press.alt = true;
+    os64_dom_event_t focus = plain_event("focus", false, false);
+    focus.kind = OS64_DOM_EVENT_FOCUS;
+    focus.related = button;
+    os64_dom_event_t input = plain_event("input", true, false);
+    input.kind = OS64_DOM_EVENT_INPUT;
+    os64_dom_event_t submit = plain_event("submit", true, true);
+    submit.kind = OS64_DOM_EVENT_SUBMIT;
+    submit.related = button;
+    os64_dom_event_t change = plain_event("change", true, false);
+    os64_dom_event_t *all[] = {&down, &press, &focus, &input, &submit, &change};
+    os64_html_node_t *at[] = {p, p, button, p, native_id(f.document->document, "f"), p};
+    bool dispatched = true;
+    for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++)
+        dispatched = dispatched && os64_dom_dispatch(f.binding, at[i], all[i], &prevented, &outcome) == OS64_JS_OK;
+    check(dispatched, "ui host: every kind dispatches");
+    dom_script(&f, DOM_ASSERT
+        "const [m,k,fo,i,s,c]=seen;assert(seen.length===6,'six');"
+        "for(const e of seen)assert(Object.keys(e).length===0&&e.isTrusted,e.type+': no own properties, trusted');"
+        "assert(m.constructor===MouseEvent&&m.view===window&&m.detail===1&&m.clientX===3&&m.clientY===4&&"
+        "m.x===3&&m.y===4&&m.pageX===13&&m.pageY===104&&m.screenX===30&&m.screenY===40&&m.button===2&&"
+        "m.buttons===2&&m.which===3&&m.ctrlKey&&!m.shiftKey&&m.getModifierState('Control')&&"
+        "m.relatedTarget===null,'mouse');"
+        "assert(k.constructor===KeyboardEvent&&k.key==='a'&&k.code===''&&k.keyCode===97&&k.charCode===97&&"
+        "k.which===97&&k.altKey&&!k.ctrlKey&&k.location===0&&!k.repeat&&k.view===window&&k.detail===0,'key');"
+        "assert(fo.constructor===FocusEvent&&fo.relatedTarget===document.getElementById('b')&&fo.view===window,'focus');"
+        "assert(i.constructor===InputEvent&&i.data===null&&i.inputType===''&&!i.isComposing,'input');"
+        "assert(s.constructor===SubmitEvent&&s.submitter===document.getElementById('b')&&!('view' in s),'submit');"
+        "assert(c.constructor===Event,'change is an Event');",
+        "ui-host.js");
+    /* A host's click is the host's to act on: its dispatch activates
+     * nothing, where a script's MouseEvent click would tick the box. */
+    dom_script(&f, "var box=document.createElement('input');box.type='checkbox';box.id='box';"
+                   "document.body.append(box);box.onclick=()=>{};", "ui-host-click-setup.js");
+    os64_dom_event_t click = plain_event("click", true, true);
+    click.kind = OS64_DOM_EVENT_MOUSE;
+    check(os64_dom_dispatch(f.binding, native_id(f.document->document, "box"), &click, &prevented, &outcome) ==
+          OS64_JS_OK, "ui host: a click dispatches");
+    dom_script(&f, DOM_ASSERT "assert(!document.getElementById('box').checked,'the host ticks its own boxes')",
+               "ui-host-click.js");
+    fixture_free(&f);
+
+    f = event_fixture_switched(kPage, "http://example.test/", false);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.seen=[];for(const t of ['mousedown','keypress','focus','input','submit'])"
+                   "document.addEventListener(t,e=>seen.push(e),true);", "ui-host-off-setup.js");
+    p = native_id(f.document->document, "p");
+    button = native_id(f.document->document, "b");
+    focus.related = submit.related = button;
+    at[2] = button;
+    at[4] = native_id(f.document->document, "f");
+    dispatched = true;
+    for (size_t i = 0; i < 5; i++)
+        dispatched = dispatched && os64_dom_dispatch(f.binding, i == 2 || i == 4 ? at[i] : p, all[i], &prevented,
+                                                     &outcome) == OS64_JS_OK;
+    check(dispatched, "ui host, switch off: every kind dispatches");
+    dom_script(&f, DOM_ASSERT
+        "const [m,k,fo,i,s]=seen;assert(seen.length===5,'five');"
+        "for(const e of seen)assert(Object.getPrototypeOf(e)===Event.prototype,e.type+': an Event');"
+        "assert(m.hasOwnProperty('clientX')&&m.clientX===3&&m.which===3&&m.ctrlKey&&!('detail' in m)&&"
+        "!('buttons' in m)&&!('view' in m),'mouse: its fields as data, as before');"
+        "assert(k.hasOwnProperty('key')&&k.keyCode===97&&!('code' in k),'key: its fields as data');"
+        "for(const e of [fo,i,s])assert(Object.keys(e).length===0&&!('relatedTarget' in e)&&!('submitter' in e),"
+        "e.type+': a plain Event');",
+        "ui-host-off.js");
     fixture_free(&f);
 }
 
@@ -725,6 +832,7 @@ static void dom_event_cases(void)
     dom_event_handler_cases();
     dom_event_window_order_cases();
     dom_event_listens_cases();
+    dom_ui_host_cases();
     dom_event_reentry_cases();
     dom_timer_cases();
     dom_navigation_cases();

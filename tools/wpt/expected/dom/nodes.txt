@@ -435,6 +435,29 @@ Node-isSameNode.html	text nodes should be compared on reference
 Node-normalize.html	Empty text nodes
 Node-normalize.html	Empty text nodes separated by a non-empty text node
 Node-normalize.html	Node.normalize()
+# 0f's P8 (MODERN_WEB.md § 0f's P8, as built): the UI event interfaces and
+# a click's activation in the dispatch. Each fails with the switch off.
+Document-createEvent.https.html	COMPOSITIONEVENT should be an alias for CompositionEvent.
+Document-createEvent.https.html	CompositionEvent should be an alias for CompositionEvent.
+Document-createEvent.https.html	FOCUSEVENT should be an alias for FocusEvent.
+Document-createEvent.https.html	FocusEvent should be an alias for FocusEvent.
+Document-createEvent.https.html	KEYBOARDEVENT should be an alias for KeyboardEvent.
+Document-createEvent.https.html	KeyboardEvent should be an alias for KeyboardEvent.
+Document-createEvent.https.html	MOUSEEVENT should be an alias for MouseEvent.
+Document-createEvent.https.html	MOUSEEVENTS should be an alias for MouseEvent.
+Document-createEvent.https.html	MouseEvent should be an alias for MouseEvent.
+Document-createEvent.https.html	MouseEvents should be an alias for MouseEvent.
+Document-createEvent.https.html	UIEVENT should be an alias for UIEvent.
+Document-createEvent.https.html	UIEVENTS should be an alias for UIEvent.
+Document-createEvent.https.html	UIEvent should be an alias for UIEvent.
+Document-createEvent.https.html	UIEvents should be an alias for UIEvent.
+Document-createEvent.https.html	compositionevent should be an alias for CompositionEvent.
+Document-createEvent.https.html	focusevent should be an alias for FocusEvent.
+Document-createEvent.https.html	keyboardevent should be an alias for KeyboardEvent.
+Document-createEvent.https.html	mouseevent should be an alias for MouseEvent.
+Document-createEvent.https.html	mouseevents should be an alias for MouseEvent.
+Document-createEvent.https.html	uievent should be an alias for UIEvent.
+Document-createEvent.https.html	uievents should be an alias for UIEvent.
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -1142,18 +1165,28 @@ Document-createElementNS.html	createElementNS test in HTML document: undefined,"
 Document-createEvent-touchevent.window.html	document.createEvent('TOUCHEVENT') should throw if 'expose legacy touch event APIs' is false
 Document-createEvent-touchevent.window.html	document.createEvent('TouchEvent') should throw if 'expose legacy touch event APIs' is false
 Document-createEvent-touchevent.window.html	document.createEvent('touchevent') should throw if 'expose legacy touch event APIs' is false
+Document-createEvent.https.html	COMPOSITIONEVENT should be an alias for CompositionEvent.
 Document-createEvent.https.html	CUSTOMEVENT should be an alias for CustomEvent.
+Document-createEvent.https.html	CompositionEvent should be an alias for CompositionEvent.
 Document-createEvent.https.html	CustomEvent should be an alias for CustomEvent.
 Document-createEvent.https.html	EVENT should be an alias for Event.
 Document-createEvent.https.html	EVENTS should be an alias for Event.
 Document-createEvent.https.html	Event should be an alias for Event.
 Document-createEvent.https.html	Events should be an alias for Event.
+Document-createEvent.https.html	FOCUSEVENT should be an alias for FocusEvent.
+Document-createEvent.https.html	FocusEvent should be an alias for FocusEvent.
 Document-createEvent.https.html	HASHCHANGEEVENT should be an alias for HashChangeEvent.
 Document-createEvent.https.html	HTMLEVENTS should be an alias for Event.
 Document-createEvent.https.html	HTMLEvents should be an alias for Event.
 Document-createEvent.https.html	HashChangeEvent should be an alias for HashChangeEvent.
+Document-createEvent.https.html	KEYBOARDEVENT should be an alias for KeyboardEvent.
+Document-createEvent.https.html	KeyboardEvent should be an alias for KeyboardEvent.
 Document-createEvent.https.html	MESSAGEEVENT should be an alias for MessageEvent.
+Document-createEvent.https.html	MOUSEEVENT should be an alias for MouseEvent.
+Document-createEvent.https.html	MOUSEEVENTS should be an alias for MouseEvent.
 Document-createEvent.https.html	MessageEvent should be an alias for MessageEvent.
+Document-createEvent.https.html	MouseEvent should be an alias for MouseEvent.
+Document-createEvent.https.html	MouseEvents should be an alias for MouseEvent.
 Document-createEvent.https.html	SVGEVENTS should be an alias for Event.
 Document-createEvent.https.html	SVGEvents should be an alias for Event.
 Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationEvent"
@@ -1309,6 +1342,11 @@ Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized no
 Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WheelEvents"
 Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "XULCommandEvents"
 Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for unrecognized arguments
+Document-createEvent.https.html	UIEVENT should be an alias for UIEvent.
+Document-createEvent.https.html	UIEVENTS should be an alias for UIEvent.
+Document-createEvent.https.html	UIEvent should be an alias for UIEvent.
+Document-createEvent.https.html	UIEvents should be an alias for UIEvent.
+Document-createEvent.https.html	compositionevent should be an alias for CompositionEvent.
 Document-createEvent.https.html	createEvent('BEFOREUNLOADEVENT') should be initialized correctly.
 Document-createEvent.https.html	createEvent('BeforeUnloadEvent') should be initialized correctly.
 Document-createEvent.https.html	createEvent('COMPOSITIONEVENT') should be initialized correctly.
@@ -1372,10 +1410,16 @@ Document-createEvent.https.html	createEvent('uievents') should be initialized co
 Document-createEvent.https.html	customevent should be an alias for CustomEvent.
 Document-createEvent.https.html	event should be an alias for Event.
 Document-createEvent.https.html	events should be an alias for Event.
+Document-createEvent.https.html	focusevent should be an alias for FocusEvent.
 Document-createEvent.https.html	hashchangeevent should be an alias for HashChangeEvent.
 Document-createEvent.https.html	htmlevents should be an alias for Event.
+Document-createEvent.https.html	keyboardevent should be an alias for KeyboardEvent.
 Document-createEvent.https.html	messageevent should be an alias for MessageEvent.
+Document-createEvent.https.html	mouseevent should be an alias for MouseEvent.
+Document-createEvent.https.html	mouseevents should be an alias for MouseEvent.
 Document-createEvent.https.html	svgevents should be an alias for Event.
+Document-createEvent.https.html	uievent should be an alias for UIEvent.
+Document-createEvent.https.html	uievents should be an alias for UIEvent.
 Document-createProcessingInstruction.html	Document.createProcessingInstruction in HTML documents
 Document-createTreeWalker.html	Required arguments to createTreeWalker should be required.
 Document-doctype.html	Window document with doctype

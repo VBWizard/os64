@@ -816,6 +816,11 @@ static bool probe_text_is(const char *id, const char *text) {
     return n && n->first_child && n->first_child->kind==OS64_HTML_TEXT &&
         os64_streq(n->first_child->text,text);
 }
+/* An element's text, when it is one text node; "" otherwise. */
+static const char *probe_text_of(const char *id) {
+    os64_html_node_t *n=probe_id(id);
+    return n && n->first_child && n->first_child->kind==OS64_HTML_TEXT ? n->first_child->text : "";
+}
 static void script_type_case(const char *attributes, bool runs) {
     char html[512];
     os64_snprintf(html,sizeof(html),"<p id=result>before</p><script %s>"
@@ -2578,6 +2583,60 @@ static void input_forms(void) {
     check(status_says("background workers"),"input: an uncancelled submit sends the form after its listeners");
     probe_drop();
 }
+/* 0f's P8: what the window tells the binding of each input, read back as
+ * the UI event's members: a click's detail and the button held, the key's
+ * codes, focus's other control, an edit's InputEvent, a submission's
+ * submitter. */
+static void input_ui_events(void) {
+    probe_page("<p><b id=a>press</b></p><form id=f action=/send><input id=one name=a><input id=two name=b>"
+        "<button id=send>send</button></form><p id=log>-</p>"
+        "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+        "var a=document.getElementById('a'),one=document.getElementById('one'),two=document.getElementById('two');"
+        "for(const t of ['mousedown','mouseup','click'])a.addEventListener(t,e=>note(t+' '+e.constructor.name+' '+"
+        "e.detail+' '+e.buttons+' '+(e.view===window)));"
+        "a.addEventListener('mousemove',e=>note('move '+e.buttons));"
+        "one.addEventListener('keydown',e=>note('keydown '+e.constructor.name+' '+e.keyCode+' '+e.which));"
+        "one.addEventListener('keypress',e=>note('keypress '+e.keyCode+' '+e.charCode+' '+e.which));"
+        "one.addEventListener('input',e=>note('input '+e.constructor.name+' '+e.inputType));"
+        "for(const c of [one,two]){c.addEventListener('focus',e=>note('focus '+c.id+' from '+"
+        "(e.relatedTarget?e.relatedTarget.id:'none')+' '+e.constructor.name));"
+        "c.addEventListener('blur',e=>note('blur '+c.id+' to '+(e.relatedTarget?e.relatedTarget.id:'none')))}"
+        "document.getElementById('f').addEventListener('submit',e=>{note('submit '+e.constructor.name+' '+"
+        "(e.submitter?e.submitter.id:'none'));e.preventDefault()});</script>",true);
+    script_turn();
+    input_click_at("a");
+    check(probe_text_is("log","mousedown MouseEvent 1 1 true|mouseup MouseEvent 1 0 true|click MouseEvent 1 0 true"),
+        "input: a press, a release and a click are MouseEvents of one click, the button held only while pressed");
+    const flow_box_t *b=flow_box_for(g.page.tree,probe_id("a"));
+    int32_t x=g.view.bounds.x+b->rect.x+2-g.sx, y=g.view.bounds.y+b->rect.y+2-g.sy;
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=x; ev.mouse.y=y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    view_event(&g.view,&g.ui,&ev); inputs_run();
+    hover(x+1,y); inputs_run();
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    view_event(&g.view,&g.ui,&ev); inputs_run();
+    hover(x+2,y); inputs_run();
+    check(strstr(probe_text_of("log"),"|move 1|")!=NULL && strstr(probe_text_of("log"),"|move 0")!=NULL,
+        "input: a move while the button is down says so, and one after it is let go does not");
+    FormWidget *first=probe_field("one"), *second=probe_field("two");
+    os64_ui_set_focus(&g.ui,first->w); inputs_run();
+    input_key('a');
+    os64_ui_set_focus(&g.ui,second->w); inputs_run();
+    const char *got=probe_text_of("log");
+    check(strstr(got,"focus one from none FocusEvent|keydown KeyboardEvent 65 65|keypress 97 97 97|"
+                     "input InputEvent |blur one to two|focus two from one FocusEvent")!=NULL,
+        "input: focus and blur name the other control; a keypress's codes are its character's; an edit is an InputEvent");
+    os64_ui_set_focus(&g.ui,first->w); inputs_run();
+    input_key('\r');
+    check(strstr(probe_text_of("log"),"submit SubmitEvent send")!=NULL,
+        "input: Enter's submission names the form's default button as its submitter");
+    FormWidget *send=probe_field("send");
+    button_clicked(send->w,send); inputs_run();
+    got=probe_text_of("log");
+    check(strlen(got)>24 && strcmp(got+strlen(got)-24,"|submit SubmitEvent send")==0,
+        "input: a button's submission names the button");
+    probe_drop();
+}
 /* A button whose default action is nothing (no form, or type=button) is the
  * page's script's to act on: its click runs, and the status line does not
  * say the press was refused. */
@@ -2806,6 +2865,7 @@ static void input_cases(void) {
     input_attribute_backstop();
     input_hover();
     input_forms();
+    input_ui_events();
     input_script_buttons();
     input_validation();
     input_select_dropdown();
