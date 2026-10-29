@@ -1,11 +1,10 @@
 #include "internal.h"
+#include <draw2d/paint.h>
 
 typedef struct {
     uint32_t x0, y0, x1, y1;
 } Rect;
-typedef struct {
-    uint16_t a, r, g, b;
-} Pixel;
+typedef draw2d_pixel_t Pixel;
 typedef struct {
     Rect box;
     Pixel *pixels;
@@ -414,16 +413,6 @@ static uint16_t alpha(double a)
 {
     return (uint16_t)(a * 65535 + .5);
 }
-static uint16_t multiply(uint16_t a, uint16_t b)
-{
-    return (uint16_t)(((uint32_t)a * b + 32767) / 65535);
-}
-static Pixel over(Pixel source, Pixel dest)
-{
-    uint16_t inverse = 65535 - source.a;
-    return (Pixel){source.a + multiply(dest.a, inverse), source.r + multiply(dest.r, inverse),
-                   source.g + multiply(dest.g, inverse), source.b + multiply(dest.b, inverse)};
-}
 static Status composite(Render *r, Layer *dest, Layer *source, uint16_t opacity)
 {
     Rect b = source->box;
@@ -432,9 +421,8 @@ static Status composite(Render *r, Layer *dest, Layer *source, uint16_t opacity)
             return r->c->why;
         Pixel *s = at(source, b.x0, y), *d = at(dest, b.x0, y);
         for (uint32_t x = b.x0; x < b.x1; ++x, ++s, ++d) {
-            Pixel p = {multiply(s->a, opacity), multiply(s->r, opacity), multiply(s->g, opacity),
-                       multiply(s->b, opacity)};
-            *d = over(p, *d);
+            Pixel p = draw2d_scale(*s, opacity);
+            *d = draw2d_over(p, *d);
         }
     }
     return SVG_OK;
@@ -471,8 +459,7 @@ static Status clip_one(Render *r, const Item *p, unsigned mask_index, Layer *lay
             const uint8_t *mask = coverage + (size_t)(y - b.y0) * (b.x1 - b.x0);
             for (uint32_t x = b.x0; x < b.x1; ++x, ++dest, ++mask) {
                 uint16_t a = (uint16_t)(*mask * 257);
-                *dest = (Pixel){multiply(dest->a, a), multiply(dest->r, a), multiply(dest->g, a),
-                                multiply(dest->b, a)};
+                *dest = draw2d_scale(*dest, a);
             }
         }
     svg_free(r->c, coverage);
@@ -526,13 +513,8 @@ static Status paint_path(Render *r, const svg_scene_item_t *s, Item *p, Layer *s
                 uint32_t color = radial     ? svg_radial_gradient_sample(&p->radial[part], sx, sy)
                                  : gradient ? svg_linear_gradient_sample(&p->gradient[part], sx, sy)
                                             : paint->argb;
-                uint16_t a = multiply((uint16_t)((color >> 24) * 257), opacity);
-                uint16_t red = (uint16_t)(((color >> 16) & 255) * 257);
-                uint16_t green = (uint16_t)(((color >> 8) & 255) * 257);
-                uint16_t blue = (uint16_t)((color & 255) * 257);
-                uint16_t sa = multiply(a, (uint16_t)(*mask * 257));
-                Pixel source = {sa, multiply(red, sa), multiply(green, sa), multiply(blue, sa)};
-                *dest = over(source, *dest);
+                Pixel source = draw2d_color(color, opacity, (uint16_t)(*mask * 257));
+                *dest = draw2d_over(source, *dest);
             }
         }
         svg_free(r->c, coverage);
@@ -575,13 +557,12 @@ Status svg_render_validate(const svg_render_options_t *o, const svg_render_targe
         return SVG_BAD_ARGUMENT;
     if (t->width > 65535 || t->height > 65535)
         return SVG_LIMIT;
-    size_t row = (size_t)t->width * sizeof(uint32_t);
-    if (t->stride < row)
-        return SVG_BAD_ARGUMENT;
-    if (t->height > 1 && t->stride > (SIZE_MAX - row) / (t->height - 1))
-        return SVG_LIMIT;
-    if ((size_t)(t->height - 1) * t->stride + row > t->capacity || t->width > o->max_dimension ||
-        t->height > o->max_dimension || t->width > 65535 || t->height > 65535 ||
+    draw2d_surface_t surface = {t->pixels, t->width, t->height, t->stride, t->capacity,
+                                DRAW2D_ARGB8_STRAIGHT};
+    draw2d_status_t valid = draw2d_surface_validate(&surface);
+    if (valid != DRAW2D_OK)
+        return valid == DRAW2D_LIMIT ? SVG_LIMIT : SVG_BAD_ARGUMENT;
+    if (t->width > o->max_dimension || t->height > o->max_dimension ||
         t->width > o->max_pixels / t->height)
         return SVG_LIMIT;
     const os64_geometry_backend_t *b = o->geometry;

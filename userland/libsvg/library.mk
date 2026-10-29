@@ -6,11 +6,11 @@ LIBSVG_BASE = $(patsubst libsvg.so=%,%,$(filter libsvg.so=%,$(LIB_BASE_PAIRS)))
 LIBSVG_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden -fno-builtin \
     -fno-tree-loop-distribute-patterns -fno-fast-math -ffp-contract=off
 
-$(LIBSVG_SO): $(LIBSVG_OBJS) $(LIBMATH_SO) link/lib.ld tools/app_bases.py libsvg/library.mk
+$(LIBSVG_SO): $(LIBSVG_OBJS) $(LIBMATH_SO) $(LIBDRAW2D_SO) link/lib.ld tools/app_bases.py libsvg/library.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBSVG_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libsvg.so --no-undefined --no-as-needed \
-	    -o $@ $(LIBSVG_OBJS) $(LIBMATH_SO)
+	    -o $@ $(LIBSVG_OBJS) $(LIBMATH_SO) $(LIBDRAW2D_SO)
 
 $(OBJ)/pic/libsvg/%.c.o: libsvg/%.c libsvg/library.mk GNUmakefile
 	@mkdir -p "$(dir $@)"
