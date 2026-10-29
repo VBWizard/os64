@@ -7,7 +7,8 @@
 # whole, one at the cap kept, a 1 MiB sheet cascaded 16 times and left as
 # it was, a cascade's sheets held to one read budget, and @keyframes at
 # scale held to a sort's cost; then the Modern Web arc's mark,
-# on the names GARB_MODERN_PROBE marks for the purpose.
+# on the names GARB_MODERN_PROBE marks for the purpose, and `:defined` with
+# the switch on and off.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
@@ -54,3 +55,4 @@ python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --keyframes-scale
 "$work/garb_driver" --faces-cap
 "$work/garb_driver" --modern
+"$work/garb_driver" --defined

@@ -97,9 +97,12 @@ absent attribute removed and a node replaced by itself all answer OK with
 the version where it was. The one same-place insert that does move it is
 the one that changed something: a node is still taken out and put back,
 which parts a control from a form outside what moved. (A script that sets `className` to what it is
-already, every frame, is common.) It is the whole invalidation contract:
-libhtml calls nobody. A consumer that wants to know whether the tree moved
-compares the version it was built at with `os64_html_version(doc)`. A live
+already, every frame, is common.) It is the whole invalidation contract.
+libhtml calls nobody but the one listener a document may be given
+(`os64_html_observe`, CUSTOM_ELEMENTS.md), which serves the page's own
+observers and custom element reactions, not invalidation. A consumer that
+wants to know whether the tree moved compares the version it was built at
+with `os64_html_version(doc)`. A live
 collection (`childNodes`, `getElementsByTagName`) is a query and the
 version it was last answered at.
 

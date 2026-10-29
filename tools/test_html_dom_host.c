@@ -213,6 +213,8 @@ static size_t links_ok(const HDoc *d, const HNode *n, size_t depth)
     return records;
 }
 
+#include "test_html_observe.inc"
+
 // ── Cases by hand ───────────────────────────────────────────────────────
 
 #define PAGE "<!doctype html><html><head><title>t</title></head><body>" \
@@ -1817,6 +1819,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
     for (int i = 0; i < nall; i++)
         all[i]->owner = r_of(all[i]->real->form_owner);
     r_compare(doc, document, 0, "import");
+    listen_to(doc);
     rng = seed;
     Snapshot snaps[3] = {{0}};
     uint64_t pin_versions[3] = {0};
@@ -1841,6 +1844,12 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
         uint32_t what_to_do = pick(14);
         size_t owned_before = r_live();
         bool held_before = r_held(x);
+        // What the listener should hear (html.h, THE LISTENER): how many
+        // records, and the old value an attribute or a text record carries.
+        size_t expect_told = 0;
+        char expect_old[64] = "";
+        bool expect_old_null = false, check_old = false;
+        ntold = 0;
         if (r_live() > 1500 && (what_to_do == 9 || what_to_do == 10))
             what_to_do = 4;         // the walk has made enough nodes: take one out instead
         switch (what_to_do) {
@@ -1856,6 +1865,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
                 R *was_under = x->parent;
                 int was_at = was_under ? r_index(was_under, x) : -1, tied = r_tied();
                 bool brought = x->kind != OS64_HTML_FRAGMENT || x->nkids > 0;
+                expect_told = !brought ? 0 : x->kind == OS64_HTML_FRAGMENT || was_under ? 2 : 1;
                 if (x->kind == OS64_HTML_FRAGMENT) { x->candidate = true; x->deferred = x->holds != 0 || !x->nkids; }
                 r_insert(y, x, z);
                 changes = brought && (x->kind == OS64_HTML_FRAGMENT || x->parent != was_under ||
@@ -1866,6 +1876,8 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             snprintf(did, sizeof(did), "replace");
             want = r_may(document, (int)(2 * max_depth + 2), y, x, z, true);
             got = os64_html_replace(doc, y->real, x->real, z ? z->real : NULL);
+            if (!want)
+                expect_told = x != z && (x->kind == OS64_HTML_FRAGMENT ? !x->nkids : !x->parent) ? 1 : 2;
             if (!want && x != z) {
                 int at = r_index(y, z);
                 R *before = at + 1 < y->nkids ? y->kids[at + 1] : NULL;
@@ -1888,6 +1900,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             changes = x->parent != NULL;
             got = os64_html_remove(doc, x->real);
             if (!want && x->parent) {
+                expect_told = 1;
                 x->candidate = true; x->deferred = r_held(x);
                 r_take(x);
                 r_part(x);
@@ -1904,6 +1917,10 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             got = os64_html_set_attr(doc, x->real, name, value, strlen(value));
             if (!want) {
                 int at = r_attr(x, name);
+                expect_told = 1;
+                check_old = true;
+                expect_old_null = at < 0;
+                snprintf(expect_old, sizeof(expect_old), "%s", at < 0 ? "" : x->av[at]);
                 changes = at < 0 || strcmp(x->av[at], value) != 0;
                 if (at < 0) {
                     x->an = realloc(x->an, (size_t)(x->nattrs + 1) * sizeof(char *));
@@ -1927,6 +1944,9 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             int at = want ? -1 : r_attr(x, name);
             changes = at >= 0;
             if (at >= 0) {
+                expect_told = 1;
+                check_old = true;
+                snprintf(expect_old, sizeof(expect_old), "%s", x->av[at]);
                 free(x->an[at]);
                 free(x->av[at]);
                 memmove(x->an + at, x->an + at + 1, (size_t)(x->nattrs - at - 1) * sizeof(char *));
@@ -1943,6 +1963,9 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             want = x->kind != OS64_HTML_TEXT && x->kind != OS64_HTML_COMMENT ? OS64_HTML_BAD_ARGUMENT : 0;
             got = os64_html_set_text(doc, x->real, value, strlen(value));
             if (!want) {
+                expect_told = 1;
+                check_old = true;
+                snprintf(expect_old, sizeof(expect_old), "%s", x->text);
                 changes = strcmp(x->text, value) != 0;
                 free(x->text);
                 x->text = strdup(value);
@@ -2036,6 +2059,11 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
         }
         check(got == want, "step %u (%s): %s, the model says %s", step, did, os64_html_status_name(got),
               os64_html_status_name(want));
+        check(ntold == expect_told, "step %u (%s): the listener heard %zu records, the model says %zu", step,
+              did, ntold, expect_told);
+        if (check_old && ntold == 1)
+            check(told_old(&told[0], expect_old_null ? NULL : expect_old),
+                  "step %u (%s): the record's old value is the model's", step, did);
         if (got) {
             refused++;
             if (got < 0 && got >= -10)
@@ -2653,6 +2681,10 @@ int main(int argc, char **argv)
         t_documents();
         t_second_documents();
         t_out_of_memory();
+        t_observe_children();
+        t_observe_attributes();
+        t_observe_parser();
+        t_custom_state();
     }
     static const char *const pages[] = {
         "<!doctype html><html><head><title>t</title></head><body><div id=a class=x><span>one</span></div>"

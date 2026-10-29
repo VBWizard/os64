@@ -74,6 +74,9 @@ typedef struct os64_html_node {
     const char *name; /* Local element name; PI target; doctype name. */
     const char *prefix, *namespace_uri; /* Owned XML spellings; NULL when absent. */
     bool xml_document; /* Owning arena is an XML document, including detached nodes. */
+    /* An element's custom state, an os64_html_ce_t (below). Only
+     * os64_html_set_ce changes it. */
+    uint8_t ce;
     const char *public_id, *system_id;
     const char *text;
     size_t text_len;
@@ -281,7 +284,8 @@ uint32_t os64_html_decode_windows_1252(uint8_t byte);
  *
  * `os64_html_version` moves on every change a reader could see, and is never
  * zero for a document: comparing it with the version something was built at
- * answers "has the tree moved since?". The library calls nobody. A verb that
+ * answers "has the tree moved since?". The library calls nobody but the
+ * one listener a document may be given (THE LISTENER, below). A verb that
  * leaves everything as it was answers OK and does not move it: an empty
  * fragment inserted, a node inserted where it already sits (unless that
  * parted a control from its form, below), a text or an attribute set to the
@@ -408,6 +412,103 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, os64_html_node_t *eleme
                               const char *name);
 int64_t os64_html_set_text(os64_html_document_t *doc, os64_html_node_t *node, const char *utf8,
                            size_t len);
+
+/* ── THE LISTENER (docs/design/pending/CUSTOM_ELEMENTS.md, RELAYOUT.md) ───
+ *
+ * A document may be given one function to be told, inside a verb and after
+ * its change is applied, of every change the DOM Standard's "queue a
+ * mutation record" step sees: custom element reactions and MutationObserver
+ * are both built on it. A verb that sets an attribute or a text to the
+ * value it already has is told too, though the version does not move, and
+ * so is a node inserted where it already sits (its removal and its
+ * insertion) or replaced by itself (the same two). Removing an absent
+ * attribute is not a change and is not told, nor is inserting an empty
+ * fragment.
+ *
+ * The record shapes are the standard's. A node inserted or replaced in
+ * from another parent is two records: its removal from that parent, then
+ * the insertion. A fragment drained is two: the fragment's record with its
+ * children removed, then the parent's with them added. A replace is one
+ * record on the parent, with both lists filled; the node it puts in has
+ * left its own parent before the node it takes out goes. The siblings are
+ * the ones the standard names, read as the tree stood at that step.
+ *
+ * THE DOCUMENT PARSER IS TOLD AS A VERB IS: every node it links in or takes
+ * out, every character it appends to a text node, every attribute a second
+ * `html` or `body` tag adds. A fragment parse tells nothing, since it
+ * builds in a tree of its own and the result reaches the document by a
+ * verb. Nor does a clone: nothing can be listening to a copy being built.
+ *
+ * Everything a record points at is borrowed for the call. The old value of
+ * an attribute or a text is still the bytes the node had, before they are
+ * retired. A removed node is still alive, before the verb decides whether
+ * it can be reclaimed, so a listener that holds it keeps it
+ * (os64_html_hold allocates nothing). The listener must not change the
+ * document, pin it, or free it. */
+typedef enum {
+    OS64_HTML_CHANGE_CHILDREN = 1, /* target's children changed */
+    OS64_HTML_CHANGE_ATTR,         /* an attribute of target was set or removed */
+    OS64_HTML_CHANGE_TEXT,         /* target's text was replaced or appended to */
+    /* An element's custom state changed (os64_html_set_ce). The standard
+     * records no mutation for it, so no listener is told. The kind is for a
+     * log of the document's changes (RELAYOUT.md), whose every entry stands
+     * for a move of the version: this change moves it because `:defined`
+     * reads the state. */
+    OS64_HTML_CHANGE_STATE
+} os64_html_change_kind_t;
+
+typedef struct {
+    uint64_t version;               /* the document's version once the change was made */
+    os64_html_change_kind_t kind;
+    const os64_html_node_t *target; /* CHILDREN: the parent; ATTR: the element; TEXT: the node */
+    /* CHILDREN: what was put in and taken out, each a run of siblings: the
+     * first and how many, read along `next` as the tree stands when the
+     * listener is told. A removed run of more than one node is a drained
+     * fragment's children, which by then lie together in their new parent.
+     * The siblings the change happened between, NULL at an end. */
+    const os64_html_node_t *added, *removed;
+    size_t nadded, nremoved;
+    const os64_html_node_t *previous_sibling, *next_sibling;
+    /* ATTR: the qualified name, the namespace URI (NULL for none), the
+     * local name, and the value before the change: NULL when it was
+     * absent, and not NUL-terminated. */
+    const char *attr_name, *attr_ns, *attr_local, *attr_old;
+    size_t attr_old_len;
+    /* TEXT: the text before the change, not NUL-terminated. */
+    const char *text_old;
+    size_t text_old_len;
+} os64_html_change_t;
+
+/* NULL `changed` takes the listener away. */
+void os64_html_observe(os64_html_document_t *doc,
+                       void (*changed)(void *opaque, const os64_html_change_t *change),
+                       void *opaque);
+
+/* ── CUSTOM STATE (docs/design/pending/CUSTOM_ELEMENTS.md) ──────────────
+ *
+ * The standard's five states fold into three: "uncustomized" and
+ * "undefined" are PLAIN, told apart by the name; "precustomized" lives on
+ * a constructor's stack, where only the upgrade itself can see it. Every
+ * node is born PLAIN, and so is a clone, since the standard upgrades a
+ * clone after making it; that is also what lets a FAILED element's clone
+ * be tried again.
+ *
+ * `set_ce` moves the version when the state changes (the cascade reads it
+ * for `:defined`) and tells no listener. An element only, of `doc`, and a
+ * state the enum names; anything else is OS64_HTML_BAD_ARGUMENT.
+ *
+ * `os64_html_custom_name` is HTML's valid custom element name (§ 4.13.2):
+ * a lowercase ASCII letter, then name characters with a hyphen among them,
+ * and none of the names SVG and MathML already use. A byte past ASCII is
+ * taken as one of the name characters, which nearly every code point past
+ * ASCII is. */
+typedef enum {
+    OS64_HTML_CE_PLAIN = 0, /* by its name: undefined when it is a valid custom element name */
+    OS64_HTML_CE_CUSTOM,    /* constructed by its definition */
+    OS64_HTML_CE_FAILED     /* its constructor threw, or returned something else */
+} os64_html_ce_t;
+int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
+bool os64_html_custom_name(const char *name);
 
 /* Parse a complete UTF-8 string in an owned ELEMENT context.
  * This HTML fragment entry point refuses XML documents and unknown/no-namespace

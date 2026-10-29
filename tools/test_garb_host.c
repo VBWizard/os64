@@ -300,7 +300,7 @@ static void select_page(const char *html, size_t hlen, const char *lists)
         size_t n = end != NULL ? (size_t)(end - line) : strlen(line);
         garb_parsed_t r;
         garb_parse_values(line, n, &r);
-        garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, doc->quirks);
+        garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, doc->quirks, false);
         if (sel == NULL) {
             puts("null");
         } else {
@@ -649,7 +649,7 @@ static void parse_all(const char *text, size_t len)
         }
         if (rule->at)
             continue;
-        (void)garb_selectors_parse(&r, rule->prelude, rule->nprelude, OS64_HTML_NO_QUIRKS);
+        (void)garb_selectors_parse(&r, rule->prelude, rule->nprelude, OS64_HTML_NO_QUIRKS, false);
         garb_set_t sets[GARB_SETS_MAX];
         for (int32_t k = 0; k < n; k++)
             if (items[k].kind == GARB_ITEM_DECL)
@@ -968,7 +968,7 @@ static void selector_desc(const char *text, char *out, size_t cap, bool *incompl
 {
     garb_parsed_t r;
     (void)garb_parse_values(text, strlen(text), &r);
-    garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, OS64_HTML_NO_QUIRKS);
+    garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, OS64_HTML_NO_QUIRKS, false);
     size_t at = (size_t)snprintf(out, cap, "%s", sel == NULL ? "null" : "list");
     for (int32_t i = 0; sel != NULL && i < garb_selectors_count(sel) && at < cap; i++)
         at += (size_t)snprintf(out + at, cap - at, " %u/%d", garb_selector_specificity(sel, i),
@@ -1795,6 +1795,53 @@ static void modern_cascade(bool off, garb_prop_t *props, int32_t *n, bool *skipp
     os64_html_document_free(doc);
 }
 
+// :defined (CUSTOM_ELEMENTS.md). With the switch on, an HTML element with a
+// custom name is not defined while it waits for a definition, nor once its
+// constructor has failed; with it off every element is, as before the arc.
+// Read through a selector list, which takes the switch as it is parsed, and
+// through a cascade, which takes it from its environment.
+static int defined(void)
+{
+    static const char kPage[] = "<!doctype html><body><x-wait id=w></x-wait><x-made id=m></x-made>"
+                                "<x-fail id=f></x-fail><div id=d></div><font-face id=r></font-face>"
+                                "<svg><x-svg id=s /></svg>";
+    static const struct { const char *id; bool on; } kOn[] = {
+        {"w", false}, {"m", true}, {"f", false}, {"d", true}, {"r", true}, {"s", true}};
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    os64_html_set_ce(doc, (os64_html_node_t *)by_id(doc->document, "m"), OS64_HTML_CE_CUSTOM);
+    os64_html_set_ce(doc, (os64_html_node_t *)by_id(doc->document, "f"), OS64_HTML_CE_FAILED);
+    static const char kSheet[] = ":not(:defined) { display: none }";
+    int failed = 0;
+    for (int off = 0; off < 2; off++) {
+        garb_parsed_t r, sheet;
+        garb_parse_values(":defined", 8, &r);
+        garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, OS64_HTML_NO_QUIRKS, off);
+        garb_parse_sheet_text(kSheet, sizeof(kSheet) - 1, &sheet);
+        garb_sheet_in_t in = {.sheet = &sheet};
+        garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600,
+                                                                   .modern_off = off});
+        for (size_t k = 0; k < sizeof(kOn) / sizeof(kOn[0]); k++) {
+            const os64_html_node_t *el = by_id(doc->document, kOn[k].id);
+            bool want = off || kOn[k].on;
+            if (sel == NULL || el == NULL || garb_selector_matches(sel, 0, el) != want ||
+                c == NULL || (garb_style_for(c, el).n == 0) != want) {
+                printf("libgarb :defined: #%s with the switch %s is %s - FAILED\n", kOn[k].id,
+                       off ? "off" : "on", want ? "defined" : "not defined");
+                failed++;
+            }
+        }
+        garb_cascade_free(c);
+        garb_free(&sheet);
+        garb_free(&r);
+    }
+    os64_html_document_free(doc);
+    printf("libgarb :defined: %s\n", failed ? "FAILED" : "each state, the switch on and off");
+    return failed;
+}
+
 static int modern_marks(void)
 {
     int failed = 0;
@@ -1992,6 +2039,8 @@ int main(int argc, char **argv)
         return media_depth();
     if (argc == 2 && strcmp(argv[1], "--modern") == 0)
         return modern_marks();
+    if (argc == 2 && strcmp(argv[1], "--defined") == 0)
+        return defined();
     if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)
         return keyframes_scale();
     if (argc == 2 && strcmp(argv[1], "--faces-cap") == 0)
