@@ -45,9 +45,10 @@ typedef enum {
 // neighbours in the list with it. NULL too when memory ran out partway,
 // and then `owner` is marked incomplete: a list read short is neither
 // valid nor invalid. `quirks` is the document's mode, which
-// makes class and id names match without regard to case.
+// makes class and id names match without regard to case. `modern_off` is
+// the Modern Web switch, off: `:defined` then matches every element.
 garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t *prelude,
-                                       int32_t n, os64_html_quirks_t quirks);
+                                       int32_t n, os64_html_quirks_t quirks, bool modern_off);
 
 int32_t garb_selectors_count(const garb_selectors_t *list);
 // The i-th selector's specificity, (a, b, c) packed as a << 20 | b << 10 | c,
