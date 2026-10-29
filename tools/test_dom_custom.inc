@@ -5,11 +5,13 @@
  * a second document's adoption, and the reactions a change between tasks
  * leaves owed, which the host runs. `L` is each script's log.
  *
- * Until [CEReactions] wraps the DOM's own members (cut b2), a callback a
- * plain DOM call causes runs at the microtask checkpoint after the script,
- * which is the end of dom_script's run: such a callback is looked for in
- * the next script. define, upgrade, createElement and cloneNode push their
- * own element queue and run what they queued before they return. */
+ * A [CEReactions] member runs what it queued as it returns (cut b2's
+ * wrappers, and define, upgrade, createElement and cloneNode in C). A path
+ * no wrapper reaches (dataset's exotic setter) runs at the microtask
+ * checkpoint after the script, which is the end of dom_script's run: such a
+ * callback is looked for in the next script. */
+
+#include <time.h>
 
 #define CE_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(f,name){try{f()}catch(e){return e.name===name}return false}"
@@ -68,6 +70,135 @@ static void custom_allocation_cases(void)
         cuts++;
     }
     check(cuts > 4, "custom: define and its upgrade were failed at each of their allocations");
+}
+
+/* libdom's internal.h: the harness links the binding's own objects. */
+size_t d_reactions_rows(void);
+bool d_reactions_row_name(size_t i, char *out, size_t cap);
+const char *d_reactions_row_state(const os64_dom_t *dom, size_t i);
+size_t d_reactions_wrapped(const os64_dom_t *dom);
+
+/* The state install gave the table's row `name` ("Interface.member"), or
+ * NULL for a name the table does not have. */
+static const char *custom_row_state(const os64_dom_t *dom, const char *name)
+{
+    char row[128];
+    for (size_t i = 0; i < d_reactions_rows(); i++)
+        if (d_reactions_row_name(i, row, sizeof(row)) && strcmp(row, name) == 0)
+            return d_reactions_row_state(dom, i);
+    return NULL;
+}
+
+/* A loop of mutations a script makes, in microseconds, the best of three
+ * runs: what the [CEReactions] trampoline costs is at most the same loop
+ * with the switch on against off (which differs in more than the
+ * wrappers, so the difference is an upper bound). */
+static double custom_mutation_us(DomFixture *f)
+{
+    static const char kLoop[] =
+        "var box=document.getElementById('box'),p=document.createElement('p');"
+        "for(var i=0;i<20000;i++){p.setAttribute('x',i);box.appendChild(p);box.removeChild(p)}";
+    double best = 0;
+    for (int run = 0; run < 3; run++) {
+        struct timespec a, b;
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        dom_script(f, kLoop, "custom-cost");
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        double us = (double)(b.tv_sec - a.tv_sec) * 1e6 + (double)(b.tv_nsec - a.tv_nsec) / 1e3;
+        if (run == 0 || us < best) best = us;
+    }
+    return best;
+}
+
+/* THE [CEReactions] WRAPPERS (cut b2): the members the reactions tests
+ * reach are wrapped, the exotic paths no wrapper can reach are the ones
+ * named here and no others, a wrapper keeps its original's name, length and
+ * property attributes, a member's reactions run as it returns, and one
+ * that throws still lets go of its element queue. A member libdom gains
+ * that the table names is wrapped with no change here. */
+static void custom_reactions_cases(void)
+{
+    static const char *const kWrapped[] = {
+        "Node.appendChild", "Node.insertBefore", "Node.removeChild", "Node.replaceChild", "Node.cloneNode",
+        "Node.textContent", "Node.nodeValue", "Node.normalize", "Element.setAttribute", "Element.removeAttribute",
+        "Element.toggleAttribute", "Element.setAttributeNode", "Element.removeAttributeNode", "Element.id",
+        "Element.className", "Element.innerHTML", "Element.insertAdjacentHTML", "Element.insertAdjacentElement",
+        "Element.before", "Element.after", "Element.remove", "Element.replaceWith", "Element.append",
+        "Element.prepend", "Element.replaceChildren", "Document.createElement", "Document.createElementNS",
+        "Document.title", "DOMTokenList.add", "DOMTokenList.remove", "DOMTokenList.toggle", "DOMTokenList.replace",
+        "DOMTokenList.value", "CSSStyleDeclaration.cssText", "CSSStyleDeclaration.setProperty",
+        "CSSStyleDeclaration.removeProperty", "CSSStyleDeclaration.*", "Attr.value", "NamedNodeMap.setNamedItem",
+        "NamedNodeMap.removeNamedItem", "HTMLElement.title", "HTMLElement.hidden", "HTMLElement.dir",
+        "HTMLInputElement.value",
+    };
+    /* Special operations, which no prototype member is: what they change
+     * reaches the backup element queue and runs at the checkpoint. */
+    static const char *const kExotic[] = {"DOMStringMap.(setter)", "DOMStringMap.(deleter)",
+                                          "HTMLOptionsCollection.(setter)", "HTMLSelectElement.(setter)"};
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    for (size_t i = 0; i < sizeof(kWrapped) / sizeof(kWrapped[0]); i++) {
+        const char *state = custom_row_state(f.binding, kWrapped[i]);
+        char what[160];
+        snprintf(what, sizeof(what), "custom: %s is wrapped (%s)", kWrapped[i],
+                 state != NULL ? state : "not in the table");
+        check(state != NULL && (!strcmp(state, "wrapped") || !strcmp(state, "shared")), what);
+    }
+    size_t unwrappable = 0;
+    for (size_t i = 0; i < d_reactions_rows(); i++)
+        unwrappable += !strcmp(d_reactions_row_state(f.binding, i), "unwrappable");
+    bool named = unwrappable == sizeof(kExotic) / sizeof(kExotic[0]);
+    for (size_t i = 0; i < sizeof(kExotic) / sizeof(kExotic[0]); i++) {
+        const char *state = custom_row_state(f.binding, kExotic[i]);
+        named = named && state != NULL && !strcmp(state, "unwrappable");
+    }
+    check(named, "custom: the exotic paths no wrapper reaches are the four named");
+    check(d_reactions_wrapped(f.binding) > sizeof(kWrapped) / sizeof(kWrapped[0]),
+          "custom: install wrapped the table's members, and every CSS property's setter");
+
+    custom_script(&f, CE_ASSERT
+        "function same(a,b,k){var x=Object.getOwnPropertyDescriptor(a,k),y=Object.getOwnPropertyDescriptor(a,b);"
+        "return x.writable===y.writable&&x.enumerable===y.enumerable&&x.configurable===y.configurable}"
+        "assert(same(Node.prototype,'contains','appendChild'),'a wrapped method keeps its attributes');"
+        /* hasChildNodes is made by the same installer and is no [CEReactions]
+         * member: the wrapper's name follows the original's as its does. */
+        "var a=Node.prototype.appendChild,h=Node.prototype.hasChildNodes;"
+        "assert(a.length===1&&(a.name==='appendChild')===(h.name==='hasChildNodes'),'and its name and length');"
+        "var t=Object.getOwnPropertyDescriptor(Node.prototype,'textContent'),"
+        "n=Object.getOwnPropertyDescriptor(Node.prototype,'nodeName');"
+        "assert(t.enumerable===n.enumerable&&t.configurable===n.configurable&&typeof t.get==='function',"
+        "'a wrapped setter keeps the accessor\\'s attributes and its getter');",
+        "custom-wrapper-shape");
+
+    custom_script(&f, CE_ASSERT
+        "window.L=[];class R extends HTMLElement{static get observedAttributes(){return['class','style','data-k']}"
+        "attributeChangedCallback(n,o,v){L.push(n+'='+v)}connectedCallback(){L.push('conn')}"
+        "disconnectedCallback(){L.push('disc')}};customElements.define('x-r',R);"
+        "var r=document.createElement('x-r'),box=document.getElementById('box');"
+        "box.appendChild(r);assert(L.join()==='conn','appendChild connects before it returns: '+L);"
+        "L=[];r.classList.add('on');assert(L.join()==='class=on','classList: '+L);"
+        "L=[];r.style.color='red';assert(L.length===1&&/^style=/.test(L[0]),'a CSS property setter: '+L);"
+        "L=[];box.removeChild(r);assert(L.join()==='disc','removeChild: '+L);"
+        "L=[];box.innerHTML='<x-r id=parsed></x-r>';"
+        "assert(document.getElementById('parsed') instanceof R&&L.join()==='conn','innerHTML upgrades: '+L);"
+        "try{box.removeChild(document.createElement('p'))}catch(e){}"
+        "var q=document.getElementById('parsed');L=[];q.setAttribute('class','b');"
+        "assert(L.join()==='class=b','a member that threw let go of its element queue: '+L);"
+        "L=[];q.dataset.k='1';assert(L.length===0,'dataset\\'s setter is exotic: the checkpoint runs it');",
+        "custom-reactions-sync");
+    custom_script(&f, CE_ASSERT "assert(L.join()==='data-k=1','the checkpoint ran it: '+L);", "custom-reactions-exotic");
+    double on = custom_mutation_us(&f);
+    fixture_free(&f);
+
+    os64_dom_options_t options = os64_dom_default_options();
+    options.modern = false;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    double off = custom_mutation_us(&f);
+    fixture_free(&f);
+    printf("custom: 20000 x (setAttribute, appendChild, removeChild): %.0f us with the switch on "
+           "(wrapped), %.0f us off; the trampolines' share is at most %.1f%%\n", on, off,
+           off > 0 ? (on - off) * 100.0 / off : 0.0);
 }
 
 static void dom_custom_cases(void)
@@ -152,8 +283,9 @@ static void dom_custom_cases(void)
         "customElements.define('x-up',Up);"
         "assert(L.join('|')==='ctor u1 true|attr u1 a null 1 null|connected u1|ctor u2 true|connected u2',L.join('|'));"
         "assert(u1 instanceof Up&&u1.matches(':defined')&&!document.querySelector(':not(:defined)'));"
-        "L=[];u1.setAttribute('a','3');u1.setAttribute('b','4');u1.setAttribute('a','3');"
-        "assert(L.length===0,'a plain DOM call queues for the checkpoint');",
+        /* [CEReactions]: each setAttribute's callback has run as it returns. */
+        "L=[];u1.setAttribute('a','3');assert(L.join('|')==='attr u1 a 1 3 null','before the next statement');"
+        "u1.setAttribute('b','4');u1.setAttribute('a','3');",
         "custom-upgrade-on-define");
     custom_script(&f, CE_ASSERT
         "assert(L.join('|')==='attr u1 a 1 3 null|attr u1 a 3 3 null',L.join('|'));"
@@ -203,6 +335,7 @@ static void dom_custom_cases(void)
         "L=[];errors=[];var box=document.getElementById('box');"
         "box.innerHTML='<x-throws id=t1 a=1></x-throws><x-early id=t0></x-early>"
         "<x-twice id=t2></x-twice><x-swap id=t3></x-swap>';"
+        "assert(L.join()==='disconnected u2','innerHTML disconnected what it replaced as it returned');L=[];"
         "class Throws extends HTMLElement{static get observedAttributes(){return['a']}"
         "constructor(){super();throw Error('upgrade fails')}"
         "attributeChangedCallback(){L.push('attr')}connectedCallback(){L.push('connected')}};"
@@ -342,5 +475,6 @@ static void dom_custom_cases(void)
     check(!os64_dom_reactions_owed(f.binding), "custom: nothing is owed with the switch off");
     fixture_free(&f);
     custom_allocation_cases();
+    custom_reactions_cases();
 }
 #undef CE_ASSERT

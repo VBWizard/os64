@@ -28,12 +28,39 @@ parser/parser-constructs-custom-elements.html	HTML parser must create a defined 
 parser/parser-uses-registry-of-owner-document.html	HTML parser must not instantiate custom elements inside template elements
 upgrading/upgrading-parser-created-element.html	Upgrading a custom element must throw an TypeError when the returned element is not SameValue as the upgraded element
 upgrading/upgrading-parser-created-element.html	Upgrading a custom element whose constructor returns a Text node must throw
+# Cut b2: a [CEReactions] member's reactions run before it returns. The
+# reactions tests' attribute lines wait on getAttributeNS, which their log
+# helper calls inside every attributeChangedCallback and libdom does not have.
+reactions/ChildNode.html	after on ChildNode must enqueue a connected reaction
+reactions/ChildNode.html	after on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/ChildNode.html	before on ChildNode must enqueue a connected reaction
+reactions/ChildNode.html	before on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/ChildNode.html	remove on ChildNode must enqueue a disconnected reaction
+reactions/ChildNode.html	replaceWith on ChildNode must enqueue a connected reaction
+reactions/ChildNode.html	replaceWith on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Element.html	innerHTML on Element must enqueue a connected reaction for a newly constructed custom element
+reactions/Element.html	innerHTML on Element must enqueue a disconnected reaction
+reactions/Element.html	insertAdjacentElement on Element must enqueue a connected reaction
+reactions/Element.html	insertAdjacentElement on Element must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Element.html	insertAdjacentHTML on Element must enqueue a connected reaction for a newly constructed custom element
+reactions/Node.html	appendChild on ChildNode must enqueue a connected reaction
+reactions/Node.html	appendChild on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Node.html	insertBefore on ChildNode must enqueue a connected reaction
+reactions/Node.html	insertBefore on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Node.html	removeChild on ChildNode must enqueue a disconnected reaction
+reactions/Node.html	replaceChild on ChildNode must enqueue a connected reaction
+reactions/Node.html	replaceChild on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/ParentNode.html	append on ParentNode must enqueue a connected reaction
+reactions/ParentNode.html	append on ParentNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/ParentNode.html	prepend on ParentNode must enqueue a connected reaction
+reactions/ParentNode.html	prepend on ParentNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
 [excluded]
 [passing]
 CustomElementRegistry-constructor-and-callbacks-are-held-strongly.html	constructor
 CustomElementRegistry-getName.html	customElements.getName must return null when the registry does not contain an entry with the given constructor
 CustomElementRegistry-getName.html	customElements.getName must throw when the element interface is not a constructor
 CustomElementRegistry-getName.html	customElements.getName returns the name of the entry with the given constructor when there is a matching entry.
+Document-createElement-customized-builtins.html	document.createElement must create an instance of autonomous custom elements when it has is attribute
 Document-createElementNS.html	autonomous: document.createElementNS with undefined options value should be upgraded.
 HTMLElement-constructor.html	Custom element constructor must throw TypeError when it does not extend HTMLElement
 HTMLElement-constructor.html	HTMLElement constructor must allow subclassing a custom element
@@ -58,7 +85,7 @@ overwritten-customElements-global.html	Custom elements can still be constructed 
 overwritten-customElements-global.html	Custom elements can still be constructed after `window.customElements` is overwritten.
 overwritten-customElements-global.html	Custom elements can still be created after `window.customElements` is deleted.
 overwritten-customElements-global.html	Custom elements can still be created after `window.customElements` is overwritten.
-parser/parser-constructs-custom-element-in-document-write.html	HTML parser should call connectedCallback before appending child nodes inside document.write
+parser/parser-constructs-custom-element-in-document-write.html	HTML parser must instantiate custom elements inside document.write
 parser/parser-constructs-custom-elements-with-is.html	HTML parser must create a defined autonomous custom element when customElements.define comes after HTML parser creation
 parser/parser-constructs-custom-elements-with-is.html	HTML parser must create a defined autonomous custom element when customElements.define comes before HTML parser creation
 parser/parser-constructs-custom-elements.html	HTML parser must NOT create a custom element before customElements.define is called
@@ -66,7 +93,16 @@ parser/parser-constructs-custom-elements.html	HTML parser must create a defined 
 parser/parser-custom-element-in-foreign-content.html	HTML parser should not create custom elements in non-HTML namespaces
 parser/parser-uses-registry-of-owner-document.html	HTML parser must not instantiate custom elements inside template elements
 reaction-timing.html	Calling Node.prototype.cloneNode(false) must push a new element queue to the processing stack
+reaction-timing.html	setAttribute and removeAttribute must enqueue and invoke attributeChangedCallback
+reaction-timing.html	toggleAttribute must enqueue and invoke attributeChangedCallback
 reactions/Attr.html	value on Attr must not enqueue an attributeChanged reaction when replacing an existing unobserved attribute
+reactions/ChildNode.html	after on ChildNode must enqueue a connected reaction
+reactions/ChildNode.html	after on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/ChildNode.html	before on ChildNode must enqueue a connected reaction
+reactions/ChildNode.html	before on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/ChildNode.html	remove on ChildNode must enqueue a disconnected reaction
+reactions/ChildNode.html	replaceWith on ChildNode must enqueue a connected reaction
+reactions/ChildNode.html	replaceWith on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
 reactions/DOMStringMap.html	deleter on DOMStringMap must not enqueue an attributeChanged reaction when it does not remove a data attribute
 reactions/DOMStringMap.html	deleter on DOMStringMap must not enqueue an attributeChanged reaction when removing an unobserved data attribute
 reactions/DOMStringMap.html	setter on DOMStringMap must not enqueue an attributeChanged reaction when adding an unobserved data attribute
@@ -77,6 +113,11 @@ reactions/DOMTokenList.html	remove on DOMTokenList must not enqueue an attribute
 reactions/DOMTokenList.html	replace on DOMTokenList must not enqueue an attributeChanged reaction when replacing a value in an unobserved attribute
 reactions/DOMTokenList.html	the stringifier of DOMTokenList must not enqueue an attributeChanged reaction when adding an unobserved attribute
 reactions/DOMTokenList.html	the stringifier of DOMTokenList must not enqueue an attributeChanged reaction when mutating the value of an unobserved attribute
+reactions/Element.html	innerHTML on Element must enqueue a connected reaction for a newly constructed custom element
+reactions/Element.html	innerHTML on Element must enqueue a disconnected reaction
+reactions/Element.html	insertAdjacentElement on Element must enqueue a connected reaction
+reactions/Element.html	insertAdjacentElement on Element must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Element.html	insertAdjacentHTML on Element must enqueue a connected reaction for a newly constructed custom element
 reactions/Element.html	removeAttribute on Element must not enqueue an attributeChanged reaction when removing an existing unobserved attribute
 reactions/Element.html	removeAttribute on Element must not enqueue an attributeChanged reaction when removing an unobserved attribute
 reactions/Element.html	removeAttributeNode on Element must not enqueue an attributeChanged reaction when removing an existing unobserved attribute
@@ -99,8 +140,20 @@ reactions/NamedNodeMap.html	setNamedItem on NamedNodeMap must enqueue an attribu
 reactions/NamedNodeMap.html	setNamedItem on NamedNodeMap must not enqueue an attributeChanged reaction when adding an unobserved attribute
 reactions/NamedNodeMap.html	setNamedItemNS on NamedNodeMap must enqueue an attributeChanged reaction when replacing an existing unobserved attribute
 reactions/NamedNodeMap.html	setNamedItemNS on NamedNodeMap must not enqueue an attributeChanged reaction when adding an unobserved attribute
+reactions/Node.html	appendChild on ChildNode must enqueue a connected reaction
+reactions/Node.html	appendChild on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Node.html	cloneNode on Node must not enqueue an attributeChanged reaction when cloning an element with an unobserved attribute
+reactions/Node.html	insertBefore on ChildNode must enqueue a connected reaction
+reactions/Node.html	insertBefore on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
 reactions/Node.html	nodeValue on Node must not enqueue an attributeChanged reaction when replacing an existing unobserved attribute
+reactions/Node.html	removeChild on ChildNode must enqueue a disconnected reaction
+reactions/Node.html	replaceChild on ChildNode must enqueue a connected reaction
+reactions/Node.html	replaceChild on ChildNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
 reactions/Node.html	textContent on Node must not enqueue an attributeChanged reaction when replacing an existing unobserved attribute
+reactions/ParentNode.html	append on ParentNode must enqueue a connected reaction
+reactions/ParentNode.html	append on ParentNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/ParentNode.html	prepend on ParentNode must enqueue a connected reaction
+reactions/ParentNode.html	prepend on ParentNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
 reactions/customized-builtins/HTMLInputElement.html	No tests if HTMLInputEement has no "capture" IDL attribute
 registries/global.window.html	createElementNS() should throw with global registry from another document
 registries/upgrade.html	Two elements as children of the upgraded node
