@@ -473,6 +473,7 @@ void os64_dom_drain(os64_dom_t *dom)
     d_idle_drain(dom);
     /* The document may outlive the binding: its listener goes now. */
     d_custom_drain(dom);
+    d_observers_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -502,6 +503,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_attr_table_free(dom);
     d_report_free(dom);
     d_custom_free(dom);
+    d_observers_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);
@@ -518,12 +520,13 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-/* The seven registries: wrappers and other held values, listener callbacks,
+/* The eight registries: wrappers and other held values, listener callbacks,
  * timer callbacks with their arguments, what the requests out hold, the
  * failures waiting for their events (report.c), the windows that posted
- * the messages waiting (message.c), and the idle callbacks (idle.c). */
+ * the messages waiting (message.c), the idle callbacks (idle.c), and the
+ * mutation observers their registrations hold (observer.c). */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
     return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
-        dom->pending_held + dom->messages_held + dom->idle_live : 0;
+        dom->pending_held + dom->messages_held + dom->idle_live + dom->observers_held : 0;
 }

@@ -34,6 +34,7 @@ CASCADE_C = 'userland/libgarb/cascade.c'
 COLLECTION_C = 'userland/libdom/collection.c'
 YONDER_C = 'userland/apps/yonder/yonder.c'
 CUSTOM_C = 'userland/libdom/custom.c'
+OBSERVER_C = 'userland/libdom/observer.c'
 NODE_C = 'userland/libdom/node.c'
 IMPL_C = 'userland/libdom/implementation.c'
 TIMER_C = 'userland/libdom/timer.c'
@@ -43,6 +44,8 @@ GARB = 'tools/test_garb_host.sh'
 DOM = 'tools/test_dom_host.sh'
 # The DOM host's custom elements cases alone (its --custom mode).
 DOMC = 'tools/test_dom_host.sh --custom'
+# Its MutationObserver cases alone (--observer).
+DOMO = 'tools/test_dom_host.sh --observer'
 WINDOW = 'tools/test_yonder_scripts_host.sh'
 JSRT = 'tools/test_js_runtime_host.sh'
 
@@ -307,6 +310,51 @@ mutants = [
     ('ce-exotic-named', CUSTOM_C, '            s->row_states[i] = D_CE_UNWRAPPABLE;\n            continue;',
      '            continue;', [DOMC]),
     ('ce-pop-fast-path', CUSTOM_C, '    if (q.count == 0 && s->lost == 0) {', '    if (s->lost == 0) {', [DOMC]),
+    # ── Cut c: MutationObserver (libdom observer.c) ─────────────────────
+    ('mo-subtree', OBSERVER_C, '    if (node != c->target && !(r->options & O_SUBTREE)) return false;',
+     '    if (node != c->target && !(r->options & O_SUBTREE) && false) return false;', [DOMO]),
+    ('mo-filter', OBSERVER_C,
+     '        if ((r->options & O_FILTER) && (c->attr_ns != NULL || !filter_has(r, c->attr_local))) return false;',
+     '        if ((r->options & O_FILTER) && c->attr_ns != NULL && !filter_has(r, c->attr_local)) return false;',
+     [DOMO]),
+    ('mo-old-value', OBSERVER_C, '                with_old[i] = true;', '                with_old[i] = false;', [DOMO]),
+    ('mo-transients-added', OBSERVER_C,
+     '    if (type == T_CHILD_LIST && c->nremoved != 0 && add_transients(dom, c)) request_notify(dom);',
+     '    if (type == T_CHILD_LIST && c->nremoved != 0 && false && add_transients(dom, c)) request_notify(dom);',
+     [DOMO]),
+    ('mo-transients-cleared', OBSERVER_C, '        registrations_drop(dom, transient_for, o);',
+     '        if (false) registrations_drop(dom, transient_for, o);', [DOMO]),
+    ('mo-creation-order', OBSERVER_C,
+     '    if (s->observers_last != NULL) s->observers_last->next = o;\n    else s->observers = o;\n'
+     '    s->observers_last = o;',
+     '    o->next = s->observers;\n    s->observers = o;\n    if (s->observers_last == NULL) s->observers_last = o;',
+     [DOMO]),
+    ('mo-transients-queue-notify', OBSERVER_C,
+     '    if (type == T_CHILD_LIST && c->nremoved != 0 && add_transients(dom, c)) request_notify(dom);',
+     '    if (type == T_CHILD_LIST && c->nremoved != 0 && add_transients(dom, c)) (void)0;', [DOMO]),
+    ('mo-transient-root-source', OBSERVER_C, '.source = r->source != NULL ? r->source : r,', '.source = r,',
+     [DOMO]),
+    ('mo-throw-continues', OBSERVER_C,
+     '                    d_report_as(dom, ctx, error, o->script);\n                    JS_FreeValue(ctx, error);',
+     '                    d_report_as(dom, ctx, error, o->script);\n                    JS_FreeValue(ctx, error);\n'
+     '                    status = -1;', [DOMO]),
+    ('mo-take-empties', OBSERVER_C, '    queue_clear(dom, o);\n    return array;', '    return array;', [DOMO]),
+    ('mo-disconnect-empties', OBSERVER_C,
+     '        registrations_drop(dom, any_for, o);\n        queue_clear(dom, o);',
+     '        registrations_drop(dom, any_for, o);', [DOMO]),
+    ('mo-microtask-in-turn', OBSERVER_C,
+     '    s->queued = true;\n    if (os64_js_turn_open(dom->runtime)) {',
+     '    s->queued = true;\n    if (false) {', [DOMO]),
+    ('mo-owed-runs', CUSTOM_C, '    return d_observers_notify_owed(dom, ctx) < 0 ? JS_EXCEPTION : JS_UNDEFINED;',
+     '    return JS_UNDEFINED;', [DOMO]),
+    ('mo-owed-counted', CUSTOM_C, '((dom->custom != NULL && dom->custom->owed) || d_observers_owed(dom))',
+     '(dom->custom != NULL && dom->custom->owed)', [DOMO]),
+    ('mo-listener-feeds', CUSTOM_C, '    d_observers_changed(dom, c);\n', '', [DOMO]),
+    ('mo-options-imply', OBSERVER_C,
+     '!(given & O_ATTRIBUTES)) *options |= O_ATTRIBUTES;', '!(given & O_ATTRIBUTES)) *options |= 0;', [DOMO]),
+    ('mo-held-released', OBSERVER_C,
+     '        o->held = false;\n        dom->observers_held--;\n        JS_FreeValueRT(dom->engine, o->object);',
+     '        o->held = false;\n        dom->observers_held--;', [DOMO]),
     ('census-failed-apart', YONDER_C,
      '                while (c < ncustom && !(custom[c].failed == (n->ce == OS64_HTML_CE_FAILED) &&\n'
      '                                        os64_streq(custom[c].name, n->name)))',

@@ -139,6 +139,9 @@ static const DModernRow kModern[] = {
     /* 0f's P1b: last, since every interface whose prototype inherits
      * EventTarget.prototype is made to inherit EventTarget. */
     {(const char *const[]){"EventTarget", "Window", NULL}, d_targets_install},
+    /* MutationObserver and MutationRecord (CUSTOM_ELEMENTS.md, the third
+     * cut), fed by the document's listener the custom elements row installs. */
+    {(const char *const[]){"MutationObserver", "MutationRecord", NULL}, d_observers_install},
     /* Custom elements (CUSTOM_ELEMENTS.md): the registry, the document's
      * listener, and the [CEReactions] wrappers, which is why it is last: it
      * wraps the members the rows before it made. The interfaces row's

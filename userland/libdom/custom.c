@@ -420,11 +420,17 @@ static void children_changed(os64_dom_t *dom, const os64_html_change_t *c)
     s->moving_count = 0;
 }
 
+/* The document's one listener, for both of its readers: mutation observers'
+ * records first (observer.c), then custom element reactions. Which comes
+ * first cannot be observed: records are delivered at the checkpoint and
+ * reactions run as their member returns, and both are queued before either. */
 static void changed(void *opaque, const os64_html_change_t *c)
 {
     os64_dom_t *dom = opaque;
+    if (dom->closed) return;
+    d_observers_changed(dom, c);
     /* No definitions, no work: a page that defines nothing walks nothing. */
-    if (dom->closed || dom->custom == NULL || dom->custom->definitions == NULL) return;
+    if (dom->custom == NULL || dom->custom->definitions == NULL) return;
     if (c->kind == OS64_HTML_CHANGE_ATTR) attribute_changed(dom, c);
     else if (c->kind == OS64_HTML_CHANGE_CHILDREN) children_changed(dom, c);
 }
@@ -629,7 +635,10 @@ static JSValue run_owed(JSContext *ctx, JSValueConst self, int argc, JSValueCons
     (void)self; (void)argc; (void)argv;
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL) return JS_EXCEPTION;
-    return dom->custom != NULL && process_backup(dom, ctx) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    /* The backup queue, then the mutation observers' notify, each when it
+     * is owed: the order they would have been queued as microtasks. */
+    if (dom->custom != NULL && dom->custom->owed && process_backup(dom, ctx) < 0) return JS_EXCEPTION;
+    return d_observers_notify_owed(dom, ctx) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
 /* ── [CEReactions] in C ──────────────────────────────────────────────── */
@@ -809,9 +818,10 @@ int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *cop
 
 enum { M_DEFINE, M_GET, M_GET_NAME, M_WHEN_DEFINED, M_UPGRADE };
 
-/* WebIDL's sequence<DOMString> from an iterable: each string copied, the
- * array and the strings d_alloc'd. -1 with an exception pending. */
-static int string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char ***out, size_t *count)
+/* WebIDL's sequence<DOMString> from an iterable (internal.h): each string
+ * copied, the array and the strings d_alloc'd. -1 with an exception
+ * pending. */
+int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char ***out, size_t *count)
 {
     *out = NULL;
     *count = 0;
@@ -887,7 +897,7 @@ static int string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, 
     return status;
 }
 
-static void strings_free(os64_dom_t *dom, char **strings, size_t count)
+void d_strings_free(os64_dom_t *dom, char **strings, size_t count)
 {
     for (size_t i = 0; i < count; i++) d_free(dom, strings[i]);
     d_free(dom, strings);
@@ -939,7 +949,8 @@ static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constru
     if (!JS_IsUndefined(r->callbacks[CB_ATTRIBUTE])) {
         JSValue observed = JS_GetPropertyStr(ctx, constructor, "observedAttributes");
         if (JS_IsException(observed)) return -1;
-        int status = JS_IsUndefined(observed) ? 0 : string_sequence(dom, ctx, observed, &r->observed, &r->observed_count);
+        int status = JS_IsUndefined(observed)
+            ? 0 : d_string_sequence(dom, ctx, observed, &r->observed, &r->observed_count);
         JS_FreeValue(ctx, observed);
         if (status < 0) return -1;
     }
@@ -950,10 +961,10 @@ static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constru
     if (!JS_IsUndefined(disabled)) {
         char **features;
         size_t count;
-        int status = string_sequence(dom, ctx, disabled, &features, &count);
+        int status = d_string_sequence(dom, ctx, disabled, &features, &count);
         JS_FreeValue(ctx, disabled);
         if (status < 0) return -1;
-        strings_free(dom, features, count);
+        d_strings_free(dom, features, count);
     }
     JSValue associated = JS_GetPropertyStr(ctx, constructor, "formAssociated");
     if (JS_IsException(associated)) return -1;
@@ -971,7 +982,7 @@ static void reading_free(os64_dom_t *dom, JSContext *ctx, DReading *r)
 {
     JS_FreeValue(ctx, r->prototype);
     for (int i = 0; i < CB_COUNT; i++) JS_FreeValue(ctx, r->callbacks[i]);
-    strings_free(dom, r->observed, r->observed_count);
+    d_strings_free(dom, r->observed, r->observed_count);
 }
 
 /* The definition recorded from a reading (step 16 on): every engine value
@@ -1496,7 +1507,8 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 
 bool os64_dom_reactions_owed(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->custom != NULL && dom->custom->owed;
+    return dom != NULL && !dom->closed &&
+           ((dom->custom != NULL && dom->custom->owed) || d_observers_owed(dom));
 }
 
 bool os64_dom_reactions_run(os64_dom_t *dom, os64_js_outcome_t *outcome)
@@ -1556,7 +1568,7 @@ void d_custom_free(os64_dom_t *dom)
         }
     for (DDefinition *d = s->definitions; d != NULL;) {
         DDefinition *next = d->next;
-        strings_free(dom, d->observed, d->observed_count);
+        d_strings_free(dom, d->observed, d->observed_count);
         d_free(dom, d->stack);
         d_free(dom, d->failure);
         d_free(dom, d->name);

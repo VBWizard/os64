@@ -458,6 +458,37 @@ Document-createEvent.https.html	mouseevent should be an alias for MouseEvent.
 Document-createEvent.https.html	mouseevents should be an alias for MouseEvent.
 Document-createEvent.https.html	uievent should be an alias for UIEvent.
 Document-createEvent.https.html	uievents should be an alias for UIEvent.
+# Custom elements' third cut (CUSTOM_ELEMENTS.md): MutationObserver, on the
+# document's listener. The replace lines hold cut a's record shapes (a node
+# replaced by itself is two records). Each fails with the switch off. What
+# still fails here wants Range, CharacterData's appendData and its kin,
+# setAttributeNS, or one record for a "replace all" (DEBTS).
+MutationObserver-attributes.html	attributes Element.classList.add: single token addition mutation
+MutationObserver-attributes.html	attributes Element.id: update mutation
+MutationObserver-attributes.html	attributes Element.removeAttribute: removal mutation
+MutationObserver-attributes.html	attributes Element.setAttribute: id mutation
+MutationObserver-attributes.html	attributes Element.setAttribute: same class mutation
+MutationObserver-callback-arguments.html	Callback is invoked with |this| value of MutationObserver and two arguments
+MutationObserver-callback-order.window.html	Mutation observers are notified in the order they were created
+MutationObserver-callback-order.window.html	Mutation observers are notified in the order they were created, also when one observes a removed subtree
+MutationObserver-callback-tricky.html	Disconnect and re-observe in callback should not lead to more calls
+MutationObserver-characterData.html	characterData Text.data: simple mutation
+MutationObserver-childList.html	childList Node.appendChild: addition mutation
+MutationObserver-childList.html	childList Node.appendChild: fragment addition mutations
+MutationObserver-childList.html	childList Node.appendChild: removal and addition mutations
+MutationObserver-childList.html	childList Node.insertBefore: addition mutation
+MutationObserver-childList.html	childList Node.removeChild: removal mutation
+MutationObserver-childList.html	childList Node.replaceChild: internal replacement mutation
+MutationObserver-childList.html	childList Node.replaceChild: replacement mutation
+MutationObserver-childList.html	childList Node.replaceChild: self internal replacement mutation
+MutationObserver-disconnect.html	disconnect discarded some mutations
+MutationObserver-document.html	parser insertion mutations
+MutationObserver-document.html	removal of parent during parsing
+MutationObserver-overlapping-registrations.html	An observer matching through multiple registrations receives one record with the requested old value
+MutationObserver-sanity.html	Should throw if none of childList, attributes, characterData are true
+MutationObserver-sanity.html	Should not throw if attributeFilter is present and attributes is omitted
+MutationObserver-takeRecords.html	All records present
+MutationObserver-transient-registered-observers.window.html	Mutations in a removed subtree are observed until mutation observers are notified
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -2410,6 +2441,112 @@ Element-setAttribute-crbug-1138487.html	Attributes first seen in mixed ASCII cas
 Element-siblingElement-null.html	Null test
 Element-tagName.html	tagName should not upper-case for SVG elements in HTML documents.
 Element-tagName.html	tagName should upper-case for HTML elements in HTML documents.
+MutationObserver-attributes.html	attributes Element.attributes.value: same id mutation
+MutationObserver-attributes.html	attributes Element.attributes.value: update mutation
+MutationObserver-attributes.html	attributes Element.classList.add: invalid character/no mutation
+MutationObserver-attributes.html	attributes Element.classList.add: multiple tokens addition mutation
+MutationObserver-attributes.html	attributes Element.classList.add: same value mutation
+MutationObserver-attributes.html	attributes Element.classList.add: single token addition mutation
+MutationObserver-attributes.html	attributes Element.classList.add: syntax err/no mutation
+MutationObserver-attributes.html	attributes Element.classList.remove: missing token removal mutation
+MutationObserver-attributes.html	attributes Element.classList.remove: multiple tokens removal mutation
+MutationObserver-attributes.html	attributes Element.classList.remove: single token removal mutation
+MutationObserver-attributes.html	attributes Element.classList.toggle: forced existing token addition no mutation
+MutationObserver-attributes.html	attributes Element.classList.toggle: forced missing token removal no mutation
+MutationObserver-attributes.html	attributes Element.classList.toggle: forced token addition mutation
+MutationObserver-attributes.html	attributes Element.classList.toggle: forced token removal mutation
+MutationObserver-attributes.html	attributes Element.classList.toggle: token addition mutation
+MutationObserver-attributes.html	attributes Element.classList.toggle: token removal mutation
+MutationObserver-attributes.html	attributes Element.className: empty string update mutation
+MutationObserver-attributes.html	attributes Element.className: new value mutation
+MutationObserver-attributes.html	attributes Element.className: same multiple values mutation
+MutationObserver-attributes.html	attributes Element.className: same value mutation
+MutationObserver-attributes.html	attributes Element.id: empty string update mutation
+MutationObserver-attributes.html	attributes Element.id: same value mutation
+MutationObserver-attributes.html	attributes Element.id: update mutation
+MutationObserver-attributes.html	attributes Element.id: update, no oldValue, mutation
+MutationObserver-attributes.html	attributes Element.removeAttribute: removal mutation
+MutationObserver-attributes.html	attributes Element.removeAttribute: removal no mutation
+MutationObserver-attributes.html	attributes Element.setAttribute: classname mutation
+MutationObserver-attributes.html	attributes Element.setAttribute: id mutation
+MutationObserver-attributes.html	attributes Element.setAttribute: same class mutation
+MutationObserver-attributes.html	attributes Element.unknown: IDL attribute no mutation
+MutationObserver-attributes.html	attributes HTMLInputElement.type: type update mutation
+MutationObserver-attributes.html	childList HTMLInputElement.removeAttribute: type removal mutation
+MutationObserver-callback-arguments.html	Callback is invoked with |this| value of MutationObserver and two arguments
+MutationObserver-callback-order.window.html	Mutation observers are notified in the order they were created
+MutationObserver-callback-order.window.html	Mutation observers are notified in the order they were created, also when one observes a removed subtree
+MutationObserver-callback-order.window.html	The mutation observer microtask is only queued once a record is queued for an observer
+MutationObserver-callback-tricky.html	Calling observe in callback should not lead to more calls
+MutationObserver-callback-tricky.html	Disconnect and re-observe in callback should not lead to more calls
+MutationObserver-characterData.html	characterData Text.data: simple mutation
+MutationObserver-characterData.html	characterData Text.data: simple mutation without oldValue
+MutationObserver-childList.html	childList Node.appendChild: addition mutation
+MutationObserver-childList.html	childList Node.appendChild: addition outside document tree mutation
+MutationObserver-childList.html	childList Node.appendChild: fragment addition mutations
+MutationObserver-childList.html	childList Node.appendChild: fragment removal mutations
+MutationObserver-childList.html	childList Node.appendChild: removal and addition mutations
+MutationObserver-childList.html	childList Node.appendChild: removal mutation
+MutationObserver-childList.html	childList Node.insertBefore: addition mutation
+MutationObserver-childList.html	childList Node.insertBefore: fragment addition mutations
+MutationObserver-childList.html	childList Node.insertBefore: fragment removal mutations
+MutationObserver-childList.html	childList Node.insertBefore: last child addition mutation
+MutationObserver-childList.html	childList Node.insertBefore: removal and addition mutations
+MutationObserver-childList.html	childList Node.insertBefore: removal mutation
+MutationObserver-childList.html	childList Node.nodeValue: no mutation
+MutationObserver-childList.html	childList Node.normalize mutation
+MutationObserver-childList.html	childList Node.normalize mutations
+MutationObserver-childList.html	childList Node.removeChild: removal mutation
+MutationObserver-childList.html	childList Node.replaceChild: internal replacement mutation
+MutationObserver-childList.html	childList Node.replaceChild: removal mutation
+MutationObserver-childList.html	childList Node.replaceChild: replacement mutation
+MutationObserver-childList.html	childList Node.replaceChild: self internal replacement mutation
+MutationObserver-childList.html	childList Node.textContent: empty string mutation
+MutationObserver-childList.html	childList Node.textContent: no previous content mutation
+MutationObserver-childList.html	childList Node.textContent: textContent no mutation
+MutationObserver-disconnect.html	disconnect discarded some mutations
+MutationObserver-disconnect.html	subtree mutations
+MutationObserver-document.html	parser insertion mutations
+MutationObserver-document.html	removal of parent during parsing
+MutationObserver-document.html	setup test
+MutationObserver-overlapping-registrations.html	An observer matching through multiple registrations receives one record with the requested old value
+MutationObserver-overlapping-registrations.html	Distinct observers matching the same mutation receive records using their own options
+MutationObserver-overlapping-registrations.html	Observers registered on separate targets do not share registrations
+MutationObserver-sanity.html	Should not throw if attributeFilter is present and attributes is omitted
+MutationObserver-sanity.html	Should not throw if attributeFilter is present and attributes is true
+MutationObserver-sanity.html	Should not throw if attributeOldValue and attributes are both true
+MutationObserver-sanity.html	Should not throw if attributeOldValue is false and attributes is omitted
+MutationObserver-sanity.html	Should not throw if attributeOldValue is true and attributes is omitted
+MutationObserver-sanity.html	Should not throw if attributes is true
+MutationObserver-sanity.html	Should not throw if characterData is true
+MutationObserver-sanity.html	Should not throw if characterDataOldValue is false and characterData is omitted
+MutationObserver-sanity.html	Should not throw if characterDataOldValue is true and characterData is omitted
+MutationObserver-sanity.html	Should not throw if characterDataOldValue is true and characterData is true
+MutationObserver-sanity.html	Should not throw if childList is true
+MutationObserver-sanity.html	Should throw if attributeFilter is present and attributes is false
+MutationObserver-sanity.html	Should throw if attributeOldValue is true and attributes is false
+MutationObserver-sanity.html	Should throw if characterDataOldValue is true and characterData is false
+MutationObserver-sanity.html	Should throw if none of childList, attributes, characterData are true
+MutationObserver-sanity.html	attributeOldValue:false (present) auto-enables attribute observation
+MutationObserver-takeRecords.html	All records present
+MutationObserver-takeRecords.html	No more records present
+MutationObserver-takeRecords.html	unreachabled test
+MutationObserver-textContent.html	Setting Element.textContent
+MutationObserver-transient-registered-observers.window.html	A removed subtree is no longer observed after mutation observers are notified
+MutationObserver-transient-registered-observers.window.html	A removed subtree is no longer observed after mutation observers are notified, even if no record was queued
+MutationObserver-transient-registered-observers.window.html	A removed subtree is no longer observed after mutation observers are notified, even if the callback was not invoked
+MutationObserver-transient-registered-observers.window.html	A subtree removed from a removed subtree is no longer observed after mutation observers are notified
+MutationObserver-transient-registered-observers.window.html	Attribute mutations in a removed subtree are observed until mutation observers are notified
+MutationObserver-transient-registered-observers.window.html	Mutations in a removed subtree are observed until mutation observers are notified
+MutationObserver-transient-registered-observers.window.html	Mutations in a subtree removed by replaceChildren() are observed until mutation observers are notified
+MutationObserver-transient-registered-observers.window.html	Removing a node from an observed subtree queues the mutation observer microtask
+MutationObserver-transient-registered-observers.window.html	disconnect() does not affect another observer observing a removed subtree
+MutationObserver-transient-registered-observers.window.html	disconnect() stops observing a removed subtree
+MutationObserver-transient-registered-observers.window.html	disconnect() stops observing a subtree removed from a removed subtree
+MutationObserver-transient-registered-observers.window.html	observe() on a node in a removed subtree keeps observing it after mutation observers are notified
+MutationObserver-transient-registered-observers.window.html	observe() stops observing a removed subtree through the target, but not through other targets
+MutationObserver-transient-registered-observers.window.html	observe() stops observing subtrees removed from a removed subtree
+MutationObserver-transient-registered-observers.window.html	takeRecords() does not stop observing a removed subtree
 Node-appendChild.html	Appending null to a comment
 Node-appendChild.html	Appending null to a doctype
 Node-appendChild.html	Appending null to a text node
