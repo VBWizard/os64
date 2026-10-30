@@ -4426,28 +4426,42 @@ static bool picture_unasked(Page *p, const char *url, const char *written,
                             os64_page_reason_t refused);
 static const char *written_attr(const os64_html_node_t *node, const char *attr);
 
-// After a layout: every picture the laid-out boxes' sheets put behind them
-// is sent for, once — a resize whose media query brings a new one fetches
-// it then.
-static bool css_pictures_under(Page *p, const flow_box_t *b)
+// The pictures one box's layers put behind it, each sent for once.
+// NOT inlined into the walk below: the address buffer is 16KB, and the
+// walk recurses once per level of box nesting on a 1MB stack — with the
+// buffer in the walk's own frame, a page sixty boxes deep walked the stack
+// off its end (the P5, 2026-10-30). Here it lives in a frame that is popped
+// before the walk descends.
+static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t *b)
 {
     bool fresh = false;             // a refusal the record had not met
-    for (; b != NULL; b = b->next) {
-        for (int32_t i = 0; b->node != NULL && i < flow_background_layers(b->style); i++) {
-            flow_layer_t l = flow_background_layer(b->style, i);
-            char url[OS64_FETCH_URL_MAX];
-            if (l.image == NULL)
-                continue;
-            if (!css_url(p, &l, url, sizeof(url))) {
-                // Unresolved: the address as the sheet wrote it.
-                size_t len = l.image_len < sizeof(url) - 1 ? l.image_len : sizeof(url) - 1;
-                os64_memcpy(url, l.image, len);
-                url[len] = '\0';
-                fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);
-            } else if (picture_for(p, url) < 0) {
-                fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
-            }
+    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
+        flow_layer_t l = flow_background_layer(b->style, i);
+        char url[OS64_FETCH_URL_MAX];
+        if (l.image == NULL)
+            continue;
+        if (!css_url(p, &l, url, sizeof(url))) {
+            // Unresolved: the address as the sheet wrote it.
+            size_t len = l.image_len < sizeof(url) - 1 ? l.image_len : sizeof(url) - 1;
+            os64_memcpy(url, l.image, len);
+            url[len] = '\0';
+            fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);
+        } else if (picture_for(p, url) < 0) {
+            fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
         }
+    }
+    return fresh;
+}
+
+// After a layout: every picture the laid-out boxes' sheets put behind them
+// is sent for, once — a resize whose media query brings a new one fetches
+// it then. The frame here must stay small (css_pictures_of says why).
+static bool css_pictures_under(Page *p, const flow_box_t *b)
+{
+    bool fresh = false;
+    for (; b != NULL; b = b->next) {
+        if (b->node != NULL)
+            fresh |= css_pictures_of(p, b);
         fresh |= css_pictures_under(p, b->first);
     }
     return fresh;
