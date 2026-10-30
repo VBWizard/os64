@@ -53,6 +53,13 @@ typedef struct DObserver {
     uint32_t script;
     DMutation *first, *last;
     size_t registrations;
+    /* The listener's scratch while it gathers one change's interested
+     * observers: the change that last found this one, the next observer
+     * that change found, and whether any registration asked for the old
+     * value. */
+    uint64_t found_change;
+    struct DObserver *found_next;
+    bool found_old;
 } DObserver;
 
 typedef struct DRegistration {
@@ -76,6 +83,9 @@ struct DObservers {
     DObserver *observers, *observers_last;
     DRegistration *registrations[D_OBSERVER_BUCKETS];
     size_t count;
+    /* Counts the changes the listener has gathered observers for, so each
+     * stamps the observers it finds with a number no earlier one used. */
+    uint64_t changes;
     /* The notify microtask: queued, or owed when no turn will drain it. */
     bool queued, owed;
     /* Records the listener could not keep for want of memory, reported at
@@ -257,40 +267,37 @@ void d_observers_changed(os64_dom_t *dom, const os64_html_change_t *c)
     int type = c->kind == OS64_HTML_CHANGE_ATTR ? T_ATTRIBUTES : c->kind == OS64_HTML_CHANGE_TEXT
         ? T_CHARACTER_DATA : c->kind == OS64_HTML_CHANGE_CHILDREN ? T_CHILD_LIST : -1;
     if (type < 0) return;
-    /* The interested observers, each once, and whether any registration of
-     * it asked for the old value. */
-    DObserver *found[32];
-    bool with_old[32];
-    size_t n = 0;
+    /* The interested observers, each once however many registrations of it
+     * match, chained through their scratch; nothing here runs script, so
+     * no other change can claim the scratch midway. */
+    uint64_t change = ++s->changes;
+    DObserver *found = NULL, **tail = &found;
     for (const os64_html_node_t *at = c->target; at != NULL; at = at->parent)
         for (DRegistration *r = s->registrations[node_bucket(at)]; r != NULL; r = r->next) {
             if (r->node != at || !interested(r, at, c, type)) continue;
-            size_t i = 0;
-            while (i < n && found[i] != r->observer) i++;
-            if (i == n) {
-                if (n == sizeof(found) / sizeof(found[0])) {
-                    s->lost++;
-                    continue;
-                }
-                found[n] = r->observer;
-                with_old[n++] = false;
+            DObserver *o = r->observer;
+            if (o->found_change != change) {
+                o->found_change = change;
+                o->found_next = NULL;
+                o->found_old = false;
+                *tail = o;
+                tail = &o->found_next;
             }
             if ((type == T_ATTRIBUTES && (r->options & O_ATTRIBUTE_OLD)) ||
                 (type == T_CHARACTER_DATA && (r->options & O_CHARACTER_DATA_OLD)))
-                with_old[i] = true;
+                o->found_old = true;
         }
-    for (size_t i = 0; i < n; i++) {
-        DMutation *m = mutation_new(dom, c, type, with_old[i]);
+    for (DObserver *o = found; o != NULL; o = o->found_next) {
+        DMutation *m = mutation_new(dom, c, type, o->found_old);
         if (m == NULL) {
             s->lost++;
             continue;
         }
-        DObserver *o = found[i];
         if (o->last != NULL) o->last->next = m;
         else o->first = m;
         o->last = m;
     }
-    if (n != 0) request_notify(dom);
+    if (found != NULL) request_notify(dom);
     if (type == T_CHILD_LIST && c->nremoved != 0 && add_transients(dom, c)) request_notify(dom);
 }
 
@@ -582,7 +589,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
 
 /* MutationObserverInit, its members read in their WebIDL order
  * (alphabetical), each only when present. 0 with the options, -1 with an
- * exception pending. */
+ * exception pending and nothing kept: a getter that throws after
+ * attributeFilter was read takes the filter with it. */
 static int read_options(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, uint8_t *options,
                         char ***filter, size_t *nfilter)
 {
@@ -601,7 +609,7 @@ static int read_options(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst 
     uint8_t given = 0;
     for (size_t i = 0; i < sizeof(kMembers) / sizeof(kMembers[0]); i++) {
         JSValue value = JS_GetPropertyStr(ctx, argv[1], kMembers[i].name);
-        if (JS_IsException(value)) return -1;
+        if (JS_IsException(value)) goto failed;
         if (JS_IsUndefined(value)) continue;
         given |= kMembers[i].bit;
         int status;
@@ -613,13 +621,18 @@ static int read_options(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst 
             if (status > 0) *options |= kMembers[i].bit;
         }
         JS_FreeValue(ctx, value);
-        if (status < 0) return -1;
+        if (status < 0) goto failed;
     }
     /* DOM § 4.3.1, observe() steps 1 and 2: an old value or a filter asked
      * for implies the kind they belong to, when that was not given. */
     if (((given & O_ATTRIBUTE_OLD) || (given & O_FILTER)) && !(given & O_ATTRIBUTES)) *options |= O_ATTRIBUTES;
     if ((given & O_CHARACTER_DATA_OLD) && !(given & O_CHARACTER_DATA)) *options |= O_CHARACTER_DATA;
     return 0;
+failed:
+    d_strings_free(dom, *filter, *nfilter);
+    *filter = NULL;
+    *nfilter = 0;
+    return -1;
 }
 
 static JSValue observe(os64_dom_t *dom, JSContext *ctx, DObserver *o, int argc, JSValueConst *argv)

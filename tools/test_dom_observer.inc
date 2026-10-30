@@ -34,7 +34,9 @@ static void dom_observer_cases(void)
         "assert(throws(function(){o.observe(box,{characterData:false,characterDataOldValue:true})},'TypeError'));"
         "assert(throws(function(){o.observe(1,{childList:true})},'TypeError'),'a node is required');"
         "o.observe(box,{attributeOldValue:true});o.observe(box,{attributeFilter:['x']});"
-        "o.observe(box,{characterDataOldValue:true});o.disconnect();",
+        "o.observe(box,{characterDataOldValue:true});o.disconnect();"
+        "for(var i=0;i<4;i++)assert(throws(function(){o.observe(box,{attributeFilter:['x'],"
+        "get attributes(){throw Error('a getter')}})},'Error'),'a getter after the filter throws');",
         "observer-options");
 
     /* Each kind, delivered after the script, with `this` the observer. */
@@ -79,6 +81,22 @@ static void dom_observer_cases(void)
         "observer-filters");
     observer_script(&f, MO_ASSERT "assert(L.length===0,'no subtree, no record of a descendant: '+L);"
                     "shallow.disconnect();", "observer-shallow");
+
+    /* However many observers a change interests, each gets its record, and
+     * once however many of its registrations match, with the old value if
+     * any of them asked for it. */
+    observer_script(&f, MO_ASSERT
+        "var box=document.getElementById('box'),many=[];"
+        "for(var i=0;i<40;i++){var m=new MutationObserver(function(){});m.observe(box,{childList:true});many.push(m)}"
+        "var s=document.createElement('s');box.appendChild(s);"
+        "assert(many.every(function(m){return m.takeRecords().length===1}),'every one of forty observers');"
+        "many.forEach(function(m){m.disconnect()});"
+        "var twice=new MutationObserver(function(){});twice.observe(box,{attributes:true});"
+        "twice.observe(document.body,{attributes:true,attributeOldValue:true,subtree:true});"
+        "s.remove();box.setAttribute('class','twice');var r=twice.takeRecords();"
+        "assert(r.length===1&&r[0].oldValue!==null,'one record, and the old value one registration asked for');"
+        "twice.disconnect();",
+        "observer-many");
 
     /* A node removed from an observed subtree keeps its observers until
      * they are next notified: a change in it at once is still seen. */
