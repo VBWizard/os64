@@ -104,9 +104,56 @@ static void update_dependencies(void)
     garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     update_check(live==baseline,"streaming fixture releases allocations");
 }
+// A flat stylesheet should not need one temporary heap allocation per
+// styled element. Include a larger declaration set in the same update so
+// the scratch buffer must grow without changing earlier winners.
+static void update_scratch_cost(void)
+{
+    size_t points=0;
+    for(size_t failure=0;failure<=points;++failure) {
+        size_t baseline=live;
+        char html[4096]="<!doctype html><main id=rows>";
+        for(int i=0;i<256;++i)strcat(html,"<p></p>");
+        strcat(html,"</main>");
+        os64_html_document_t *doc=update_doc(html);
+        char css[2048]="p{color:red}.on{color:blue;";
+        for(int i=0;i<40;++i)strcat(css,"width:2px;");
+        strcat(css,"}.large{");
+        for(int i=0;i<60;++i)strcat(css,"height:3px;");
+        strcat(css,"}");
+        garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+        garb_sheet_in_t in={.sheet=&sheet};
+        size_t before=allocations;
+        garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+        size_t build_calls=allocations-before;
+        update_check(c && !garb_cascade_incomplete(c) && build_calls<128,
+                     "flat full cascade avoids per-element temporary allocations");
+        os64_html_node_t *rows=(void *)by_id(doc->document,"rows"),*node=rows->first_child;
+        for(int i=0;i<100;++i,node=node->next) {
+            const char *classes=i%3==1?"on":i%3==2?"on large":"off";
+            os64_html_set_attr(doc,node,"class",classes,strlen(classes));
+        }
+        before=allocations;fail_single=true;fail_at=failure?before+failure:0;
+        bool updated=garb_cascade_update(c);
+        size_t update_calls=allocations-before;
+        fail_at=0;fail_single=false;
+        if(!failure) {
+            points=update_calls;
+            update_check(updated && update_calls<50,"batch update shares temporary declaration storage");
+            printf("libgarb scratch: 256-element build %zu allocations, 100-element update %zu\n",build_calls,update_calls);
+        }
+        if(updated) update_equal(c,doc,&in);
+        else update_check(!garb_cascade_update(c),"failed scratch growth requires a fresh cascade");
+        garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+        update_check(live==baseline,"temporary declaration storage released with its pass");
+    }
+    printf("libgarb scratch: %zu batch-update failure positions\n",points);
+}
+
 static int cascade_updates(void)
 {
     update_dependencies();
+    update_scratch_cost();
     size_t baseline=live;
     const char *css[] = {
         "div{--ink:red}p{color:var(--ink)}.on{--ink:blue}span{opacity:.5}",

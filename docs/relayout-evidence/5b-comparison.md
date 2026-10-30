@@ -232,3 +232,112 @@ Zero updates/copied styles is expected. The cascade phase includes early
 hidden-measurement release in the candidate, so its increase alone does not
 measure extra selector work. Original-list follow-up and investigation of this
 article slowdown remain open. Frozen delivery files are unchanged.
+
+## Full-cascade scratch follow-up: initial experiment
+
+Temporary host and target instrumentation compared the control and candidate
+before changing code. The host article trace had 36 additional allocation
+attempts in the candidate and roughly 250 KiB more live payload near the final
+layout. Guest tracing recorded 124,011 versus 124,047 allocation-family calls,
+5,502,936 versus 5,545,500 region-search steps, and 283,754 versus 285,975
+first-fit steps; both ended the final layout at 64 regions. Largest-free-block
+rescans were fewer in the candidate (4,777,791 versus 5,370,011). Those results
+do not support an increased search count as the explanation for the P5 gap.
+Instrumented timings are not used for performance claims. Probe sources were
+restored and probe binaries remain separate from deliveries.
+
+The full-cascade path nevertheless allocated and freed a temporary sorted
+list of applied declarations for each styled element. The follow-up shares
+that scratch buffer across elements within a build or update. It grows to the
+largest declaration list encountered and is released at the end of that pass,
+including an update failure. Published winners and their ownership are
+unchanged; the retained cascade keeps no scratch buffer between mutations.
+This removes avoidable work from the fallback path without claiming to explain
+the entire measured regression.
+
+Validation:
+
+- Full libgarb suite passes. Final focused update suite: 1,727 checks, zero
+  failures. A 256-element build uses 13 allocation calls and a 100-element
+  update uses seven; the regression bounds reject per-element temporary
+  allocation. Mixed declaration counts exercise buffer growth and compare
+  winners with a fresh cascade. Each of the seven batch-update allocation
+  positions is failed independently; refused updates require replacement and
+  release their temporary storage. Existing inline/growth sweeps cover eight
+  and four allocation positions.
+- Full Yonder scripted-page suite: 12,566 checks, zero failures.
+- Focused libflow restyle suite: 25,463 checks, including 164 allocation
+  positions failed individually and persistently; zero failures.
+- Original and companion measurement fixtures pass at 200/3 and 2,000/20:
+  four runs of 16 checks. Captured article: nine checks, zero failures.
+- ASan, UBSan and LeakSanitizer remain enabled. Target cross-build passes.
+
+The uninstrumented QEMU article total is 5,526.100 ms, median 277.050 ms,
+worst 509.100 ms. It uses the same 828 × 509 light/100% workload as the prior
+5,774.300 ms candidate and 5,692.700 ms control. That is 4.3% below the prior
+candidate and 2.9% below control in individual emulator runs. Native counts
+remain 17 model rebuilds, 18 stream layouts, 7,825 elements, 5,209 boxes and
+3,043 measures, with no refusals/clock errors. Stream cascade/layout totals
+are 4,676.346/522.023 ms. This is directional evidence, not P5 acceptance.
+
+The original 2,000/20 target page also completes with cached/paragraph/list
+medians 0.350/450.550/636.050 ms and maxima 0.500/783.300/673.700 ms.
+It records 52 model rebuilds, 53 layouts, 26 cascade updates and 53,134 copied
+styles, with zero refusals/clock errors. Its layout total is 23,846.768 ms.
+The hardware comparison still needs the original page and the article at the
+matched viewport. Only libgarb changes in the replacement cohort.
+
+A subsequent isolated comparison put the previous `8406bc21` libgarb back
+into the same guest, with the same original fixture and a fresh browser.
+It reported 0.400/429.750/619.750 ms medians and 0.700/728.900/694.300 ms
+maxima. The scratch candidate's paragraph/list medians are 4.8%/2.6% higher
+in this pair, despite fewer allocations. This prevents claiming a general
+speedup from the article result. Hardware validation remains necessary;
+the scratch change is not evidence that either P5 regression is resolved.
+
+The same heap-buffer candidate repeated the original page at medians
+0.350/448.550/593.050 ms and maxima 0.400/769.000/645.300 ms. This run
+showed list timing variation, while paragraph timing remained above the
+previous-library comparison. The final refinement below avoids allocating
+heap scratch for short declaration lists.
+
+## Stack-backed declaration scratch
+
+The final implementation keeps up to 32 temporary declarations on the stack;
+larger lists share a growable heap buffer for that build/update. Heap storage
+is released at pass end or failed update, and no scratch pointers escape into
+published styles. This retains the per-pass allocation reduction while avoiding
+heap scratch for common small edits. Both full and incremental callers use the
+same storage contract.
+
+Final validation remains leak-enabled (ASan/UBSan/LSan): full libgarb suite
+passes, with 1,719 focused update checks; full Yonder suite passes 12,562 checks;
+libflow restyle passes 25,463 checks and its 164-position single/persistent
+failure sweep. The expanded scratch fixture uses heterogeneous rule lists that
+cross the local-buffer threshold and grow the heap buffer. Its 256-element
+build uses 16 allocation calls and its 100-element update uses five. Failing
+each of the five update allocation positions preserves refusal/cleanup
+contracts; winners match a fresh cascade on success. Existing inline-style and
+slot-growth sweeps now cover seven and three positions. Lower suite totals
+reflect fewer allocation-failure positions, not disabled cases.
+
+Both measurement pages complete their quick/full host runs (16 checks each),
+and the captured article passes nine checks. The target build passes. The
+replacement cohort changes only libgarb relative to `8406bc21`; P5 acceptance
+is still pending.
+
+The final uninstrumented article run reports total 5,545.400 ms, median
+279.800 ms and maximum 496.000 ms: 4.0% less total time than the installed
+candidate and 2.6% less than the 5a control in these emulator
+runs. Work counts match the prior QEMU article. Cascade/layout phase totals
+are 4,692.115/523.244 ms, with zero refusals or clock errors.
+
+The final original-page run reports cached/paragraph/list medians
+0.400/443.050/615.600 ms and maxima 0.500/666.600/653.800 ms. Against the
+isolated prior-library run, paragraph median is 3.1% higher and list median
+0.7% lower; both maxima are lower. The repeated intermediate runs demonstrate
+variation, so this does not establish a general timing win. The intended
+allocation reduction is verified, and the article result is encouraging, but
+the P5 regressions remain unresolved until remeasurement. Preserve the old
+cohorts; use the replacement only for the candidate's original-page and
+matched-viewport article follow-up.

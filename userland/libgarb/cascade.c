@@ -1914,6 +1914,17 @@ typedef struct {
     int32_t sheet;              // -1 for the style attribute
 } Applied;
 
+// Declaration ordering is temporary. Reuse its storage within one build
+// or update and release it when that pass ends; a retained
+// cascade does not keep this scratch allocation between mutations.
+#define APPLIED_LOCAL_COUNT 32u
+typedef struct {
+    // Short declaration lists avoid the heap; larger ones share a buffer.
+    Applied local[APPLIED_LOCAL_COUNT];
+    Applied *items;
+    size_t capacity;
+} AppliedScratch;
+
 static bool before(const Applied *a, const Applied *b)
 {
     if (a->important != b->important)
@@ -2141,7 +2152,7 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
 }
 
 static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
-                            const CustomMap *inherited, Match **m, int32_t *mcap)
+                            const CustomMap *inherited, Match **m, int32_t *mcap, AppliedScratch *scratch)
 {
     Slot *slot = slot_for(c, el, true);
     if (slot == NULL)
@@ -2157,11 +2168,17 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
         total += (*m)[k].rule->ndecls;
     if (total == 0)
         return;
-    Applied *ap = os64_malloc((size_t)total * sizeof(*ap));
-    if (ap == NULL) {
-        c->incomplete = true;
-        return;
+    size_t capacity = scratch->items ? scratch->capacity : APPLIED_LOCAL_COUNT;
+    if ((size_t)total > capacity) {
+        Applied *more = os64_realloc(scratch->items, (size_t)total * sizeof(*more));
+        if (more == NULL) {
+            c->incomplete = true;
+            return;
+        }
+        scratch->items = more;
+        scratch->capacity = (size_t)total;
     }
+    Applied *ap = scratch->items ? scratch->items : scratch->local;
     int32_t na = 0;
     for (int32_t j = 0; j < nattrs; ++j)
         ap[na++] = (Applied){&attrs[j], false, false, 0, 0, -1};
@@ -2281,7 +2298,6 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
             have[sets[k].prop] = true;
         }
     }
-    os64_free(ap);
     int32_t nwin = 0;
     for (int p = 0; p < GARB_NPROPS; p++)
         nwin += have[p];
@@ -2428,10 +2444,11 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     }
     Match *m = NULL;
     int32_t mcap = 0;
+    AppliedScratch scratch = {0};
     for (const os64_html_node_t *x = doc->document; x != NULL;) {
         if (is_el(x)) {
             const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
-            cascade_element(c, x, up != NULL ? up->customs : NULL, &m, &mcap);
+            cascade_element(c, x, up != NULL ? up->customs : NULL, &m, &mcap, &scratch);
         }
         if (x->first_child != NULL) {
             x = x->first_child;
@@ -2441,6 +2458,7 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
             x = x->parent;
         x = x != NULL ? x->next : NULL;
     }
+    os64_free(scratch.items);
     // What the cascade read ran short wherever it was read: a sheet's own
     // parse (taken in above, for the sheets the cascade applied), the rule
     // blocks, selectors and values read from them, which mark this
@@ -2614,6 +2632,7 @@ bool garb_cascade_update(garb_cascade_t *c)
     c->updating = true;
     int32_t old_nattrs = c->nattrs;
     Match *m = NULL; int32_t mcap = 0;
+    AppliedScratch scratch = {0};
     for (size_t i = 0; i < c->ndirty; ++i) {
         const os64_html_node_t *root = c->dirty_nodes[i];
         Slot *s = slot_for(c, root, false);
@@ -2627,10 +2646,15 @@ bool garb_cascade_update(garb_cascade_t *c)
             if (!s || !s->dirty) continue;
             up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
             *s = (Slot){.node = x, .changed = c->updates + 1};
-            cascade_element(c, x, up ? up->customs : NULL, &m, &mcap);
-            if (c->incomplete || c->self.incomplete) { c->updating = false; return false; }
+            cascade_element(c, x, up ? up->customs : NULL, &m, &mcap, &scratch);
+            if (c->incomplete || c->self.incomplete) {
+                os64_free(scratch.items);
+                c->updating = false;
+                return false;
+            }
         }
     }
+    os64_free(scratch.items);
     c->updating = false;
     for (int32_t i = old_nattrs; i < c->nattrs; ++i) c->incomplete |= c->attrs[i].incomplete;
     os64_html_pin_t pin = c->incomplete || c->self.incomplete ? 0 : os64_html_pin(c->doc);
