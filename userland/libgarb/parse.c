@@ -736,11 +736,9 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
     // not where the text did, so EMPTY, EXTRA_INPUT and INVALID are no
     // more true of it than OK is.
     // Only one of the two lists was used, so closing both keeps its own.
+    // The scratch stays with `p`: whoever made the parse frees it or keeps it.
     out->items = list_close(p, &items, sizeof(garb_item_t), &out->nitems);
     out->values = close_values(p, &values, &out->nvalues);
-    os64_free(p->scratch);
-    p->scratch = NULL;
-    p->top = p->scratch_cap = 0;
     if (p_spent(p) && (mode == M_ONE_RULE || mode == M_ONE_DECL || mode == M_ONE_VALUE)) {
         out->rule = NULL;
         os64_memset(&out->decl, 0, sizeof(out->decl));
@@ -772,6 +770,9 @@ static garb_status_t parse_text_limited(Mode mode, const char *text, size_t len,
     in.tz = &tz;
     in.owner = &p;
     garb_status_t st = run(mode, &p, &in, out);
+    // Text is parsed once, so its result keeps no scratch: a sheet would
+    // carry a dead buffer for its life.
+    os64_free(p.scratch);
     return finish(out, &p, &tz, st);
 }
 
@@ -832,17 +833,23 @@ garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *
     return parse_text(M_ONE_VALUE, text, len, out);
 }
 
-// Over component values a parse already made, into its arena.
+// Over component values a parse already made, into its arena, on the
+// scratch the owner keeps: a cascade reads a block a rule, so a scratch of
+// each read's own was a malloc and a free a rule (HEAP_BINS.md § Part A).
+// The read borrows it and hands it back, grown if it had to grow.
 static bool reparse(Mode mode, garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                     garb_item_t **items, int32_t *nitems)
 {
-    Parse p = {.arena = owner->arena, .max = garb_arena_max(owner)};
+    Parse p = {.arena = owner->arena, .max = garb_arena_max(owner),
+               .scratch = owner->scratch, .scratch_cap = owner->scratch_cap};
     Input in = {0};
     in.values = values;
     in.n = n;
     in.owner = &p;
     garb_parsed_t tmp = {0};
     garb_status_t st = run(mode, &p, &in, &tmp);
+    owner->scratch = p.scratch;
+    owner->scratch_cap = p.scratch_cap;
     if (p.incomplete)
         owner->incomplete = true;
     *items = tmp.items;
@@ -867,5 +874,6 @@ void garb_free(garb_parsed_t *parsed)
     if (parsed == NULL)
         return;
     os64_arena_destroy(parsed->arena);
+    os64_free(parsed->scratch);
     os64_memset(parsed, 0, sizeof(*parsed));
 }

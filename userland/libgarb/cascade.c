@@ -2470,7 +2470,7 @@ void garb_cascade_free(garb_cascade_t *c)
         garb_free(&c->attrs[i]);
     garb_free(&c->reads);
     os64_free(c->slots);
-    os64_arena_destroy(c->self.arena);
+    garb_free(&c->self);
     if (c->pin != 0)
         os64_html_unpin(c->doc, c->pin);
     os64_free(c);

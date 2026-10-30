@@ -200,8 +200,11 @@ packs to 56 bytes, and a one-byte ASCII text is shared rather than kept.
 Outside the arena, and freed when the parse ends: the tokenizer's code
 points (4 bytes a byte of input, 32 MiB at `GARB_SHEET_MAX`), the decoded
 text of a sheet given as bytes (up to 3 bytes a byte), and the scratch
-stack, as deep as the lists open at once. What the faces reserve for a
-parse on the pool has to count those too.
+stack, as deep as the lists open at once. The blocks a cascade reads are
+the exception to the last: they share one scratch the cascade keeps, as
+deep as its deepest read and freed with it, since a scratch of each read's
+own was a malloc and a free for every rule (HEAP_BINS.md § Part A). What
+the faces reserve for a parse on the pool has to count those too.
 
 ## What the faces owe
 
