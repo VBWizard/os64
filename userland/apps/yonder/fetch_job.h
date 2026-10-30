@@ -68,6 +68,9 @@ typedef struct {
     // A module script's fetch: its compiled form is read beside the entry
     // that holds its body (BYTECODE_CACHE.md § 9).
     bool module;
+    // When the window handed it to the pool, on os64_micros' clock; 0
+    // when it was not (a synchronous request runs where it is made).
+    int64_t submitted_us;
 } yonder_fetch_job_t;
 
 typedef struct {
@@ -90,8 +93,13 @@ typedef struct {
     way_cookies_short_t cookies_short;  // what its hops left out for want of room (way/jar.h)
     // How long the fetch took, from the job's start to its answer, in
     // microseconds; -1 when the clock could not say. The page record's
-    // number for what a request cost.
+    // number for what a request cost. Beside it, how long the job waited
+    // for a worker (-1: not known), and when its answer was ready, on
+    // os64_micros' clock (-1: not known), from which the record says how
+    // long the answer then waited for the window.
     int64_t elapsed_us;
+    int64_t queued_us;
+    int64_t finished_us;
     // Where the answer came from: the network, or the cache, fresh or
     // after a 304 (way_served_t; the page record says which).
     way_served_t served;

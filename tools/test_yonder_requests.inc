@@ -56,6 +56,24 @@ static void request_same_origin_case(void) {
     request_drop();
 }
 
+/* With the clock moving, a request's line says how long it waited for a
+ * worker and how long its answer waited for the window. */
+static void request_waits_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/w.json",200,"Content-Type: application/json\r\n","{}");
+    loop_page("<script>fetch('/w.json')</script>");
+    check(loop_settle() && nrequest_jobs==1,"requests: the fetch is out");
+    clock_step=1000;
+    bool landed=request_land("/w.json");
+    clock_step=0;
+    const char *text=request_record_text();
+    const char *line=strstr(text,"request GET http://fixture.test/w.json: ");
+    check(landed && line!=NULL && strstr(line,", queued ")!=NULL && strstr(line," ms later")!=NULL &&
+          strstr(line,", queued ")<strchr(line,'\n') && strstr(line," ms later")<strchr(line,'\n'),
+          "requests: the line says the wait for a worker and the wait to be heard");
+    request_drop();
+}
+
 /* A request's cache mode (SCRIPT_CACHE.md § 5) reaches its job, and one
  * that names none is the default; a module's fetch is said to be one. */
 static void request_cache_mode_case(void) {
@@ -394,6 +412,7 @@ static void request_cases(void) {
     request_redirected_page_case();
     request_same_origin_case();
     request_cache_mode_case();
+    request_waits_case();
     request_cors_case();
     request_xhr_case();
     request_cancel_case();

@@ -8434,6 +8434,7 @@ static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, co
         return 0;
     os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job,
                         job->module ? YONDER_FETCH_MODULE_RESERVE : YONDER_FETCH_RESERVE};
+    job->submitted_us = os64_micros();
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
         yonder_fetch_release(job, NULL);
@@ -8478,9 +8479,17 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
     }
     char key[OS64_FETCH_URL_MAX + 48];
     char value[160];
-    char took[32] = "";
+    char took[96] = "";
     if (got->elapsed_us >= 0)
         os64_snprintf(took, sizeof(took), " in %ld ms", (long)(got->elapsed_us / 1000));
+    // A wait for a worker, or for the window to hear the answer, a
+    // millisecond or more: time the request spent not being fetched.
+    int64_t heard = got->finished_us >= 0 ? os64_micros() - got->finished_us : -1;
+    size_t at = os64_strlen(took);
+    if (got->queued_us >= 1000 && at < sizeof(took))
+        at += (size_t)os64_snprintf(took + at, sizeof(took) - at, ", queued %ld ms", (long)(got->queued_us / 1000));
+    if (heard >= 1000 && at < sizeof(took))
+        os64_snprintf(took + at, sizeof(took) - at, ", heard %ld ms later", (long)(heard / 1000));
     os64_snprintf(key, sizeof(key), "request %s %s", job->request.method, job->url);
     // An answer the cache gave says so (SCRIPT_CACHE.md § 9): kept, served
     // without asking; confirmed, served after a 304.

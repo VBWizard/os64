@@ -959,8 +959,12 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     int64_t verdict = fetch_run(job_ptr, cancelled, ctx, out);
     int64_t ended = os64_micros();
     yonder_fetched_t *got = *out;
-    if (got != NULL)
+    if (got != NULL) {
+        const yonder_fetch_job_t *job = job_ptr;
         got->elapsed_us = began >= 0 && ended >= began ? ended - began : -1;
+        got->queued_us = job->submitted_us > 0 && began >= job->submitted_us ? began - job->submitted_us : -1;
+        got->finished_us = ended >= 0 ? ended : -1;
+    }
     return verdict;
 }
 
