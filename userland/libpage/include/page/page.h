@@ -394,6 +394,14 @@ bool os64_page_url_absolute(const char *base, const char *reference, char *out, 
 // URL`): no `<base href>`, and a query in UTF-8.
 bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_url,
                           const char *reference, char *out, size_t cap);
+// os64_page_resolve_in's answer in memory of its own (os64_malloc'd), and
+// an opaque data: URL (one whose scheme is not followed by `/`) at any
+// length: a data: URL carries its document in itself, so it may be longer
+// than an address is held to, and it needs no base. It is spelled by the
+// same rule. NULL when the reference will not resolve, when an address
+// other than a data: URL is longer than OS64_URL_REF_MAX, or on no memory.
+char *os64_page_resolve_in_alloc(const os64_html_document_t *doc, const char *document_url,
+                                 const char *reference);
 // Where the page came from, canonical. Never NULL.
 const char *os64_page_document_url(const os64_page_t *page);
 

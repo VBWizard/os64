@@ -382,6 +382,30 @@ layout in the heap's first-fit walk, one walk per rule, and the window's
 thread holds 7% of a core idle on the same walk. Order: the scratch first,
 the bins when heap.c is opened; neither makes the other optional.
 
+**Two slices the P5's pages promoted, and where they wait (Chris,
+2026-10-29).** Each is a surface a real page died on, and each waits
+behind what is left of Tier 0 rather than in front of it: the scratch and
+the bins above, slice 5, slice 7, slice 8, then these two in this order.
+A surface a page finds after this goes to the end of the list too, unless
+Chris promotes it by name.
+
+- **Range.** `Range`, `StaticRange` and `document.createRange` (DOM § 5),
+  live boundary points that follow the tree on the document's listener
+  (`os64_html_observe`, which MutationObserver already reads),
+  `createContextualFragment`, and a range's `getBoundingClientRect` and
+  `getClientRects` over 1b's geometry. Google's search box throws
+  `'createRange' is not a function` as a query is typed, WPT's
+  MutationObserver tests stop at it, and WINDOW_DOCUMENT.md counts it on
+  91 pages. Selection stays class (d), for the window's selection model
+  (YONDER_HONEY_DO.md's selection model). Oracle: WPT `dom/ranges/`.
+  Opus.
+- **Streams.** A `ReadableStream` a page builds itself, and bodies that
+  stream, the Streams standard whole (DEBTS.md's row; a body is read whole
+  today, `response.body` a one-chunk stream). A social site's sign-in
+  pages die on `'ReadableStream' is not defined` before they draw, and
+  GitHub's bundles name it after `MutationObserver`. A design pass before
+  code, since it is the Streams standard. Oracle: WPT `streams/`. Opus.
+
 ## How the slices run side by side (2026-10-21)
 
 Chris opened the arc on 2026-10-21 with a week's model usage to spend and
@@ -3464,7 +3488,10 @@ Integrity at all (DEBTS.md).
   libos64's grammar, so one module spelled two ways was two modules: that
   DEBTS row is paid. What the grammar still does not do is what the map
   cannot (the URL grammar's row in DEBTS.md: `https:host`, extra slashes, a
-  percent-encoded host, a backslash).
+  percent-encoded host, a backslash). An opaque `data:` URL is spelled by
+  the same rule at any length (`os64_page_resolve_in_alloc`), since it
+  carries its module in itself: a page's inline module written as one, past
+  the 8 KiB an address is held to, was taken for a bare name.
 - **A script's base URL is fixed when it is prepared**: an import map's,
   for its addresses, and an inline module's, which is its base for
   imports, its scope match and its `import.meta.url`. Both read the tree
