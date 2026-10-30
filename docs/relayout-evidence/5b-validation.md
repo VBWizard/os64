@@ -54,8 +54,8 @@ unchanged measurement fixture. The local handoff records the exact source
 commit and delivery paths.
 
 The first P5 run completed, but performance acceptance remains pending:
-it exposed the regression recorded below. Fable's restyle design review
-also remains pending. For comparison with [the 5a baseline](5a-validation.md), use the same settings:
+it exposed the regression recorded below. The corrected P5 comparison is
+recorded below as well; performance and review follow-up remain open. For comparison with [the 5a baseline](5a-validation.md), use the same settings:
 Scripts and Modern Web on, dark appearance, 100% zoom, a fixed 2,526 × 1,259
 CSS-pixel viewport, 2,000 rows and 20 samples. Reload before the run:
 
@@ -123,11 +123,46 @@ reuse. The full cascade suite passes (1,321 update checks); the focused
 style/layout oracle passes 25,463 checks including 164 allocation positions;
 the full browser suite passes 12,548 checks. Sanitizers and leak checks remain
 enabled. The replacement cohort reuses 21 of its 22 binaries from the first
-5b delivery; only libgarb changes. P5 remeasurement remains required.
+5b delivery; only libgarb changes. The P5 remeasurement is recorded below.
 
 The corrected target then completed the same QEMU workload with 35 cascade
 updates, 1,402 reused styles and no refusals/partial layouts or clock errors.
 Its paragraph/list medians were 648.700/612.050 ms, with worst values
 1,199.900/879.600 ms. Cumulative layout time was 26.484 seconds, versus
 38.340 seconds for the original 5b target. These are encouraging functional
-and comparative emulator results; the replacement still needs P5 validation.
+and comparative emulator results; the subsequent P5 run follows.
+
+## Corrected P5 comparison: substantial recovery, remaining regression
+
+Corpus 300 and the completed screenshot record the corrected build
+`850ff5a5` at 2026-10-30 01:37 UTC (October 29 local time). The viewport,
+appearance, zoom, row count and sample count match both prior runs.
+
+| Experiment | 5a median | First 5b median | Corrected 5b median | Corrected worst |
+|---|---:|---:|---:|---:|
+| Read unchanged geometry | 0.100 ms | 0.100 ms | 0.100 ms | 0.200 ms |
+| Change one paragraph | 63.900 ms | 136.900 ms | 64.750 ms | 162.300 ms |
+| Replace one list item | 55.300 ms | 138.450 ms | 66.700 ms | 88.700 ms |
+
+The correction reduced the paragraph and list medians by 52.7% and 51.8%
+relative to the first 5b build. Relative to 5a, they remain 1.3% and 20.6%
+higher. These are individual runs, not a statistical estimate of variance;
+the results do not establish a speedup over 5a or close performance acceptance.
+
+The native report records 52 model rebuilds, 54 layout attempts, 35 cascade
+updates and 1,402 reused styles, with zero refused/partial results and zero
+clock errors. Cumulative phase times are:
+
+| Phase | Corrected 5b time |
+|---|---:|
+| Model rebuild | 19.122 ms |
+| Cascade | 567.971 ms |
+| Computed styles | 115.673 ms |
+| Box construction | 24.262 ms |
+| Layout | 3,056.432 ms |
+| Public tree | 59.999 ms |
+
+The screenshot and original corpus report are retained with the local proof
+artifacts. Raw individual sample values have not been retrieved. The frozen
+replacement bundle remains unchanged. The broad restyle rule, update
+bookkeeping and design-review findings require follow-up before merge.

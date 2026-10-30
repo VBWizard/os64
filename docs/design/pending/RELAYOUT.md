@@ -4,7 +4,7 @@
 then `requestAnimationFrame`. Original design by Fable, 2026-10-21;
 5a implementation and reconciliation by Quinn, 2026-10-29.
 5b implementation adds incremental cascade and computed-style reuse; hardware
-acceptance and the restyle design review are pending. The sequence
+acceptance and restyle design-review follow-up remain pending. The sequence
 with Canvas is recorded in [CANVAS.md](CANVAS.md). Fable reviews the
 restyle rule and layout graft before those cuts merge.*
 
