@@ -1933,9 +1933,33 @@ static bool ticking_build(flow_tree_t *t)
     return ok;
 }
 
+typedef struct {
+    flow_profile_t *out;
+    int64_t (*clock)(void *);
+    void *ctx;
+} Profile;
+static int64_t profile_clock(const Profile *p)
+{
+    return p->out && p->clock ? p->clock(p->ctx) : -1;
+}
+static void profile_elapsed(const Profile *p, int64_t from, uint64_t *total)
+{
+    int64_t to = profile_clock(p);
+    if (from < 0 || to < from) ++p->out->clock_errors;
+    else *total += (uint64_t)(to - from);
+}
+
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
                          int32_t width, const flow_env_t *env)
 {
+    return flow_layout_profiled(doc, model, width, env, NULL, NULL, NULL);
+}
+flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_page_t *model,
+                                  int32_t width, const flow_env_t *env, flow_profile_t *profile,
+                                  int64_t (*clock)(void *), void *clock_ctx)
+{
+    Profile timing = {profile, clock, clock_ctx};
+    if (profile) os64_memset(profile, 0, sizeof(*profile));
     if (doc == NULL || env == NULL || env->text == NULL || env->fonts == NULL || width < 0)
         return NULL;
     // One viewport height for the cascade's `vh` and the initial containing
@@ -1959,13 +1983,33 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     tree->now_ms = env->now_ms;
     tree->tick_ms = env->now_ms;
     tree->live = -1;
+    int64_t began = profile_clock(&timing);
     tree->styles = f_style_build(doc, model, env);
-    tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
-    tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;
+    if (profile) {
+        profile_elapsed(&timing, began, &profile->style_us);
+        profile->elements = tree->styles ? tree->styles->map.count : 0;
+    }
+    if (tree->styles) {
+        began = profile_clock(&timing);
+        tree->boxes = f_boxes_build(doc, model, tree->styles, env);
+        if (profile) {
+            profile_elapsed(&timing, began, &profile->boxes_us);
+            profile->boxes = tree->boxes ? tree->boxes->count : 0;
+        }
+    }
+    if (tree->boxes) {
+        began = profile_clock(&timing);
+        tree->layout = f_layout(tree->boxes, doc, model, env, width);
+        if (profile) {
+            profile_elapsed(&timing, began, &profile->layout_us);
+            profile->measures = tree->layout ? tree->layout->measures : 0;
+        }
+    }
     if (tree->layout == NULL) {
         flow_free(tree);
         return NULL;
     }
+    began = profile_clock(&timing);
     tree->incomplete = tree->layout->incomplete;
     const FBox *root = tree->boxes->root;
     if (root != NULL && root->placed) {
@@ -1980,6 +2024,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         // Out of memory for the public boxes is out of memory for the
         // page: nothing half-built is handed over.
         if (bd.failed || !stack_build(tree)) {
+            if (profile) profile_elapsed(&timing, began, &profile->public_us);
             flow_free(tree);
             return NULL;
         }
@@ -1988,9 +2033,11 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         ink_reach(tree->root);
     }
     if (!ticking_build(tree) || !f_timeline_end(tree->styles->timeline, !tree->incomplete)) {
+        if (profile) profile_elapsed(&timing, began, &profile->public_us);
         flow_free(tree);
         return NULL;
     }
+    if (profile) profile_elapsed(&timing, began, &profile->public_us);
     return tree;
 }
 

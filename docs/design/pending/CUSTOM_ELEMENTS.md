@@ -237,7 +237,9 @@ as a reason, not as a count.
   Because `define` is `[CEReactions]`, they are constructed before it
   returns.
 - Last, a pending `whenDefined` promise for the name resolves with the
-  constructor.
+  constructor. That is before the upgrades run, which happens as `define`
+  returns, so the promise's handlers come before anything a constructor
+  queued.
 - The candidate walk covers the whole document for each name. A hundred
   defines over 10,000 nodes is a million visits, which is milliseconds.
   The page record carries the walk's total, so this is measured and not
@@ -359,17 +361,24 @@ compare over the list. GitHub defines about a hundred.
   - When the original throws, the wrapper still pops the queue and runs
     its reactions, then rethrows. The standard's `[CEReactions]` steps
     cover a member's exceptions too.
-  - A row naming a member libdom lacks is skipped. The DOM host lists the
-    members it expects to be wrapped and fails when one is not, so a
-    member gained later that is not in the table is caught by the
-    reactions tests, not by a reader.
-  - **Exotic paths cannot be wrapped**, and the host's list names each
-    one with that reason: `DOMStringMap`'s setter and deleter
-    (`dataset.x = y`, `delete dataset.x`, `attr.c`'s exotic class), and
-    the indexed and named exotic paths of the same shape. Their reactions
-    reach the backup queue by design and run at the checkpoint. The style
-    object's `cssText`, `setProperty` and camel-cased properties are
-    prototype accessors, so the table reaches them.
+  - A row's member is wrapped where its interface's prototype chain has
+    it, and once, however many rows reach it (a mixin's member included
+    by several interfaces, or one libdom keeps on an ancestor). A row
+    naming a member libdom lacks is skipped, and a member libdom gains
+    later that the table names is wrapped with no other change. What
+    install made of each row is kept, and the DOM host holds the members
+    it expects to be wrapped to it.
+  - **Exotic paths cannot be wrapped**: the special operations, which no
+    prototype member is. The table names four, and the DOM host names
+    each: `DOMStringMap`'s setter and deleter (`dataset.x = y`,
+    `delete dataset.x`, `attr.c`'s exotic class), and the indexed setters
+    of `HTMLOptionsCollection` and `HTMLSelectElement`. Their reactions
+    reach the backup queue by design and run at the checkpoint.
+  - **CSS properties.** The style object's `cssText`, `setProperty` and
+    `removeProperty` are rows of their own. Its property attributes
+    (camel-cased, dashed, webkit-cased) are `[CEReactions]` in CSSOM as a
+    class, not one by one, so the table gives `CSSStyleDeclaration` one
+    row that wraps every setter its prototype has.
 - **Where reactions come from.** The listener (decision 2) handles three
   kinds of change.
   - **CHILDREN, insertion:** if the target is connected, each inclusive
@@ -401,6 +410,43 @@ compare over the list. GitHub defines about a hundred.
 - **Teardown.** Queues, definitions and their holds go in libdom's
   teardown, before the engine, in D8's order.
 
+## An element's life, in one table
+
+What each state is made of: the node's `ce`, whether a `DCustom` record
+exists (it holds the node while it does), and the wrapper's prototype.
+An element that never had a valid custom name stays in the first row for
+good, and costs nothing.
+
+| State | `ce` | `DCustom` | Wrapper's prototype |
+|---|---|---|---|
+| no valid custom name | PLAIN | none | its kind's |
+| valid name, no definition | PLAIN | none | `HTMLElement`'s |
+| upgrade queued | PLAIN | yes: an upgrade in its queue | `HTMLElement`'s |
+| upgrading (its constructor running) | FAILED | yes: on the construction stack | `HTMLElement`'s, until `super()` sets the definition's |
+| custom, idle | CUSTOM | none | the definition's |
+| custom, callbacks queued | CUSTOM | yes: the callbacks | the definition's |
+| failed | FAILED | none | `HTMLElement`'s after an upgrade, `HTMLUnknownElement`'s after `createElement` |
+
+And what moves an element between them:
+
+| Event | From | To |
+|---|---|---|
+| `define(name)`, or an insertion connecting it to the window's document, with a definition for its name | valid name, no definition | upgrade queued |
+| `createElement` with a definition, the constructor succeeding | (new) | custom, idle |
+| `createElement` with a definition, the constructor failing | (new) | failed |
+| `new C()` for a defined `C` | (new) | custom, idle |
+| a clone of an element with a definition | (new copy) | upgrade queued |
+| the queued upgrade runs | upgrade queued | upgrading |
+| its constructor returns the element | upgrading | custom (callbacks queued if any were) |
+| its constructor throws or returns something else | upgrading | failed: its queue emptied |
+| connected, disconnected, an observed attribute changed, adopted | custom, idle | custom, callbacks queued |
+| its queue drained | custom, callbacks queued | custom, idle |
+| `upgrade(root)` | valid name with a definition | upgrade queued (only an element with a definition is tried) |
+
+A `DCustom` is freed when its queue is empty and no element queue and no
+construction stack names it. Nothing else holds a node for custom
+elements' sake.
+
 ## MutationObserver (the third cut)
 
 RELAYOUT.md § "MutationObserver reads the log" is the design, unchanged
@@ -420,7 +466,8 @@ What 5a then holds is the change log, its readers, and the instrument.
 | Cut | Builds | Oracle | Size |
 |---|---|---|---|
 | a | libhtml: `os64_html_observe` with the record above, and the `STATE` kind; the document parser's reports on both attach paths and the text append; `ce` and `os64_html_set_ce`; `os64_html_custom_name`. libgarb: `:defined`, honest with the switch on. yonder's census. | libhtml host: one fixture per verb, asserting the records by shape (a move is two, a fragment drained is two, a replace is one and a replace by itself two, an attribute set to its own value is one), the parser's attachments on both paths and its text appends, and a fragment parse reporting nothing; `set_ce` moves the version and reaches no listener; a clone is PLAIN. libgarb host: `:defined` against each state, switch on and off. Mutants. | S |
-| b | libdom `custom.c`: the registry, the `HTMLElement` constructor, `createElement`'s and clone's construction, the reactions, the trampoline and `ce_reactions.inc`, `os64_dom_reactions_run` and yonder's calls to it, the timer backstop, the row. | WPT `custom-elements/` (added to the sparse checkout): its expected file, and the required lines the cut earns. DOM host: the cases above, and the wrapped-member list with the exotic paths named. Scripted-page host: a classic page that defines in `<head>` and calls a method in `<body>`, and a streamed page. Mutants. P5: GitHub's record. | L |
+| b1 | libdom `custom.c`: the registry, the `HTMLElement` constructor, `createElement`'s and clone's construction, upgrades, the reactions and their queues, the listener, `os64_dom_reactions_run` and yonder's calls to it, the timer backstop, the row, and the constructor's message on the census line. libjs: whether a job queued now will be drained. The members libdom does not yet wrap still work: their reactions run at the next microtask checkpoint, the standard's own path for a change made outside any `[CEReactions]` member. | WPT `custom-elements/` (added to the sparse checkout): its expected file, and the required lines the cut earns. DOM host: the cases above. Scripted-page host: a classic page that defines in `<head>` and calls a method in `<body>`, and a streamed page. Mutants. P5: GitHub's record. | M |
+| b2 | `tools/ce_reactions.py` and `ce_reactions.inc`, the trampoline, the wrapping at install, so a `[CEReactions]` member's reactions run before it returns. | WPT `custom-elements/reactions/`. DOM host: the wrapped-member list with the exotic paths named; the trampoline's cost on the scripted-page host's mutation fixtures. Mutants. | M |
 | c | libdom `MutationObserver`, `MutationRecord`. | WPT `dom/nodes/MutationObserver-*` (17 files). DOM host. P5: GitHub's record past catalyst. | M |
 
 Each cut is a PR, stacked on the one before. Codex reads each. Fable
@@ -457,17 +504,21 @@ records the standard names.
 - **`ElementInternals` and form-associated elements:** a DEBTS row. The
   census names neither yet.
 - **Scoped registries, `connectedMoveCallback` and `moveBefore`:**
-  `define` reads the callback in the standard's order but never calls
-  it, and `moveBefore` does not exist.
+  `moveBefore` does not exist, so `define` does not read
+  `connectedMoveCallback`, as WPT at the pin expects.
 - **The parser's synchronous construction:** decision 6, a DEBTS row. A
   parser-made element is upgraded, not constructed bare. A constructor
   that reads its own attributes in its body sees them present, and
   `attributeChangedCallback` fires once for each.
-- **The trampoline adds one call** to every wrapped method and setter. A
-  `[CEReactions]` member already does tree work, so one more call there
-  is noise. Cut b's numbers have to show that on the scripted-page
-  host's mutation fixtures, and if it is not noise, the measurement says
-  so.
+- **The trampoline adds one call** to every wrapped method and setter,
+  and the measurement says it is not noise on a tight loop. The DOM
+  host times 20,000 rounds of `setAttribute`, `appendChild` and
+  `removeChild` (best of three, under the sanitizers): with the switch
+  on it is 17–23% slower than off, which is at most half a microsecond a
+  wrapped call. That is an upper bound, since the switch changes more
+  than the wrappers. An empty element queue, which is most calls, leaves
+  the trampoline at once. A page whose script mutates in tight loops pays
+  it. The P5's GitHub record is where it is judged on a real page.
 - **`:defined` turning honest with the switch on** hides the hyphenated
   elements a page hides while they are undefined (above). If a P5 test
   page loses something it showed, that page is behaving the way Chrome

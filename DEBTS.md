@@ -607,6 +607,16 @@ how a worklist fills with things nobody intends to do.
 | **`relList` is a link's alone**: HTML gives `<a>`, `<area>` and `<form>` one too (whose supported tokens are `noreferrer`, `noopener`, `opener`), and yonder reflects none of them | Fidelity | XS | a page that feature-detects `noopener` through `a.relList.supports` | `userland/libdom/mixin.c` |
 | **No `import.meta.resolve`, JSON or CSS modules (import attributes), or module workers** | Feature | M each | a site that uses one | `userland/apps/yonder/modules.c`, libdom |
 
+## Custom elements (CUSTOM_ELEMENTS.md, 2026-10-29 — booked the day it was built)
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| **The parser upgrades an element it makes after its definition exists, where HTML constructs it bare** (decision 6): its constructor runs with its attributes already present and the element connected, and `attributeChangedCallback` fires once for each observed attribute. A constructor that reads `this.getAttribute` in its body, or counts its callbacks, can tell. The upgrade runs before any later script (yonder runs what the parser left owed after each parser call) | Fidelity | M (the parser asking libdom to construct, which means running a page's code inside a parser call) | a page whose element's constructor depends on running before its attributes are set | `userland/libdom/custom.c`, `userland/apps/yonder/yonder.c` `stream_reactions` |
+| **No `ElementInternals` and no form-associated custom elements**: `attachInternals` is undefined, and a definition's `formAssociated` and its four form callbacks are read as the standard reads them and kept by nothing, so such an element takes no part in its form | Feature | M | a site whose custom controls submit with a form, or that calls `attachInternals` | `userland/libdom/custom.c` `read_definition` |
+| **No customized built-in elements**: `define`'s `extends` is a NotSupportedError, as in Safari, and `is=` is ignored | Feature | M | a site that relies on `is=` with no fallback | `userland/libdom/custom.c` `define` |
+| **The binding's operations are not enumerable**: `d_method` and `d_method_named` define every method writable and configurable but not enumerable, where WebIDL makes an operation all three. Binding-wide, not custom elements' alone (found writing their tests). idlharness checks it; a page almost never enumerates a prototype | Fidelity | S (one flag in the two definers, and the DOM host's chain-shape and idlharness expectations moved with it) | idlharness lines worth earning, or a page that walks a prototype's own keys | `userland/libdom/core.c` `d_method`, `d_method_named` |
+| **`adoptedCallback` knows only the window's document and the ones `document.implementation` and `DOMParser` make**, read from the move's removal or the node's own record; a node that never had a wrapper and is inserted into another document straight from no parent is taken as the window's | Fidelity | XS | a page that adopts parser-made nodes between documents of its own | `userland/libdom/custom.c` `came_from` |
+
 ## husk (the shell, ongoing)
 
 | Debt | Class | Size | Trigger | Where |

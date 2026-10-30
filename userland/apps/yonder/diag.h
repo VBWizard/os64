@@ -72,6 +72,17 @@
 
 typedef struct yonder_diag yonder_diag_t;
 
+/* Optional layout instrumentation, accumulated for this page record.
+ * Microsecond totals include repeated attempts; calls/refusals and bad clock
+ * reads keep incomplete evidence distinguishable from a fast successful run.
+ * Model counts cover rebuilds, not the initial loader's model construction. */
+typedef struct {
+    uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
+    uint64_t elements, boxes, measures, reused;
+    uint64_t model_calls, layouts, refusals, clock_errors;
+} yonder_layout_stats_t;
+void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
+
 // A record for the load of `url`, numbered `seq`, begun at `began_us` on
 // the caller's clock (kept for the caller: this file reads no clock).
 // NULL on no memory.

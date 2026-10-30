@@ -41,6 +41,8 @@ LIBDOM_SRCS += libdom/compare.c
 LIBDOM_SRCS += libdom/sheets.c libdom/image_data.c libdom/canvas.c libdom/canvas_path.c libdom/canvas_text.c libdom/canvas_image.c libdom/mutation.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
+# Custom elements: the registry, upgrades and their reactions.
+LIBDOM_SRCS += libdom/custom.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))

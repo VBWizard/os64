@@ -66,8 +66,8 @@ Chris moves rows.
 | 2 | jQuery dies at load | Opus | open |
 | 3 | A menu bar, with Favorites and History on it | Opus | open |
 | 4 | ~~Persistent cookies, with a switch~~ | Opus | done (the login slice; § 4 has the as-built) |
-| 5 | The right-click menu | Opus; Quinn (the save dialog) | open |
-| 6 | Download | Opus | open |
+| 5 | The right-click menu | Opus; Quinn (the save dialog) | built (§ 5, as built; the Save verbs with § 6) |
+| 6 | Download | Opus | built (§ 6, as built); the live panel and drawn faces are the polish cut |
 | 7 | Selecting and copying text, and the I-beam | Fable design; Opus builds | open |
 | 8 | The mouse wheel through vncd | Fable reads; Opus fixes | open |
 
@@ -243,6 +243,23 @@ and over neither the menu does not open this slice). Five verbs:
   Roam's directory browser made reusable for exactly this. The dialog
   opens on the `downloads` folder with the proposed name filled in.
 
+**As built (2026-10-29), the menu without its Save verbs.** The popup is
+the window's menu session (the one a dropdown's list opens in) with an
+action registry and three models: a link's two verbs, a picture's two, and
+all four with a separator for a picture inside a link. "Open in new window"
+became two verbs, **Open Link in New Window** and **Open Picture in New
+Window**, because a picture alone has no link to open and yonder shows a
+picture on a page of its own. The addresses are copied when the menu opens,
+so a page that changes under it cannot change what a verb acts on: the
+link's resolved address with its fragment, and the picture's address as
+the page's catalog fetched it (`srcset`'s choice; a `data:` picture is not
+in the catalog and offers nothing). A `javascript:` link can be copied but
+not opened. Shift+F10 opens the same menu at the pointer when the page has
+the keys. No `contextmenu` event reaches the page: that is web surface,
+and it waits for the arc. Save picture as and Save link as arrived with § 6,
+the thing they do: **Save Link As...** and **Save Picture As...**, each
+between its Open and its Copy, offered for an http or https address.
+
 ### 6. Download
 
 **Direction.** The stream libfetch already runs for pages and pictures,
@@ -261,6 +278,66 @@ page's loop like a picture does, so the window keeps answering.
 yonder cannot show keeps today's behaviour, and its message changes from
 "use os64get" to "right-click the link and choose Save link as", because a
 message should name the door that exists.
+
+**Ruled 2026-10-29 (Chris, with Opus), superseding parts of the above.**
+- **A left-click on something yonder cannot show opens the save dialog**,
+  with the name filled in. Asking is not an automatic download; Cancel
+  leaves the page where it was. The reply libway already holds open can be
+  handed to the download rather than fetched twice.
+- **The status line carries nothing about downloads**: it is full. Their
+  place is a **downloads button** at the right end of the address row (the
+  field gives up the room), always present and dim while there is nothing
+  to show, so the row never jumps. It is the progress meter: it fills with
+  the bytes, says it is alive when the length is unknown, flashes when one
+  finishes and stays red after a failure until looked at. A click opens a
+  list, one row per download: its name, how far it got or why it failed,
+  and Cancel, Show in Roam and Clear finished. The first cut's list is the
+  menu session's text list, read afresh each time it opens; a live panel
+  with a bar per row, and drawn faces for the whole row's buttons
+  (`os64/ui_icon.h`'s icon button over the shipped icon set), are a later
+  polish cut.
+- **A download is the window's, not the page's**: a job on the window's
+  work pool, so the window keeps answering, and it survives a move to
+  another page. Closing yonder cancels it and removes what it staged. A few
+  run at once at most, so a big file can never take the workers a page's
+  pictures need.
+- **The save dialog is modal to yonder's window** while it is open (the
+  toolkit's dialog is a separate window, not a native modal owner): the
+  window takes no input and a click on it brings the dialog forward, while
+  the page goes on painting and the downloads go on running.
+
+**As built (2026-10-29).** `download.c` names the file (pure, in
+`tools/test_yonder_host.c`): `Content-Disposition`'s `filename*` in UTF-8,
+else its `filename`, else the address's last path segment percent-decoded,
+else `download`; a path in it stripped to its last part, a control byte
+`_`, leading dots and trailing dots and spaces gone, cut to 127 bytes
+keeping a short extension and never splitting a UTF-8 sequence. A taken
+name is numbered before its FIRST dot past the first byte (`a.tar.gz` →
+`a-1.tar.gz`), so a compound extension stays whole; past a hundred taken,
+the dialog's own replace question decides. `download_job.c` is the pool
+job: the fetch goes out as a person's navigation from the page it was
+asked from (the jar, the Referer, the preset's lines and a navigation's
+Fetch Metadata), asks for the bytes as the server keeps them (`identity`,
+so a `.tar.gz` does not arrive unzipped), refuses a reply that is not 2xx
+(an error's body is not the file), streams 64 KB at a time to
+a staging file it creates exclusively (`<path>.part`, or `<path>.<n>.part`
+when that is taken, so nothing already there is truncated or removed),
+syncs, looks once more for a cancel, and renames with `NOREPLACE` unless
+the dialog had consent to replace. Every way out but success removes the
+job's own staging file, a pool that fails marks its downloads failed, and
+closing yonder cancels through the pool's destroy. Progress is two 64-bit
+words the worker stores and the window reads, and a bell (`BELL_DOWNLOAD`,
+at most every 200 ms) to repaint the meter. Three run at once; the list
+keeps 32 rows, the oldest finished one going for a new one. A left-click's
+reply is offered by libway (`way_leg_t.offer`: the address after
+redirects, the type and the final head's `Content-Disposition`) and
+fetched again for the download: handing the open reply over was weighed
+and left for later, since the trip's fetch belongs to a job whose mailbox
+ends with it. `downloads = <dir>` is read by the same folder reader as
+`profile`. The meter is v1's: a bar along the button's foot in the
+button's ink (a band that steps with the bytes when no length was given),
+red across after a failure until the list is opened; no flash when one
+finishes, which waits for the polish cut with the live panel.
 
 ### 7. Selecting and copying text, and the I-beam
 

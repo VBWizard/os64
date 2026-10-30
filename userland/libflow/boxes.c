@@ -285,6 +285,7 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     FBox *box = alloc(b, sizeof(*box));
     if (box == NULL)
         return NULL;
+    ++b->out->count;
     box->kind = kind;
     box->node = node;
     box->style = style;

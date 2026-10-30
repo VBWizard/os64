@@ -318,13 +318,13 @@ and `object-position`, `letter-spacing`, `text-overflow`, `word-break` and
 INTO this arc and ahead of `requestAnimationFrame` on 2026-10-07, because
 rAF on a page that relays out whole is danlegt at 16 ms per frame forever.
 A layout that reuses the boxes a change did not touch; then
-`requestAnimationFrame` on the loop's rendering step and
-`MutationObserver` on the mutation core. Oracle: WPT
-`html/webappapis/animation-frames/`, `dom/nodes/MutationObserver-*`.
+`requestAnimationFrame` on the loop's rendering step. Script mutation
+notification belongs to the custom-elements work. Oracle: WPT
+`html/webappapis/animation-frames/`.
 Acceptance: the perf record's layouts-per-second on danlegt, unchanged
 with rAF on. **Fable design**, because it changes what libflow's tree IS
 between layouts: [RELAYOUT.md](RELAYOUT.md) (2026-10-21), which cuts it
-into 5a (the change log in libhtml, `MutationObserver`, the instrument),
+into 5a (the native change log in libhtml and the instrument),
 5b (the cascade updated in place, pass 1 reused), 5c (the layout memo)
 and 5d (`requestAnimationFrame`).
 
@@ -368,7 +368,7 @@ the public-suffix list. Custom elements (`customElements.define`, GitHub's
 `react-partial` and friends) join here or the end of Tier 0 as the census
 says once modules run. With modules and import maps in, the census said it
 (2026-10-26, Chris's P5 records of GitHub): its bundles die on
-`customElements`, then `MutationObserver` (5a), `IntersectionObserver` and
+`customElements`, then `MutationObserver` (custom-elements work), `IntersectionObserver` and
 `ReadableStream`, and its loading placeholders stay where that code would
 have filled them. Chris bookmarked custom elements to follow 0f.
 
@@ -3586,7 +3586,7 @@ Integrity at all (DEBTS.md).
   would.
 - **P5**, Chris, on GitHub's pages: a repository's page fetches 118
   modules through its maps, each once; what stops its code next is
-  `customElements`, then `MutationObserver` (slice 5a),
+  `customElements`, then `MutationObserver` (now in the custom-elements work),
   `IntersectionObserver` and `ReadableStream`, and its placeholders stay
   gray where that code would have filled them.
 

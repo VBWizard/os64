@@ -365,7 +365,8 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
  * it from wherever it was; a FRAGMENT gives up its children in its place and
  * is left empty. `replace` puts `node` where `old` is. `remove` unlinks a
  * node that has a parent and is a no-op on one that has none. Adjacent text
- * is not merged. None of the three allocates.
+ * is not merged. Tree linking allocates nothing; an optional change log may
+ * allocate, and reports loss to its readers if that allocation fails.
  *
  * A document's element or doctype cannot be inserted under that document
  * again, even to where it already is: the rule that a document has one of
@@ -483,6 +484,42 @@ typedef struct {
 void os64_html_observe(os64_html_document_t *doc,
                        void (*changed)(void *opaque, const os64_html_change_t *change),
                        void *opaque);
+
+/* ── BOUNDED CHANGE LOG ───────────────────────────────────────────────
+ * Independent native readers consume invalidations since a document version.
+ * With no readers, no log storage or node holds are created. This is a lossy
+ * optimization aid: -1 from changes means rebuild from the current document.
+ * It does not replace the synchronous listener or retain old text/values.
+ *
+ * Entries own copies of attribute names and arrays of node identities. They
+ * hold target, siblings and listed nodes; their tree links and current data
+ * may change. In particular, iterate the arrays, not nodes' next pointers.
+ * The borrowed chain lasts until the next mutation, reader operation or limit
+ * change on this document. Hold nodes separately to keep them beyond that.
+ * Reader operations must not run inside the listener. Free readers before
+ * freeing their document. A future version or allocation failure refuses new.
+ */
+typedef struct os64_html_reader os64_html_reader_t;
+typedef struct os64_html_change_entry {
+    uint64_t version;
+    os64_html_change_kind_t kind;
+    const os64_html_node_t *target;
+    const os64_html_node_t *const *added, *const *removed;
+    size_t nadded, nremoved;
+    const os64_html_node_t *previous_sibling, *next_sibling;
+    const char *attr_name, *attr_ns, *attr_local;
+    const struct os64_html_change_entry *next;
+} os64_html_change_entry_t;
+os64_html_reader_t *os64_html_reader_new(os64_html_document_t *doc, uint64_t version);
+void os64_html_reader_free(os64_html_reader_t *reader);
+/* Advances to the current version, including on -1. Zero sets *out to NULL.
+ * Records from a parser call or one verb may share a version. */
+int64_t os64_html_changes(os64_html_reader_t *reader, const os64_html_change_entry_t **out);
+/* Default cap is one sixteenth of the document arena budget. Zero disables
+ * retention; loss still reports -1. The cap counts record allocation headers
+ * and payloads; readers themselves also consume the document arena budget. */
+void os64_html_changes_limit(os64_html_document_t *doc, size_t bytes);
+size_t os64_html_changes_bytes(const os64_html_document_t *doc);
 
 /* ── CUSTOM STATE (docs/design/pending/CUSTOM_ELEMENTS.md) ──────────────
  *

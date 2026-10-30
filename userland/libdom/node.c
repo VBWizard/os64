@@ -522,6 +522,12 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0) {
             JSValue made = wrapper_attach(dom, ctx, entry, copy);
             d_made_in(dom, copy, d_node_document(dom, node));
+            /* [CEReactions]: the copy's elements with a definition come
+             * back upgraded (custom.c). */
+            if (d_custom_cloned(dom, ctx, copy) < 0) {
+                JS_FreeValue(ctx, made);
+                return JS_EXCEPTION;
+            }
             return made;
         }
         if (copy != NULL) status = OS64_HTML_NO_MEMORY;
@@ -579,6 +585,27 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
                            "which this browser's documents cannot hold");
         }
         if (type == D_DOCUMENT_HTML) d_fold(string.data);
+        /* An element with a definition is constructed (custom.c), inside
+         * [CEReactions]: what its constructor queued runs before this
+         * returns. */
+        JSValue made = JS_UNDEFINED;
+        if (d_reactions_push(dom, ctx) < 0) {
+            d_string_free(dom, &string);
+            return JS_EXCEPTION;
+        }
+        int constructed = d_custom_create(dom, ctx, node, string.data, &made);
+        if (d_reactions_pop(dom, ctx) < 0 && constructed && !JS_IsException(made)) {
+            JS_FreeValue(ctx, made);
+            made = JS_EXCEPTION;
+        }
+        if (constructed) {
+            d_string_free(dom, &string);
+            return made;
+        }
+        if (JS_HasException(ctx)) {
+            d_string_free(dom, &string);
+            return JS_EXCEPTION;
+        }
     }
     int64_t status;
     os64_html_node_t *created = magic == D_CREATE_ELEMENT ?

@@ -49,6 +49,13 @@ os64_js_status_t os64_js_checkpoint(os64_js_runtime_t *runtime, const char *call
 /* A final checkpoint, then the task is closed and eval/run are accepted. */
 os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const char *caller_abi,
                                   os64_js_outcome_t *outcome);
+/* Whether a job queued now (JS_EnqueueJob) will be drained by the turn
+ * under way: true inside a call, an eval or a run, and while a task is
+ * open. Outside all of them a queued job is left for nobody, and the next
+ * task_begin answers BUSY until something drains it, so a binding told of
+ * a change by its host (a parser's report, between tasks) asks first and
+ * defers the work another way when the answer is no. No engine entry. */
+bool os64_js_turn_open(const os64_js_runtime_t *runtime);
 /* Replaces the execution limit for tasks and turns started from now on; an
  * open task keeps the deadline it was armed with. Owner thread, outside a
  * call. Zero or unrepresentable is BAD_ARGUMENT, as creation refuses. */

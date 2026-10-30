@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""One deliberate break at a time to custom elements' first cut
-(CUSTOM_ELEMENTS.md): libhtml's listener and what each verb and the parser
-tell it, the custom state and the name it is read with, libgarb's `:defined`
-with the switch on and off, and yonder's census. A mutant is CAUGHT when one
+"""One deliberate break at a time to custom elements (CUSTOM_ELEMENTS.md):
+libhtml's listener and what each verb and the parser tell it, the custom
+state and the name it is read with, libgarb's `:defined` with the switch on
+and off, yonder's census; and libdom's registry, upgrades, construction and
+reactions, the reactions a change between tasks leaves owed, yonder's
+checkpoint for them, and libjs's answer to whether a turn is open. A mutant is CAUGHT when one
 of its harnesses fails, MISSED when they all pass, which means a test is
 missing and gets written. A build failure is neither.
 
@@ -31,10 +33,18 @@ SELECT_C = 'userland/libgarb/select.c'
 CASCADE_C = 'userland/libgarb/cascade.c'
 COLLECTION_C = 'userland/libdom/collection.c'
 YONDER_C = 'userland/apps/yonder/yonder.c'
+CUSTOM_C = 'userland/libdom/custom.c'
+NODE_C = 'userland/libdom/node.c'
+IMPL_C = 'userland/libdom/implementation.c'
+TIMER_C = 'userland/libdom/timer.c'
+JS_C = 'userland/libjs/runtime/runtime.c'
 HTML = 'tools/test_html_dom_host.sh'
 GARB = 'tools/test_garb_host.sh'
 DOM = 'tools/test_dom_host.sh'
+# The DOM host's custom elements cases alone (its --custom mode).
+DOMC = 'tools/test_dom_host.sh --custom'
 WINDOW = 'tools/test_yonder_scripts_host.sh'
+JSRT = 'tools/test_js_runtime_host.sh'
 
 mutants = [
     # ── The listener ────────────────────────────────────────────────────
@@ -44,7 +54,7 @@ mutants = [
     ('seen-previous', DOM_C, '    seen->previous = before ? before->prev : parent->last_child;',
      '    seen->previous = before ? before->prev : parent->first_child;', [HTML]),
     ('seen-fragment-count', DOM_C, '            seen->count++;', '            ;', [HTML]),
-    ('seen-move', DOM_C, '        seen->from = node->parent;\n', '', [HTML]),
+    ('seen-move-parent', DOM_C, '        seen->from = node->parent;\n', '', [HTML]),
     ('seen-move-siblings', DOM_C, '        seen->from_prev = node->prev;', '        seen->from_prev = NULL;', [HTML]),
     ('drained-record', DOM_C, '            tell(d, &drained);', '            (void)drained;', [HTML]),
     ('replace-record-removed', DOM_C, '.nremoved = replaced != NULL,', '.nremoved = 0,', [HTML]),
@@ -161,8 +171,142 @@ mutants = [
      '            if (n->ns == OS64_HTML_NS_HTML &&', [WINDOW]),
     ('census-name-rule', YONDER_C, '                os64_html_custom_name(n->name)) {',
      "                os64_strchr(n->name, '-') != NULL) {", [WINDOW]),
-    ('census-failed-line', YONDER_C, '        if (custom[c].failed)\n', '        if (custom[c].failed && !c)\n',
+    ('census-failed-line', YONDER_C, '        if (!custom[c].failed)\n', '        if (!custom[c].failed || c)\n',
      [WINDOW]),
+    # ── Cut b1: the registry, upgrades and reactions (libdom custom.c) ──
+    ('ce-attribute-custom-only', CUSTOM_C, '    if (element->ce != OS64_HTML_CE_CUSTOM) return;\n    const os64_html_attr_t *now',
+     '    const os64_html_attr_t *now', [DOMC]),
+    ('ce-observed-only', CUSTOM_C, '    if (kind == CB_ATTRIBUTE && !observes(d, strings[0])) return;\n',
+     '    if (kind == CB_ATTRIBUTE && !observes(d, strings[0]) && false) return;\n', [DOMC]),
+    ('ce-disconnect-needs-document', CUSTOM_C,
+     '        if (d_connected(c->target)) {\n            const os64_html_node_t *n = c->removed;',
+     '        if (true) {\n            const os64_html_node_t *n = c->removed;', [DOMC]),
+    ('ce-connect-needs-document', CUSTOM_C, '        if (!connected) continue;\n',
+     '        if (!connected && false) continue;\n', [DOMC]),
+    ('ce-adopt-other-document-only', CUSTOM_C, 'if (from != NULL && from != document) {', 'if (from != NULL) {',
+     [DOMC]),
+    ('ce-upgrade-window-only', CUSTOM_C,
+     '    if (element->ce != OS64_HTML_CE_PLAIN || definition_for(dom, element) == NULL ||\n'
+     '        !d_window_document(dom, element))',
+     '    if (element->ce != OS64_HTML_CE_PLAIN || definition_for(dom, element) == NULL)', [DOMC]),
+    ('ce-define-upgrades', CUSTOM_C,
+     '        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))\n'
+     '            try_upgrade(dom, at);',
+     '        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))\n'
+     '            (void)at;', [DOMC]),
+    ('ce-upgrade-marks-failed', CUSTOM_C,
+     '    os64_html_set_ce(dom->document, (os64_html_node_t *)element, OS64_HTML_CE_FAILED);\n'
+     '    for (const os64_html_attr_t *a', '    for (const os64_html_attr_t *a', [DOMC]),
+    ('ce-upgrade-marks-custom', CUSTOM_C,
+     '        os64_html_set_ce(dom->document, (os64_html_node_t *)element, OS64_HTML_CE_CUSTOM);\n        return 0;',
+     '        return 0;', [DOMC]),
+    ('ce-construction-stack', CUSTOM_C, '    d->stack[d->depth++] = element;', '    d->stack[d->depth++] = NULL;',
+     [DOMC]),
+    ('ce-marker', CUSTOM_C, '        if (!JS_IsException(result)) d->stack[d->depth - 1] = NULL;\n', '', [DOMC]),
+    ('ce-same-value', CUSTOM_C,
+     '    bool same = !JS_IsException(result) && JS_IsObject(result) &&\n'
+     '                JS_VALUE_GET_PTR(result) == JS_VALUE_GET_PTR(self);',
+     '    bool same = !JS_IsException(result) && JS_IsObject(result);', [DOMC]),
+    ('ce-failed-empties-queue', CUSTOM_C,
+     '    while (r->first != NULL) {\n        DReaction *next = r->first->next;\n        reaction_free(dom, r->first);\n'
+     '        r->first = next;\n    }\n    r->last = NULL;\n    if (!d_exception_catchable(ctx)) return -1;',
+     '    if (!d_exception_catchable(ctx)) return -1;', [DOMC]),
+    ('ce-attribute-arguments', CUSTOM_C,
+     'const char *strings[4] = {c->attr_local, was, now != NULL ? now->value : NULL, c->attr_ns};',
+     'const char *strings[4] = {c->attr_local, now != NULL ? now->value : NULL, was, c->attr_ns};', [DOMC]),
+    ('ce-pop-rethrows', CUSTOM_C,
+     '        if (threw && status == 0) JS_Throw(ctx, pending);\n        else JS_FreeValue(ctx, pending);',
+     '        JS_FreeValue(ctx, pending);', [DOMC]),
+    ('ce-microtask-in-turn', CUSTOM_C, '    if (os64_js_turn_open(dom->runtime)) {\n        os64_js_outcome_t outcome;',
+     '    if (false) {\n        os64_js_outcome_t outcome;', [DOMC]),
+    ('ce-owed-cleared', CUSTOM_C, '    s->requested = false;\n    s->owed = false;\n    return status;',
+     '    s->requested = false;\n    return status;', [DOMC]),
+    ('ce-timer-next-owed', TIMER_C, '    if (os64_dom_reactions_owed(dom)) return 0;\n', '', [DOMC]),
+    ('ce-timer-fire-owed', TIMER_C, '    if (os64_dom_reactions_run(dom, outcome)) return true;\n', '', [DOMC]),
+    ('ce-when-defined-one-promise', CUSTOM_C,
+     '    if (valid && d == NULL && w != NULL) {\n        d_string_free(dom, &name);\n'
+     '        return JS_DupValue(ctx, w->promise->value);\n    }\n', '', [DOMC]),
+    ('ce-when-defined-resolves', CUSTOM_C,
+     '        JSValue resolved = JS_Call(ctx, w->resolve->value, JS_UNDEFINED, 1, &argv[1]);',
+     '        JSValue resolved = JS_UNDEFINED;', [DOMC]),
+    ('ce-observed-needs-callback', CUSTOM_C,
+     '    if (!JS_IsUndefined(r->callbacks[CB_ATTRIBUTE])) {\n        JSValue observed',
+     '    if (true) {\n        JSValue observed', [DOMC]),
+    ('ce-create-window-only', CUSTOM_C, 'document == window_document(dom) && s->definitions != NULL',
+     '(document == window_document(dom) || document != NULL) && s->definitions != NULL', [DOMC]),
+    ('ce-created-name', CUSTOM_C, '!d_window_document(dom, node) || !os64_streq(node->name, name))',
+     '!d_window_document(dom, node) || (!os64_streq(node->name, name) && false))', [DOMC]),
+    ('ce-create-remembers-failure', CUSTOM_C,
+     '    remember_failure(dom, ctx, d, error);\n    d_report_as(dom, ctx, error, d->constructor_script);\n'
+     '    JS_FreeValue(ctx, error);\n    int64_t status;',
+     '    d_report_as(dom, ctx, error, d->constructor_script);\n    JS_FreeValue(ctx, error);\n    int64_t status;',
+     [DOMC]),
+    ('ce-create-failed-unknown', CUSTOM_C,
+     '    os64_html_set_ce(dom->document, element, OS64_HTML_CE_FAILED);\n    *out = d_wrap(dom, ctx, element);',
+     '    *out = d_wrap(dom, ctx, element);', [DOMC]),
+    ('ce-new-is-custom', CUSTOM_C,
+     '            os64_html_set_ce(dom->document, element, OS64_HTML_CE_CUSTOM);\n'
+     '            result = d_wrap_constructed(dom, ctx, element, prototype);',
+     '            result = d_wrap_constructed(dom, ctx, element, prototype);', [DOMC]),
+    ('ce-clone-upgrades', NODE_C, '            if (d_custom_cloned(dom, ctx, copy) < 0) {',
+     '            if (false && d_custom_cloned(dom, ctx, copy) < 0) {', [DOMC]),
+    ('ce-create-element-constructs', NODE_C,
+     '        int constructed = d_custom_create(dom, ctx, node, string.data, &made);',
+     '        int constructed = 0;', [DOMC]),
+    ('ce-create-element-ns-constructs', IMPL_C,
+     '            if (d_custom_create(dom, ctx, document, name.data, &made) != 0) result = made;',
+     '            (void)made;', [DOMC]),
+    ('ce-node-kind-failed', 'userland/libdom/node.c', ' && node->ce != OS64_HTML_CE_FAILED', '', [DOMC]),
+    ('ce-drain-takes-listener', CUSTOM_C, '    if (dom->custom != NULL) os64_html_observe(dom->document, NULL, NULL);',
+     '    (void)dom;', [DOMC]),
+    ('ce-stream-checkpoint', YONDER_C, '            stream_sheets();\n            stream_reactions();\n            return r;',
+     '            stream_sheets();\n            return r;', [WINDOW]),
+    ('ce-census-message', YONDER_C,
+     '        else if (yonder_scripts_custom_failure(scripts, custom[c].name, why, sizeof(why))) {',
+     '        else if (false && yonder_scripts_custom_failure(scripts, custom[c].name, why, sizeof(why))) {', [WINDOW]),
+    ('js-turn-open-task', JS_C, '    return runtime != NULL && (runtime->active || runtime->turn);',
+     '    return runtime != NULL && runtime->active;', [JSRT]),
+    # Codex #407's three: define's upgrades after its promise, a replace's
+    # removed node not hiding the adopted one's source, and nothing queued
+    # for an upgrade the construction stack cannot afford.
+    ('ce-define-promise-first', CUSTOM_C,
+     '    const os64_html_node_t *document = window_document(dom);\n'
+     '    for (const os64_html_node_t *at = document; at != NULL; at = d_walk_next(document, at)) {\n'
+     '        s->visits++;\n'
+     '        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))\n'
+     '            try_upgrade(dom, at);\n    }\n',
+     '    if (d_reactions_push(dom, ctx) < 0) goto done;\n'
+     '    const os64_html_node_t *document = window_document(dom);\n'
+     '    for (const os64_html_node_t *at = document; at != NULL; at = d_walk_next(document, at)) {\n'
+     '        s->visits++;\n'
+     '        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))\n'
+     '            try_upgrade(dom, at);\n    }\n'
+     '    if (d_reactions_pop(dom, ctx) < 0) goto done;\n', [DOMC]),
+    ('ce-replace-keeps-source', CUSTOM_C, 'if (dom->documents != 0 && c->nadded == 0) {', 'if (dom->documents != 0) {',
+     [DOMC]),
+    ('ce-stack-before-queue', CUSTOM_C,
+     '        if (stack == NULL) {\n            JS_FreeValue(ctx, self);',
+     '        if (stack == NULL) {\n            if (d_connected(element)) enqueue_callback(dom, element, CB_CONNECTED, NULL, NULL);\n'
+     '            JS_FreeValue(ctx, self);', [DOMC]),
+    # ── Cut b2: the [CEReactions] wrappers ──────────────────────────────
+    ('ce-wrap-pops-on-throw', CUSTOM_C, '    if (d_reactions_pop(dom, ctx) < 0) {\n        JS_FreeValue(ctx, result);',
+     '    if (!JS_IsException(result) && d_reactions_pop(dom, ctx) < 0) {\n        JS_FreeValue(ctx, result);', [DOMC]),
+    ('ce-wrap-methods', CUSTOM_C, '        bool method = kind == D_CE_METHOD &&',
+     '        bool method = false && kind == D_CE_METHOD &&', [DOMC]),
+    ('ce-wrap-setters', CUSTOM_C, '        bool setter = kind == D_CE_SETTER &&',
+     '        bool setter = false && kind == D_CE_SETTER &&', [DOMC]),
+    ('ce-wrap-keeps-attributes', CUSTOM_C,
+     '            int flags = desc.flags & (JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);',
+     '            int flags = JS_PROP_C_W_E | (desc.flags & 0);', [DOMC]),
+    ('ce-wrap-keeps-getter', CUSTOM_C, 'JS_DefinePropertyGetSet(ctx, owner, key, JS_DupValue(ctx, desc.getter), wrapper,',
+     'JS_DefinePropertyGetSet(ctx, owner, key, JS_UNDEFINED, wrapper,', [DOMC]),
+    ('ce-wrap-keeps-length', CUSTOM_C, '    JSValue wrapper = JS_NewCFunctionData(ctx, trampoline, length, 0, 2, data);',
+     '    JSValue wrapper = JS_NewCFunctionData(ctx, trampoline, length * 0, 0, 2, data);', [DOMC]),
+    ('ce-wrap-all-setters', CUSTOM_C, '                status = wrap_all_setters(dom, ctx, prototype, list);',
+     '                status = list == NULL ? wrap_all_setters(dom, ctx, prototype, list) : 0;', [DOMC]),
+    ('ce-exotic-named', CUSTOM_C, '            s->row_states[i] = D_CE_UNWRAPPABLE;\n            continue;',
+     '            continue;', [DOMC]),
+    ('ce-pop-fast-path', CUSTOM_C, '    if (q.count == 0 && s->lost == 0) {', '    if (s->lost == 0) {', [DOMC]),
     ('census-failed-apart', YONDER_C,
      '                while (c < ncustom && !(custom[c].failed == (n->ce == OS64_HTML_CE_FAILED) &&\n'
      '                                        os64_streq(custom[c].name, n->name)))',
@@ -186,9 +330,13 @@ for name, rel, old, new, harnesses in mutants:
         path.write_text(text.replace(old, new))
         with log.open('w') as out:
             for harness in harnesses:
+                script, *flags = harness.split()
+                # tools/mutants_parallel.py gives a worker's whole baseline, every
+                # suite named here in turn, this one deadline: the full DOM host
+                # among them takes most of it.
                 try:
-                    result = subprocess.run(['bash', str(root / harness)], cwd=root, stdout=out, stderr=out,
-                                            timeout=900)
+                    result = subprocess.run(['bash', str(root / script), *flags], cwd=root, stdout=out, stderr=out,
+                                            timeout=2400)
                     codes.append(result.returncode)
                 except subprocess.TimeoutExpired:
                     codes.append('timeout')

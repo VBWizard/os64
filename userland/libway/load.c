@@ -72,6 +72,30 @@ static void leg_cookie(void *ctx, const os64_url_t *from, bool encrypted, const 
     way_jar_hear(s->session->jar, from, encrypted, value, len, now_utc());
 }
 
+// Each head's Content-Disposition, for way_leg_t.offer: a redirect's is
+// heard too, and the hop that follows it empties it (hop_ask), so what is
+// left when the last head is in is the final head's.
+static void leg_header(void *ctx, const char *name, size_t name_len, const char *value, size_t value_len)
+{
+    way_leg_t *s = ctx;
+    static const char kWant[] = "content-disposition";
+    if (name_len != sizeof(kWant) - 1 || value == NULL)
+        return;
+    for (size_t i = 0; i < name_len; i++) {
+        char c = name[i];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+        if (c != kWant[i])
+            return;
+    }
+    if (value_len >= sizeof(s->offer.disposition)) {
+        s->offer.disposition[0] = '\0';
+        return;
+    }
+    os64_memcpy(s->offer.disposition, value, value_len);
+    s->offer.disposition[value_len] = '\0';
+}
+
 // The same two for a fetch a face makes itself, whose cancellation rides
 // in the hooks because libfetch has one context for all of them.
 static bool hooks_cancelled(void *ctx)
@@ -311,6 +335,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
 {
     way_leg_t *s = ctx;
+    s->offer.disposition[0] = '\0';     // the redirect's own, heard before this
     // The first hop whose target is off the asked origin, or has no parsed
     // target to compare, is noted by its number: the load's redirectCount
     // is 0 when that hop was one of those followed (way_head_t.redirects).
@@ -397,6 +422,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     show(s);
     way_origin_of(url, 0, &s->asked_origin);
     s->left_at = 0;
+    s->offer.url[0] = s->offer.type[0] = s->offer.disposition[0] = '\0';
 
     os64_html_options_t limits = os64_html_options_default();
     os64_fetch_options_t opt = {0};
@@ -429,6 +455,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     opt.on_hop = hop_ask;
     opt.headers_for = leg_headers;
     opt.on_set_cookie = leg_cookie;
+    opt.on_header = leg_header;
     opt.ctx = s;
     if (posting) {
         opt.method = OS64_FETCH_METHOD_POST;
@@ -469,15 +496,21 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         // Not a page at all. Say what it is and how to keep it — unless the
         // reply was to a POST, which a new GET of the address cannot fetch
         // again. The FINAL method decides: a redirect may have turned it.
-        if (head->method == OS64_FETCH_METHOD_POST)
+        // A GET's is offered too (way_leg_t.offer), for a face that saves
+        // it itself; the sentence is for one that does not.
+        if (head->method == OS64_FETCH_METHOD_POST) {
             leg_say(s, " that is %s - %s cannot display or save this POST response",
                     type, s->session->name);
-        else if (way_shell_quotable(head->url_text))
-            leg_say(s, " that is %s, not a page - save it with:  os64get '%s'",
-                    type, head->url_text);
-        else
-            leg_say(s, " that is %s, not a page - and its address holds a quote,"
-                       " so save it by hand", type);
+        } else {
+            os64_strcopy(s->offer.url, sizeof(s->offer.url), head->url_text);
+            os64_strcopy(s->offer.type, sizeof(s->offer.type), type);
+            if (way_shell_quotable(head->url_text))
+                leg_say(s, " that is %s, not a page - save it with:  os64get '%s'",
+                        type, head->url_text);
+            else
+                leg_say(s, " that is %s, not a page - and its address holds a quote,"
+                           " so save it by hand", type);
+        }
         os64_fetch_close(f);
         return false;
     }

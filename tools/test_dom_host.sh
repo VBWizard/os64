@@ -10,7 +10,7 @@ trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
-    forms validity compare \
+    forms validity compare custom \
     sheets image_data canvas canvas_path canvas_text canvas_image mutation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
@@ -22,6 +22,9 @@ if grep -n 'os64_page_node_set_attr\|os64_html_set_attr\|os64_html_remove_attr' 
     echo "libdom: an attribute verb outside attr.c's d_set_attr (above)" >&2
     exit 1
 fi
+# The [CEReactions] table's parser against a sample of every IDL shape it
+# reads (the table itself is held to the IDL by --check, which needs WPT).
+python3 tools/ce_reactions.py --selftest
 make -C userland -j8 js-runtime-test > "$work/build.log" 2>&1 || { cat "$work/build.log"; exit 1; }
 flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
@@ -57,7 +60,7 @@ done
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle options selection importmap controls elements tables \
-    forms validity compare \
+    forms validity compare custom \
     sheets image_data canvas canvas_path canvas_text canvas_image mutation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \

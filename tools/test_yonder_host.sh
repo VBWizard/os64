@@ -29,7 +29,8 @@ host_sources=(
    userland/libdraw2d/paint.c
    tools/test_yonder_host.c userland/apps/yonder/paint.c userland/apps/yonder/paint_cache.c
    userland/apps/yonder/scratch.c
-   userland/apps/yonder/bar.c userland/apps/yonder/scale.c userland/apps/yonder/mail.c
+   userland/apps/yonder/bar.c userland/apps/yonder/download.c userland/apps/yonder/scale.c
+   userland/apps/yonder/mail.c
    userland/apps/yonder/agent.c userland/libway/origin.c userland/libfetch/http.c
    userland/libflow/store.c userland/libflow/attrs.c
    userland/libflow/style.c userland/libflow/dump.c userland/libflow/boxes.c
