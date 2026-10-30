@@ -50,6 +50,13 @@ typedef enum {
 garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t *prelude,
                                        int32_t n, os64_html_quirks_t quirks, bool modern_off);
 
+// Dependencies include nested functional selectors. A whole-tree dependency
+// cannot be bounded by the target/ancestor/sibling restyle rule.
+typedef struct {
+    bool following, position_front, position_back, parent_state, filtered, whole_tree;
+} garb_selector_dependencies_t;
+garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list);
+
 int32_t garb_selectors_count(const garb_selectors_t *list);
 // The i-th selector's specificity, (a, b, c) packed as a << 20 | b << 10 | c,
 // each part capped at 1023 — so a larger packed value outranks a smaller.

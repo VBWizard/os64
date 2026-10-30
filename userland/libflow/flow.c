@@ -1958,6 +1958,16 @@ flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_pa
                                   int32_t width, const flow_env_t *env, flow_profile_t *profile,
                                   int64_t (*clock)(void *), void *clock_ctx)
 {
+    return flow_layout_restyled(doc, model, width, env, NULL, profile, clock, clock_ctx);
+}
+uint64_t flow_styles_reused(const flow_tree_t *tree)
+{
+    return tree && tree->styles ? tree->styles->reused : 0;
+}
+flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_page_t *model,
+                                  int32_t width, const flow_env_t *env, const flow_tree_t *previous,
+                                  flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx)
+{
     Profile timing = {profile, clock, clock_ctx};
     if (profile) os64_memset(profile, 0, sizeof(*profile));
     if (doc == NULL || env == NULL || env->text == NULL || env->fonts == NULL || width < 0)
@@ -1984,7 +1994,7 @@ flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_pa
     tree->tick_ms = env->now_ms;
     tree->live = -1;
     int64_t began = profile_clock(&timing);
-    tree->styles = f_style_build(doc, model, env);
+    tree->styles = f_style_build_reusing(doc, model, env, previous ? previous->styles : NULL);
     if (profile) {
         profile_elapsed(&timing, began, &profile->style_us);
         profile->elements = tree->styles ? tree->styles->map.count : 0;

@@ -1401,9 +1401,16 @@ static void layout_sweep(void)
 #include "test_libflow_cliptext.inc"
 #include "test_libflow_motion.inc"
 #include "test_libflow_computed.inc"
+#include "test_libflow_restyle.inc"
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--restyle") == 0) {
+        text_setup(); restyle_cases(); restyle_mutations(); text_teardown();
+        printf("libflow restyle: %d checks, %d failed%s\n", checks, failures,
+               live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0;
+    }
     // `--write-corpus`: regenerate tools/html_corpus/*.boxes from the engine.
     if (argc == 2 && strcmp(argv[1], "--write-corpus") == 0) {
         text_setup();
@@ -1543,6 +1550,8 @@ int main(int argc, char **argv)
     transform_cases();
     cliptext_cases();
     motion_cases();
+    restyle_cases();
+    restyle_mutations();
     computed_cases();
     computed_round1_cases();
     computed_round2_cases();

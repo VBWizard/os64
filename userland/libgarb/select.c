@@ -1293,3 +1293,40 @@ bool garb_selector_matches_in(const garb_selectors_t *list, int32_t i,
         return false;
     return match_complex(list, &list->list.v[i], element, scope);
 }
+
+// Walk the parsed form, including :is/:not/:where and nth-child's filter.
+static void dependencies(const List *list, garb_selector_dependencies_t *out)
+{
+    for (int32_t i = 0; i < list->n; ++i) {
+        const Complex *x = &list->v[i];
+        for (int32_t j = 0; j < x->n; ++j) {
+            const Compound *c = &x->c[j];
+            out->following |= c->left == C_NEXT || c->left == C_SUBSEQUENT;
+            for (int32_t k = 0; k < c->n; ++k) {
+                const Simple *s = &c->s[k];
+                if (s->kind != S_PSEUDO) continue;
+                switch (s->pseudo) {
+                case P_FIRST_CHILD: case P_FIRST_OF_TYPE:
+                case P_NTH_CHILD: case P_NTH_OF_TYPE:
+                    out->position_front = true; break;
+                case P_LAST_CHILD: case P_LAST_OF_TYPE: case P_ONLY_CHILD: case P_ONLY_OF_TYPE:
+                case P_NTH_LAST_CHILD: case P_NTH_LAST_OF_TYPE:
+                    out->position_back = true; break;
+                case P_EMPTY: out->parent_state = true; break;
+                // An ancestor's dir=auto can depend on descendant text.
+                case P_HAS: case P_DIR: out->whole_tree = true; break;
+                default: break;
+                }
+                if ((s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD) && s->list)
+                    out->filtered = true;
+                if (s->list) dependencies(s->list, out);
+            }
+        }
+    }
+}
+garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list)
+{
+    garb_selector_dependencies_t out = {0};
+    if (list) dependencies(&list->list, &out);
+    return out;
+}

@@ -59,6 +59,7 @@ typedef struct {
     // The element this rule last matched, and the specificity it matched
     // with — so one rule matched through two selectors is counted once.
     const os64_html_node_t *seen;
+    uint64_t seen_update;
     int32_t slot;
 } Rule;
 
@@ -138,12 +139,30 @@ typedef struct {
     const CustomMap *customs;
     OwnFrames *frames;
     int32_t nframes;
-    bool needs_substitution;
+    bool needs_substitution, dirty, dirty_suffix;
+    uint64_t changed, removed_children;
 } Slot;
 
+typedef struct {
+    const garb_parsed_t *sheet;
+    const char *media;
+    garb_import_t via;
+    bool imported;
+    int32_t parent;
+} CascadeInput;
+
 struct garb_cascade {
+    uint32_t refs;
+    CascadeInput *inputs;
+    int32_t ninputs;
     const os64_html_document_t *doc;
     os64_html_pin_t pin;
+    os64_html_reader_t *reader;
+    uint64_t generation, updates, version;
+    garb_selector_dependencies_t dependencies;
+    bool update_failed, updating;
+    size_t update_attribute_bytes;
+    size_t initial_state_bytes, retained_budget;
     garb_parsed_t self;         // the cascade's own arena, in a parse's shape
     // What it read of the sheets it applied, all of them: one arena held to
     // the selected read limit, in a parse's shape, so a read that ran short —
@@ -167,7 +186,9 @@ struct garb_cascade {
     Table ids, classes, types;
     int32_t universal;
     Slot *slots;                // open addressing, keyed by node
-    uint32_t slotcap;
+    uint32_t slotcap, slotcount;
+    const os64_html_node_t **dirty_nodes;
+    size_t ndirty, dirtycap;
     garb_parsed_t *attrs;       // `style` attributes' parses, freed with the cascade
     int32_t nattrs, attrcap;
     // What the build passed over because this library does not read it
@@ -1325,21 +1346,56 @@ static uint32_t hash_ptr(const void *p)
     return (uint32_t)v;
 }
 
+// The document pin predates removals: an address cannot be recycled while
+// its slot exists. Removed slots are erased before rotating that pin.
+static bool slots_grow(garb_cascade_t *c)
+{
+    if (c->slotcap > UINT32_MAX / 2) return false;
+    uint32_t cap = c->slotcap ? c->slotcap * 2 : 64;
+    Slot *slots = os64_calloc(cap, sizeof(*slots));
+    if (!slots) return false;
+    for (uint32_t i = 0; i < c->slotcap; ++i) if (c->slots[i].node) {
+        uint32_t at = hash_ptr(c->slots[i].node) & (cap - 1);
+        while (slots[at].node) at = (at + 1) & (cap - 1);
+        slots[at] = c->slots[i];
+    }
+    os64_free(c->slots);
+    c->slots = slots; c->slotcap = cap;
+    return true;
+}
 static Slot *slot_for(const garb_cascade_t *c, const os64_html_node_t *node, bool create)
 {
-    if (c->slotcap == 0)
-        return NULL;
+    if (!c->slotcap) return NULL;
     uint32_t h = hash_ptr(node) & (c->slotcap - 1);
-    while (c->slots[h].node != NULL) {
-        if (c->slots[h].node == node)
-            return &c->slots[h];
+    while (c->slots[h].node) {
+        if (c->slots[h].node == node) return &c->slots[h];
         h = (h + 1) & (c->slotcap - 1);
     }
-    if (!create)
-        return NULL;
-    Slot *s = (Slot *)&c->slots[h];
-    s->node = node;
+    if (!create) return NULL;
+    garb_cascade_t *write = (garb_cascade_t *)c;
+    if (c->slotcount >= c->slotcap / 2) {
+        if (!slots_grow(write)) { write->incomplete = true; return NULL; }
+        h = hash_ptr(node) & (c->slotcap - 1);
+        while (c->slots[h].node) h = (h + 1) & (c->slotcap - 1);
+    }
+    Slot *s = &write->slots[h];
+    s->node = node; ++write->slotcount;
     return s;
+}
+static void slot_remove(garb_cascade_t *c, const os64_html_node_t *node)
+{
+    Slot *s = slot_for(c, node, false);
+    if (!s) return;
+    uint32_t hole = (uint32_t)(s - c->slots), mask = c->slotcap - 1;
+    // Backshift the cluster: stopping at an empty slot remains a valid
+    // lookup rule without accumulating tombstones after repeated moves.
+    for (uint32_t at = (hole + 1) & mask; c->slots[at].node; at = (at + 1) & mask) {
+        uint32_t home = hash_ptr(c->slots[at].node) & mask;
+        if (((at - home) & mask) >= ((at - hole) & mask)) {
+            c->slots[hole] = c->slots[at]; hole = at;
+        }
+    }
+    c->slots[hole] = (Slot){0}; --c->slotcount;
 }
 
 // ── var() and env() (Custom Properties 1 § 3, Environment Variables 1) ─
@@ -1858,6 +1914,17 @@ typedef struct {
     int32_t sheet;              // -1 for the style attribute
 } Applied;
 
+// Declaration ordering is temporary. Reuse its storage within one build
+// or update and release it when that pass ends; a retained
+// cascade does not keep this scratch allocation between mutations.
+#define APPLIED_LOCAL_COUNT 32u
+typedef struct {
+    // Short declaration lists avoid the heap; larger ones share a buffer.
+    Applied local[APPLIED_LOCAL_COUNT];
+    Applied *items;
+    size_t capacity;
+} AppliedScratch;
+
 static bool before(const Applied *a, const Applied *b)
 {
     if (a->important != b->important)
@@ -1872,14 +1939,15 @@ static bool before(const Applied *a, const Applied *b)
 static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rule *r,
                      uint32_t spec, const os64_html_node_t *el)
 {
-    if (r->seen == el) {
+    uint64_t update = c->updates + (c->updating ? 1 : 0);
+    if (r->seen == el && r->seen_update == update) {
         if (spec > (*m)[r->slot].spec)
             (*m)[r->slot].spec = spec;
         return;
     }
     if (!grow(c, (void **)m, *n, cap, sizeof(Match)))
         return;
-    r->seen = el;
+    r->seen = el; r->seen_update = update;
     r->slot = *n;
     (*m)[(*n)++] = (Match){r, spec};
 }
@@ -1951,12 +2019,16 @@ static int32_t inline_decls(garb_cascade_t *c, const os64_html_node_t *el, Decl 
     if (!grow(c, (void **)&c->attrs, c->nattrs, &c->attrcap, sizeof(garb_parsed_t)))
         return 0;
     garb_parsed_t *p = &c->attrs[c->nattrs];
-    if (garb_parse_block_limited(a->value, os64_strlen(a->value), c->limits.attribute_bytes, p) != GARB_OK) {
+    size_t cap = c->limits.attribute_bytes;
+    if (c->updating && cap > c->limits.state_bytes - c->update_attribute_bytes)
+        cap = c->limits.state_bytes - c->update_attribute_bytes;
+    if (garb_parse_block_limited(a->value, os64_strlen(a->value), cap, p) != GARB_OK) {
         garb_free(p);
         c->incomplete = true;           // a style the page gave was not read
         return 0;
     }
     c->nattrs++;
+    if (c->updating) c->update_attribute_bytes += os64_arena_stats(p->arena).reserved_bytes;
     Decl *d = alloc(c, (size_t)(p->nitems > 0 ? p->nitems : 1) * sizeof(Decl));
     if (d == NULL)
         return 0;
@@ -2080,7 +2152,7 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
 }
 
 static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
-                            const CustomMap *inherited, Match **m, int32_t *mcap)
+                            const CustomMap *inherited, Match **m, int32_t *mcap, AppliedScratch *scratch)
 {
     Slot *slot = slot_for(c, el, true);
     if (slot == NULL)
@@ -2096,11 +2168,17 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
         total += (*m)[k].rule->ndecls;
     if (total == 0)
         return;
-    Applied *ap = os64_malloc((size_t)total * sizeof(*ap));
-    if (ap == NULL) {
-        c->incomplete = true;
-        return;
+    size_t capacity = scratch->items ? scratch->capacity : APPLIED_LOCAL_COUNT;
+    if ((size_t)total > capacity) {
+        Applied *more = os64_realloc(scratch->items, (size_t)total * sizeof(*more));
+        if (more == NULL) {
+            c->incomplete = true;
+            return;
+        }
+        scratch->items = more;
+        scratch->capacity = (size_t)total;
     }
+    Applied *ap = scratch->items ? scratch->items : scratch->local;
     int32_t na = 0;
     for (int32_t j = 0; j < nattrs; ++j)
         ap[na++] = (Applied){&attrs[j], false, false, 0, 0, -1};
@@ -2220,7 +2298,6 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
             have[sets[k].prop] = true;
         }
     }
-    os64_free(ap);
     int32_t nwin = 0;
     for (int p = 0; p < GARB_NPROPS; p++)
         nwin += have[p];
@@ -2271,6 +2348,7 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     garb_cascade_t *c = os64_calloc(1, sizeof(*c));
     if (c == NULL)
         return NULL;
+    c->refs = 1;
     c->limits = limits;
     c->self.arena_max = limits.state_bytes;
     c->self.arena = os64_arena_create(0, limits.state_bytes);
@@ -2284,6 +2362,9 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         garb_cascade_free(c);
         return NULL;
     }
+    static uint64_t generation;
+    c->generation = __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
+    c->version = os64_html_version(doc);
     c->env = env;
     c->quirks = doc->quirks;
     c->universal = -1;
@@ -2298,6 +2379,22 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         if (c->reads.arena != NULL)
             into = &c->reads;
     }
+    c->inputs = n > 0 ? alloc(c, (size_t)n * sizeof(*c->inputs)) : NULL;
+    if (n > 0 && !c->inputs) { garb_cascade_free(c); return NULL; }
+    c->ninputs = n;
+    for (int32_t i = 0; i < n; ++i) {
+        c->inputs[i].sheet = sheets[i].sheet;
+        c->inputs[i].parent = sheets[i].parent;
+        c->inputs[i].imported = sheets[i].via != NULL;
+        if (sheets[i].via) c->inputs[i].via = *sheets[i].via;
+        if (sheets[i].media) {
+            size_t len = os64_strlen(sheets[i].media) + 1;
+            char *copy = alloc(c, len);
+            if (!copy) { garb_cascade_free(c); return NULL; }
+            os64_memcpy(copy, sheets[i].media, len);
+            c->inputs[i].media = copy;
+        }
+    }
     uint32_t order = 0;
     for (int32_t s = 0; s < n; s++) {
         const garb_parsed_t *sheet = sheets[s].sheet;
@@ -2309,6 +2406,15 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         if (sheet->incomplete)
             c->incomplete = true;
         add_rules(c, into, sheet->items, sheet->nitems, &order, 0, s);
+    }
+    for (int32_t i = 0; i < c->nrules; ++i) {
+        garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
+        c->dependencies.following |= d.following;
+        c->dependencies.position_front |= d.position_front;
+        c->dependencies.position_back |= d.position_back;
+        c->dependencies.parent_state |= d.parent_state;
+        c->dependencies.filtered |= d.filtered;
+        c->dependencies.whole_tree |= d.whole_tree;
     }
     keyframes_settle(c);
     // Each @keyframes read for no element: what an element shares.
@@ -2338,10 +2444,11 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     }
     Match *m = NULL;
     int32_t mcap = 0;
+    AppliedScratch scratch = {0};
     for (const os64_html_node_t *x = doc->document; x != NULL;) {
         if (is_el(x)) {
             const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
-            cascade_element(c, x, up != NULL ? up->customs : NULL, &m, &mcap);
+            cascade_element(c, x, up != NULL ? up->customs : NULL, &m, &mcap, &scratch);
         }
         if (x->first_child != NULL) {
             x = x->first_child;
@@ -2351,6 +2458,7 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
             x = x->parent;
         x = x != NULL ? x->next : NULL;
     }
+    os64_free(scratch.items);
     // What the cascade read ran short wherever it was read: a sheet's own
     // parse (taken in above, for the sheets the cascade applied), the rule
     // blocks, selectors and values read from them, which mark this
@@ -2362,7 +2470,198 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         short_read |= c->attrs[i].incomplete;
     if (short_read)
         c->incomplete = true;
+    c->initial_state_bytes = os64_arena_stats(c->self.arena).used_bytes;
+    c->retained_budget = c->initial_state_bytes > 4096 ? c->initial_state_bytes : 4096;
+    // A cascade that must rebuild cannot consume invalidations. Registering
+    // it would still make DOM/parser mutations allocate and retain log entries.
+    if (!c->incomplete && !c->dependencies.whole_tree)
+        c->reader = os64_html_reader_new((os64_html_document_t *)doc, c->version);
     return c;
+}
+
+static const os64_html_node_t *subtree_next(const os64_html_node_t *x,
+                                              const os64_html_node_t *root, bool children)
+{
+    if (children && x->first_child) return x->first_child;
+    while (x != root && !x->next) x = x->parent;
+    return x == root ? NULL : x->next;
+}
+static bool connected(const garb_cascade_t *c, const os64_html_node_t *x)
+{
+    if (!x) return false;
+    while (x->parent) x = x->parent;
+    return x == c->doc->document;
+}
+static bool mark_subtree(garb_cascade_t *c, const os64_html_node_t *root)
+{
+    if (!connected(c, root)) return true;
+    for (const os64_html_node_t *x = root; x;) {
+        if (!is_el(x)) { x = subtree_next(x, root, true); continue; }
+        Slot *s = slot_for(c, x, false);
+        if (!s) return false;
+        if (s->dirty) { x = subtree_next(x, root, false); continue; }
+        if (c->ndirty == c->dirtycap) {
+            size_t cap = c->dirtycap ? c->dirtycap * 2 : 32;
+            if (cap > SIZE_MAX / sizeof(*c->dirty_nodes)) return false;
+            void *more = os64_realloc(c->dirty_nodes, cap * sizeof(*c->dirty_nodes));
+            if (!more) return false;
+            c->dirty_nodes = more; c->dirtycap = cap;
+        }
+        s->dirty = true; c->dirty_nodes[c->ndirty++] = x;
+        // A broad update would recompute most winners and retain the old
+        // versions too. Ask for the fresh build before producing winners.
+        if (c->ndirty > c->slotcount / 2) return false;
+        x = subtree_next(x, root, true);
+    }
+    return true;
+}
+static bool mark_siblings(garb_cascade_t *c, const os64_html_node_t *first)
+{
+    for (const os64_html_node_t *x = first; x; x = x->next) {
+        if (!is_el(x)) continue;
+        Slot *s = slot_for(c, x, false);
+        // A previous sibling walk covered this suffix. Parser feeds can
+        // append many siblings in one batch; do not walk that suffix again.
+        if (s && s->dirty_suffix) break;
+        if (!mark_subtree(c, x)) return false;
+        s = slot_for(c, x, false);
+        s->dirty_suffix = true;
+    }
+    return true;
+}
+static bool mark_changed(garb_cascade_t *c, const os64_html_node_t *node)
+{
+    if (!connected(c, node)) return true;
+    if (!mark_subtree(c, node)) return false;
+    if (c->dependencies.filtered && node->parent)
+        return mark_siblings(c, node->parent->first_child);
+    return !c->dependencies.following || mark_siblings(c, node->next);
+}
+static bool body_hint(const os64_html_change_entry_t *e, const os64_html_document_t *doc)
+{
+    if (e->kind != OS64_HTML_CHANGE_ATTR || e->target != doc->body || !e->attr_name)
+        return false;
+    // Match the qualified-name lookup used by the HTML hint consumer.
+    const char *names[] = {"link", "vlink", "alink", "text", "bgcolor"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i)
+        if (os64_streq(e->attr_name, names[i])) return true;
+    return false;
+}
+static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
+{
+    const os64_html_node_t *parent = e->target;
+    if (!connected(c, parent)) return true;
+    // :empty can change inherited winners and a following sibling's match.
+    // The UA first-summary/first-legend rules also depend on child order.
+    if (c->dependencies.parent_state || (parent->ns == OS64_HTML_NS_HTML &&
+        (parent->tag == OS64_HTML_TAG_DETAILS || parent->tag == OS64_HTML_TAG_FIELDSET)))
+        if (!mark_changed(c, parent)) return false;
+    for (size_t i = 0; i < e->nadded; ++i)
+        if (!mark_subtree(c, e->added[i])) return false;
+    if (c->dependencies.position_back || c->dependencies.filtered)
+        return mark_siblings(c, parent->first_child);
+    if (c->dependencies.position_front || c->dependencies.following) {
+        const os64_html_node_t *previous = e->previous_sibling;
+        bool boundary = !previous || previous->parent == parent;
+        // A removed/moved boundary may now sit elsewhere in the same parent.
+        // Pure insert batches preserve existing relative order; removals use
+        // all children because the log preserves identities, not old links.
+        const Slot *p = slot_for(c, parent, false);
+        if (p && p->removed_children == c->updates + 1) boundary = false;
+        return mark_siblings(c, boundary && previous ? previous->next : parent->first_child);
+    }
+    return true;
+}
+uint64_t garb_cascade_generation(const garb_cascade_t *c) { return c ? c->generation : 0; }
+uint64_t garb_cascade_updates(const garb_cascade_t *c) { return c ? c->updates : 0; }
+uint64_t garb_cascade_version(const garb_cascade_t *c) { return c ? c->version : 0; }
+bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *node, uint64_t update)
+{
+    const Slot *s = c ? slot_for(c, node, false) : NULL;
+    return !s || s->changed > update;
+}
+
+bool garb_cascade_update(garb_cascade_t *c)
+{
+    if (!c || c->incomplete || c->update_failed) return false;
+    uint64_t version = os64_html_version(c->doc);
+    if (version == c->version) return true;
+    // Old derived values stay alive for displayed trees. Renew once added
+    // storage reaches one initial state's worth (at least 4 KiB). Keeping
+    // many whole restyles bloats the allocator's region ledger and slows
+    // even unrelated layout allocations. An update may cross this soft
+    // threshold; the arena and attribute caps remain the hard bounds.
+    size_t added = os64_arena_stats(c->self.arena).used_bytes - c->initial_state_bytes;
+    if (!c->reader || c->dependencies.whole_tree || c->updates >= 64 ||
+        added >= c->retained_budget || c->update_attribute_bytes >= c->retained_budget - added)
+        return false;
+    const os64_html_change_entry_t *changes = NULL;
+    int64_t count = os64_html_changes(c->reader, &changes);
+    c->update_failed = true;
+    if (count < 0) return false;
+    // Process removals before additions: a node may have moved several
+    // times since the last read, and entry arrays preserve its identity.
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next)
+        for (size_t i = 0; i < e->nremoved; ++i)
+            for (const os64_html_node_t *x = e->removed[i]; x;
+                 x = subtree_next(x, e->removed[i], true))
+                if (is_el(x)) slot_remove(c, x);
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next)
+        for (size_t i = 0; i < e->nadded; ++i) {
+            const os64_html_node_t *root = e->added[i];
+            if (!connected(c, root)) continue;
+            for (const os64_html_node_t *x = root; x; x = subtree_next(x, root, true))
+                if (is_el(x) && !slot_for(c, x, true)) return false;
+        }
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next)
+        if (e->kind == OS64_HTML_CHANGE_CHILDREN && e->nremoved) {
+            Slot *parent = slot_for(c, e->target, false);
+            if (parent) parent->removed_children = c->updates + 1;
+        }
+    c->ndirty = 0;
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
+        if (body_hint(e, c->doc)) return false;
+        if (e->kind == OS64_HTML_CHANGE_CHILDREN) {
+            if (!mark_children(c, e)) return false;
+        } else {
+            const os64_html_node_t *root = e->target;
+            if (root && !is_el(root)) root = root->parent;
+            if (!mark_changed(c, root)) return false;
+        }
+    }
+    c->updating = true;
+    int32_t old_nattrs = c->nattrs;
+    Match *m = NULL; int32_t mcap = 0;
+    AppliedScratch scratch = {0};
+    for (size_t i = 0; i < c->ndirty; ++i) {
+        const os64_html_node_t *root = c->dirty_nodes[i];
+        Slot *s = slot_for(c, root, false);
+        const Slot *up = is_el(root->parent) ? slot_for(c, root->parent, false) : NULL;
+        if (!s || !s->dirty || (up && up->dirty)) continue;
+        // Minimal dirty roots traverse their dirty descendants in tree order,
+        // so inherited custom properties have their new parent values.
+        for (const os64_html_node_t *x = root; x; x = subtree_next(x, root, true)) {
+            if (!is_el(x)) continue;
+            s = slot_for(c, x, false);
+            if (!s || !s->dirty) continue;
+            up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
+            *s = (Slot){.node = x, .changed = c->updates + 1};
+            cascade_element(c, x, up ? up->customs : NULL, &m, &mcap, &scratch);
+            if (c->incomplete || c->self.incomplete) {
+                os64_free(scratch.items);
+                c->updating = false;
+                return false;
+            }
+        }
+    }
+    os64_free(scratch.items);
+    c->updating = false;
+    for (int32_t i = old_nattrs; i < c->nattrs; ++i) c->incomplete |= c->attrs[i].incomplete;
+    os64_html_pin_t pin = c->incomplete || c->self.incomplete ? 0 : os64_html_pin(c->doc);
+    if (!pin) return false;
+    os64_html_unpin(c->doc, c->pin); c->pin = pin;
+    c->version = version; ++c->updates; c->update_failed = false; c->ndirty = 0;
+    return true;
 }
 
 bool garb_cascade_incomplete(const garb_cascade_t *c)
@@ -2462,15 +2761,49 @@ int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t ca
     return c->nskips;
 }
 
+// Retained users share updates; each keeps its old computed-style snapshot
+// and update number. The host serializes updates with reads.
+bool garb_cascade_retain(garb_cascade_t *c)
+{
+    if (!c || c->refs == UINT32_MAX) return false;
+    ++c->refs;
+    return true;
+}
+
+bool garb_cascade_matches(const garb_cascade_t *c, const garb_sheet_in_t *in,
+                          int32_t n, garb_env_t env)
+{
+    if (!c || c->ninputs != n || c->env.width != env.width || c->env.height != env.height ||
+        c->env.dark != env.dark || c->env.reduced_motion != env.reduced_motion ||
+        c->env.scripting != env.scripting || c->env.modern_off != env.modern_off ||
+        c->env.device_width != env.device_width || c->env.device_height != env.device_height ||
+        c->env.resolution != env.resolution) return false;
+    for (int32_t i = 0; i < n; ++i) {
+        const CascadeInput *a = &c->inputs[i];
+        const garb_sheet_in_t *b = &in[i];
+        if (a->sheet != b->sheet || a->parent != b->parent || a->imported != (b->via != NULL) ||
+            ((a->media == NULL) != (b->media == NULL)) ||
+            (a->media && !os64_streq(a->media, b->media))) return false;
+        if (a->imported && (a->via.url != b->via->url || a->via.len != b->via->len ||
+            a->via.media != b->via->media || a->via.nmedia != b->via->nmedia ||
+            a->via.has_supports != b->via->has_supports || a->via.supports != b->via->supports ||
+            a->via.nsupports != b->via->nsupports)) return false;
+    }
+    return true;
+}
+
 void garb_cascade_free(garb_cascade_t *c)
 {
     if (c == NULL)
         return;
+    if (--c->refs) return;
     for (int32_t i = 0; i < c->nattrs; i++)
         garb_free(&c->attrs[i]);
     garb_free(&c->reads);
     os64_free(c->slots);
+    os64_free(c->dirty_nodes);
     os64_arena_destroy(c->self.arena);
+    os64_html_reader_free(c->reader);
     if (c->pin != 0)
         os64_html_unpin(c->doc, c->pin);
     os64_free(c);

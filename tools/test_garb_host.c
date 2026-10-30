@@ -2033,8 +2033,12 @@ static int media_depth(void)
     return failed;
 }
 
+
+#include "test_garb_updates.inc"
+
 int main(int argc, char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--updates")) return cascade_updates();
     if (argc == 2 && strcmp(argv[1], "--media-depth") == 0)
         return media_depth();
     if (argc == 2 && strcmp(argv[1], "--modern") == 0)

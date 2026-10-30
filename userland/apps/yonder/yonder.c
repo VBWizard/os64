@@ -577,9 +577,15 @@ typedef struct {
 #define SHEET_IMPORTS_MAX 16    // the @imports one sheet may make
 #define SHEETS_WAIT_MS 3000     // how long a page waits for its sheets before it is shown
 
-typedef struct Sheet {
+typedef struct {
+    uint32_t refs;
     garb_parsed_t parsed;
-    struct Sheet *borrowed_from; // staged reuse; ownership moves after old layout is freed
+    char *inline_text;
+    size_t inline_len;
+} SheetParse;
+
+typedef struct Sheet {
+    SheetParse *source; // shared by displayed, measured and staged tables
     bool ready;                     // parsed: it is in the cascade
     bool waiting;                   // its job is out, as `id`
     // The first paint waits for it: its media holds on this glass now, or
@@ -623,7 +629,9 @@ typedef struct {
 // text/plain page has no tree of its own, so it is given one.
 typedef struct Page {
     way_page_t way;
-    struct Page *reuse_sheets;   // source of ready linked parses during a rebuild
+    struct Page *reuse_sheets;   // source of immutable parses during a rebuild
+    const flow_tree_t *restyle_from; // borrowed only for a staged layout
+    bool measuring;             // measurement does not enqueue stylesheet fetches
     bool scripting;
     // Whether the page has the Modern Web arc's surface: its script host's
     // globals and the properties its cascade reads (garb_env_t.modern_off),
@@ -787,8 +795,12 @@ static void sheet_table_free(const os64_html_document_t *doc, Sheet *sheets, int
     for (int32_t i = 0; i < n; i++) {
         if (sheets[i].node != NULL)
             os64_html_release(doc, sheets[i].node);
-        if (sheets[i].borrowed_from == NULL)
-            garb_free(&sheets[i].parsed);
+        SheetParse *source = sheets[i].source;
+        if (source && --source->refs == 0) {
+            garb_free(&source->parsed);
+            os64_free(source->inline_text);
+            os64_free(source);
+        }
         os64_free(sheets[i].url);
         os64_free(sheets[i].imports);
         os64_free(sheets[i].child);
@@ -905,7 +917,7 @@ static int32_t sheet_emit(const Page *p, int32_t e, garb_sheet_in_t *in, int32_t
     int32_t at = (*n)++;
     entry[at] = e;
     in[at] = (garb_sheet_in_t){
-        .sheet = &sh->parsed,
+        .sheet = &sh->source->parsed,
         .media = sh->media,
         .via = sh->importer >= 0 ? &p->sheets[sh->importer].imports[sh->import_index] : NULL,
     };
@@ -1075,38 +1087,49 @@ static uint64_t layout_elapsed(int64_t from, uint64_t *errors)
     if (from < 0 || to < from) { ++*errors; return 0; }
     return (uint64_t)(to - from);
 }
+// A measured stream page borrows its stream's record without becoming an
+// owner. Ordinary Page.diag ownership and teardown stay with the page.
+static yonder_diag_t *layout_profile_diag(const Page *p);
+static void layout_profile_add(const Page *p, const yonder_layout_stats_t *sample)
+{
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (p->diag) yonder_diag_layout_add(diag, sample);
+    else yonder_diag_layout_stream_add(diag, sample);
+}
 static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 {
-    bool enabled = s_layout_profile && p->diag;
+    bool enabled = s_layout_profile && layout_profile_diag(p);
     int64_t began = enabled ? os64_micros() : -1;
     os64_page_t *model = os64_page_rebuild(old);
     if (enabled) {
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
-        yonder_diag_layout_add(p->diag, &sample);
+        layout_profile_add(p, &sample);
     }
     return model;
 }
 static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 {
-    bool enabled = s_layout_profile && p->diag;
+    bool enabled = s_layout_profile && layout_profile_diag(p);
     flow_profile_t profile;
-    flow_tree_t *tree = enabled ?
-        flow_layout_profiled(page_doc(p), page_model(p), width, &s_env, &profile, layout_clock, NULL) :
-        flow_layout(page_doc(p), page_model(p), width, &s_env);
+    flow_tree_t *tree = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env,
+        p->restyle_from ? p->restyle_from : p->tree, enabled ? &profile : NULL,
+        enabled ? layout_clock : NULL, NULL);
     if (enabled) {
         yonder_layout_stats_t sample = {
             .style_us = profile.style_us, .boxes_us = profile.boxes_us,
             .layout_us = profile.layout_us, .public_us = profile.public_us,
             .elements = profile.elements, .boxes = profile.boxes,
             .measures = profile.measures, .reused = profile.reused,
+            .styles_reused = flow_styles_reused(tree),
             .clock_errors = profile.clock_errors, .layouts = 1,
             .refusals = tree == NULL || flow_incomplete(tree)};
-        yonder_diag_layout_add(p->diag, &sample);
+        layout_profile_add(p, &sample);
     }
     return tree;
 }
 
+static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     if (page_rebuild_owed(p))
@@ -1116,34 +1139,31 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     garb_env_t view = css_view(width, height, zoom);
     view.modern_off = !p->modern;
     view.scripting = p->scripting;
-    if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
-                                                  garb_cascade_env(cascade).height != view.height ||
-                                                  garb_cascade_env(cascade).dark != view.dark ||
-                                                  garb_cascade_env(cascade).reduced_motion !=
-                                                      view.reduced_motion ||
-                                                  garb_cascade_env(cascade).modern_off != view.modern_off ||
-                                                  garb_cascade_env(cascade).scripting != view.scripting ||
-                                                  garb_cascade_env(cascade).device_width != view.device_width ||
-                                                  garb_cascade_env(cascade).device_height != view.device_height ||
-                                                  garb_cascade_env(cascade).resolution != view.resolution))) {
-        int64_t began = s_layout_profile && p->diag ? os64_micros() : -1;
-        garb_sheet_in_t in[SHEETS_MAX];
-        int32_t n = 0;
-        const os64_page_t *model = page_model(p);
-        for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
-            int32_t e = sheet_of(p, os64_page_sheet(model, i)->node);
-            if (e >= 0)
-                (void)sheet_emit(p, e, in, entry, &n);
-        }
-        // Inline style attributes also need a cascade when no sheet is linked.
+    int64_t began = s_layout_profile && layout_profile_diag(p) ? os64_micros() : -1;
+    garb_sheet_in_t in[SHEETS_MAX];
+    int32_t n = 0;
+    const os64_page_t *model = page_model(p);
+    for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
+        int32_t e = sheet_of(p, os64_page_sheet(model, i)->node);
+        if (e >= 0) (void)sheet_emit(p, e, in, entry, &n);
+    }
+    uint64_t prior_updates = garb_cascade_updates(cascade);
+    // A live page can explicitly invalidate its sheets. A staged table
+    // instead proves that its immutable inputs still match the source.
+    bool updated = (!p->sheets_changed || p->reuse_sheets) &&
+                   garb_cascade_matches(cascade, in, n, view) && garb_cascade_update(cascade);
+    if (!updated) {
+        measured_fallback(p);
         cascade = garb_cascade(in, n, page_doc(p), view);
-        if (s_layout_profile && p->diag) {
-            yonder_layout_stats_t sample = {.refusals = cascade == NULL};
-            sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
-            yonder_diag_layout_add(p->diag, &sample);
-        }
-        if (cascade == NULL)
-            return false;
+    }
+    if (s_layout_profile && layout_profile_diag(p)) {
+        yonder_layout_stats_t sample = {.refusals = cascade == NULL,
+            .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates};
+        sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
+        layout_profile_add(p, &sample);
+    }
+    if (cascade == NULL) return false;
+    {
         // A condition of the page, said once however many of its cascades
         // meet it; a copy of the page laid out beside it (a rebuild staged,
         // a measurement) borrows its record, so it is said there too. The
@@ -1160,7 +1180,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_env.svg = p->modern;
     s_env.cascade = cascade;
     s_laying.cascade = cascade;
-    s_laying.entry = cascade == p->cascade ? p->cascade_entry : entry;
+    s_laying.entry = entry;
     s_env.scripting = p->scripting;
     // One height for `vh` and the initial containing block (flow_env_t),
     // in CSS pixels at `zoom`.
@@ -1182,6 +1202,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // attempt did.
     if (fresh != NULL && flow_incomplete(fresh) && reclaim != NULL && reclaim->tree != NULL) {
         flow_free(fresh);
+        if (p->restyle_from == reclaim->tree) p->restyle_from = NULL;
         flow_free(reclaim->tree);
         reclaim->tree = NULL;
         if (reclaim != p) {
@@ -1250,8 +1271,8 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     if (cascade != p->cascade) {
         garb_cascade_free(p->cascade);
         p->cascade = cascade;
-        os64_memcpy(p->cascade_entry, entry, sizeof(entry));
     }
+    os64_memcpy(p->cascade_entry, entry, sizeof(entry));
     p->laid_width = width;
     p->laid_height = height;
     p->laid_zoom = zoom;
@@ -1703,12 +1724,20 @@ static void mark_whole(WholeBy by, bool root)
     os64_ui_mark_dirty(&g.ui, root ? &g.root : &g.view);
 }
 
+static yonder_diag_t *layout_profile_diag(const Page *p)
+{
+    if (p->diag) return p->diag;
+    const os64_html_document_t *doc = page_doc(p);
+    return doc && g.stream.parser && doc == os64_html_parser_document(g.stream.parser)
+        ? g.stream.diag : NULL;
+}
+
 // THE MEASURED LAYOUT (DOM.md § Geometry): a page not on screen, laid out
 // for its scripts' measurements at the view's size — the stream's parse as
 // far as it has gone, the page stream_finish holds, the page waiting for
 // its sheets. It is made from a copy of the page and never published: the
-// page's own model, cascade and tree are left as they were (arrival lays
-// the page out for itself), and nothing is clamped, placed or painted. It
+// page's shown model and tree remain in place; its cascade may accept
+// changes shared with this measured layout. Nothing is placed or painted. It
 // is kept for the reads after it while nothing it was made from has moved,
 // and let go before its document, its control state or its sheets are.
 // Each page is measured against its own sheet table, the stream's included
@@ -1721,8 +1750,11 @@ static struct {
     os64_page_t *model;
     garb_cascade_t *cascade;
     flow_tree_t *tree;
+    Sheet *sheets;
+    int32_t nsheets, ready;
 } s_measured;
 static Page s_measuring;            // the copy a measured layout is made from
+static void sheets_start(Page *p);
 
 // Lets go of the measured layout if it is `doc`'s.
 static void measured_forget(const os64_html_document_t *doc)
@@ -1731,16 +1763,35 @@ static void measured_forget(const os64_html_document_t *doc)
         return;
     flow_free(s_measured.tree);
     garb_cascade_free(s_measured.cascade);
+    sheet_table_free(s_measured.doc, s_measured.sheets, s_measured.nsheets);
     os64_page_free(s_measured.model);
     os64_memset(&s_measured, 0, sizeof(s_measured));
+}
+
+// A full cascade changes generation, so the hidden measurement cannot
+// supply copied styles. Its sheets have already been retained by p's new
+// table. Release the cached measurement even when new sheets prevented it
+// from being selected as the source. A displayed source stays owned by its
+// page; clearing this measurement's references does not reclaim that page.
+static void measured_fallback(Page *p)
+{
+    if (!p->measuring)
+        return;
+    p->restyle_from = NULL;
+    p->reuse_sheets = NULL;
+    measured_forget(s_measured.doc);
+    garb_cascade_free(p->cascade);
+    p->cascade = NULL;
 }
 
 // `p`'s measured layout at `width` x `height` and the window's zoom, in
 // s_measured. The model is the tree's version: the last measured one or the
 // page's own while current, else one built beside it, sharing `state`
 // (`url` is where a page with no model came from). There is one measured
-// layout at a time: the one held, whichever page's, is let go first. False
-// when it cannot be had, or the layout ran short: no stale answer is kept.
+// cached measurement at a time. Its source stays alive for style reuse;
+// a full-cascade fallback releases an unusable measured source before the
+// replacement is built. False on refusal or a short layout: no stale answer
+// is kept.
 static bool measured_layout(const Page *p, os64_page_state_t *state, const char *url,
                             int32_t width, int32_t height)
 {
@@ -1762,15 +1813,34 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
         model = profile_model_rebuild(p, page_model(p));
     else
         model = os64_page_build(doc, url, NULL, state);
-    measured_forget(s_measured.doc);
-    if (model == NULL)
+    if (model == NULL) {
+        measured_forget(s_measured.doc);
         return false;
+    }
+    Page source = *p;
+    if (mine && s_measured.serial == p->serial && s_measured.sheets_ready == p->sheets_ready) {
+        source.tree = s_measured.tree;
+        source.cascade = s_measured.cascade;
+        source.sheets = s_measured.sheets;
+        source.nsheets = s_measured.nsheets;
+        source.sheets_ready = s_measured.ready;
+    }
     s_measuring = *p;
     s_measuring.way.model = model;
     s_measuring.plain_model = NULL;
+    s_measuring.restyle_from = source.tree;
     s_measuring.tree = NULL;
-    s_measuring.cascade = NULL;
+    // Geometry reads may advance this shared cascade beyond the shown
+    // tree. Tasks and rendering are serialized: frame/parts work resumes
+    // after the rendering step has brought that tree to the DOM version.
+    s_measuring.cascade = garb_cascade_retain(source.cascade) ? source.cascade : NULL;
+    s_measuring.model_version = version;
+    s_measuring.reuse_sheets = &source;
+    s_measuring.measuring = true;
+    s_measuring.sheets = NULL;
+    s_measuring.nsheets = s_measuring.sheets_waiting = s_measuring.sheets_ready = 0;
     s_measuring.sheets_changed = true;
+    sheets_start(&s_measuring);
     s_measuring.box_scrolls = NULL;
     s_measuring.nbox_scrolls = s_measuring.cap_box_scrolls = 0;
     s_measuring.rendered_version = 0;
@@ -1778,12 +1848,12 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     // out to be shown (page_timeline).
     s_measuring.timeline = NULL;
     bool laid = page_lay_out(&s_measuring, width, height, g.zoom, NULL);
-    if (laid && flow_incomplete(s_measuring.tree)) {
+    if (laid && flow_incomplete(s_measuring.tree)) laid = false;
+    measured_forget(s_measured.doc);
+    if (!laid) {
         flow_free(s_measuring.tree);
         garb_cascade_free(s_measuring.cascade);
-        laid = false;
-    }
-    if (!laid) {
+        sheet_table_free(doc, s_measuring.sheets, s_measuring.nsheets);
         os64_page_free(model);
         os64_memset(&s_measuring, 0, sizeof(s_measuring));
         return false;
@@ -1798,6 +1868,9 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     s_measured.model = model;
     s_measured.cascade = s_measuring.cascade;
     s_measured.tree = s_measuring.tree;
+    s_measured.sheets = s_measuring.sheets;
+    s_measured.nsheets = s_measuring.nsheets;
+    s_measured.ready = s_measuring.sheets_ready;
     os64_memset(&s_measuring, 0, sizeof(s_measuring));
     return true;
 }
@@ -4224,18 +4297,14 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
             Sheet *source = &old->sheets[i];
             if (!source->ready || source->url == NULL || !os64_streq(source->url, url))
                 continue;
-            bool lent = false;
-            for (int32_t k = 0; k < p->nsheets; k++)
-                lent |= p->sheets[k].borrowed_from == source;
-            if (lent)
-                continue;
-            sh->parsed = source->parsed;
-            sh->borrowed_from = source;
+            if (source->source->refs == UINT32_MAX) continue;
+            sh->source = source->source;
+            ++sh->source->refs;
             sheet_ready(p, (int32_t)(sh - p->sheets));
             return;
         }
     }
-    bool fetchable = sh->url != NULL &&
+    bool fetchable = !p->measuring && sh->url != NULL &&
                      ((os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
                       (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0));
@@ -4279,7 +4348,7 @@ static void sheet_ready(Page *p, int32_t e)
     sh->ready = true;
     p->sheets_ready++;
     p->sheets_changed = true;
-    int32_t n = garb_sheet_imports(&sh->parsed, NULL, 0);
+    int32_t n = garb_sheet_imports(&sh->source->parsed, NULL, 0);
     if (n > SHEET_IMPORTS_MAX)
         n = SHEET_IMPORTS_MAX;
     if (n == 0)
@@ -4298,7 +4367,7 @@ static void sheet_ready(Page *p, int32_t e)
     sh->child = os64_calloc((size_t)n, sizeof(*sh->child));
     if (sh->imports == NULL || sh->child == NULL)
         return;
-    sh->nimports = garb_sheet_imports(&sh->parsed, sh->imports, n);
+    sh->nimports = garb_sheet_imports(&sh->source->parsed, sh->imports, n);
     if (sh->nimports > n)
         sh->nimports = n;
     for (int32_t k = 0; k < sh->nimports; k++) {
@@ -4322,6 +4391,51 @@ static void sheet_ready(Page *p, int32_t e)
     }
 }
 
+static bool sheet_inline_matches(const SheetParse *source, const os64_html_node_t *node)
+{
+    if (!source || !source->inline_text) return false;
+    size_t at = 0;
+    for (const os64_html_node_t *x = node->first_child; x; x = x->next) {
+        if (x->kind != OS64_HTML_TEXT) continue;
+        if (x->text_len > source->inline_len - at ||
+            os64_memcmp(source->inline_text + at, x->text, x->text_len)) return false;
+        at += x->text_len;
+    }
+    return at == source->inline_len;
+}
+
+static void sheet_inline(Page *p, Sheet *sh)
+{
+    if (p->reuse_sheets) {
+        int32_t e = sheet_of(p->reuse_sheets, sh->node);
+        Sheet *old = e >= 0 ? &p->reuse_sheets->sheets[e] : NULL;
+        if (old && old->ready && old->url == NULL && old->source->refs < UINT32_MAX &&
+            sheet_inline_matches(old->source, sh->node)) {
+            sh->source = old->source;
+            ++sh->source->refs;
+            sheet_ready(p, (int32_t)(sh - p->sheets));
+            return;
+        }
+    }
+    SheetParse *source = os64_calloc(1, sizeof(*source));
+    if (!source) return;
+    source->refs = 1;
+    sh->source = source;
+    size_t len = 0;
+    for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
+        if (x->kind == OS64_HTML_TEXT) len += x->text_len;
+    source->inline_text = os64_malloc(len + 1);
+    if (!source->inline_text) return;
+    for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
+        if (x->kind == OS64_HTML_TEXT) {
+            os64_memcpy(source->inline_text + source->inline_len, x->text, x->text_len);
+            source->inline_len += x->text_len;
+        }
+    source->inline_text[len] = '\0';
+    if (garb_parse_sheet_text(source->inline_text, len, &source->parsed) == GARB_OK)
+        sheet_ready(p, (int32_t)(sh - p->sheets));
+}
+
 // A sheet the page names, if the table does not have it yet: a `style`
 // element's parsed here, a linked one sent for. A page whose table the
 // stream began has most of them already (stream_sheets); a sheet is
@@ -4338,10 +4452,8 @@ static bool sheet_add(void *page, const os64_page_sheet_t *one)
         return false;               // the table is full
     if (one->linked) {
         sheet_fetch(p, sh, one->href.url);
-    } else if (garb_parse_style_element(one->node, &sh->parsed) == GARB_OK) {
-        sheet_ready(p, (int32_t)(sh - p->sheets));
     } else {
-        garb_free(&sh->parsed);
+        sheet_inline(p, sh);
     }
     return true;
 }
@@ -4415,7 +4527,10 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     if (sh->holds)
         p->sheets_waiting--;
     if (got != NULL && got->ok) {
-        sh->parsed = got->parsed;               // moved: the release frees nothing
+        sh->source = os64_calloc(1, sizeof(*sh->source));
+        if (!sh->source) return;
+        sh->source->refs = 1;
+        sh->source->parsed = got->parsed;
         os64_memset(&got->parsed, 0, sizeof(got->parsed));
         char *url = copy_text(got->url);        // after its redirects
         if (url != NULL) {
@@ -7800,7 +7915,7 @@ static bool page_model_refresh(Page *p)
 
 // A page not yet laid out whose model was just refreshed takes its sheet
 // table from that model, as script_rebuild's staged page does: parses
-// already in are borrowed, waits on the old table are cancelled, and a new
+// already in are shared, waits on the old table are cancelled, and a new
 // serial keeps an old table's job out of the new one. Sheets the scripts
 // linked are fetched and join when they arrive; the first paint does not
 // wait for them.
@@ -7814,12 +7929,6 @@ static void sheets_restage(Page *p)
     next.serial = ++g.pages_made;
     sheets_start(&next);
     sheets_leave(p);
-    // A borrowed parse moves to its borrower before the old table goes.
-    for (int32_t i = 0; i < next.nsheets; i++)
-        if (next.sheets[i].borrowed_from != NULL) {
-            os64_memset(&next.sheets[i].borrowed_from->parsed, 0, sizeof(garb_parsed_t));
-            next.sheets[i].borrowed_from = NULL;
-        }
     sheets_free(p);
     p->sheets = next.sheets;
     p->nsheets = next.nsheets;
@@ -7875,8 +7984,9 @@ static bool script_rebuild(void)
         Page next = *p;
         next.rendered_version = version; // the staged layout's target DOM version
         next.reuse_sheets = p;
+        next.restyle_from = p->tree;
         next.tree = NULL;
-        next.cascade = NULL;
+        next.cascade = garb_cascade_retain(p->cascade) ? p->cascade : NULL;
         next.sheets = NULL;
         next.nsheets = next.sheets_waiting = next.sheets_ready = 0;
         next.sheets_changed = true;
@@ -7901,13 +8011,6 @@ static bool script_rebuild(void)
         sheets_leave(p);
         page_show(p, next.tree);
         garb_cascade_free(p->cascade);
-        // A borrowed parse has one staged borrower. Once its old cascade
-        // is gone, transfer its arena before freeing the old sheet table.
-        for (int32_t i = 0; i < next.nsheets; i++)
-            if (next.sheets[i].borrowed_from != NULL) {
-                os64_memset(&next.sheets[i].borrowed_from->parsed, 0, sizeof(garb_parsed_t));
-                next.sheets[i].borrowed_from = NULL;
-            }
         sheets_free(p);
         p->laid_width = next.laid_width;
         p->laid_height = next.laid_height;

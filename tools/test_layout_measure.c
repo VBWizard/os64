@@ -28,9 +28,9 @@ static void measure_pump(void)
 }
 int main(int argc,char **argv)
 {
-    if(argc<2 || argc>3)return 2;
-    bool full=argc==3 && !strcmp(argv[2],"--full");
-    FILE *f=fopen("tools/pages/layout-measure.html","rb");if(!f)return 2;
+    if(argc<2 || argc>4)return 2;
+    bool full=argc>=3 && !strcmp(argv[2],"--full");
+    FILE *f=fopen(argc==4?argv[3]:"tools/pages/layout-measure.html","rb");if(!f)return 2;
     fseek(f,0,SEEK_END);size_t size=ftell(f);rewind(f);char *html=malloc(size+1);
     if(!html||fread(html,1,size,f)!=size)return 2;
     html[size]=0;fclose(f);

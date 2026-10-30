@@ -137,6 +137,30 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *, int32_t,
 // many big sheets holds no more than this of reads in any one cascade.
 #define GARB_CASCADE_READ_MAX ((size_t)2 * GARB_ARENA_MAX)
 bool garb_cascade_incomplete(const garb_cascade_t *c);
+// Sheets are immutable while a cascade uses them. Match their identity,
+// order, media/import conditions and the complete environment before updating.
+// The sheet objects themselves (not just their arenas) must stay alive.
+bool garb_cascade_matches(const garb_cascade_t *cascade, const garb_sheet_in_t *sheets,
+                          int32_t count, garb_env_t env);
+// One reference per owner; free releases it. Updates are shared and callers
+// serialize them with reads. Retaining does not retain the input sheets.
+bool garb_cascade_retain(garb_cascade_t *cascade);
+/* Consume this cascade's native change reader and update affected winners.
+ * Sheets and environment must be unchanged. False requests a fresh cascade:
+ * lost history, broad dependencies/dirty sets, arena renewal or refusal.
+ * On failure, previously returned values remain alive but no new queries may
+ * use this cascade until it is replaced. On success, old values also remain
+ * alive until free, for displayed animation records borrowing keyframes.
+ * Reader storage is optional: its absence disables updates, not full builds.
+ * The caller serializes updates with queries on its window thread. */
+bool garb_cascade_update(garb_cascade_t *c);
+uint64_t garb_cascade_generation(const garb_cascade_t *c);
+uint64_t garb_cascade_updates(const garb_cascade_t *c);
+uint64_t garb_cascade_version(const garb_cascade_t *c);
+// Whether this element's winners were recomputed after an earlier update.
+bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *node,
+                              uint64_t update);
+
 // The viewport the cascade was judged against: what a `vw` or `vh` in its
 // winners is a hundredth of.
 garb_env_t garb_cascade_env(const garb_cascade_t *c);

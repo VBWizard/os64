@@ -1119,6 +1119,15 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
 flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_page_t *model,
                                   int32_t width, const flow_env_t *env, flow_profile_t *profile,
                                   int64_t (*clock)(void *), void *clock_ctx);
+/* Build a fresh tree, copying unaffected computed styles from `previous`
+ * when its cascade generation and styling inputs agree. The previous tree
+ * is borrowed for this call; no arena ownership is shared. Boxes and layout
+ * are rebuilt. The cascade must have been updated for the current document.
+ * A NULL previous is a whole rebuild. Profiling has the contract above. */
+flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_page_t *model,
+                                  int32_t width, const flow_env_t *env, const flow_tree_t *previous,
+                                  flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
+uint64_t flow_styles_reused(const flow_tree_t *tree);
 void flow_free(flow_tree_t *tree);
 // Borrowed snapshot whose indices the boxes carry; NULL if built without one.
 const os64_page_t *flow_model(const flow_tree_t *tree);
