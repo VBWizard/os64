@@ -18,6 +18,7 @@
 #include "flow/flow.h"
 #include "garb/cascade.h"
 #include "way/way.h"
+#include "image/icon_theme.h"
 #include "image/image.h"
 #include "os64/os64.h"
 #include "os64/clip.h"
@@ -38,6 +39,7 @@
 #include "os64/ui_dispatcher.h"
 #include "os64/ui_menu.h"
 #include "os64/ui_file_dialog.h"
+#include "os64/ui_icon.h"
 #include "os64/work.h"
 #include "agent.h"
 #include "bar.h"
@@ -12719,10 +12721,11 @@ static int32_t s_ndownloads;
 static uint32_t s_download_serial;
 static uint32_t s_download_chosen;              // the row the row menu acts on
 static bool s_download_failed_unseen;           // a failure the list has not shown yet
-// The button's class, with the meter painted over what the button's own
-// paint draws. Both are taken from the widget os64_ui_button made, never by
-// the library's name for the class: an executable that names a library's
-// data gets a copy relocation, which the kernel's linker does not perform.
+// The button's class, with the meter painted over its face (head_paint),
+// and the stock button paint a face without a picture falls back to. Both
+// are taken from the widget os64_ui_button made, never by the library's
+// name for the class: an executable that names a library's data gets a copy
+// relocation, which the kernel's linker does not perform.
 static os64_ui_class_t s_downloads_class;
 static void (*s_button_paint)(os64_ui_widget_t *, os64_draw_ctx_t *, const os64_ui_theme_t *);
 // The list while it is open: said again when a download changes state, as
@@ -12733,6 +12736,14 @@ static void (*s_button_paint)(os64_ui_widget_t *, os64_draw_ctx_t *, const os64_
 #define DOWNLOADS_STALL_MS 1000
 static bool s_downloads_listed;
 static uint64_t s_downloads_listed_at;
+// A download just finished: the meter's lane blinks green, on and off
+// every DOWNLOAD_FLASH_STEP_MS for DOWNLOAD_FLASH_MS from s_download_flash_from.
+// s_download_flash_seen is when it was last stepped: the next step is owed
+// from there, not from whenever the clock is asked.
+#define DOWNLOAD_FLASH_STEP_MS 250
+#define DOWNLOAD_FLASH_MS 1500
+static bool s_download_flashing;
+static uint64_t s_download_flash_from, s_download_flash_seen;
 
 // The question the Save dialog is asked, one at a time: `url` NULL when
 // nothing is asked. The dialog opens between turns (downloads_turn).
@@ -12964,10 +12975,13 @@ static void download_arrived(os64_work_id_t id, yonder_download_job_t *job)
         d->got = job->got;
         d->total = job->total;
         d->ended = yonder_now_ms();
-        if (job->whole)
+        if (job->whole) {
             d->state = DL_DONE;
-        else
+            s_download_flashing = true;
+            s_download_flash_from = s_download_flash_seen = d->ended;
+        } else {
             download_failed(d, job->why[0] != '\0' ? job->why : "it stopped");
+        }
         break;
     }
     downloads_feed();
@@ -13022,12 +13036,17 @@ static void downloads_progress(uint64_t *got, uint64_t *total, bool *unknown)
     }
 }
 
-// Bytes arrived, or a stall's moment came (downloads_due): each running
-// download's pace noted, the meter moved, and the open list said again.
+// Bytes arrived, or a moment came (downloads_due): each running download's
+// pace noted, the meter moved or its flash stepped, and the open list said
+// again.
 static void downloads_heard(void)
 {
     uint64_t got, total, now = yonder_now_ms();
     bool unknown;
+    if (s_download_flashing) {
+        s_download_flash_seen = now;
+        s_download_flashing = now - s_download_flash_from < DOWNLOAD_FLASH_MS;
+    }
     downloads_progress(&got, &total, &unknown);
     for (int32_t i = 0; i < s_ndownloads; i++)
         if (s_downloads[i].state == DL_RUNNING)
@@ -13036,24 +13055,45 @@ static void downloads_heard(void)
     downloads_relist(false);
 }
 
-// When the open list is next said again though no bytes arrive: YONDER_NEVER
-// while it is shut or nothing runs.
+// When the meter's flash next steps, or the open list is next said again
+// though no bytes arrive: YONDER_NEVER when neither is owed.
 static uint64_t downloads_due(void)
 {
-    return s_downloads_listed && downloads_running() > 0 ? s_downloads_listed_at + DOWNLOADS_STALL_MS : YONDER_NEVER;
+    uint64_t due = s_downloads_listed && downloads_running() > 0 ? s_downloads_listed_at + DOWNLOADS_STALL_MS
+                                                                  : YONDER_NEVER;
+    if (s_download_flashing) {
+        uint64_t steps = (s_download_flash_seen - s_download_flash_from) / DOWNLOAD_FLASH_STEP_MS + 1;
+        uint64_t step = s_download_flash_from + steps * DOWNLOAD_FLASH_STEP_MS;
+        if (step < due)
+            due = step;
+    }
+    return due;
 }
 
-// The button, and its meter along its foot: the share that has arrived
-// while every running download's size is known, a band that moves with the
-// bytes while one's is not, red across after a failure the list has not
-// shown yet.
+// The flash's lit half: the even steps of its run.
+static bool download_flash_lit(void)
+{
+    uint64_t since = yonder_now_ms() - s_download_flash_from;
+    return s_download_flashing && since < DOWNLOAD_FLASH_MS && (since / DOWNLOAD_FLASH_STEP_MS) % 2 == 0;
+}
+
+static void head_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t);
+
+// The button, and its meter along its foot: green across, blinking, as a
+// download finishes; the share that has arrived while every running
+// download's size is known, a band that moves with the bytes while one's is
+// not; red across after a failure the list has not shown yet.
 static void downloads_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
-    s_button_paint(w, ctx, t);
+    head_paint(w, ctx, t);
     os64_gui_rect_t b = w->bounds;
     os64_gui_rect_t lane = {b.x + 3, b.y + b.h - 5, b.w - 6, 3};
     if (lane.w <= 0)
         return;
+    if (download_flash_lit()) {
+        os64_draw_fill_rect(&ctx->surf, lane, 0xff46b03cu);
+        return;
+    }
     uint64_t got, total;
     bool unknown;
     downloads_progress(&got, &total, &unknown);
@@ -13687,6 +13727,112 @@ static int32_t button_width(const char *caption)
     return tw + 4 * g.ui.theme.pad;
 }
 
+// ── The head row's pictures ─────────────────────────────────────────────
+//
+// Back, Forward, Reload, Stop and Downloads wear the icon set's pictures
+// beside their labels (icons.conf on the config ladder, the shipped set
+// beneath it), at the size the row's height holds, so the row is no taller
+// for them. A button whose picture is not there (no theme, a set without
+// that icon, a lease refused) is the plain captioned button.
+
+typedef struct {
+    os64_ui_widget_t *w;
+    const char *key;
+    os64_ui_icon_lease_t icon;          // pixels NULL: none
+} HeadFace;
+
+static HeadFace s_head_faces[] = {
+    {&g.back, "go-back", {0}},       {&g.forward, "go-forward", {0}}, {&g.reload, "view-refresh", {0}},
+    {&g.stop, "window-close", {0}},  {&g.downloads, "download", {0}},
+};
+static os64_icon_theme_t *s_icons;
+static uint32_t s_face_size;            // the size the pictures were taken at; 0 before
+static os64_ui_class_t s_head_class;    // the button's, painted with its picture
+
+// The pictures' size for a row `bh` high: 24 where it leaves the face a
+// margin, else 16.
+static uint32_t head_icon_size(int32_t bh)
+{
+    return bh >= 32 ? 24 : 16;
+}
+
+static HeadFace *head_face(const os64_ui_widget_t *w)
+{
+    for (size_t i = 0; i < sizeof(s_head_faces) / sizeof(s_head_faces[0]); i++)
+        if (s_head_faces[i].w == w)
+            return &s_head_faces[i];
+    return NULL;
+}
+
+// The pictures taken at the size a row `bh` high holds, when it is not the
+// size they have; one not to be had at it keeps the picture it has.
+static void head_faces_take(int32_t bh)
+{
+    uint32_t size = head_icon_size(bh);
+    if (s_icons == NULL || size == s_face_size)
+        return;
+    const os64_ui_icon_provider_t *provider = os64_icon_theme_provider(s_icons);
+    for (size_t i = 0; i < sizeof(s_head_faces) / sizeof(s_head_faces[0]); i++) {
+        os64_ui_icon_lease_t lease;
+        if (os64_ui_icon_acquire(provider, s_head_faces[i].key, size, &lease) != OS64_UI_ICON_OK)
+            continue;
+        os64_ui_icon_release(provider, &s_head_faces[i].icon);
+        s_head_faces[i].icon = lease;
+        os64_ui_mark_dirty(&g.ui, s_head_faces[i].w);
+    }
+    s_face_size = size;
+}
+
+// As yonder leaves: the pictures go back before the theme that lent them.
+static void head_faces_drop(void)
+{
+    if (s_icons == NULL)
+        return;
+    const os64_ui_icon_provider_t *provider = os64_icon_theme_provider(s_icons);
+    for (size_t i = 0; i < sizeof(s_head_faces) / sizeof(s_head_faces[0]); i++)
+        os64_ui_icon_release(provider, &s_head_faces[i].icon);
+    if (os64_icon_theme_destroy(s_icons) == OS64_UI_OK)
+        s_icons = NULL;
+}
+
+// The width a head button takes in a row `bh` high: its caption's, and its
+// picture's beside it.
+static int32_t head_width(os64_ui_widget_t *w, int32_t bh)
+{
+    const HeadFace *f = head_face(w);
+    int32_t width = button_width(w->text);
+    if (f != NULL && f->icon.pixels != NULL)
+        width += (int32_t)head_icon_size(bh) + g.ui.theme.gap;
+    return width;
+}
+
+// The button's face, its picture at the left and its caption centred in
+// what is left; the stock paint when it has no picture. The caption is the
+// run the button stages, measured and drawn as the stock paint does.
+static void head_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
+{
+    const HeadFace *f = head_face(w);
+    if (f == NULL || f->icon.pixels == NULL) {
+        s_button_paint(w, ctx, t);
+        return;
+    }
+    os64_ui_button_face(w, ctx, t);
+    os64_gui_rect_t b = w->bounds;
+    os64_gui_rect_t slot = {b.x + 2 * t->pad, b.y, (int32_t)s_face_size, b.h};
+    os64_ui_icon_draw(&ctx->surf, slot, &f->icon, !os64_ui_widget_enabled(w));
+    os64_ui_t *ui = os64_ui_of(w);
+    const char *text = w->text != NULL ? w->text : "";
+    size_t len = os64_strlen(text);
+    int32_t tw = 0;
+    if (os64_ui_run_width(ui, &w->run, OS64_FONT_ROLE_UI, text, len, &tw) != OS64_FONT_OK)
+        return;
+    int32_t left = slot.x + slot.w + t->gap, right = b.x + b.w - 2 * t->pad;
+    int32_t tx = left + (right - left - tw) / 2;
+    int32_t ty = b.y + (b.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
+    uint32_t face = w->pressed ? t->button_face_pressed : w->hovered ? t->button_face_hover : t->button_face;
+    os64_ui_draw_run(ui, w->run, OS64_FONT_ROLE_UI, &ctx->surf, b, tx, ty, text, len, t->button_fg, face);
+}
+
 // Font adoption measures candidate metrics before replacing the live face.
 // Stage the same geometry used for ordinary resizes so a refused adoption
 // leaves the current window intact.
@@ -13704,14 +13850,16 @@ static os64_font_status_t layout_window(bool staged)
     os64_gui_rect_t area = os64_ui_widget_planned_bounds(&g.root);
     int32_t pad = t->pad, gap = t->gap, bh = os64_ui_control_min_height(&g.ui), sw = t->scroll_w;
     int32_t x = pad;
+    if (!staged)
+        head_faces_take(bh);
     os64_ui_widget_t *tools[] = {&g.back, &g.forward, &g.reload, &g.stop};
     for (size_t i = 0; i < sizeof(tools) / sizeof(tools[0]); i++) {
-        int32_t bw = button_width(tools[i]->text);
+        int32_t bw = head_width(tools[i], bh);
         layout_place(tools[i], (os64_gui_rect_t){x, pad, bw, bh}, staged);
         x += bw + gap;
     }
     // The downloads button takes the row's right end; the field has the rest.
-    int32_t dw = button_width(g.downloads.text);
+    int32_t dw = head_width(&g.downloads, bh);
     layout_place(&g.downloads, (os64_gui_rect_t){area.w - pad - dw, pad, dw, bh}, staged);
     layout_place(&g.field.w, (os64_gui_rect_t){x, pad, area.w - pad - dw - gap - x, bh}, staged);
     int32_t top = pad + bh + pad;
@@ -14186,9 +14334,14 @@ int main(int argc, char **argv)
     os64_ui_button(&g.downloads, "Downloads", click_downloads, NULL);
     s_downloads_class = *g.downloads.cls;
     s_button_paint = s_downloads_class.paint;
+    s_head_class = s_downloads_class;
+    s_head_class.name = "head-button";
+    s_head_class.paint = head_paint;
     s_downloads_class.name = "downloads";
     s_downloads_class.paint = downloads_paint;
     g.downloads.cls = &s_downloads_class;
+    g.back.cls = g.forward.cls = g.reload.cls = g.stop.cls = &s_head_class;
+    (void)os64_icon_theme_create(&s_icons);     // NULL: the buttons are captions alone
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf), field_submit, field_cancel, NULL);
     os64_ui_label(&g.status, g.status_text);
     os64_ui_label(&g.badge, g.badge_text);
@@ -14366,6 +14519,7 @@ int main(int argc, char **argv)
     os64_work_pool_destroy(g.pool);
     g.pool = NULL;                      // and no teardown below cancels through it
     downloads_drop();
+    head_faces_drop();
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
     page_departs();

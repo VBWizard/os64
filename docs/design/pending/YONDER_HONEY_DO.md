@@ -67,7 +67,7 @@ Chris moves rows.
 | 3 | A menu bar, with Favorites and History on it | Opus | open |
 | 4 | ~~Persistent cookies, with a switch~~ | Opus | done (the login slice; § 4 has the as-built) |
 | 5 | The right-click menu | Opus; Quinn (the save dialog) | built (§ 5, as built; the Save verbs with § 6) |
-| 6 | Download | Opus | built (§ 6, as built), its list live; the flash, a panel with a bar per row and drawn faces are the polish cut |
+| 6 | Download | Opus | built (§ 6, as built): its list live, the meter's flash, pictures on the head row's buttons; a panel with a bar per row is the polish left |
 | 7 | Selecting and copying text, and the I-beam | Fable design; Opus builds | open |
 | 8 | The mouse wheel through vncd | Fable reads; Opus fixes | open |
 
@@ -336,8 +336,16 @@ and left for later, since the trip's fetch belongs to a job whose mailbox
 ends with it. `downloads = <dir>` is read by the same folder reader as
 `profile`. The meter is v1's: a bar along the button's foot in the
 button's ink (a band that steps with the bytes when no length was given),
-red across after a failure until the list is opened; no flash when one
-finishes, which waits for the polish cut. The list is live while it is
+red across after a failure until the list is opened, and green across,
+blinking three times a quarter second apart, when one finishes (stepped
+by the ticker on a `PAST_DOWNLOADS` deadline counted from the step last
+shown). The head row's five buttons wear the icon set's pictures beside
+their captions (`os64_icon_theme` from `icons.conf`, 24 px where the row
+is 32 high, else 16), the stock button paint when a picture is not to be
+had; Stop is the set's `window-close`, and Downloads has a `download`
+icon of its own, composed (not generated) from the set's `go-up` master
+over a tray in the set's outline, its record in
+`assets/icons/sources/default/generation.json`. The list is live while it is
 open: the menu session's `os64_ui_menu_list_relabel` swaps an open list's
 rows in place (same count, the width it opened at, a label grown past it
 cut), and yonder says the rows again on a state change, on the bell at
