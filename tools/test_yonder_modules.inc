@@ -357,6 +357,10 @@ static void module_data_case(void) {
           strstr(record,"FAILED script data:text/javascript,/*xxx")!=NULL,
           "modules: no long data: URL is taken for a name no module has, and the one that does not compile is "
           "on the record");
+    check(strstr(record,"request GET data:text/javascript,export default 7;//xxx")!=NULL &&
+              strstr(record,"...(8910 more bytes)...xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxstatic-end: 200")!=NULL &&
+              strlen(record)<6000,
+          "modules: the record holds each long data: address by its start and its end");
     request_drop();
 }
 

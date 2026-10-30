@@ -410,7 +410,14 @@ was shown, or since its record was last written on asking:
   `F%41ILED` and `%25` in one pass from the left (`tools/yonder_records.py`'s
   `unescape`, the replay's `rp_unescape`). Records written before this
   wrote a `%25` of their own as it was, so in those a literal `%25` reads
-  back as `%`.
+  back as `%`. **A `data:` address is shortened as a line is kept**
+  (Chris, 2026-10-29), so for such a line the bytes back are the
+  shortened ones: from the first `data:` that begins a word to its
+  field's end, a run past 200 bytes keeps its first 100 and its last 40
+  with `...(<n> more bytes)...` between. A data: URL is its document, so a
+  module's name, a request's address or a failure's place can be
+  kilobytes of percent-encoded script on one line. The page's own
+  `address:` line is written whole, since a replay loads the page from it.
 - **The kinds are** `global`, `script` (`module`), `element`,
   `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`,
   and for pictures `picture-scheme` and `image`.

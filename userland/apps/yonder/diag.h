@@ -26,6 +26,17 @@
 // written as it is. A byte that would break a line, and a backslash, are
 // written `\xHH` and `\\`.
 //
+// A DATA: ADDRESS IS SHORTENED as a line is kept, before any of the above
+// (ruled 2026-10-29): a data: URL carries its document in itself, so a
+// module's or a script's name, a request's address, or a failure's place
+// may run to many kilobytes. From the first `data:` that begins a word to
+// the end of its field, a run past 200 bytes keeps its first 100 and its
+// last 40 with `...(<n> more bytes)...` between, so the bytes a reader
+// gets back are the shortened ones. Lines are found by their shortened
+// keys, so a writer and a lookup (yonder_diag_fact_value) may give the
+// address whole. The page's own `address:` line is not a kept line and is
+// written whole: a replay loads the page from it.
+//
 // THE PAGE KEPT beside its file, when yonder.conf says `keep_pages = on`
 // (MODERN_WEB.md rule 3: a kept page can be fed to the headless binding
 // again, tools/test_yonder_replay_host.sh): `<name>.html`, the page's bytes
