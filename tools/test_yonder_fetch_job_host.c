@@ -1306,11 +1306,15 @@ static void http_cache_cases(void)
     expect("never: an opaque answer", g != NULL && g->type == WAY_TYPE_OPAQUE && g->served == WAY_SERVED_NETWORK,
            NULL);
     yonder_fetched_free(g);
-    fake_answer(NULL, "https://cdn.test/from.js", 301, "Location: https://cdn.test/to.js\r\n", NULL);
+    fake_answer(NULL, "https://cdn.test/from.js", 301,
+                "Location: https://cdn.test/to.js\r\nAccess-Control-Allow-Origin: *\r\n", NULL);
     fake_answer(NULL, "https://cdn.test/to.js", 200, MODULE_HEAD "Cache-Control: max-age=600\r\n", kModule);
-    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/from.js"}));
     g = run(&(Ask){page, "https://cdn.test/from.js"});
-    expect("never: an answer reached by a redirect", g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
+    expect("never: a redirected answer arrives", g != NULL && g->ok && g->redirected, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/from.js"});
+    expect("never: an answer reached by a redirect", g != NULL && g->ok && g->served == WAY_SERVED_NETWORK,
+           g ? g->why : NULL);
     yonder_fetched_free(g);
 
     module_bytecode_cases(page);
