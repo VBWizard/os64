@@ -203,3 +203,32 @@ navigation after maximizing the starter, leaving the frozen cohorts unchanged.
 original-page run to check the list regression signal, plus a candidate article
 run with the matching viewport. Preserve the existing control/companion results;
 there is no reason to discard or repeat all six runs.
+
+### Corrected candidate article: corpus 466
+
+The tester maximized the window and reloaded the article. Only the latest
+record, corpus 466, is used for this rerun; intermediate record 465 is excluded.
+The retained screenshot ending in `candidate2` reports 18 completed checkpoints
+at 2,526 × 1,259, device ratio 1. Its checkpoint heights match the control.
+The native record confirms dark appearance, 100% zoom, Scripts and Modern Web
+on, 17 model rebuilds, 18 stream layouts, 7,927 elements, 5,294 boxes and 3,795
+measures, with zero refusals/clock errors. These counts match control corpus 461.
+
+| Article checkpoint timing | Control 461 | Candidate 466 |
+|---|---:|---:|
+| Total | 407.200 ms | 469.100 ms |
+| Median | 20.350 ms | 24.250 ms |
+| Worst | 40.600 ms | 54.200 ms |
+
+The candidate total is 61.900 ms (15.2%) higher. This replaces the invalid
+small-viewport candidate comparison; it does not meet the non-regression gate.
+Reloading after maximizing provides a matching geometry workload, though one
+run per build does not establish run-to-run variance or isolate the cause.
+
+Candidate stream phases are model 3.261 ms, cascade 369.149 ms, styles
+6.421 ms, boxes 1.391 ms, layout 83.720 ms and public tree 3.294 ms.
+The final displayed layout is separate (941 elements, 512 boxes, 413 measures).
+Zero updates/copied styles is expected. The cascade phase includes early
+hidden-measurement release in the candidate, so its increase alone does not
+measure extra selector work. Original-list follow-up and investigation of this
+article slowdown remain open. Frozen delivery files are unchanged.
