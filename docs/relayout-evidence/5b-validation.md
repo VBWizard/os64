@@ -247,9 +247,57 @@ positional row rule with a uniform background and identifying its report as
 `yonder-layout-local-v1`. `tools/test_layout_measure.sh` generates and runs
 both pages. The frozen handoff includes both fixtures and matching libraries.
 
-**P5 acceptance remains open.** Remeasure the original page against the 5a
-baseline, then compare the companion under both cohorts. The streamed
+**P5 acceptance remains open.** The original-page remeasurement is recorded
+below; compare the companion under both cohorts. The streamed
 Wikipedia article comparison requested by the design review also remains
 open: retain its input and settings and compare the native `cascade` phase
 with the stream-layout count. A final-load screenshot alone does not prove
 streaming reuse. These gates precede the 5b PR and work on 5c.
+
+
+## P5 result after targeted invalidation
+
+The refined cohort (`40d52cff`) was run twice, with Yonder closed between
+runs. The tester reports similar displayed results. The first run's native
+report was saved on page departure (corpus 343); the second was saved on
+request (corpus 344) and has the retained screenshot. Settings match the 5a
+baseline: 2,000 rows, 20 samples per workload, five warm-ups, 2,526 × 1,259
+CSS-pixel viewport, device ratio 1, dark appearance, Scripts and Modern Web
+enabled, and 100% zoom.
+
+| Workload | 5a median | Previous correction median | Refined median | Refined worst |
+|---|---:|---:|---:|---:|
+| Read unchanged geometry | 0.100 ms | 0.100 ms | 0.100 ms | 0.200 ms |
+| Change one paragraph | 63.900 ms | 64.750 ms | 36.300 ms | 158.800 ms |
+| Replace one list item | 55.300 ms | 66.700 ms | 55.650 ms | 61.900 ms |
+
+Paragraph median time is 43.2% below 5a. List replacement is 0.350 ms
+(0.63%) above 5a, substantially recovering the prior 20.6% regression but
+not demonstrating a list speedup or statistical equivalence. The paragraph
+worst remains above 5a's 109.600 ms; the list worst is also above 5a's
+56.900 ms. Faster typical paragraph edits do not establish better tail
+latency.
+
+Both native reports are clean, with 52 model rebuilds, 54 layout attempts,
+26 cascade updates, 53,134 reused computed styles, zero refused/partial
+layouts and zero clock errors. Their cumulative phase times are:
+
+| Phase | First run | Second run |
+|---|---:|---:|
+| Model rebuild | 13.762 ms | 18.501 ms |
+| Cascade | 215.946 ms | 213.032 ms |
+| Computed styles | 104.032 ms | 95.646 ms |
+| Box construction | 24.107 ms | 19.752 ms |
+| Layout | 2,895.157 ms | 2,824.165 ms |
+| Public tree | 61.462 ms | 55.336 ms |
+
+The second run's cumulative cascade time is 50.8% below the 5a report.
+Its layout total remains above 5a's 2,414.759 ms. These totals include setup,
+warm-ups and presentation work as well as the measured operations; they
+are not medians of individual samples.
+
+The screenshot and both original reports are retained with the private proof
+artifacts. First-run displayed medians and individual raw samples were not
+retrieved. The frozen delivery is unchanged. The original-page result is
+encouraging, while the companion and streamed-Wikipedia comparisons and the
+performance acceptance decision remain open before review or 5c.
