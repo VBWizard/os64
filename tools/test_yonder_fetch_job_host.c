@@ -1243,6 +1243,19 @@ static void http_cache_cases(void)
            g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
     yonder_fetched_free(g);
 
+    // Vary on what the page sends: a different value is a miss, the kept
+    // one's a hit.
+    fake_answer(NULL, "https://cdn.test/acc.js", 200, MODULE_HEAD "Vary: Accept\r\nCache-Control: max-age=600\r\n",
+                kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/acc.js", .headers = "Accept: text/a\r\n"}));
+    g = run(&(Ask){page, "https://cdn.test/acc.js", .headers = "Accept: text/b\r\n"});
+    expect("cache: a request whose Vary'd value differs is not served the kept reply",
+           g != NULL && g->ok && g->served == WAY_SERVED_NETWORK, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/acc.js", .headers = "Accept: text/b\r\n"});
+    expect("cache: one whose value matches is", g != NULL && g->served == WAY_SERVED_KEPT, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
     // The cache modes (SCRIPT_CACHE.md § 5).
     fake_answer_t *m = fake_answer(NULL, "https://cdn.test/n.js", 200,
                                    MODULE_HEAD "Cache-Control: max-age=600\r\nETag: \"n1\"\r\n", kModule);

@@ -2044,8 +2044,9 @@ static void module_bytecode_cases(void)
     // A compile that throws keeps nothing; no bytecode is refused.
     os64_js_bytecode_t bad = {.keep = true};
     check(module_compile_through(runtime, "https://m.test/bad.js", &bad, &outcome) == NULL &&
-          outcome.status == OS64_JS_EXCEPTION && bad.kept == NULL && !bad.from_blob,
-          "a module compile that throws keeps no blob");
+          outcome.status == OS64_JS_EXCEPTION && bad.kept == NULL && !bad.from_blob &&
+              strncmp(outcome.message, "SyntaxError", 11) == 0,
+          "a module compile that throws keeps no blob, and reports its own error");
     os64_js_module_t *none = NULL;
     check(os64_js_module_compile_bytecode(runtime, OS64_JS_ABI_ID, "", 0, "https://m.test/none.js", NULL, NULL, &none,
                                           &outcome) == OS64_JS_BAD_ARGUMENT && none == NULL,
