@@ -4,9 +4,10 @@ The current original-page paragraph/list medians are below the 5a control,
 and the non-positional companion improves both mutations. Repeated article
 measurements on the P5 are comparable to control; the earlier large article
 slowdown did not recur in the controlled follow-up below. This evidence
-supports review of 5b. **Merge remains blocked on the alternating manual
-article comparison described below.** The earlier article result and elevated
-paragraph maximum remain disclosed; neither has an established root cause.
+supports review of 5b. **The alternating manual article comparison below
+clears the performance gate.** Code review remains separate. The earlier
+article result and elevated paragraph maximum remain disclosed; neither has
+an established root cause.
 
 ## Workloads and control
 
@@ -602,3 +603,51 @@ address on a follow-up pair. Compare live regions and allocator state before
 choosing a fix; more retained regions would support the hypothesis, not by
 itself prove that a particular allocator or lifetime change cures it. Merge
 and 5c remain on hold until this gate is resolved.
+
+
+## Alternating manual P5 session: performance gate cleared
+
+The tester installed the frozen control `9dca4a7d` and candidate `483df1bb`
+in alternating order, three runs each, starting a fresh Yonder on the starter,
+double-clicking the title bar to maximize, then entering the article address.
+Corpus 595–606 records the six starter/article pairs; screenshots retain each
+completed sample list. All six captured article files have the frozen fixture's
+SHA-256 `b56f866156c264b6b085c83535637d32022783202a8f283f1e35c484500700fc`.
+
+| Pair | Control corpus | Control total | Candidate corpus | Candidate total | Paired change |
+|---|---:|---:|---:|---:|---:|
+| 1 | 596 | 418.8 ms | 598 | 410.7 ms | -1.9% |
+| 2 | 600 | 421.4 ms | 602 | 407.0 ms | -3.4% |
+| 3 | 604 | 436.1 ms | 606 | 415.5 ms | -4.7% |
+
+The median of run totals is 421.4 ms for control and 410.7 ms for candidate,
+2.5% lower. All three candidate totals are below the control range of
+418.8–436.1 ms, satisfying the gate's no-regression purpose. Three repetitions
+support acceptance of this workload, not a general article-speedup claim.
+
+Every run completed 18 checkpoints at 2,526 × 1,259, device ratio 1, 100% zoom,
+dark appearance, Scripts and Modern Web enabled. The 18 measured heights
+match across all screenshots. Native stream reports agree on 7,927 styled
+elements, 5,294 boxes, 3,795 measurements, 17 model rebuilds and 18 layouts,
+with zero refused/partial results or clock errors. Candidate cascade updates
+and copied styles are zero, as expected for this full-fallback workload.
+Native layout-phase totals are 55.132 / 48.680 / 55.252 ms for control and
+47.913 / 45.910 / 54.537 ms for candidate. The earlier doubled layout cost
+did not recur.
+
+The tester varied the delay between completion and pressing `d`. This does
+not invalidate the comparison: the fixture computes its geometry samples and
+report during parsing, before completion. `d` saves diagnostics and a paint
+reading; it does not repeat the geometry measurements. Each record retains
+evidence of that request (a numbered paint reading or `written: when asked`).
+The first five were subsequently written again at page departure. Idle/paint
+intervals differ and are not used as geometry timings.
+
+**Acceptance:** the manual article requirement is satisfied. Combined with
+the original and companion results, this clears the 5b performance hold;
+code review and merge remain separate steps. The earlier 15–19% manual
+slowdown and the elevated paragraph maxima remain unresolved evidence, not
+fixed defects or discarded samples. No production code or frozen binaries
+changed for this session. The six screenshots, native records, captured
+fixtures, checked sample transcriptions, analysis script and SHA-256 manifest
+are retained outside temporary storage. 5c has not started.
