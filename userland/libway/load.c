@@ -228,6 +228,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     int64_t now = now_utc();
     if (have && way_keep_fresh(&e->keep, now)) {
         serve(out, e, kept, kept_len, WAY_SERVED_KEPT);
+        out->kept = true;
         way_cache_count(cache, WAY_SERVED_KEPT);
         os64_free(e);
         return true;
@@ -268,6 +269,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         bool unreachable = out->fetch == OS64_FETCH_DIAL_FAILED || out->fetch == OS64_FETCH_SILENT;
         if (have && unreachable && way_keep_stale_ok(&e->keep)) {
             served = serve(out, e, kept, kept_len, WAY_SERVED_STALE);
+            out->kept = true;
             way_cache_count(cache, WAY_SERVED_STALE);
             kept = NULL;
         }
@@ -284,6 +286,9 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         else
             way_cache_drop(cache, url);
         served = serve(out, e, kept, kept_len, WAY_SERVED_CONFIRMED);
+        // Held either way while it is kept: a rewrite that failed leaves
+        // the entry it would have replaced, which holds this same body.
+        out->kept = keep;
         way_cache_count(cache, WAY_SERVED_CONFIRMED);
         kept = NULL;
     } else {
@@ -313,7 +318,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
                 e->status = head->status;
                 os64_strcopy(e->content_type, sizeof(e->content_type), head->content_type);
                 os64_strcopy(e->charset, sizeof(e->charset), head->charset);
-                (void)way_cache_put(cache, e, bytes, len);
+                out->kept = way_cache_put(cache, e, bytes, len);
             } else if (have) {
                 // A new answer that is not kept is still newer than the
                 // kept one, which must not come back as stale.

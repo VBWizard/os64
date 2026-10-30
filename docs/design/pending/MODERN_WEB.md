@@ -354,7 +354,16 @@ and a run-from-bytes pair over the engine's own `JS_WriteObject` and
 `JS_ReadObject`, tied to the engine's build so a cache written by one
 build is never read by another. The timing instrument (compile time per
 script, in the page file) lands in slice 0b so this slice's
-before-and-after is a number on the P5. Opus.
+before-and-after is a number on the P5. Opus. *As built (7a, classic
+`src` scripts; [BYTECODE_CACHE.md](BYTECODE_CACHE.md)):* a companion
+file beside the script's cache entry, keyed by the decoded source's
+digest rather than the validators, so a blob is only ever offered for
+the text it came from; read only for a body the cache holds and removed
+with its entry; one verb, `os64_js_run_bytecode`, not a pair; the
+script's per-page name given at the read (patch 0015), since libdom reads
+it back to mute another site's errors; and NOT compressed — libgzip
+inflates at 68 MB/s against the engine's 600 MB/s read, so the inflate
+would have cost more than it saved. 7b, modules, follows on its own path.
 
 **Slice 8: generated content and the rest of the census's CSS.**
 `::before`/`::after` with `content` (144 asks, the icon fonts' whole
@@ -460,7 +469,7 @@ rebase order below resolves them rather than a merge fight.
 | 2 | `libdom/fetch.c`, `libdom/xhr.c`, `yonder/fetch_job.c`, `libway/origin.c` (origins, CORS) | `scripts.h` (the job hook), `modern.c` (rows), the WPT runner (two origins) |
 | 3 | the module entry in `libjs` (`runtime.c`, `js.h`), `yonder/modules.c` (the graph) | `yonder/scripts.c` (the loader hook), `libdom/window.c` (script kind) |
 | 4 | `libgarb/props.c`, `values.c` and `libflow` for the named properties | `yonder/paint.c` (`outline`, `text-overflow`) |
-| 7 | the bytes pair in `libjs`, `libway/cache.c` (a bytecode entry beside a script's) | `yonder/script_job.c` |
+| 7 | `os64_js_run_bytecode` in `libjs`, `libway/cache.c` (a companion beside a script's entry) | `yonder/script_job.c`, `scripts.c`, `yonder.c` (the write job) |
 
 Landing order, a lean Chris moves: 0a, 0b, 1a, 1b, 4, 2, 3, 7. A later
 slice rebases onto what landed before it; `settings.c` and `modern.c`

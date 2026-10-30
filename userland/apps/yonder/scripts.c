@@ -37,6 +37,10 @@ typedef struct {
     uint64_t job;                   // while FETCHING
     char *source;
     size_t length;
+    // A `src` script whose body the cache holds: its compiled form, when
+    // one was kept for this text, and where a compile's is kept. Freed
+    // with the source.
+    yonder_bytecode_t *bytecode;
     const char *why;                // FAILED: what the status line says instead
     char name[OS64_JS_SOURCE_NAME_CAP];
     // A `src` script's whole address, which `name` (the engine's source
@@ -114,8 +118,10 @@ struct yonder_scripts {
     os64_dom_timing_t timing;
     // How long the last task's script took the engine to evaluate, in
     // microseconds; -1 when the last task evaluated none
-    // (yonder_scripts_task_us).
+    // (yonder_scripts_task_us). And whether what it evaluated was read
+    // from the script's kept bytecode rather than compiled.
     int64_t task_us;
+    bool task_from_bytecode;
     // The document's readiness, moved by the dispatches this host makes
     // (os64_dom_readiness_after) whether or not a binding hears them yet:
     // a binding made late, at the first script after the page's load, is
@@ -134,6 +140,8 @@ static void release_item(yonder_scripts_t *s, Item *it)
     it->job = 0;
     os64_free(it->source);
     it->source = NULL;
+    yonder_bytecode_free(it->bytecode);
+    it->bytecode = NULL;
     if (it->node != NULL)
         os64_html_release(s->doc, it->node);
     it->node = NULL;
@@ -1086,6 +1094,7 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     os64_strcopy(name, sizeof(name), it->name);
     s->task_address = it->address;
     s->task_us = -1;
+    s->task_from_bytecode = false;
     if (it->state == STATE_FAILED) {
         out->status = OS64_JS_EXCEPTION;
         os64_strcopy(out->message, sizeof(out->message), it->why);
@@ -1110,9 +1119,12 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         // reason the item is named by its index.
         char *source = it->source;
         size_t length = it->length;
+        yonder_bytecode_t *bytecode = it->bytecode;
         it->source = NULL;
-        // The engine's whole evaluation, compiling the source included: the
-        // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
+        it->bytecode = NULL;
+        // The engine's whole evaluation, compiling the source or reading its
+        // kept bytecode included: the number the bytecode cache makes
+        // smaller (BYTECODE_CACHE.md).
         // The engine knows the script by the binding's name for it, which is
         // how the binding tells another site's script's failures from the
         // page's (libdom's report.c); the outcome keeps the item's name.
@@ -1130,9 +1142,24 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         // itself; a run that threw drains them below. A link's script has
         // no element, and leaves it null.
         os64_dom_set_current_script(s->dom, it->node);
-        os64_js_run(s->runtime, source, length, engine_name, out);
+        // A script whose body the cache holds runs through its bytecode: the
+        // kept blob, read under this run's name, or a compile whose blob is
+        // kept for the next visit (the window hands it to a job to write).
+        os64_js_bytecode_t bc = {0};
+        if (bytecode != NULL) {
+            bc.blob = bytecode->blob;
+            bc.blob_length = bytecode->length;
+            bc.keep = s->options.keep_bytecode != NULL;
+            os64_js_run_bytecode(s->runtime, source, length, engine_name, &bc, out);
+        } else {
+            os64_js_run(s->runtime, source, length, engine_name, out);
+        }
         int64_t ended = os64_micros();
         s->task_us = began >= 0 && ended >= began ? ended - began : -1;
+        s->task_from_bytecode = bc.from_blob;
+        if (bc.kept != NULL)
+            s->options.keep_bytecode(s->options.opaque, bytecode, bc.kept, bc.kept_length);
+        yonder_bytecode_free(bytecode);
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
@@ -1340,14 +1367,15 @@ bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fr
 }
 
 void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length,
-                            const char *final_url)
+                            const char *final_url, yonder_bytecode_t *bytecode)
 {
-    if (s == NULL || s->dead || token == 0 || token > s->count)
+    if (s == NULL || s->dead || token == 0 || token > s->count || s->items[token - 1].state != STATE_FETCHING) {
+        yonder_bytecode_free(bytecode);
         return;
+    }
     Item *it = &s->items[token - 1];
-    if (it->state != STATE_FETCHING)
-        return;
     it->job = 0;
+    it->bytecode = bytecode;
     if (source == NULL) {
         fail_item(s, it, "could not fetch the script");
         return;
@@ -1669,6 +1697,11 @@ void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const ch
 int64_t yonder_scripts_task_us(const yonder_scripts_t *s)
 {
     return s != NULL ? s->task_us : -1;
+}
+
+bool yonder_scripts_task_from_bytecode(const yonder_scripts_t *s)
+{
+    return s != NULL && s->task_us >= 0 && s->task_from_bytecode;
 }
 
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *s)

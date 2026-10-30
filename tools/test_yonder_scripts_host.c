@@ -12,6 +12,10 @@
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
+#ifdef OS64_JS_BYTECODE_ROUND_TRIP
+/* libjs's round-trip build counts the scripts it ran from their bytecode. */
+extern size_t os64_js_round_trips, os64_js_round_trips_skipped;
+#endif
 #include "os64/procfs.h"
 #include "os64/js_engine.h"
 os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
@@ -291,6 +295,9 @@ static int pool_fake;
 static struct { os64_work_id_t id; yonder_script_job_t *job; } script_jobs[32];
 static int nscript_jobs;
 static unsigned script_cancels;
+/* A compiled form's write (BYTECODE_CACHE.md), held until a case reaps it. */
+static struct { os64_work_id_t id; yonder_bytecode_job_t *job; } bytecode_jobs[8];
+static int nbytecode_jobs;
 /* A sheet's fetch job is held the same way, never run: a case that wants a
  * page waiting for its sheets gets one that waits until it is cancelled or
  * the window drops it. */
@@ -374,6 +381,11 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         if(nrequest_jobs==64) return 0;
         request_jobs[nrequest_jobs].id=++pool_ids; request_jobs[nrequest_jobs].job=work->job;
         return request_jobs[nrequest_jobs++].id;
+    }
+    if(*(const uint32_t *)work->job==YONDER_JOB_BYTECODE) {
+        if(nbytecode_jobs==8) return 0;
+        bytecode_jobs[nbytecode_jobs].id=++pool_ids; bytecode_jobs[nbytecode_jobs].job=work->job;
+        return bytecode_jobs[nbytecode_jobs++].id;
     }
     if(*(const uint32_t *)work->job==YONDER_JOB_FONT) {
         if(nfont_jobs==32 || font_refuse) return 0;
@@ -510,16 +522,35 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void 
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
 }
+/* As script_job.c frees a compiled form, and releases a script job and a
+ * compiled form's write. */
+void yonder_bytecode_free(yonder_bytecode_t *bytecode) {
+    if(bytecode) { os64_free(bytecode->blob); os64_free(bytecode); }
+}
 void yonder_script_release(void *job, void *product) {
     yonder_script_t *got=product;
-    if(got) { os64_free(got->source); os64_free(got); }
+    if(got) { os64_free(got->source); yonder_bytecode_free(got->bytecode); os64_free(got); }
     os64_free(job);
+}
+int64_t yonder_bytecode_keep_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
+    (void)job; (void)cancelled; (void)ctx; (void)out;
+    check(false,"unexpected worker execution"); return -1;
+}
+void yonder_bytecode_keep_release(void *job, void *product) {
+    (void)product; yonder_bytecode_job_t *j=job;
+    if(j) os64_free(j->blob);
+    os64_free(j);
 }
 /* The worker's answer to the script job whose address ends with `tail`:
  * its source, or NULL for a fetch that failed. False when no such job is
  * out. */
 static bool script_land_from(const char *tail, const char *source, const char *final);
 static bool script_land(const char *tail, const char *source) { return script_land_from(tail,source,NULL); }
+/* The next landings' body is one the cache holds (BYTECODE_CACHE.md), with
+ * this compiled form beside it when it is not NULL. */
+static bool script_land_kept;
+static const uint8_t *script_land_blob;
+static size_t script_land_blob_length;
 /* The same, the response having come from `final` after its redirects
  * (NULL: from the address asked for). */
 static bool script_land_from(const char *tail, const char *source, const char *final) {
@@ -535,6 +566,18 @@ static bool script_land_from(const char *tail, const char *source, const char *f
             got->source=os64_malloc(got->length+1); memcpy(got->source,source,got->length+1);
         }
         os64_strcopy(got->url,sizeof(got->url),final!=NULL ? final : url);
+        if(source && script_land_kept) {
+            /* The cache holds the body: its compiled form, when the case
+             * gave one, and where a compile's is kept. */
+            got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
+            os64_strcopy(got->bytecode->url,sizeof(got->bytecode->url),url);
+            os64_strcopy(got->bytecode->key,sizeof(got->bytecode->key),"classic test");
+            if(script_land_blob) {
+                got->bytecode->blob=os64_malloc(script_land_blob_length);
+                memcpy(got->bytecode->blob,script_land_blob,script_land_blob_length);
+                got->bytecode->length=script_land_blob_length;
+            }
+        }
         reaped(id,job,got);
         return true;
     }
@@ -10869,6 +10912,95 @@ static void title_fit_cases(void)
     os64_html_document_free(doc);
 }
 
+/* BYTECODE_CACHE.md: a compiled form, as libjs keeps one, of `source`
+ * compiled under a name no page gives a script. The caller's to free. */
+static uint8_t *bytecode_blob_of(const char *source, size_t *length) {
+    os64_js_config_t config={.limits=os64_js_default_limits()};
+    os64_js_runtime_t *runtime=NULL; os64_js_outcome_t out;
+    if(os64_js_create(&config,OS64_JS_ABI_ID,&runtime,&out)!=OS64_JS_OK) return NULL;
+    os64_js_bytecode_t bc={.keep=true};
+    os64_js_run_bytecode(runtime,source,strlen(source),"os64-script:99",&bc,&out);
+    os64_js_destroy(runtime);
+    *length=bc.kept_length;
+    return bc.kept;
+}
+/* A `src` script whose body the cache holds runs through its compiled
+ * form when one is kept, and a compile's form goes to a job of its own. */
+/* A page whose window has a cache, one the fakes never open: keeping asks
+ * only that there is one. The window is made afresh with each page. */
+static void bytecode_page(void) {
+    loop_page("<p id=out>-</p><script src=app.js></script>");
+    g.cache=(way_cache_t *)&nbytecode_jobs;
+}
+static void bytecode_cases(void) {
+    script_land_kept=true;
+    bytecode_page();
+    check(loop_settle() && nscript_jobs==1,"bytecode: the script's fetch is out");
+    check(script_land("/app.js","document.getElementById('out').textContent='compiled'"),
+        "bytecode: its body comes back, kept, with no compiled form beside it");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","compiled"),
+        "bytecode: a script with no compiled form is compiled and runs");
+    check(javascript_record_has("/app.js: ran in ") && !javascript_record_has("from its bytecode"),
+        "bytecode: and the record says it ran, not that it was read");
+    check(nbytecode_jobs==1 && has(bytecode_jobs[0].job->url,"/app.js") &&
+        os64_streq(bytecode_jobs[0].job->key,"classic test") && bytecode_jobs[0].job->length>96 &&
+        bytecode_jobs[0].job->cache==g.cache && s_bytecode_queued==bytecode_jobs[0].job->length,
+        "bytecode: the compile's form goes to a job of its own, under the entry's address and key");
+    if(nbytecode_jobs!=1) {
+        script_land_kept=false; loop_drop(); g.cache=NULL; return;
+    }
+    reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
+    nbytecode_jobs=0;
+    check(s_bytecode_queued==0,"bytecode: what was queued is let go with its job");
+    loop_drop();
+
+    /* The next visit runs what was kept: here a form of another text, so
+     * the page says which of the two ran. */
+    size_t length=0;
+    uint8_t *blob=bytecode_blob_of("document.getElementById('out').textContent='from its bytecode'",&length);
+    script_land_blob=blob; script_land_blob_length=length;
+    bytecode_page();
+    check(loop_settle() && script_land("/app.js","document.getElementById('out').textContent='compiled'") &&
+        loop_settle() && g.page.tree!=NULL && probe_text_is("out","from its bytecode"),
+        "bytecode: a kept form is what runs");
+    check(javascript_record_has(" us from its bytecode\n"),
+        "bytecode: and the record says it ran from its bytecode, the before and after's number");
+    check(nbytecode_jobs==0,"bytecode: and running it keeps nothing new");
+    loop_drop();
+
+    /* A form that is not libjs's is refused, and the source runs instead,
+     * its own form kept. */
+    blob[0]^=0xff;
+    bytecode_page();
+    check(loop_settle() && script_land("/app.js","document.getElementById('out').textContent='compiled'") &&
+        loop_settle() && g.page.tree!=NULL && probe_text_is("out","compiled") && nbytecode_jobs==1,
+        "bytecode: a damaged form is refused, the source compiled and its form kept");
+    reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
+    nbytecode_jobs=0;
+    loop_drop();
+    os64_free(blob);
+    script_land_blob=NULL; script_land_blob_length=0;
+
+    /* A body the cache does not hold has no form, and keeps none. */
+    script_land_kept=false;
+    bytecode_page();
+    check(loop_settle() && script_land("/app.js","document.getElementById('out').textContent='compiled'") &&
+        loop_settle() && probe_text_is("out","compiled") && nbytecode_jobs==0,
+        "bytecode: a body the cache does not hold keeps no form");
+    loop_drop();
+
+    /* A form arriving for a page that is gone is let go with the answer:
+     * the suite's last check, an empty heap, is what sees it. */
+    yonder_script_job_t *job=os64_calloc(1,sizeof(*job));
+    job->kind=YONDER_JOB_SCRIPT; job->page=UINT64_MAX; job->token=1;
+    yonder_script_t *got=os64_calloc(1,sizeof(*got));
+    got->ok=true; got->source=os64_malloc(2); memcpy(got->source,"1",2); got->length=1;
+    got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
+    got->bytecode->blob=os64_malloc(8);
+    reaped(0,job,got);
+    g.cache=NULL;
+}
+
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
  * its own main. */
@@ -10937,6 +11069,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) module_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) bytecode_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();
@@ -10944,6 +11077,12 @@ int main(void)
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");
+#ifdef OS64_JS_BYTECODE_ROUND_TRIP
+    /* The round trip's build: every classic script went through its blob. */
+    printf("Yonder scripted-page host: %zu scripts run from their round-tripped bytecode, %zu not (no memory for the blob)\n",
+           os64_js_round_trips,os64_js_round_trips_skipped);
+    check(os64_js_round_trips>0,"round trip: classic scripts were run from their bytecode");
+#endif
     printf("Yonder scripted-page host: %u checks, %u failed\n",checks,failures);
     return failures?1:0;
 }

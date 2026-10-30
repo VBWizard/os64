@@ -120,6 +120,29 @@ class PrepareTests(unittest.TestCase):
         self.assertIn('        if (cpool_idx < 0) {\n            JS_ThrowOutOfMemory(ctx);\n            goto fail;\n'
                       '        }\n        func_obj = js_create_function(ctx, fd1);', source)
         self.assertNotIn('assert(cpool_idx >= 0);', source)
+        # 0015: a read given a name renames each function as its debug
+        # information is read, and JS_ReadObject reads with none.
+        self.assertIn('        if (bc_get_atom(s, &b->debug.filename))\n            goto fail;\n'
+                      '        if (s->filename != JS_ATOM_NULL) {\n'
+                      '            JS_FreeAtom(ctx, b->debug.filename);\n'
+                      '            b->debug.filename = JS_DupAtom(ctx, s->filename);\n        }\n', source)
+        self.assertIn('    return JS_ReadObjectInternal(ctx, buf, buf_len, flags, JS_ATOM_NULL);\n', source)
+
+    def test_engine_identity(self):
+        # The identity a bytecode blob is tied to follows the prepared
+        # engine: the same sources give the same one, and an edit to any of
+        # them (a patch's effect included) gives another.
+        def identity():
+            result = self.prepare()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            text = (self.root / 'prepared/os64_js_engine_id.h').read_text()
+            self.assertRegex(text, r'#define OS64_JS_ENGINE_ID "[0-9a-f]{64}"\n')
+            return text
+        first = identity()
+        self.assertEqual(identity(), first)
+        path = self.lib / 'upstream/quickjs-opcode.h'
+        path.write_text(path.read_text() + '\n')
+        self.assertNotEqual(identity(), first)
 
     def test_line_shifts_preserve_output(self):
         result = self.prepare()

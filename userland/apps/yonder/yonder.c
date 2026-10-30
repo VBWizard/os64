@@ -8065,6 +8065,8 @@ static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
         *modified = 0;
 }
 
+static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
@@ -8074,8 +8076,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
-        .fetch = script_fetch, .cancel = script_cancel, .activate = script_activate,
-        .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
+        .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
@@ -8089,7 +8091,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     return host;
 }
 
-static void script_arrived(const yonder_script_job_t *job, const yonder_script_t *got)
+static void script_arrived(const yonder_script_job_t *job, yonder_script_t *got)
 {
     yonder_scripts_t *host = scripts_for(job->page);
     // Kept as the host is handed it, decoded, a fetch that failed as a
@@ -8100,9 +8102,49 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
     if (host != NULL)
         diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
                   came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
+    // Its compiled form, if the cache holds its body, is the host's now.
+    yonder_bytecode_t *bytecode = came ? got->bytecode : NULL;
+    if (came)
+        got->bytecode = NULL;
     if (host != NULL)
         yonder_scripts_fetched(host, job->token, came ? got->source : NULL, got != NULL ? got->length : 0,
-                               came ? got->url : NULL);
+                               came ? got->url : NULL, bytecode);
+    else
+        yonder_bytecode_free(bytecode);
+}
+
+// The compiled forms on their way to the disk, in bytes: a page compiling
+// a megabyte of script a second must not queue more than this behind the
+// workers, and one that would is not kept, which costs the next visit a
+// compile and nothing else.
+#define BYTECODE_QUEUED_MAX ((size_t)64 << 20)
+static size_t s_bytecode_queued;
+
+// A script compiled from a body the cache holds (scripts.h keep_bytecode):
+// its blob is written beside the entry on a job of its own.
+static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length)
+{
+    (void)opaque;
+    yonder_bytecode_job_t *job = g.pool != NULL && g.cache != NULL && length <= SCRIPT_BYTECODE_MAX &&
+                                         s_bytecode_queued + length <= BYTECODE_QUEUED_MAX
+                                     ? os64_calloc(1, sizeof(*job))
+                                     : NULL;
+    if (job == NULL) {
+        os64_free(blob);
+        return;
+    }
+    job->kind = YONDER_JOB_BYTECODE;
+    job->cache = g.cache;
+    job->blob = blob;
+    job->length = length;
+    os64_strcopy(job->url, sizeof(job->url), where->url);
+    os64_strcopy(job->key, sizeof(job->key), where->key);
+    os64_work_t work = {yonder_bytecode_keep_run, yonder_bytecode_keep_release, job, BYTECODE_KEEP_RESERVE};
+    if (os64_work_submit(g.pool, &work) == 0) {
+        yonder_bytecode_keep_release(job, NULL);
+        return;
+    }
+    s_bytecode_queued += length;
 }
 
 // When the task running began (task_begin), for its cost (task_cost). A
@@ -8169,12 +8211,15 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     char key[OS64_DOM_URL_MAX + 16];
     os64_snprintf(key, sizeof(key), "script %s", address != NULL ? address : name);
     // How long the engine took over it, compiling included, when the task
-    // evaluated a script: `ran in 1520 us`.
+    // evaluated a script: `ran in 1520 us`, and `ran in 80 us from its
+    // bytecode` when the compile was its kept bytecode's read instead
+    // (BYTECODE_CACHE.md), which is the before and after.
     int64_t us = yonder_scripts_task_us(host);
-    char ran[48] = "ran", died[48] = "failed";
+    const char *from = yonder_scripts_task_from_bytecode(host) ? " from its bytecode" : "";
+    char ran[64] = "ran", died[64] = "failed";
     if (us >= 0) {
-        os64_snprintf(ran, sizeof(ran), "ran in %ld us", (long)us);
-        os64_snprintf(died, sizeof(died), "failed in %ld us", (long)us);
+        os64_snprintf(ran, sizeof(ran), "ran in %ld us%s", (long)us, from);
+        os64_snprintf(died, sizeof(died), "failed in %ld us%s", (long)us, from);
     }
     // A task with a script's name is a script's, and the record lists it;
     // an event or a timer with none is listed only by a failure.
@@ -10355,6 +10400,12 @@ static void reaped(os64_work_id_t id, void *job, void *product)
     if (*(const uint32_t *)job == YONDER_JOB_DOWNLOAD) {
         download_arrived(id, job);
         yonder_download_release(job, product);
+        return;
+    }
+    // A compiled form written, or not: either way nothing waits on it.
+    if (*(const uint32_t *)job == YONDER_JOB_BYTECODE) {
+        s_bytecode_queued -= ((const yonder_bytecode_job_t *)job)->length;
+        yonder_bytecode_keep_release(job, product);
         return;
     }
     // A fetch is done. Everything it had to say went down the mailbox

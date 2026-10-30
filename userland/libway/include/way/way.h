@@ -397,6 +397,10 @@ typedef struct {
     char charset[HTTP_CHARSET_MAX];
     char url[OS64_FETCH_URL_MAX];           // where it came from: a base for what it names
     way_served_t served;
+    // The cache holds this body now: it was served from there, or stored
+    // by this fetch. What a face keeps beside it (a companion, cache.h) is
+    // asked for only then.
+    bool kept;
     os64_fetch_status_t fetch;              // the fetch's verdict, when there was one
 } way_whole_t;
 

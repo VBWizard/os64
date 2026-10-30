@@ -1,0 +1,93 @@
+# A host that caches a script's bytecode may run it under a name other than
+# the one it was compiled under: yonder names a classic script by its place
+# in the page (`os64-script:<n>`) and reads that name back off a thrown
+# error to know whose error it is, and so whether it is muted, while one
+# bundle is the third script of one page and the seventh of another. The
+# name is compiled into every function's debug information, so the read
+# must give it. JS_ReadObjectNamed is JS_ReadObject with a filename every
+# function it makes takes in place of the one written. A module's own name
+# (its identity for resolution) is not touched.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -38639,6 +38639,9 @@
+     BOOL allow_bytecode : 8;
+     BOOL is_rom_data : 8;
+     BOOL allow_reference : 8;
++    /* os64: the name every function read takes in place of the one
++       written, when not JS_ATOM_NULL (JS_ReadObjectNamed). */
++    JSAtom filename;
+     /* object references */
+     JSObject **objects;
+     int objects_count;
+@@ -39172,6 +39175,10 @@
+         bc_read_trace(s, "debug {\n");
+         if (bc_get_atom(s, &b->debug.filename))
+             goto fail;
++        if (s->filename != JS_ATOM_NULL) {
++            JS_FreeAtom(ctx, b->debug.filename);
++            b->debug.filename = JS_DupAtom(ctx, s->filename);
++        }
+ #ifdef DUMP_READ_OBJECT
+         bc_read_trace(s, "filename: "); print_atom(s->ctx, b->debug.filename); printf("\n");
+ #endif
+@@ -39745,8 +39752,8 @@
+     js_free(s->ctx, s->objects);
+ }
+ 
+-JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+-                       int flags)
++static JSValue JS_ReadObjectInternal(JSContext *ctx, const uint8_t *buf, size_t buf_len,
++                                     int flags, JSAtom filename)
+ {
+     BCReaderState ss, *s = &ss;
+     JSValue obj;
+@@ -39763,6 +39770,7 @@
+     s->is_rom_data = ((flags & JS_READ_OBJ_ROM_DATA) != 0);
+     s->allow_sab = ((flags & JS_READ_OBJ_SAB) != 0);
+     s->allow_reference = ((flags & JS_READ_OBJ_REFERENCE) != 0);
++    s->filename = filename;
+     if (s->allow_bytecode)
+         s->first_atom = JS_ATOM_END;
+     else
+@@ -39776,6 +39784,28 @@
+     return obj;
+ }
+ 
++JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len,
++                       int flags)
++{
++    return JS_ReadObjectInternal(ctx, buf, buf_len, flags, JS_ATOM_NULL);
++}
++
++/* os64: a script's name is not part of its bytecode's identity, since a
++   host may run one compiled script under different names; the read gives
++   it. Only the functions' debug names change: a module keeps the name it
++   was written with, which is its identity for resolution. */
++JSValue JS_ReadObjectNamed(JSContext *ctx, const uint8_t *buf, size_t buf_len,
++                           int flags, const char *filename)
++{
++    JSAtom name = JS_NewAtom(ctx, filename);
++    JSValue obj;
++    if (name == JS_ATOM_NULL)
++        return JS_EXCEPTION;
++    obj = JS_ReadObjectInternal(ctx, buf, buf_len, flags, name);
++    JS_FreeAtom(ctx, name);
++    return obj;
++}
++
+ /*******************************************************************/
+ /* runtime functions & objects */
+ 
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -1015,6 +1015,10 @@
+ #define JS_READ_OBJ_REFERENCE (1 << 3) /* allow object references */
+ JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+                       int flags);
++/* os64: JS_ReadObject, every function it makes taking `filename` as its
++   name in place of the one it was written with. */
++JSValue JS_ReadObjectNamed(JSContext *ctx, const uint8_t *buf, size_t buf_len,
++                           int flags, const char *filename);
+ /* instantiate and evaluate a bytecode function. Only used when
+    reading a script or module with JS_ReadObject() */
+ JSValue JS_EvalFunction(JSContext *ctx, JSValue fun_obj);

@@ -17,6 +17,7 @@
 #include <dom/dom.h>
 
 #include "diag.h"
+#include "script_job.h"
 #include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
@@ -31,6 +32,10 @@ typedef struct {
     uint64_t (*fetch)(void *opaque, uint64_t serial, uint32_t token, const char *url,
                       const char *fallback);
     void (*cancel)(void *opaque, uint64_t job);
+    // A `src` script compiled from its source, whose body the cache holds:
+    // its blob (libjs's, taken) to be kept where `where` says
+    // (BYTECODE_CACHE.md). NULL keeps nothing.
+    void (*keep_bytecode)(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
     void (*activate)(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what);
     // document.write: the stream's parser takes the text (os64_html_parser_
     // write) and answers its status. Asked only while the script the parse
@@ -172,9 +177,11 @@ bool yonder_scripts_address(yonder_scripts_t *scripts, const char *url, const ch
 // A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed;
 // `final_url` the response's address after its redirects (NULL or empty:
 // the address asked for), which the script is named and muted by from
-// then on.
+// then on. `bytecode`, when the cache holds the script's body, is TAKEN
+// (freed whatever becomes of the script): the compiled form read beside
+// it, and where a compile's is kept.
 void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const char *source,
-                            size_t length, const char *final_url);
+                            size_t length, const char *final_url, yonder_bytecode_t *bytecode);
 
 // One event at `node`, or at window (NULL), as os64_dom_dispatch. A page
 // whose script never ran makes its runtime here if an element carries an
@@ -257,9 +264,12 @@ const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
 void yonder_scripts_failure(const yonder_scripts_t *scripts, const char *own, const char *message,
                             const char *stack, char *out, size_t cap);
 // How long the engine took to evaluate the script the last task ran
-// (os64_js_run, compiling it included), in microseconds; -1 when the last
-// task was an event or a timer, or ran no script.
+// (compiling it, or reading its kept bytecode, included), in microseconds;
+// -1 when the last task was an event or a timer, or ran no script.
 int64_t yonder_scripts_task_us(const yonder_scripts_t *scripts);
+// Whether that script was run from its kept bytecode (BYTECODE_CACHE.md)
+// rather than compiled; false whenever task_us is -1.
+bool yonder_scripts_task_from_bytecode(const yonder_scripts_t *scripts);
 // The record the host was given (options.diag).
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *scripts);
 // The serial a script's fetch job carries back.

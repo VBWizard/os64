@@ -105,8 +105,17 @@ reader sees the old entry or the new one and two yonder windows share the
 directory safely. Its name is a 64-bit hash of the address asked for, and
 the address inside is checked, so a collision is a miss.
 
-**When it is full** the oldest entries by their file's time — stored, or
-revalidated — are removed until it is under nine-tenths of the cap. That
+A face may keep a COMPANION beside an entry (`<hash>.b` beside
+`<hash>.e`, 2026-10-30): something it derived from the body, under a key
+of its own that names what it was derived from — yonder's is a script's
+compiled form, keyed by the source's digest (BYTECODE_CACHE.md). It is
+dropped with its entry, cleared with the entries, swept by the same rule
+and counted in the same cap, and a face reads one only for a body the
+cache holds.
+
+**When it is full** the oldest entries and companions by their file's time
+— stored, or revalidated — are removed until it is under nine-tenths of
+the cap. That
 is a little blunter than least-recently-used (a hit does not rewrite the
 file), and needs no index that two windows would have to agree on. The
 cap is the DIRECTORY's, which other windows write to unseen: each counts

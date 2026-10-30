@@ -85,6 +85,27 @@ pattern that does not compile is no constraint. A class string's atoms
 are now asked as class atoms, which is what keeps the rules there, and
 lets `\-` be escaped in one, as a class allows.
 
+Patch 0015 adds `JS_ReadObjectNamed`, `JS_ReadObject` with a filename:
+every function the read makes takes it as its debug name in place of the
+one it was written with. A browser that keeps a classic script's
+bytecode (BYTECODE_CACHE.md) runs it under a name of the page's, the
+script's place there (`os64-script:<n>`), which libdom reads back off a
+thrown error to know whose error it is and whether it is muted, and one
+bundle is the third script of one page and the seventh of another. The
+name is in every function's debug information, so the read has to give
+it; nothing else in a classic script's bytecode depends on its name. A
+module's own name, its identity for resolution, is not touched.
+`JS_ReadObject` reads with none, as it always has.
+
+Not patched, and worked round instead: `JS_WriteObject2` returns its
+buffer without asking whether a growth of it failed (`dbuf.error`), and
+the writer's callers of `bc_put_atom` ignore a failed atom index, so under
+memory pressure it answers with a payload that reads back as a broken
+function (yonder's bytecode round trip ran one into a NULL closure
+reference). libjs judges a write by its allocator instead: any refusal
+during it, and the payload is thrown away (CONTRACT.md § Source and job
+turns, `run_bytecode`).
+
 Selected upstream test sources are retained separately in
 `tools/js_acceptance/upstream`, with archive/file hashes and the original
 licence. Their assertions remain unchanged; separate drivers report individual

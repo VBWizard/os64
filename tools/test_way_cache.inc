@@ -636,9 +636,125 @@ static void store_cases(void)
         expect("store: the temporary directory is removed", false, root);
 }
 
+// A companion's name: its entry's, ending `.b`.
+static void companion_path(const char *dir, const char *url, char *out, size_t cap)
+{
+    entry_path(dir, url, out, cap);
+    out[strlen(out) - 1] = 'b';
+}
+
+// BYTECODE_CACHE.md § 5: what a face keeps beside an entry.
+static void companion_cases(void)
+{
+    char root[] = "/tmp/way_companionXXXXXX";
+    if (mkdtemp(root) == NULL) {
+        expect("companion: a temporary directory", false, NULL);
+        return;
+    }
+    char dir[600];
+    snprintf(dir, sizeof(dir), "%s/cache", root);
+    s_clock = D;
+    way_cache_t *c = way_cache_open(dir, 64 * 1024);
+    const char *url = "https://x.test/app.js";
+    const char *key = "classic 0123456789abcdef 4096";
+    uint8_t blob[3000];
+    for (size_t i = 0; i < sizeof(blob); i++)
+        blob[i] = (uint8_t)(i * 13);
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    expect("companion: kept", way_cache_companion_put(c, url, key, blob, sizeof(blob)), NULL);
+    bool found = way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20);
+    expect("companion: and read back whole", found && len == sizeof(blob) &&
+           memcmp(bytes, blob, len) == 0, NULL);
+    os64_free(bytes);
+    expect("companion: another key is a miss",
+           !way_cache_companion_get(c, url, "classic 0123456789abcdef 4097", &bytes, &len, 1 << 20) &&
+           bytes == NULL, NULL);
+    expect("companion: another address is a miss",
+           !way_cache_companion_get(c, "https://x.test/other.js", key, &bytes, &len, 1 << 20), NULL);
+    expect("companion: larger than the caller's cap is a miss",
+           !way_cache_companion_get(c, url, key, &bytes, &len, sizeof(blob) - 1), NULL);
+    int32_t entries_before = 0;
+    way_cache_stats_t st;
+    way_cache_stats(c, &st);
+    entries_before = st.entries;
+    expect("companion: counted in the bytes, not as an entry", entries_before == 0 &&
+           st.bytes > sizeof(blob), NULL);
+
+    // The address inside is checked; a file cut short or grown is a miss.
+    char from[1200], to[1200];
+    companion_path(dir, url, from, sizeof(from));
+    companion_path(dir, "https://x.test/collides.js", to, sizeof(to));
+    rename(from, to);
+    expect("companion: the address inside is checked",
+           !way_cache_companion_get(c, "https://x.test/collides.js", key, &bytes, &len, 1 << 20), NULL);
+    rename(to, from);
+    struct stat whole;
+    stat(from, &whole);
+    expect("companion: cut short", truncate(from, whole.st_size - 1) == 0, NULL);
+    expect("companion: a torn companion is a miss",
+           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
+    expect("companion: grown", truncate(from, whole.st_size + 1) == 0, NULL);
+    expect("companion: a longer companion is a miss",
+           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
+
+    // A key is one line, not empty and not too long; an eighth of the cap.
+    char long_key[WAY_COMPANION_KEY_MAX + 1];
+    memset(long_key, 'k', sizeof(long_key) - 1);
+    long_key[sizeof(long_key) - 1] = '\0';
+    expect("companion: a key with a line break is refused",
+           !way_cache_companion_put(c, url, "classic\nlength 1", blob, sizeof(blob)), NULL);
+    expect("companion: an empty key is refused", !way_cache_companion_put(c, url, "", blob, sizeof(blob)),
+           NULL);
+    expect("companion: a key too long is refused",
+           !way_cache_companion_put(c, url, long_key, blob, sizeof(blob)), NULL);
+    static uint8_t big[9000];
+    expect("companion: over an eighth of the cap is not kept",
+           !way_cache_companion_put(c, url, key, big, sizeof(big)), NULL);
+    way_cache_enable(c, false);
+    expect("companion: turned off, nothing is kept or read",
+           !way_cache_companion_put(c, url, key, blob, sizeof(blob)) &&
+           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
+    way_cache_enable(c, true);
+
+    // It goes with its entry: dropped, and cleared.
+    uint8_t body[1000] = {0};
+    way_entry_t e = entry(url, "max-age=60");
+    (void)way_cache_put(c, &e, body, sizeof(body));
+    (void)way_cache_companion_put(c, url, key, blob, sizeof(blob));
+    way_cache_drop(c, url);
+    expect("companion: dropped with its entry", access(from, F_OK) != 0 &&
+           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
+    (void)way_cache_put(c, &e, body, sizeof(body));
+    (void)way_cache_companion_put(c, url, key, blob, sizeof(blob));
+    expect("companion: cleared with the entries, which alone are counted",
+           way_cache_clear(c) == 1 && access(from, F_OK) != 0 && count_entries(dir) == 0, NULL);
+
+    // The sweep takes companions by the same oldest-first rule.
+    static char names[30][1200];
+    for (int i = 0; i < 30; i++) {
+        char u[64];
+        snprintf(u, sizeof(u), "https://x.test/%d.js", i);
+        companion_path(dir, u, names[i], sizeof(names[i]));
+        (void)way_cache_companion_put(c, u, key, blob, sizeof(blob));
+        set_mtime(names[i], (time_t)(D + 10 + i));
+    }
+    way_cache_stats(c, &st);
+    struct stat s0, s29;
+    expect("companion: swept under the cap, the oldest first", st.bytes <= 64 * 1024 &&
+           stat(names[0], &s0) != 0 && stat(names[29], &s29) == 0, NULL);
+    way_cache_close(c);
+
+    char rm[700];
+    snprintf(rm, sizeof(rm), "rm -rf '%s'", root);
+    if (system(rm) != 0)
+        expect("companion: the temporary directory is removed", false, root);
+}
+
 static void cache_cases(void)
 {
     keep_rules();
     chain_rules();
     store_cases();
+    companion_cases();
 }
