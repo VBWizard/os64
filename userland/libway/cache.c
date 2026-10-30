@@ -601,15 +601,22 @@ static uint64_t cap_of(way_cache_t *c)
 }
 
 // A file the store keeps is named for its key and its kind: the reply's
-// ENTRY, or the COMPANION a face derived from its body.
+// ENTRY, or the COMPANION a face derived from its body. It lives in the
+// BUCKET its hash's top byte names (`<dir>/3f/3f...e`), because a
+// directory is a list a name is looked up in from the start (ext2 keeps no
+// index): one directory of every file made each open, create and rename
+// cost as much as the cache was large.
 #define KIND_ENTRY 'e'
 #define KIND_COMPANION 'b'
+#define BUCKETS 256
 
 static bool path_of(const way_cache_t *c, const way_cache_key_t *key, char kind, char *out, size_t cap)
 {
     if (!key_usable(key))
         return false;
-    int n = os64_snprintf(out, cap, "%s/%016lx.%c", c->dir, (unsigned long)key_hash(key), kind);
+    uint64_t h = key_hash(key);
+    int n = os64_snprintf(out, cap, "%s/%02lx/%016lx.%c", c->dir, (unsigned long)(h >> 56), (unsigned long)h,
+                          kind);
     return n > 0 && (size_t)n < cap;
 }
 
@@ -654,29 +661,87 @@ static void make_dirs(const char *dir)
         }
 }
 
-// What the directory holds: its entries' count, and the bytes of the
-// entries and their companions. Temp files a dead writer left are removed
-// on the way.
-static void survey(way_cache_t *c, int32_t *entries, uint64_t *bytes)
+static bool is_bucket(const os64_dirent_t *e)
 {
-    *entries = 0;
-    *bytes = 0;
+    const char *n = e->name;
+    return (e->flags & OS64_DE_DIR) != 0 && os64_strlen(n) == 2 &&
+           ((n[0] >= '0' && n[0] <= '9') || (n[0] >= 'a' && n[0] <= 'f')) &&
+           ((n[1] >= '0' && n[1] <= '9') || (n[1] >= 'a' && n[1] <= 'f'));
+}
+
+// A file of the store's as a walk meets it: the directory it is in, the
+// name it has there from the store's own directory (`3f/3f...e`, or the
+// bare name of one in the store's directory itself), and its listing.
+// False ends the walk.
+typedef bool (*Visit)(void *ctx, const char *dir, const char *name, const os64_dirent_t *e);
+
+// Every file in the store's directory and in each of its buckets, to
+// `visit`. A file in the store's directory itself was kept before there
+// were buckets: no key finds it, and it is counted and swept until it
+// ages out. The buckets are listed first and walked after, one directory
+// open at a time.
+static void walk(way_cache_t *c, Visit visit, void *ctx)
+{
     int64_t d = os64_opendir(c->dir);
     if (d < 0)
         return;
-    int64_t now = clock_now();
+    char (*buckets)[3] = os64_malloc(BUCKETS * sizeof(*buckets));
+    size_t nb = 0;
+    bool go = true;
     os64_dirent_t e;
-    char path[OS64_PATH_MAX];
-    while (os64_readdir((int32_t)d, &e) == 1) {
-        if (is_kept(e.name)) {
-            *entries += is_kind(e.name, KIND_ENTRY);
-            *bytes += e.size;
-        } else if (is_temp(e.name) && e.mtime != 0 && (int64_t)e.mtime + TEMP_ABANDONED < now &&
-                   os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0) {
-            (void)os64_unlink(path);
+    while (go && os64_readdir((int32_t)d, &e) == 1) {
+        if (is_bucket(&e)) {
+            if (buckets != NULL && nb < BUCKETS)
+                os64_strcopy(buckets[nb++], sizeof(buckets[0]), e.name);
+        } else {
+            go = visit(ctx, c->dir, e.name, &e);
         }
     }
     os64_close((int32_t)d);
+    char dir[OS64_PATH_MAX], name[24];
+    for (size_t i = 0; go && i < nb; i++) {
+        if (os64_snprintf(dir, sizeof(dir), "%s/%s", c->dir, buckets[i]) <= 0 ||
+            (d = os64_opendir(dir)) < 0)
+            continue;
+        while (go && os64_readdir((int32_t)d, &e) == 1)
+            if (os64_snprintf(name, sizeof(name), "%s/%s", buckets[i], e.name) > 0)
+                go = visit(ctx, dir, name, &e);
+        os64_close((int32_t)d);
+    }
+    os64_free(buckets);
+}
+
+typedef struct {
+    way_cache_t *c;
+    int32_t entries;
+    uint64_t bytes;
+    int64_t now;
+} Survey;
+
+static bool survey_one(void *ctx, const char *dir, const char *name, const os64_dirent_t *e)
+{
+    Survey *s = ctx;
+    char path[OS64_PATH_MAX];
+    (void)name;
+    if (is_kept(e->name)) {
+        s->entries += is_kind(e->name, KIND_ENTRY);
+        s->bytes += e->size;
+    } else if (is_temp(e->name) && e->mtime != 0 && (int64_t)e->mtime + TEMP_ABANDONED < s->now &&
+               os64_snprintf(path, sizeof(path), "%s/%s", dir, e->name) > 0) {
+        (void)os64_unlink(path);
+    }
+    return true;
+}
+
+// What the store holds: its entries' count, and the bytes of the entries
+// and their companions. Temp files a dead writer left are removed on the
+// way.
+static void survey(way_cache_t *c, int32_t *entries, uint64_t *bytes)
+{
+    Survey s = {c, 0, 0, clock_now()};
+    walk(c, survey_one, &s);
+    *entries = s.entries;
+    *bytes = s.bytes;
 }
 
 way_cache_t *way_cache_open(const char *dir, uint64_t cap)
@@ -752,19 +817,22 @@ void way_cache_count(way_cache_t *c, way_served_t how)
     os64_lock_release(&c->lock);
 }
 
+static bool clear_one(void *ctx, const char *dir, const char *name, const os64_dirent_t *e)
+{
+    int32_t *gone = ctx;
+    char path[OS64_PATH_MAX];
+    (void)name;
+    if (is_kept(e->name) && os64_snprintf(path, sizeof(path), "%s/%s", dir, e->name) > 0 && os64_unlink(path) == 0)
+        *gone += is_kind(e->name, KIND_ENTRY);
+    return true;
+}
+
 int32_t way_cache_clear(way_cache_t *c)
 {
     int32_t gone = 0;
-    int64_t d = c->usable ? os64_opendir(c->dir) : -1;
-    if (d < 0)
+    if (!c->usable)
         return 0;
-    os64_dirent_t e;
-    char path[OS64_PATH_MAX];
-    while (os64_readdir((int32_t)d, &e) == 1)
-        if (is_kept(e.name) && os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0 &&
-            os64_unlink(path) == 0)
-            gone += is_kind(e.name, KIND_ENTRY);
-    os64_close((int32_t)d);
+    walk(c, clear_one, &gone);
     os64_lock_acquire(&c->lock);
     c->total = 0;
     os64_lock_release(&c->lock);
@@ -983,7 +1051,7 @@ bool way_cache_companion_get(way_cache_t *c, const way_cache_key_t *key, const c
 // ── Keeping the cache under its cap ─────────────────────────────────────
 
 typedef struct {
-    char name[20];
+    char name[24];                  // from the store's directory (walk's `name`)
     uint64_t size, mtime;
 } Kept;
 
@@ -1010,36 +1078,41 @@ static void sort_by_time(Kept *v, Kept *tmp, size_t n)
 // thread that set `evicting`. True when what was written while it ran
 // calls for another pass, which the same thread makes before it lets the
 // sweep go: those writers saw a sweep running and left it to this one.
+typedef struct {
+    Kept *v;
+    size_t n, cap;
+    uint64_t total;
+} Listing;
+
+static bool list_one(void *ctx, const char *dir, const char *name, const os64_dirent_t *e)
+{
+    Listing *l = ctx;
+    (void)dir;
+    if (!is_kept(e->name))
+        return true;
+    if (l->n == l->cap) {
+        Kept *grown = os64_realloc(l->v, l->cap * 2 * sizeof(*l->v));
+        if (grown == NULL)
+            return false;
+        l->v = grown;
+        l->cap *= 2;
+    }
+    os64_strcopy(l->v[l->n].name, sizeof(l->v[l->n].name), name);
+    l->v[l->n].size = e->size;
+    l->v[l->n].mtime = e->mtime;
+    l->total += e->size;
+    l->n++;
+    return true;
+}
+
 static bool evict_pass(way_cache_t *c)
 {
-    int64_t d = os64_opendir(c->dir);
-    size_t n = 0, capn = 256;
-    if (d < 0) {
-        os64_lock_acquire(&c->lock);
-        c->evicting = false;
-        os64_lock_release(&c->lock);
-        return false;
-    }
-    uint64_t total = 0;
-    Kept *v = os64_malloc(capn * sizeof(*v));
-    os64_dirent_t e;
-    while (v != NULL && os64_readdir((int32_t)d, &e) == 1) {
-        if (!is_kept(e.name))
-            continue;
-        if (n == capn) {
-            Kept *grown = os64_realloc(v, capn * 2 * sizeof(*v));
-            if (grown == NULL)
-                break;
-            v = grown;
-            capn *= 2;
-        }
-        os64_strcopy(v[n].name, sizeof(v[n].name), e.name);
-        v[n].size = e.size;
-        v[n].mtime = e.mtime;
-        total += e.size;
-        n++;
-    }
-    os64_close((int32_t)d);
+    Listing l = {os64_malloc(256 * sizeof(Kept)), 0, 256, 0};
+    if (l.v != NULL)
+        walk(c, list_one, &l);
+    Kept *v = l.v;
+    size_t n = l.n;
+    uint64_t total = l.total;
     Kept *tmp = v != NULL ? os64_malloc(n * sizeof(*tmp) + 1) : NULL;
     if (tmp != NULL) {
         sort_by_time(v, tmp, n);
@@ -1107,6 +1180,14 @@ static bool publish(way_cache_t *c, const char *path, const char *head, size_t h
     int n = os64_snprintf(temp, sizeof(temp), "%s.%lu.%lu.new", path,
                           (unsigned long)os64_taskid(), (unsigned long)seq);
     int64_t h = hlen != 0 && n > 0 && (size_t)n < sizeof(temp) ? os64_open(temp, "x") : -1;
+    // A bucket is made by the first file that goes into it.
+    char *slash = h < 0 && hlen != 0 && n > 0 && (size_t)n < sizeof(temp) ? os64_strrchr(temp, '/') : NULL;
+    if (slash != NULL) {
+        *slash = '\0';
+        (void)os64_mkdir(temp);
+        *slash = '/';
+        h = os64_open(temp, "x");
+    }
     bool ok = h >= 0 && write_all((int32_t)h, head, hlen);
     size_t written = hlen;
     for (int32_t i = 0; ok && i < npieces; i++) {
