@@ -84,8 +84,18 @@ WERROR_FLAG := $(if $(NOWERROR),,-Werror)
 # after the kernel's identical lesson was already written down. The .d files
 # land next to the .o's; the -include below pulls them in. In CFLAGS because
 # CFLAGS is what the compile rules actually pass.
+# -fstack-clash-protection: a frame larger than a page is lowered one page at
+# a time, each page touched as it goes, so RSP can never step over the
+# unmapped guard below a thread's stack — an overflow faults IN the guard,
+# which the kernel names "Stack overflow" on the glass. Without it a frame
+# allocated in one `sub rsp` lands wherever the arithmetic puts it: yonder's
+# 16KB frame against the 16KB guard (2026-10-30) happened to land inside it,
+# and a 100KB frame would not. Costs one store per page of a large frame,
+# nothing for the rest.
+# The probe loop is inline (GCC 14), so the freestanding build needs nothing
+# from a runtime. Fixture: /tests/stackprobe.
 CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
-           -fno-stack-protector -fcf-protection=none \
+           -fno-stack-protector -fcf-protection=none -fstack-clash-protection \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
