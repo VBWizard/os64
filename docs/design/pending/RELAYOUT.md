@@ -3,11 +3,11 @@
 *Slice 5 of [MODERN_WEB.md](MODERN_WEB.md): D13, incremental relayout,
 then `requestAnimationFrame`. Original design by Fable, 2026-10-21;
 5a implementation and reconciliation by Quinn, 2026-10-29.
-5b implementation adds incremental cascade and computed-style reuse; hardware
-acceptance remains pending. Fable reviewed the restyle rule; the refined
-invalidation and update bookkeeping below address that review. The sequence
-with Canvas is recorded in [CANVAS.md](CANVAS.md). The layout graft receives
-its own design review before 5c merges.*
+5b adds incremental cascade and computed-style reuse and merged in #424 after
+P5 acceptance. Fable reviewed the restyle rule. The sequence with Canvas is
+recorded in [CANVAS.md](CANVAS.md). The proposed 5c implementation contract is
+in [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md); its graft receives an architecture
+review before implementation.*
 
 ## What this settles
 
@@ -16,15 +16,13 @@ its own design review before 5c merges.*
    for restyle and relayout; loss requests a whole rebuild. The synchronous
    mutation listener independently serves libdom's exact mutation-time
    consumers through its shared dispatcher.
-2. **The layout stays DERIVED. A relayout is `flow_layout` handed the
-   previous tree, and its output is identical to a whole rebuild.** LAYOUT.md
-   ruling 2 ("the box tree is derived, rebuilt whole, and holds nothing a
-   rebuild cannot recreate") is reversed only in its middle clause, by the
-   trigger it named (a real page whose rebuilds are visibly slow). The
-   first and last clauses are what make the whole thing provable: the
-   harness lays every fixture out twice after every mutation, whole and
-   incrementally, and diffs the dumps. A difference is a bug in the memo,
-   by definition.
+2. **The layout stays DERIVED. The proposed incremental entry takes the
+   previous tree, and its output must equal a whole rebuild.** The proposed
+   5c contract preserves fresh box construction while copying eligible derived
+   geometry. It keeps LAYOUT.md ruling 2's ownership principle: no author state
+   lives in the layout tree, and a whole rebuild can recreate its answers.
+   The harness compares whole and incremental results after each mutation;
+   a difference is a bug in reuse.
 3. **Reuse is by node identity, style equality and equal inputs, grafted by
    COPY.** A subtree is reused when its nodes did not change, its computed
    styles came out equal, and the layout hands it the same inputs it had
@@ -34,8 +32,8 @@ its own design review before 5c merges.*
    freed when the new one is shown, exactly as today.
 4. **The cascade is updated in place** for the restyle set, with TWO
    counters: a SHEET generation that moves when the sheets or the
-   environment change (then every subtree is stale), and an UPDATE
-   counter that moves at every element update and invalidates nothing by
+   environment change or the cascade is otherwise rebuilt, and an UPDATE
+   counter that moves on each successful update and invalidates nothing by
    itself (the restyle set and style equality do that). yonder's "same
    cascade?" checks read the first.
 5. **The public tree, the stacking order, the ink reach and libpage's model
@@ -45,10 +43,11 @@ its own design review before 5c merges.*
    clock that exists only while a callback is pending. The custom-elements
    design owns script mutation notification and its checkpoint integration.
 
-## What a change costs today
+## The full-rebuild path and its cost
 
 When a script changes the tree, the next turn's rendering step
-(`script_rebuild`, yonder.c) does five whole-document things:
+(`script_rebuild`, yonder.c) follows this pipeline. 5b can reuse cascade winners
+and computed styles; the other stages remain whole builds:
 
 | Step | Library | What it walks |
 |---|---|---|
@@ -237,114 +236,37 @@ path must prove its own narrower equivalence. These bits do not prove that
 text or child lists are unchanged; 5c still needs its separate untouched
 condition. Passes 2 and 3 remain whole builds in 5b.
 
-## The layout memo: passes 2 and 3
+## The layout memo: proposed 5c contract
 
-**The rule.** A box B is REUSABLE for this layout when ALL of these hold:
+[RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md) specifies the copy, invalidation,
+resource, cursor and ownership rules for architecture review. It refines the
+original sketch in several material ways:
 
-1. B's subtree is UNTOUCHED and STEADY, two bits bubbled up separately
-   (Quinn's finding 7: style equality says nothing about text). Untouched:
-   no entry of the log names a node in B's subtree, B included, as a
-   target or an added or removed node — no child list, attribute or text
-   changed anywhere under B, so every run's text and every item sequence
-   is what it was. Steady: every element in the subtree is either outside
-   the restyle set or came out style-equal, and none is animated. A text
-   change under B with every style equal is untouched-false and B lays
-   out fresh; a class toggle no rule reads is untouched-false too (the
-   attribute changed) unless the log entry's target is OUTSIDE B and only
-   the restyle reached in, in which case equality decides.
-2. B had a placed, finished box in the previous tree (`placed`, not
-   `unfinished`; a `display: none` element has none and nothing to reuse).
-3. B is a box pass 3 lays out as a unit from a given width: an in-flow
-   block container, a flex or grid item, a float, an absolutely positioned
-   box, an inline-block's content, or a whole table. NOT a table's row,
-   row group, column or cell (the table algorithm sizes those together),
-   and NOT the pieces of an inline (an inline's lines belong to its
-   container's inline formatting context, which is laid out whole).
-4. The width B is given equals the width it was given last time, and, for
-   a flex or grid item whose container sets its height, the height too.
-5. Floats cannot cross B's edge in either direction: B is a block
-   formatting context root, or `holds_float(B)` is false; and no float
-   from outside intrudes into B's old vertical range at B's x and width
-   (the exclusion space is asked, `band` in layout.c, for the range
-   [y, y + old h) before B is placed).
-6. Nothing in B's subtree reads its containing block's height unless that
-   height is the same as last time: a pass 1 bit `pct_height_in` (any
-   percentage height, min/max-height, or vertical inset in the subtree)
-   bubbled up like `holds_block`; when set, B is reusable only under a
-   containing block whose height is definite and equal to the old.
-7. The environment is the old tree's: same width, zoom, same cascade
-   SHEET generation (below: the one that moves when sheets or the
-   environment change, NOT the one that moves at every element update),
-   fonts (a web font that arrived or a face that moved is "everything
-   changed", as `s_web.moved` already says), same `medium`, same
-   `static_only` and `scripting`.
+- Pass 2 builds fresh boxes and inline items. Pass 3 copies eligible geometry
+  into them, remapping references and retaining immutable text runs. The first
+  geometry scope is ordinary block subtrees; flex/grid placement, tables,
+  floats and positioned subtrees use their existing algorithms.
+- Untouched history belongs to the old layout snapshot, independently of the
+  cascade reader. Cumulative dirty bits survive repeated measurements from
+  an older displayed tree. Missing history disables that source.
+- Fresh structural/content equality and external font, replaced-size and form
+  state snapshots supplement style equality. Markers, processed text and model
+  indices cannot be inferred from unchanged CSS.
+- Width equality alone is insufficient: the saved call signature includes
+  containing-height inputs and pending margins. Cursor effects and relative
+  coordinates must replay correctly after earlier content moves.
+- Intrinsic widths have their own memo, guarded by untouched content as well
+  as equal styles/resources. Old placed content height is not an intrinsic
+  width result.
+- The public tree, stacking, clipping and ink remain freshly derived. The
+  old tree can be freed before the new result is inspected or painted.
 
-When B is reusable, pass 2 builds B's own `FBox` and no children (it marks
-the box `reused`), and pass 3, on reaching it, GRAFTS: it deep-copies the
-old subtree (`FBox`, `FItem`, `FLine`, `FFrag`, `FSpan`, `FInline`) into
-the new arenas, translated by (B.new − B.old) in x and y, retains every
-run the fragments hold (the text engine gains `os64_text_run_retain`, or
-the graft copies the run's bytes and glyphs; the builder measures which
-and says), re-files the subtree's containing-block entries (`FPos`) under
-the new tree's entries, and takes from the old box what the parent's
-algorithm reads next: the margin summary the parent collapses with, the
-baselines (`has_baseline`, `last_baseline`'s answer), the intrinsic
-widths (`intrinsic_min/max`, `content_min/max`, `content_h`). The parent
-goes on as if B had been laid out, and the dump cannot tell.
-
-**Intrinsic sizes are reused on their own.** A flex container, a grid, a
-table cell and a shrink-to-fit box ask a child for its min-content and
-max-content widths before laying it out, and that measurement IS the cost
-on a modern page (every item of every flex row). A `subtree_steady` box
-answers those from its old box without measuring, whatever its width
-turns out to be this time: intrinsic widths do not depend on the
-containing block. So a flex row whose one item changed measures one item,
-and the rest graft if their final widths match or lay out fresh if not.
-
-**Where the memo lives.** Pass 3's state (`L`) gets the previous tree and
-a map from node to its old `FBox` (built once per layout from the old
-tree, linear in its boxes). The old tree is `flow_env_t.previous`; it is
-the tree yonder shows, alive until `page_show` frees it, which is after
-`flow_layout` returns. `flow_layout_parts` (YONDER_PERF.md § perf-4b)
-keeps working unchanged: the new tree is a whole tree.
-
-**What is NOT memoised, on purpose.** The public tree, the stacking
-contexts, the layers, the overflow and ink rects: rebuilt whole from the
-new boxes. They are linear walks with no measuring, and the instrument
-will say what they cost before anything is built for them. Tables'
-interiors. Any layout at a new width, zoom or font set, which is every
-resize. The first layout of a page (no previous tree: the memo costs one
-NULL check).
-
-## The oracle, the bound, and the proof
-
-- **Dump-identical.** `tools/test_libflow_relayout_host.sh`: for each
-  fixture of (page, a list of mutations as libhtml verbs), lay out whole,
-  then for each mutation apply it, lay out incrementally from the previous
-  tree AND whole from nothing, and `flow_dump` both: byte-identical, or
-  the harness names the first differing line. The existing dump corpus
-  runs with `previous == NULL` and must not change by a byte.
-- **The bound.** The layout counts what it measured (`measures`, already
-  kept) and what it reused (`reused_boxes`, new). For a mutation inside
-  one block of a page of N steady blocks, `measures` is at most the
-  measures of a whole layout of the changed block's formatting context
-  plus its ancestors' own lines; the harness holds that per fixture, as
-  LAYOUT.md's harness holds its linear bounds.
-- **Each clause of the rule has a fixture that breaks it**: a float
-  intruding into a steady block whose sibling grew; a steady block with a
-  percentage height under a container that got shorter; a steady flex
-  item whose container's width changed; a table cell; an inline's pieces;
-  a subtree with an animation; a removed node whose address is reused by
-  an inserted one (the cascade's stale slot). These are the mutants'
-  targets: skipping any clause must fail a fixture.
-- **The scripted-page host** proves the chain end to end: a page's script
-  appends to a list and the record's layout line shows the pass times and
-  `reused`; a geometry read inside a script after a one-line change is
-  charged a layout whose `measures` is small.
-- **The allocation sweep**, as every libflow slice: every allocation the
-  graft makes failed in turn, and a failed graft lays the box out fresh or
-  reports `incomplete` exactly as a failed layout does today; never a
-  half-grafted subtree.
+The additive entry leaves the existing layout/environment/profile ABIs
+unchanged. An opt-in first layout does incur bounded snapshot bookkeeping;
+its cost must be measured. The detailed contract defines the allocation
+failure behavior, run-retention ownership, public-observation oracle,
+adversarial fixtures and the P5 performance gates. 5c implementation has not
+started and the proposed scope awaits Fable's read.
 
 ## The instrument, and what it decides
 
@@ -386,8 +308,8 @@ behind itself.
 | Cut | Builds | Oracle |
 |---|---|---|
 | 5a | Bounded native change log and readers; opt-in phase profiling; repeatable measurement page | Native mutations, parser entries, immutable lists, eviction/OOM and lifetime checks; fake clocks; page completion/cancel/resize tests; P5 baseline |
-| 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; controlled and alternating manual P5 comparisons clear the performance gate; code review remains separate, with earlier timing outliers disclosed |
-| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Fable reviews the rule and graft |
+| 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; controlled and alternating manual P5 comparisons cleared the performance gate; reviewed and merged in #424, with earlier timing outliers disclosed |
+| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Proposed contract in RELAYOUT_GRAFT.md; Fable reviews before implementation |
 | 5d | `requestAnimationFrame` on the loop, after 5c | WPT animation-frame tests and scripted-page fake-clock cases |
 
 With one builder the cuts run in order. The Canvas integration branch
@@ -403,24 +325,27 @@ baseline measurements precede optimization claims.
   change, before and after; the record's layouts a second with rAF
   driving a page that moves one element, unchanged from the perf record's
   animation numbers.
-- The P5, Wikipedia: the first layout no slower than 600 ms (the memo is
-  one NULL check when there is no previous tree), and a script that
-  changes one paragraph laid out in a fraction of it (the instrument's
-  line is the number).
+- The P5, Wikipedia: compare first-layout time to the matched control, including
+  opt-in snapshot overhead (the historical 600 ms is not a portable threshold).
+  A script changing one paragraph should perform fewer measurements; the
+  profile and matched timings establish the improvement.
 - WPT: `html/webappapis/animation-frames/` counts before and after 5d.
 
 ## What this does not do, and the risks named
 
-- A document whose sheets use `:has()` restyles whole; the page file says
-  `restyle: whole (:has)`. The memo still applies below pass 1 where
-  styles come out equal, so the layout is still partial.
+- A document whose sheets use `:has()` restyles whole. The proposed first
+  graft keeps the cascade-generation gate, so that full cascade replacement
+  also disables geometry reuse. The stream profiler records its full work.
 - Resize, zoom, a web font's arrival, a sheet added or removed, an
   appearance or motion setting change: whole, as today. Those are the
   inputs the memo compares, and they changed.
-- Tables' interiors and inline pieces are never reused.
+- The proposed geometry graft excludes table, float, flex/grid-item and
+  positioned placement, and inline pieces that escape their candidate root.
+  The detailed contract states the intrinsic-width scope separately.
 - Memory: the graft copies, so a page that changes one element each turn
   costs one tree's worth of arena per layout, as today, plus the old tree
-  until it is shown, as today. Log records are capped by
+  until it is shown, as today, plus bounded reuse metadata and shared run
+  references. Log records are capped by
   `os64_html_changes_limit`; retained nodes consume the document arena
   budget as well. A lagging reader receives -1 and rebuilds.
 - A subtle one, written down so the builder writes the fixture: the
