@@ -1,8 +1,9 @@
 # Relayout 5c: copying layout results into a fresh box tree
 
-*Proposed implementation contract for Fable's review. Based on
-`canvas-integration` at `4184f91f`, after 5b merged in #424. No 5c code is
-implemented. This refines the layout memo in [RELAYOUT.md](RELAYOUT.md).*
+*Implementation contract based on `canvas-integration` at `4184f91f`, after
+5b merged in #424. Fable approved the architecture with amendments on
+2026-10-30. The dispositions below incorporate that read and identify two
+corrections for focused follow-up. This refines [RELAYOUT.md](RELAYOUT.md).*
 
 ## Decision and scope
 
@@ -94,6 +95,11 @@ clears that set. If the shown tree is version A, reads at B and C both consult
 changes since A, not merely the last read's delta. Each successful replacement
 tree starts its own version/reader/dirty set. Reader loss or bookkeeping
 allocation failure permanently disqualifies that snapshot as a reuse source.
+Free its reader immediately on disqualification, outside any borrowed-chain
+traversal, rather than waiting for tree destruction. The slowest live reader
+can retain log entries. A displayed tree may be that reader while hidden
+measurements advance; Yonder frees it when `page_show` replaces the old page.
+That lifetime must not be extended by a reuse reference chain.
 
 Process the complete borrowed change chain before another reader operation.
 Do not retain pointers into that chain. Mark identities named as mutation
@@ -154,8 +160,11 @@ values are immutable even when the source tree's public paint state ticks.
 
 ## Geometry eligibility and replay point
 
-Attempt the first graft at the ordinary `block`/`block_at` boundary, before
-mutating the current block's layout state. A candidate is an `FB_BLOCK` in
+Use a shared fresh prefix in `block_at`: run `clearance` before the replay
+point, and capture its resulting cursor as the signature input. A call that
+settled pending floats or gained nonzero clearance takes the fresh path.
+The qualified replay path therefore has no clearance effect to reproduce.
+Do not place the graft ahead of that prefix. A candidate is an `FB_BLOCK` in
 normal block flow, not a flex/grid item, table part, replaced block, float,
 positioned/transformed box, or the viewport root. Its mapped descendants must
 not contain excluded placement classes, split inline content spanning beyond
@@ -163,12 +172,41 @@ the root, or positioning entries/edges escaping the candidate. A plain inline
 replaced item is eligible only with equal resource inputs and matching fresh
 items; inline-block content takes fresh layout in this cut.
 
-No active or pending float in the current formatting context may influence
-the candidate. No descendant may publish a float into that context. This cut
-rejects such cases rather than reproducing exclusion-space mutations. Merely
-checking the old vertical band is insufficient: a preceding sibling can move
-the candidate into a different band. A later extension must query the proposed
-new position and reproduce the float-space effects it skips.
+A formatting context having encountered a float does not by itself prohibit
+reuse. Require no pending floats at entry or at the replay point, no floats
+inside the candidate, and proof that both the source and proposed result's
+float-sensitive layout positions lie below the placed floats' lowest bottom.
+With no pending/descendant floats, skipped `settle` calls have no placements
+to perform. If there are no placed floats, this qualification is trivial.
+
+The root's proposed border top alone does not prove that condition. A child's
+negative top margin can collapse through an ordinary block, or an internal
+negative margin can bring later content back upwards. An executable probe on
+the existing layout engine demonstrates this: an 800px page has a left float
+300px wide and 100px tall, then a spacer, then a candidate with a paragraph
+whose top margin is -80px. Reducing the spacer from 200px to 100px changes the
+candidate's actual top from 120px to 20px. The simple proposed top is 100px,
+at the float bottom, yet the paragraph must now wrap at 500px instead of
+800px (three lines instead of two). It cannot copy the old line breaks.
+
+Record a lower bound on float-sensitive y positions reached during the source
+call, relative to its saved origin. Collect that bound at the exclusion and
+clearance query sites while they are executed, even when no float is active,
+and propagate it to enclosing eligible candidates in the same inherited
+`Space`. Include upward excursions caused by collapsing and negative margins;
+unknown bounds refuse reuse. A source which actually encountered an external
+float's influence cannot certify a float-free replay. Independent inner BFCs
+have their own exclusion space and must not be confused with the inherited one.
+
+At replay, translate that lower bound into the current inherited Space's
+unmoved coordinates, using `rel_y`, and require it to be at or below the
+maximum of the two placed-float bottoms (numerically greater than or equal).
+Do not compare moved document coordinates directly with `Space.bottom`.
+The bound is conservative; it need not summarize the whole exclusion profile.
+For a simple paragraph below an infobox it passes, while the negative-margin
+counterexample fails. Add fixtures for relative-positioned ancestors as well:
+the candidate can be ordinary while its containing Space has a nonzero offset.
+Positioned descendants remain excluded by this cut's local scope.
 
 There must be no outside list marker waiting on the candidate's first line.
 Markers owned entirely inside the candidate can be copied after their freshly
@@ -191,16 +229,29 @@ an ancestor's old `Cursor.first`: preserve an already-set incoming first
 position, or reproduce the relative position established by this call when
 it was previously unset. Preserve both pending-margin components, not just
 their sum: later collapsing depends on the positive and negative extrema.
-Empty blocks that collapse through need an explicit result variant, not an
-assumption that the outgoing cursor equals the border-box bottom.
+Use one cursor-result record for both normal and collapse-through exits:
+`delta_y`, outgoing positive/negative pending margins, and first-content
+position either unchanged or set at a relative y. An empty block can leave
+the incoming y unchanged while joining margins; never infer its cursor effect
+from its border-box bottom.
 
-Save the old call's input/result separately from mutable final `FBox` fields.
-Parent algorithms can translate or resize boxes after the call. The limited
-scope above avoids stretch/refit replay, but a parent can still translate its
-ordinary descendants. The snapshot must describe one documented coordinate
-frame, and later placement must update or normalize that snapshot consistently.
-A descendant invoked by fresh layout inside an excluded parent is eligible
-only when this coordinate-frame invariant is proved for that call.
+Store the replay-point origin (`cbx`, the post-clearance cursor y) on each
+candidate `FBox`, with a validity flag. Its saved signature/result and float
+query bound are relative to that origin. `translate` must translate a valid
+origin by exactly the dx/dy applied to the box and its lines. This keeps
+absolute geometry minus origin invariant after a grid/flex parent places an
+ordinary descendant. The two coordinates cost sixteen bytes per box; include
+that cost in peak-memory evidence. Audit `translate_content` and direct geometry
+writes too: a path that changes geometry without the matching origin update
+must invalidate the signature. A struct-size check alone cannot prove that
+translation covers an already-existing field; explicit translation tests do.
+
+`FBox.laid` records logical placements in the current layout. Increment a
+replayed root as a fresh `block_at` would; mapped descendant placements are
+recorded once for this replay, without importing the source tree's counter.
+If a later fresh pass places one again, that is another placement and must
+remain visible to the existing bounds checks. It is not a count of expensive
+measurements; `measures` and the reuse counters retain that distinction.
 
 On success, copy the root and descendant geometry outputs, line results,
 content-height and baseline results from that signature's completed layout;
@@ -258,7 +309,9 @@ boxes must remain valid under the existing prefix/refusal rules.
 
 Before `intrinsic()` measures a new box, it may copy a completed old result
 when the same untouched/content/style/resource correspondence holds and the
-intrinsic-query mode matches. Equality of styles alone cannot permit this:
+intrinsic-query mode matches. Require a complete source tree and a placed,
+finished source box for this path too: `intrinsic_known` alone is insufficient
+if later layout stopped or failed. Equality of styles alone cannot permit this:
 unchanged styles with new text have different min/max content widths.
 
 The reused payload is `intrinsic_min`, `intrinsic_max`, `content_min`,
@@ -291,8 +344,9 @@ the reported layout cost; do not hide it before the profiling interval.
 Keep `flow_profile_t` ABI intact: its existing `reused` field counts internal
 boxes whose placed geometry was copied, once per box even inside a larger
 copied subtree. It must not count style copies or intrinsic-width memo hits.
-Expose intrinsic-hit and refusal-reason totals through an additive accessor if
-needed for the oracle and diagnostics. Existing `measures` counts actual IFC
+Expose intrinsic-hit and refusal-reason totals through an additive accessor.
+Build the refusal histogram in step 2, before enabling grafts, so the host
+oracle and P5 diagnostic can explain zero reuse. Existing `measures` counts actual IFC
 measurements. Initial opt-in layouts include snapshot cost but report zero hits.
 
 Without reuse, public dumps remain byte-identical to the existing baseline.
@@ -334,32 +388,69 @@ Required adversarial cases:
 | History eviction, reader/index OOM, deleted/recreated nodes | Safe full rebuild; no stale identity or partial certificate |
 | Insert an earlier link/control/list item; change `ol start` or `li value` | Fresh model indices and generated markers survive copying |
 | Font arrival, image size/availability, typed form value, canvas resize | Resource/state changes miss even without a relevant HTML delta |
-| Float begins intruding after a sibling shrinks; pending float/marker | Excluded side effects are not bypassed by a graft |
+| Float begins intruding after a sibling shrinks; collapsed negative margins; nonzero Space offset; pending float/marker | The proposed float-query bound rejects influence, using the correct coordinate frame |
 | Flex/grid stretch, table cells, absolute/fixed descendants, split inlines | Excluded geometry is rebuilt; ordinary safe descendants remain testable |
 | Viewport/zoom/height/appearance/quirks changes; animation | Environment or motion mismatch cannot replay old geometry |
 | Free source first; alternate source/destination destruction; repeated generations | Runs, bytes, styles and maps remain owned without an arena chain |
-| Intrinsic-only hit followed by a different final width | Width memo does not install old placed height/lines |
+| Intrinsic-only hit followed by a different final width; incomplete source with `intrinsic_known` | Width memo does not install old placed height/lines or accept incomplete sources |
 
-Use the existing original/companion mutation fixtures and captured article as
-performance controls. Add focused append/paragraph examples that prove the
-measurement count drops: a 2,000-item append should measure the new item's
-content and necessary ancestors, not the other 2,000 items. Measure marker
-work separately where the current counter does not expose it. Initial-layout
-and broad-fallback cases must not regress materially; compare alternating
-P5 runs at the fixed viewport if a result is ambiguous. Freeze the small
-matched delivery cohort before asking for the hardware run.
+Use the original and companion mutation fixtures, the unchanged captured
+article and a 2,000-item append fixture. For each, alternate the frozen 5b
+control and 5c candidate three times on the P5. Keep the corpus-562 manual
+maximization/address-bar protocol for the streamed article, and a fixed
+matching viewport/settings for the mutation and append pages. Record first
+opt-in layout time and peak memory beside the timings; declare which heap
+owner and sampling point each memory number describes. Keep the frozen small
+delivery cohort unchanged throughout the hardware test.
 
-## Questions for Fable's architecture read
+The append case must demonstrate fewer measurements: the new item's content
+and necessary ancestor work, not the other 2,000 items. Measure marker work
+separately where the current counter does not expose it. The original mutation
+fixture should demonstrate geometry reuse on unaffected rows; initial-layout
+and broad-fallback cases must not regress materially against the same-session
+control. Preserve the actual samples and work counts, not just medians.
 
-- Accept fresh pass 2 and the stated narrower geometry scope, with intrinsic
-  reuse in 5c and other placement classes explicitly excluded?
-- Is the saved call-input/cursor-result boundary sufficient, especially for
-  collapse-through blocks and descendant coordinates after parent translation?
-- Does the per-snapshot cumulative reader/dirty set cover hidden measurements
-  advancing independently of the displayed tree without retaining history
-  proportional to the number of mutations?
-- Are resource ownership/revisions and fresh structural/derived-input equality
-  sufficient to cover non-DOM inputs, and is the ownership inventory complete?
+**The unchanged streamed article is a fallback control, not a positive reuse
+fixture under this contract.** Its captured selectors include `:has()` and
+`:dir()`, which force full cascade replacement. The chosen generation guard
+then disables copied styles/geometry, and Yonder's `measured_fallback` releases
+the old hidden tree. Requiring `reused > 0` from this exact workload would
+require changing those architectural decisions, not merely refining the float
+predicate. Do not remove broad rules from the existing control silently.
 
-The architecture read precedes implementation of the graft. This document is
-the proposed contract to review, not evidence that those proofs already pass.
+Proposed positive float-reuse gate: add a separately named article-shaped
+fixture with a grid content column, infobox/thumbnail floats and ordinary
+paragraphs, using localized selector dependencies. Change a paragraph and
+require fresh layout beside the float and `reused > 0` below it. Compare its
+whole/incremental public output and alternating P5 timings. Include the
+negative-margin counterexample as a refusal/oracle case. Label this fixture
+as synthetic; it is not evidence of reuse on the unmodified Wikipedia capture.
+
+## Architecture-read dispositions
+
+Fable approved fresh pass 2, the local geometry exclusions, per-snapshot
+cumulative history, resource revisions and text-run ownership. His requested
+reader release on disqualification, source completion for intrinsic reuse,
+translated origins, `laid` semantics and early refusal diagnostics are now
+explicit above. His smaller cursor result record replaces the unnecessary
+collapse-through variant.
+
+Two follow-ups remain for the graft/performance contract:
+
+1. Amendment A's below-float intent is adopted, but the root-top comparison
+   is insufficient. The recorded lower bound on float-sensitive queries must
+   cover collapsed negative margins and the Space coordinate frame. The
+   [existing-engine probe](../../relayout-evidence/5c-review-probes.md)
+   demonstrates the counterexample; no speculative production fix was made
+   to produce it.
+2. Amendment D's three-workload/append protocol is adopted. Its positive-reuse
+   requirement conflicts with keeping the generation gate and 5b's hidden-tree
+   release on the unchanged article. The proposed synthetic float fixture
+   proves that safety predicate separately while preserving the real article
+   as a fallback/no-regression gate. Removing the generation gate and retaining
+   old hidden geometry across rebuilds would be a separate design change with
+   memory and first-layout consequences.
+
+Steps 1 and 2 remain approved to build. Confirm these two focused amendments
+with Fable before implementing the graft in step 3; this is not a request to
+repeat the architecture read of the accepted ownership and history design.

@@ -6,8 +6,9 @@ then `requestAnimationFrame`. Original design by Fable, 2026-10-21;
 5b adds incremental cascade and computed-style reuse and merged in #424 after
 P5 acceptance. Fable reviewed the restyle rule. The sequence with Canvas is
 recorded in [CANVAS.md](CANVAS.md). The proposed 5c implementation contract is
-in [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md); its graft receives an architecture
-review before implementation.*
+in [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md). Fable approved its architecture
+with amendments; the detailed contract records two focused follow-ups before
+the geometry graft is implemented.*
 
 ## What this settles
 
@@ -265,8 +266,9 @@ The additive entry leaves the existing layout/environment/profile ABIs
 unchanged. An opt-in first layout does incur bounded snapshot bookkeeping;
 its cost must be measured. The detailed contract defines the allocation
 failure behavior, run-retention ownership, public-observation oracle,
-adversarial fixtures and the P5 performance gates. 5c implementation has not
-started and the proposed scope awaits Fable's read.
+adversarial fixtures and the P5 performance gates. Fable accepted the scope;
+the detailed contract records the amended float qualification and the
+positive-reuse fixture that need focused follow-up.
 
 ## The instrument, and what it decides
 
@@ -309,7 +311,7 @@ behind itself.
 |---|---|---|
 | 5a | Bounded native change log and readers; opt-in phase profiling; repeatable measurement page | Native mutations, parser entries, immutable lists, eviction/OOM and lifetime checks; fake clocks; page completion/cancel/resize tests; P5 baseline |
 | 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; controlled and alternating manual P5 comparisons cleared the performance gate; reviewed and merged in #424, with earlier timing outliers disclosed |
-| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Proposed contract in RELAYOUT_GRAFT.md; Fable reviews before implementation |
+| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Contract in RELAYOUT_GRAFT.md; architecture approved, two focused amendments before graft implementation |
 | 5d | `requestAnimationFrame` on the loop, after 5c | WPT animation-frame tests and scripted-page fake-clock cases |
 
 With one builder the cuts run in order. The Canvas integration branch
