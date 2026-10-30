@@ -18,29 +18,9 @@ bool way_shell_quotable(const char *address);
 // lowercased, so the compare is verbatim.
 bool way_type_is_json(const char *type);
 
-// ── The cache's store (cache.c), for way_fetch_whole ────────────────────
-
-// One kept reply: the address asked for, the address it came from, what
-// it was, and what it said about keeping it.
-typedef struct {
-    char url[OS64_FETCH_URL_MAX];
-    char final[OS64_FETCH_URL_MAX];
-    int32_t status;
-    char content_type[HTTP_TYPE_MAX];
-    char charset[HTTP_CHARSET_MAX];
-    way_keep_t keep;
-} way_entry_t;
-
-// The entry for `url`, and its body (os64_malloc'd, the caller's), when
-// there is a whole one of at most `cap` bytes. False for none.
-bool way_cache_find(way_cache_t *cache, const char *url, way_entry_t *e, uint8_t **body,
-                    size_t *len, size_t cap);
-// Keeps an entry, replacing any for the same address. False when it was
-// not kept: turned off, too large, or the disk said no.
-bool way_cache_put(way_cache_t *cache, const way_entry_t *e, const uint8_t *body, size_t len);
-// Forgets the entry for `url`, if there is one.
-void way_cache_drop(way_cache_t *cache, const char *url);
-// Counts a reply served from the store.
+// The cache's store (way/cache.h § Entries) is way_fetch_whole's as it is
+// the fetch job's; way_cache_count is the counts a person is shown, and
+// only libway's fetches are counted.
 void way_cache_count(way_cache_t *cache, way_served_t how);
 
 #endif

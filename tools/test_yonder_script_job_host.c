@@ -3,7 +3,9 @@
  * the scripted-page suites stand a fake in for this worker, so its own
  * rules are held here (BYTECODE_CACHE.md § 5, § 6). A body the cache holds
  * has its compiled form looked for under the address asked for and the
- * source's key, and gets a record a compile's form is kept under; one it
+ * source's tag, beside the entry the fetch kept it under (the page's
+ * partition, credentialed, the address), and gets a record a compile's
+ * form is kept under; one it
  * does not hold gets neither. */
 
 #include <stdbool.h>
@@ -14,6 +16,7 @@
 
 #include "script_job.h"
 #include "os64/slurp.h"
+#include "os64/str.h"
 
 static int checks, failures;
 static size_t live;
@@ -70,6 +73,11 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
     (void)handle; (void)buf;
     return (int64_t)len;
 }
+/* libway's origin code is linked for the partition (way_partition_of); its
+ * preflight cache's lock, which this test never takes, wants a yield. */
+void os64_yield(void)
+{
+}
 
 /* The fetch: this body, the cache holding it or not. */
 static const char *s_body;
@@ -92,15 +100,18 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 
 /* The cache's companions: what was asked for, and what is there. */
 static int s_gets;
-static char s_got_url[OS64_FETCH_URL_MAX], s_got_key[WAY_COMPANION_KEY_MAX];
+static char s_got_partition[WAY_PARTITION_MAX], s_got_url[OS64_FETCH_URL_MAX], s_got_tag[WAY_COMPANION_TAG_MAX];
+static bool s_got_credentials;
 static const char *s_companion;
-bool way_cache_companion_get(way_cache_t *cache, const char *url, const char *key, uint8_t **bytes,
+bool way_cache_companion_get(way_cache_t *cache, const way_cache_key_t *key, const char *tag, uint8_t **bytes,
                              size_t *len, size_t cap)
 {
     (void)cache;
     s_gets++;
-    snprintf(s_got_url, sizeof(s_got_url), "%s", url);
-    snprintf(s_got_key, sizeof(s_got_key), "%s", key);
+    snprintf(s_got_partition, sizeof(s_got_partition), "%s", key->partition);
+    s_got_credentials = key->credentials;
+    snprintf(s_got_url, sizeof(s_got_url), "%s", key->url);
+    snprintf(s_got_tag, sizeof(s_got_tag), "%s", tag);
     *bytes = NULL;
     *len = 0;
     if (s_companion == NULL || strlen(s_companion) > cap)
@@ -111,10 +122,10 @@ bool way_cache_companion_get(way_cache_t *cache, const char *url, const char *ke
     return true;
 }
 static int s_puts;
-bool way_cache_companion_put(way_cache_t *cache, const char *url, const char *key, const uint8_t *bytes,
+bool way_cache_companion_put(way_cache_t *cache, const way_cache_key_t *key, const char *tag, const uint8_t *bytes,
                              size_t len)
 {
-    (void)cache; (void)url; (void)key; (void)bytes; (void)len;
+    (void)cache; (void)key; (void)tag; (void)bytes; (void)len;
     s_puts++;
     return true;
 }
@@ -131,6 +142,10 @@ static yonder_script_t *run(const char *url)
     job->kind = YONDER_JOB_SCRIPT;
     snprintf(job->url, sizeof(job->url), "%s", url);
     job->hooks.cache = (way_cache_t *)&s_gets;
+    // Fetched for a page of https://page.test.
+    os64_strcopy(job->hooks.metadata.origin.scheme, sizeof(job->hooks.metadata.origin.scheme), "https");
+    os64_strcopy(job->hooks.metadata.origin.host, sizeof(job->hooks.metadata.origin.host), "page.test");
+    job->hooks.metadata.origin.port = 443;
     void *out = NULL;
     yonder_script_run(job, never, NULL, &out);
     os64_free(job);
@@ -144,32 +159,35 @@ static void release(yonder_script_t *got)
 
 int main(void)
 {
-    // The key names the text: the same text one key, another text or
+    // The tag names the text: the same text one tag, another text or
     // another length another.
-    char a[WAY_COMPANION_KEY_MAX], b[WAY_COMPANION_KEY_MAX], c[WAY_COMPANION_KEY_MAX];
-    yonder_script_bytecode_key("var a = 1;", 10, a, sizeof(a));
-    yonder_script_bytecode_key("var a = 1;", 10, b, sizeof(b));
-    yonder_script_bytecode_key("var a = 2;", 10, c, sizeof(c));
-    expect("key: the same text has one key", strcmp(a, b) == 0);
-    expect("key: another text another", strcmp(a, c) != 0);
-    yonder_script_bytecode_key("var a = 1;", 9, c, sizeof(c));
-    expect("key: another length another", strcmp(a, c) != 0 && strncmp(a, "classic ", 8) == 0);
+    char a[WAY_COMPANION_TAG_MAX], b[WAY_COMPANION_TAG_MAX], c[WAY_COMPANION_TAG_MAX];
+    yonder_script_bytecode_tag("var a = 1;", 10, a, sizeof(a));
+    yonder_script_bytecode_tag("var a = 1;", 10, b, sizeof(b));
+    yonder_script_bytecode_tag("var a = 2;", 10, c, sizeof(c));
+    expect("tag: the same text has one tag", strcmp(a, b) == 0);
+    expect("tag: another text another", strcmp(a, c) != 0);
+    yonder_script_bytecode_tag("var a = 1;", 9, c, sizeof(c));
+    expect("tag: another length another", strcmp(a, c) != 0 && strncmp(a, "classic ", 8) == 0);
 
     // A body the cache holds: its companion looked for under the address
-    // asked for and the decoded text's key, and found.
+    // asked for, for the page's partition and credentialed, as way_fetch_whole
+    // kept it, and the decoded text's tag; and found.
     s_body = "document.title = 'x';";
     s_kept = true;
     s_companion = "a blob";
     yonder_script_t *got = run("http://x.test/app.js");
-    char key[WAY_COMPANION_KEY_MAX];
-    yonder_script_bytecode_key(s_body, strlen(s_body), key, sizeof(key));
+    char tag[WAY_COMPANION_TAG_MAX];
+    yonder_script_bytecode_tag(s_body, strlen(s_body), tag, sizeof(tag));
     expect("kept: the script came", got != NULL && got->ok && strcmp(got->source, s_body) == 0);
-    expect("kept: its companion was looked for under the address and the text's key",
-           s_gets == 1 && strcmp(s_got_url, "http://x.test/app.js") == 0 && strcmp(s_got_key, key) == 0);
+    expect("kept: its companion was looked for beside the fetch's entry, under the text's tag",
+           s_gets == 1 && strcmp(s_got_partition, "https page.test") == 0 && s_got_credentials &&
+               strcmp(s_got_url, "http://x.test/app.js") == 0 && strcmp(s_got_tag, tag) == 0);
     expect("kept: and carried, with where a compile's is kept",
            got != NULL && got->bytecode != NULL && got->bytecode->length == 6 &&
                memcmp(got->bytecode->blob, "a blob", 6) == 0 &&
-               strcmp(got->bytecode->url, "http://x.test/app.js") == 0 && strcmp(got->bytecode->key, key) == 0);
+               strcmp(got->bytecode->partition, "https page.test") == 0 &&
+               strcmp(got->bytecode->url, "http://x.test/app.js") == 0 && strcmp(got->bytecode->tag, tag) == 0);
     release(got);
 
     // None beside it: the record is made all the same, for the compile's.

@@ -8192,8 +8192,9 @@ static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, u
     job->cache = g.cache;
     job->blob = blob;
     job->length = length;
+    os64_strcopy(job->partition, sizeof(job->partition), where->partition);
     os64_strcopy(job->url, sizeof(job->url), where->url);
-    os64_strcopy(job->key, sizeof(job->key), where->key);
+    os64_strcopy(job->tag, sizeof(job->tag), where->tag);
     os64_work_t work = {yonder_bytecode_keep_run, yonder_bytecode_keep_release, job, BYTECODE_KEEP_RESERVE};
     if (os64_work_submit(g.pool, &work) == 0) {
         yonder_bytecode_keep_release(job, NULL);

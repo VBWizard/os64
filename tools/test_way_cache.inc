@@ -391,21 +391,36 @@ static uint64_t dir_bytes(const char *dir)
 
 // ── The store ───────────────────────────────────────────────────────────
 
-// The name the store gives an address: FNV-1a, as cache.c spells it.
-static void entry_path(const char *dir, const char *url, char *out, size_t cap)
+// The cases' page: every entry is kept for it, credentialed, unless a case
+// says otherwise. KEY spells the key for an address in place.
+static const char kPartition[] = "https page.test";
+#define KEY(url) (&(way_cache_key_t){kPartition, true, (url)})
+
+// The name the store gives a key: FNV-1a over its parts, as cache.c spells it.
+static void key_path(const char *dir, const char *partition, bool credentials, const char *url, char kind,
+                     char *out, size_t cap)
 {
     uint64_t h = 0xcbf29ce484222325ull;
-    for (const char *s = url; *s != '\0'; s++) {
+    char joined[2048];
+    snprintf(joined, sizeof(joined), "%s\n%d\n%s", partition, credentials ? 1 : 0, url);
+    for (const char *s = joined; *s != '\0'; s++) {
         h ^= (uint8_t)*s;
         h *= 0x100000001b3ull;
     }
-    snprintf(out, cap, "%s/%016llx.e", dir, (unsigned long long)h);
+    snprintf(out, cap, "%s/%016llx.%c", dir, (unsigned long long)h, kind);
+}
+
+static void entry_path(const char *dir, const char *url, char *out, size_t cap)
+{
+    key_path(dir, kPartition, true, url, 'e', out, cap);
 }
 
 static way_entry_t entry(const char *url, const char *cc)
 {
     way_entry_t e;
     memset(&e, 0, sizeof(e));
+    snprintf(e.partition, sizeof(e.partition), "%s", kPartition);
+    e.credentials = true;
     snprintf(e.url, sizeof(e.url), "%s", url);
     snprintf(e.final, sizeof(e.final), "%s", url);
     e.status = 200;
@@ -426,7 +441,7 @@ static void puts_during_sweep(void)
         char u[64];
         snprintf(u, sizeof(u), "https://during.test/b%d.png", i);
         way_entry_t x = entry(u, "max-age=60");
-        (void)way_cache_put(s_during_cache, &x, body, sizeof(body));
+        (void)way_cache_put(s_during_cache, &x, NULL, body, sizeof(body));
     }
 }
 
@@ -470,11 +485,11 @@ static void store_cases(void)
         body[i] = (uint8_t)(i * 7);
     way_entry_t e = entry(url, "public, max-age=31536000, immutable");
     snprintf(e.final, sizeof(e.final), "https://danlegt.com/moved.png");
-    expect("store: an entry is kept", way_cache_put(c, &e, body, sizeof(body)), NULL);
+    expect("store: an entry is kept", way_cache_put(c, &e, NULL, body, sizeof(body)), NULL);
     way_entry_t got;
     uint8_t *bytes = NULL;
     size_t len = 0;
-    bool found = way_cache_find(c, url, &got, &bytes, &len, 1 << 20);
+    bool found = way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20);
     expect("store: and found, whole", found && len == sizeof(body) &&
            memcmp(bytes, body, len) == 0, NULL);
     expect("store: with what came with it", found && got.status == 200 &&
@@ -485,9 +500,9 @@ static void store_cases(void)
            NULL);
     os64_free(bytes);
     expect("store: larger than the caller's cap is a miss",
-           !way_cache_find(c, url, &got, &bytes, &len, 999) && bytes == NULL, NULL);
+           !way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 999) && bytes == NULL, NULL);
     expect("store: another address is a miss",
-           !way_cache_find(c, "https://danlegt.com/", &got, &bytes, &len, 1 << 20), NULL);
+           !way_cache_find(c, KEY("https://danlegt.com/"), &got, &bytes, &len, NULL, 1 << 20), NULL);
 
     // A collision: the file under another address's name holds this one.
     char from[1200], to[1200];
@@ -495,36 +510,36 @@ static void store_cases(void)
     entry_path(dir, "https://example.com/x.png", to, sizeof(to));
     rename(from, to);
     expect("store: the address inside is checked",
-           !way_cache_find(c, "https://example.com/x.png", &got, &bytes, &len, 1 << 20), NULL);
+           !way_cache_find(c, KEY("https://example.com/x.png"), &got, &bytes, &len, NULL, 1 << 20), NULL);
     rename(to, from);
     // A file cut short, or with more than it says, is no entry.
     expect("store: an entry cut short", truncate(from, 900) == 0, NULL);
-    expect("store: a torn entry is a miss", !way_cache_find(c, url, &got, &bytes, &len, 1 << 20),
+    expect("store: a torn entry is a miss", !way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20),
            NULL);
     FILE *grow = fopen(from, "a");
     fputs("more than it says it is, and then some more", grow);
     fclose(grow);
     expect("store: an entry grown", truncate(from, 2000) == 0, NULL);
-    expect("store: a longer entry is a miss", !way_cache_find(c, url, &got, &bytes, &len, 1 << 20),
+    expect("store: a longer entry is a miss", !way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20),
            NULL);
-    expect("store: replaced whole", way_cache_put(c, &e, body, sizeof(body)) &&
-           way_cache_find(c, url, &got, &bytes, &len, 1 << 20), NULL);
+    expect("store: replaced whole", way_cache_put(c, &e, NULL, body, sizeof(body)) &&
+           way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20), NULL);
     os64_free(bytes);
 
     // Off, it neither finds nor keeps; what it holds stays.
     way_cache_enable(c, false);
-    expect("store: turned off, nothing is found", !way_cache_find(c, url, &got, &bytes, &len, 1 << 20),
+    expect("store: turned off, nothing is found", !way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20),
            NULL);
-    expect("store: nor kept", !way_cache_put(c, &e, body, sizeof(body)), NULL);
+    expect("store: nor kept", !way_cache_put(c, &e, NULL, body, sizeof(body)), NULL);
     way_cache_enable(c, true);
-    expect("store: and back", way_cache_find(c, url, &got, &bytes, &len, 1 << 20), NULL);
+    expect("store: and back", way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20), NULL);
     os64_free(bytes);
 
     // Larger than an eighth of the cap is not kept.
     static uint8_t big[9000];
     way_entry_t b = entry("https://x.test/big.png", "max-age=60");
     expect("store: an entry over an eighth of the cap is not kept",
-           !way_cache_put(c, &b, big, sizeof(big)), NULL);
+           !way_cache_put(c, &b, NULL, big, sizeof(big)), NULL);
 
     // Full: sixty entries of about 1.4 KB pass a 64 KB cap, and the oldest
     // go, by their files' times.
@@ -534,7 +549,7 @@ static void store_cases(void)
         snprintf(u, sizeof(u), "https://x.test/%d.png", i);
         way_entry_t x = entry(u, "max-age=60");
         entry_path(dir, u, names[i], sizeof(names[i]));
-        (void)way_cache_put(c, &x, body, sizeof(body));
+        (void)way_cache_put(c, &x, NULL, body, sizeof(body));
         set_mtime(names[i], (time_t)(D + 10 + i));
     }
     way_cache_stats(c, &st);
@@ -568,10 +583,10 @@ static void store_cases(void)
 
     // An entry dropped is gone.
     way_entry_t gone = entry("https://x.test/gone.png", "max-age=60");
-    (void)way_cache_put(c, &gone, body, sizeof(body));
-    way_cache_drop(c, "https://x.test/gone.png");
+    (void)way_cache_put(c, &gone, NULL, body, sizeof(body));
+    way_cache_drop(c, KEY("https://x.test/gone.png"));
     expect("store: a dropped entry is gone",
-           !way_cache_find(c, "https://x.test/gone.png", &got, &bytes, &len, 1 << 20), NULL);
+           !way_cache_find(c, KEY("https://x.test/gone.png"), &got, &bytes, &len, NULL, 1 << 20), NULL);
 
     int held = count_entries(dir);
     expect("store: emptied", held > 0 && way_cache_clear(c) == held && count_entries(dir) == 0, NULL);
@@ -589,7 +604,7 @@ static void store_cases(void)
         char u[64];
         snprintf(u, sizeof(u), "https://shared.test/%d.png", i);
         way_entry_t x = entry(u, "max-age=60");
-        (void)way_cache_put(i % 2 == 0 ? one : two, &x, seven, sizeof(seven));
+        (void)way_cache_put(i % 2 == 0 ? one : two, &x, NULL, seven, sizeof(seven));
     }
     char detail[64];
     snprintf(detail, sizeof(detail), "%llu bytes", (unsigned long long)dir_bytes(dir));
@@ -609,11 +624,11 @@ static void store_cases(void)
         char u[64];
         snprintf(u, sizeof(u), "https://during.test/a%d.png", i);
         way_entry_t x = entry(u, "max-age=60");
-        (void)way_cache_put(s_during_cache, &x, seven, sizeof(seven));
+        (void)way_cache_put(s_during_cache, &x, NULL, seven, sizeof(seven));
     }
     s_after_listing = puts_during_sweep;
     way_entry_t last = entry("https://during.test/last.png", "max-age=60");
-    (void)way_cache_put(s_during_cache, &last, seven, sizeof(seven));
+    (void)way_cache_put(s_during_cache, &last, NULL, seven, sizeof(seven));
     snprintf(detail, sizeof(detail), "%llu bytes", (unsigned long long)dir_bytes(dir));
     expect("store: what was written during a sweep is swept for", s_after_listing == NULL &&
            dir_bytes(dir) <= 65536, detail);
@@ -627,7 +642,7 @@ static void store_cases(void)
     c = way_cache_open(dir, 64 * 1024);
     way_cache_stats(c, &st);
     expect("store: an unusable directory", c != NULL && !st.usable && !way_cache_enabled(c) &&
-           !way_cache_put(c, &e, body, sizeof(body)), NULL);
+           !way_cache_put(c, &e, NULL, body, sizeof(body)), NULL);
     way_cache_close(c);
 
     char rm[700];
@@ -639,8 +654,7 @@ static void store_cases(void)
 // A companion's name: its entry's, ending `.b`.
 static void companion_path(const char *dir, const char *url, char *out, size_t cap)
 {
-    entry_path(dir, url, out, cap);
-    out[strlen(out) - 1] = 'b';
+    key_path(dir, kPartition, true, url, 'b', out, cap);
 }
 
 // BYTECODE_CACHE.md § 5: what a face keeps beside an entry.
@@ -656,24 +670,24 @@ static void companion_cases(void)
     s_clock = D;
     way_cache_t *c = way_cache_open(dir, 64 * 1024);
     const char *url = "https://x.test/app.js";
-    const char *key = "classic 0123456789abcdef 4096";
+    const char *tag = "classic 0123456789abcdef 4096";
     uint8_t blob[3000];
     for (size_t i = 0; i < sizeof(blob); i++)
         blob[i] = (uint8_t)(i * 13);
     uint8_t *bytes = NULL;
     size_t len = 0;
-    expect("companion: kept", way_cache_companion_put(c, url, key, blob, sizeof(blob)), NULL);
-    bool found = way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20);
+    expect("companion: kept", way_cache_companion_put(c, KEY(url), tag, blob, sizeof(blob)), NULL);
+    bool found = way_cache_companion_get(c, KEY(url), tag, &bytes, &len, 1 << 20);
     expect("companion: and read back whole", found && len == sizeof(blob) &&
            memcmp(bytes, blob, len) == 0, NULL);
     os64_free(bytes);
-    expect("companion: another key is a miss",
-           !way_cache_companion_get(c, url, "classic 0123456789abcdef 4097", &bytes, &len, 1 << 20) &&
+    expect("companion: another tag is a miss",
+           !way_cache_companion_get(c, KEY(url), "classic 0123456789abcdef 4097", &bytes, &len, 1 << 20) &&
            bytes == NULL, NULL);
     expect("companion: another address is a miss",
-           !way_cache_companion_get(c, "https://x.test/other.js", key, &bytes, &len, 1 << 20), NULL);
+           !way_cache_companion_get(c, KEY("https://x.test/other.js"), tag, &bytes, &len, 1 << 20), NULL);
     expect("companion: larger than the caller's cap is a miss",
-           !way_cache_companion_get(c, url, key, &bytes, &len, sizeof(blob) - 1), NULL);
+           !way_cache_companion_get(c, KEY(url), tag, &bytes, &len, sizeof(blob) - 1), NULL);
     int32_t entries_before = 0;
     way_cache_stats_t st;
     way_cache_stats(c, &st);
@@ -687,46 +701,46 @@ static void companion_cases(void)
     companion_path(dir, "https://x.test/collides.js", to, sizeof(to));
     rename(from, to);
     expect("companion: the address inside is checked",
-           !way_cache_companion_get(c, "https://x.test/collides.js", key, &bytes, &len, 1 << 20), NULL);
+           !way_cache_companion_get(c, KEY("https://x.test/collides.js"), tag, &bytes, &len, 1 << 20), NULL);
     rename(to, from);
     struct stat whole;
     stat(from, &whole);
     expect("companion: cut short", truncate(from, whole.st_size - 1) == 0, NULL);
     expect("companion: a torn companion is a miss",
-           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
+           !way_cache_companion_get(c, KEY(url), tag, &bytes, &len, 1 << 20), NULL);
     expect("companion: grown", truncate(from, whole.st_size + 1) == 0, NULL);
     expect("companion: a longer companion is a miss",
-           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
+           !way_cache_companion_get(c, KEY(url), tag, &bytes, &len, 1 << 20), NULL);
 
-    // A key is one line, not empty and not too long; an eighth of the cap.
-    char long_key[WAY_COMPANION_KEY_MAX + 1];
-    memset(long_key, 'k', sizeof(long_key) - 1);
-    long_key[sizeof(long_key) - 1] = '\0';
-    expect("companion: a key with a line break is refused",
-           !way_cache_companion_put(c, url, "classic\nlength 1", blob, sizeof(blob)), NULL);
-    expect("companion: an empty key is refused", !way_cache_companion_put(c, url, "", blob, sizeof(blob)),
+    // A tag is one line, not empty and not too long; an eighth of the cap.
+    char long_tag[WAY_COMPANION_TAG_MAX + 1];
+    memset(long_tag, 'k', sizeof(long_tag) - 1);
+    long_tag[sizeof(long_tag) - 1] = '\0';
+    expect("companion: a tag with a line break is refused",
+           !way_cache_companion_put(c, KEY(url), "classic\nlength 1", blob, sizeof(blob)), NULL);
+    expect("companion: an empty tag is refused", !way_cache_companion_put(c, KEY(url), "", blob, sizeof(blob)),
            NULL);
-    expect("companion: a key too long is refused",
-           !way_cache_companion_put(c, url, long_key, blob, sizeof(blob)), NULL);
+    expect("companion: a tag too long is refused",
+           !way_cache_companion_put(c, KEY(url), long_tag, blob, sizeof(blob)), NULL);
     static uint8_t big[9000];
     expect("companion: over an eighth of the cap is not kept",
-           !way_cache_companion_put(c, url, key, big, sizeof(big)), NULL);
+           !way_cache_companion_put(c, KEY(url), tag, big, sizeof(big)), NULL);
     way_cache_enable(c, false);
     expect("companion: turned off, nothing is kept or read",
-           !way_cache_companion_put(c, url, key, blob, sizeof(blob)) &&
-           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
+           !way_cache_companion_put(c, KEY(url), tag, blob, sizeof(blob)) &&
+           !way_cache_companion_get(c, KEY(url), tag, &bytes, &len, 1 << 20), NULL);
     way_cache_enable(c, true);
 
     // It goes with its entry: dropped, and cleared.
     uint8_t body[1000] = {0};
     way_entry_t e = entry(url, "max-age=60");
-    (void)way_cache_put(c, &e, body, sizeof(body));
-    (void)way_cache_companion_put(c, url, key, blob, sizeof(blob));
-    way_cache_drop(c, url);
+    (void)way_cache_put(c, &e, NULL, body, sizeof(body));
+    (void)way_cache_companion_put(c, KEY(url), tag, blob, sizeof(blob));
+    way_cache_drop(c, KEY(url));
     expect("companion: dropped with its entry", access(from, F_OK) != 0 &&
-           !way_cache_companion_get(c, url, key, &bytes, &len, 1 << 20), NULL);
-    (void)way_cache_put(c, &e, body, sizeof(body));
-    (void)way_cache_companion_put(c, url, key, blob, sizeof(blob));
+           !way_cache_companion_get(c, KEY(url), tag, &bytes, &len, 1 << 20), NULL);
+    (void)way_cache_put(c, &e, NULL, body, sizeof(body));
+    (void)way_cache_companion_put(c, KEY(url), tag, blob, sizeof(blob));
     expect("companion: cleared with the entries, which alone are counted",
            way_cache_clear(c) == 1 && access(from, F_OK) != 0 && count_entries(dir) == 0, NULL);
 
@@ -736,7 +750,7 @@ static void companion_cases(void)
         char u[64];
         snprintf(u, sizeof(u), "https://x.test/%d.js", i);
         companion_path(dir, u, names[i], sizeof(names[i]));
-        (void)way_cache_companion_put(c, u, key, blob, sizeof(blob));
+        (void)way_cache_companion_put(c, KEY(u), tag, blob, sizeof(blob));
         set_mtime(names[i], (time_t)(D + 10 + i));
     }
     way_cache_stats(c, &st);
@@ -751,10 +765,122 @@ static void companion_cases(void)
         expect("companion: the temporary directory is removed", false, root);
 }
 
+// SCRIPT_CACHE.md § 2-4: what is kept is found by its whole key, and keeps
+// what the live CORS check and Vary read.
+static void key_cases(void)
+{
+    char root[] = "/tmp/way_keysXXXXXX";
+    if (mkdtemp(root) == NULL) {
+        expect("keys: a temporary directory", false, NULL);
+        return;
+    }
+    char dir[600];
+    snprintf(dir, sizeof(dir), "%s/cache", root);
+    s_clock = D;
+    way_cache_t *c = way_cache_open(dir, 1 << 20);
+    const char *url = "https://cdn.test/app.js";
+    uint8_t body[100];
+    memset(body, 'b', sizeof(body));
+    way_entry_t e = entry(url, "max-age=600");
+    way_entry_t got;
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    expect("keys: kept for one site's page", way_cache_put(c, &e, NULL, body, sizeof(body)), NULL);
+    expect("keys: found by that site's page", way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20),
+           NULL);
+    os64_free(bytes);
+    expect("keys: another site's page does not find it",
+           !way_cache_find(c, &(way_cache_key_t){"https other.test", true, url}, &got, &bytes, &len, NULL, 1 << 20),
+           NULL);
+    expect("keys: an anonymous request does not find a credentialed reply",
+           !way_cache_find(c, &(way_cache_key_t){kPartition, false, url}, &got, &bytes, &len, NULL, 1 << 20), NULL);
+    way_entry_t anon = e;
+    anon.credentials = false;
+    uint8_t other[3] = {'a', 'n', 'o'};
+    expect("keys: an anonymous reply is kept beside it, not over it",
+           way_cache_put(c, &anon, NULL, other, sizeof(other)) &&
+               way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20) && len == sizeof(body), NULL);
+    os64_free(bytes);
+    expect("keys: and a credentialed request does not find it",
+           way_cache_find(c, &(way_cache_key_t){kPartition, false, url}, &got, &bytes, &len, NULL, 1 << 20) &&
+               len == sizeof(other) && !got.credentials, NULL);
+    os64_free(bytes);
+    way_entry_t theirs = e;
+    snprintf(theirs.partition, sizeof(theirs.partition), "https other.test");
+    expect("keys: another site's reply is kept beside it, not over it",
+           way_cache_put(c, &theirs, NULL, other, sizeof(other)) &&
+               way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20) && len == sizeof(body), NULL);
+    os64_free(bytes);
+
+    // A page of an opaque origin, or a caller that names no page, keeps nothing.
+    way_entry_t opaque = e;
+    snprintf(opaque.partition, sizeof(opaque.partition), "opaque 7");
+    way_entry_t none = e;
+    none.partition[0] = '\0';
+    expect("keys: an opaque page keeps nothing", !way_cache_put(c, &opaque, NULL, body, sizeof(body)), NULL);
+    expect("keys: nor one not named", !way_cache_put(c, &none, NULL, body, sizeof(body)), NULL);
+    expect("keys: nor is anything found for them",
+           !way_cache_find(c, &(way_cache_key_t){"opaque 7", true, url}, &got, &bytes, &len, NULL, 1 << 20) &&
+               !way_cache_find(c, &(way_cache_key_t){"", true, url}, &got, &bytes, &len, NULL, 1 << 20), NULL);
+
+    // The blocks come back as they were kept, after the body.
+    const char headers[] = "Content-Type: text/javascript\r\nAccess-Control-Allow-Origin: *\r\nVary: Origin\r\n";
+    const char omitted[] = "x-long\r\n";
+    const char vary[] = "Origin: https://page.test\r\n";
+    way_blocks_t kept = {headers, sizeof(headers) - 1, omitted, sizeof(omitted) - 1, vary, sizeof(vary) - 1};
+    way_blocks_t back;
+    expect("keys: an entry with its blocks is kept", way_cache_put(c, &e, &kept, body, sizeof(body)), NULL);
+    bool found = way_cache_find(c, KEY(url), &got, &bytes, &len, &back, 1 << 20);
+    expect("keys: and its body and blocks come back whole",
+           found && len == sizeof(body) && memcmp(bytes, body, len) == 0 &&
+               back.headers_len == sizeof(headers) - 1 && memcmp(back.headers, headers, back.headers_len) == 0 &&
+               back.omitted_len == sizeof(omitted) - 1 && memcmp(back.omitted, omitted, back.omitted_len) == 0 &&
+               back.vary_len == sizeof(vary) - 1 && memcmp(back.vary, vary, back.vary_len) == 0, NULL);
+    os64_free(bytes);
+    expect("keys: the body's cap is the body's, the blocks beside it",
+           !way_cache_find(c, KEY(url), &got, &bytes, &len, &back, sizeof(body) - 1) &&
+               way_cache_find(c, KEY(url), &got, &bytes, &len, &back, sizeof(body)), NULL);
+    os64_free(bytes);
+    static char huge[(256 << 10) + 1];
+    way_blocks_t too_big = {huge, sizeof(huge), NULL, 0, NULL, 0};
+    expect("keys: blocks past what a response's head can be are not kept",
+           !way_cache_put(c, &e, &too_big, body, sizeof(body)), NULL);
+
+    // A version 1 entry, under the name version 2 would give it, is a miss.
+    char path[1200];
+    entry_path(dir, url, path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    fprintf(f, "os64-cache 1\nurl %s\nfrom %s\nstatus 200\nstored %ld\nlength 3\n\nold", url, url, (long)D);
+    fclose(f);
+    expect("keys: a version 1 entry is a miss", !way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20),
+           NULL);
+
+    // A companion is its entry's key's.
+    const char *tag = "classic 00 1";
+    uint8_t blob[10] = {0};
+    expect("keys: a companion is kept beside its entry",
+           way_cache_companion_put(c, KEY(url), tag, blob, sizeof(blob)), NULL);
+    expect("keys: and another site's page does not find it",
+           !way_cache_companion_get(c, &(way_cache_key_t){"https other.test", true, url}, tag, &bytes, &len,
+                                    1 << 20), NULL);
+    expect("keys: nor an anonymous request",
+           !way_cache_companion_get(c, &(way_cache_key_t){kPartition, false, url}, tag, &bytes, &len, 1 << 20),
+           NULL);
+    expect("keys: an opaque page keeps no companion",
+           !way_cache_companion_put(c, &(way_cache_key_t){"opaque 7", true, url}, tag, blob, sizeof(blob)), NULL);
+    way_cache_close(c);
+
+    char rm[700];
+    snprintf(rm, sizeof(rm), "rm -rf '%s'", root);
+    if (system(rm) != 0)
+        expect("keys: the temporary directory is removed", false, root);
+}
+
 static void cache_cases(void)
 {
     keep_rules();
     chain_rules();
     store_cases();
     companion_cases();
+    key_cases();
 }

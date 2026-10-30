@@ -7,8 +7,10 @@ written. A build failure is neither.
 The rules: libjs's blob is refused unless it is this engine's, whole and
 the payload's own (§ 4), is read under the run's name (§ 3), and a write is
 judged by the allocator; the engine's identity follows its
-sources; a companion is the address's and the key's, and lives and dies
-with its entry (§ 5); a face is told whether the cache holds a body; the
+sources; an entry is found by its whole key — the page's partition (an
+opaque page's keeps nothing), the credentials, the address — and a
+companion by its entry's key and its tag, living and dying with its entry
+(§ 5, SCRIPT_CACHE.md § 2-3); a face is told whether the cache holds a body; the
 worker looks for a companion only for one it holds; and the window runs
 through the blob, keeps a compile's, lets its queue go, and says which ran.
 
@@ -80,7 +82,7 @@ mutants = [
      "    identity.update(name.encode())\n", PREPARED),
     # libway: the companion.
     ('a-drop-keeps-the-companion', CACHE,
-     '    if (path_of(c, url, KIND_COMPANION, path, sizeof(path)))\n        (void)os64_unlink(path);\n}',
+     '    if (path_of(c, key, KIND_COMPANION, path, sizeof(path)))\n        (void)os64_unlink(path);\n}',
      '}', WAY),
     ('a-clear-keeps-the-companions', CACHE,
      '        if (is_kept(e.name) && os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0 &&',
@@ -91,10 +93,25 @@ mutants = [
      '        if (!is_kind(e.name, KIND_ENTRY))\n            continue;', WAY),
     ('a-companion-is-counted-as-an-entry', CACHE,
      '            *entries += is_kind(e.name, KIND_ENTRY);', '            (*entries)++;', WAY),
-    ('the-key-is-not-checked', CACHE,
-     'else if (os64_streq(line, "key") && os64_streq(v, f->key))', 'else if (os64_streq(line, "key"))', WAY),
+    ('the-tag-is-not-checked', CACHE,
+     'else if (os64_streq(line, "tag") && os64_streq(v, f->tag))', 'else if (os64_streq(line, "tag"))', WAY),
     ('the-address-is-not-checked', CACHE,
-     'if (os64_streq(line, "url") && os64_streq(v, f->url))', 'if (os64_streq(line, "url"))', WAY),
+     'else if (os64_streq(line, "url") && os64_streq(v, f->key->url))', 'else if (os64_streq(line, "url"))', WAY),
+    # libway: the key (SCRIPT_CACHE.md § 2-3).
+    ('the-credentials-are-not-in-the-name', CACHE,
+     '    h = hash(h, key->credentials ? "\\n1\\n" : "\\n0\\n");', '    h = hash(h, "\\n1\\n");', WAY),
+    ('the-partition-is-not-in-the-name', CACHE,
+     '    uint64_t h = hash(0xcbf29ce484222325ull, key->partition);',
+     '    uint64_t h = 0xcbf29ce484222325ull;', WAY),
+    ('an-opaque-page-keeps', CACHE,
+     '           os64_memcmp(key->partition, kOpaque, sizeof(kOpaque) - 1) != 0;',
+     '           kOpaque[0] != 0;', WAY),
+    ('the-entry-key-is-not-checked', CACHE,
+     "    if (!entry_parse(head, f->e, &f->len) || !key_is(f->key, f->e->partition, f->e->credentials, f->e->url) ||",
+     "    if (!entry_parse(head, f->e, &f->len) ||", WAY),
+    ('whole-is-not-partitioned', LOAD,
+     '    way_partition_of(&asked_for.origin, partition, sizeof(partition));',
+     '    os64_strcopy(partition, sizeof(partition), "https all");', FETCH),
     # libway: whether the cache holds a body.
     ('a-body-a-304-forbids-is-held', LOAD, '        out->kept = keep;', '        out->kept = true;', FETCH),
     ('a-stale-body-is-not-held', LOAD,

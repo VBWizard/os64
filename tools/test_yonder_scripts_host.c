@@ -570,8 +570,9 @@ static bool script_land_from(const char *tail, const char *source, const char *f
             /* The cache holds the body: its compiled form, when the case
              * gave one, and where a compile's is kept. */
             got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
+            os64_strcopy(got->bytecode->partition,sizeof(got->bytecode->partition),"https page.test");
             os64_strcopy(got->bytecode->url,sizeof(got->bytecode->url),url);
-            os64_strcopy(got->bytecode->key,sizeof(got->bytecode->key),"classic test");
+            os64_strcopy(got->bytecode->tag,sizeof(got->bytecode->tag),"classic test");
             if(script_land_blob) {
                 got->bytecode->blob=os64_malloc(script_land_blob_length);
                 memcpy(got->bytecode->blob,script_land_blob,script_land_blob_length);
@@ -10943,9 +10944,10 @@ static void bytecode_cases(void) {
     check(javascript_record_has("/app.js: ran in ") && !javascript_record_has("from its bytecode"),
         "bytecode: and the record says it ran, not that it was read");
     check(nbytecode_jobs==1 && has(bytecode_jobs[0].job->url,"/app.js") &&
-        os64_streq(bytecode_jobs[0].job->key,"classic test") && bytecode_jobs[0].job->length>96 &&
+        os64_streq(bytecode_jobs[0].job->partition,"https page.test") &&
+        os64_streq(bytecode_jobs[0].job->tag,"classic test") && bytecode_jobs[0].job->length>96 &&
         bytecode_jobs[0].job->cache==g.cache && s_bytecode_queued==bytecode_jobs[0].job->length,
-        "bytecode: the compile's form goes to a job of its own, under the entry's address and key");
+        "bytecode: the compile's form goes to a job of its own, beside the entry's key, under its tag");
     if(nbytecode_jobs!=1) {
         script_land_kept=false; loop_drop(); g.cache=NULL; return;
     }

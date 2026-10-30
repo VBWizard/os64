@@ -125,18 +125,19 @@ and after.
 
 `way/cache.h` gains, beside the store:
 
-- `way_cache_companion_put(cache, url, key, bytes, len)` — written as
+- `way_cache_companion_put(cache, key, tag, bytes, len)` — written as
   entries are, under a writer's own temp name and renamed over its place.
-- `way_cache_companion_get(cache, url, key, &bytes, &len, cap)` — the
-  companion of `url`'s entry, when its head's address is `url` and its key
-  is `key`, whole and of exactly its length; false otherwise.
+- `way_cache_companion_get(cache, key, tag, &bytes, &len, cap)` — the
+  companion of the entry `key` names, when its head names that key and
+  `tag`, whole and of exactly its length; false otherwise.
 
-Its head is `os64-cache-companion 1`, the address it belongs to (checked,
-as an entry's is: the file name is a hash), the `key`, and the length. A
-key is one line of the face's choosing; yonder's for a classic script is
-the decoded source's FNV-1a and length (`yonder_script_bytecode_key`), so a
-companion is used only for the very text it was compiled from, whatever
-became of its entry between.
+`key` is the entry's (CACHE.md: the page's partition, the credentials, the
+address; SCRIPT_CACHE.md § 3). Its head is `os64-cache-companion 2`, the
+key's parts (checked, as an entry's are: the file name is a hash), the
+`tag`, and the length. A tag is one line of the face's choosing; yonder's
+for a classic script is the decoded source's FNV-1a and length
+(`yonder_script_bytecode_tag`), so a companion is used only for the very
+text it was compiled from, whatever became of its entry between.
 
 **Stored as it is, not gzip'd** — the slice paragraph said compressed with
 libgzip, and measurement said otherwise. On the host, libgzip deflates a
@@ -168,7 +169,7 @@ one that stops being kept takes its companion with it.
 | compile, `JS_WriteObject`, run | the window thread | as before, plus the write: a copy |
 | the companion write | a job of its own (`YONDER_JOB_BYTECODE`) | the window never waits on a disk |
 
-The write job holds the blob, the address and the key, nothing of the
+The write job holds the blob, the entry's key and the tag, nothing of the
 page: a page left while it runs does not stop it, and nothing of the
 page's is freed under it. Writes waiting behind the workers are held to 64
 MiB (`BYTECODE_QUEUED_MAX`); one that would pass it is not kept, which
@@ -183,8 +184,8 @@ to the write job.
 
 | Event | Companion | Bytecode record and blob read | Fresh blob |
 |---|---|---|---|
-| fetched, body kept, companion's key matches | read | made on the worker, taken by the script's item | — |
-| body kept, no companion or another key | untouched | made with no blob: the compile's will be kept | — |
+| fetched, body kept, companion's tag matches | read | made on the worker, taken by the script's item | — |
+| body kept, no companion or another tag | untouched | made with no blob: the compile's will be kept | — |
 | body not kept (`no-store`, cache off, too big, a redirect not kept) | not read; removed with the entry it would have replaced | none | none: never kept |
 | run from the blob | — | freed after the run | none |
 | blob refused at the run (framing, engine, digest, a read the engine refused) | left until the fresh one replaces it | freed after the run | kept |
@@ -195,7 +196,7 @@ to the write job.
 | page gone before its script landed | — | freed with the answer | — |
 | page left while its script waited | — | freed with the item, as its source is | — |
 | page left while the write job runs | written regardless: it describes the source, not the page | — | the job's |
-| entry replaced by a new body | stays until its key misses, then is replaced by the next compile | — | — |
+| entry replaced by a new body | stays until its tag misses, then is replaced by the next compile | — | — |
 | entry dropped (a no-store answer, `way_cache_drop`) | removed | — | — |
 | cache cleared | removed | — | — |
 | swept | removed, oldest first, as an entry | — | — |
@@ -223,7 +224,7 @@ held to the queue's 64 MiB.
   nothing leaks. `tools/test_js_prepare.py`: patch 0015's placement, and an
   engine identity that is the same for the same sources and changes with
   any of them.
-- **libway**: companion put and get against a temporary directory (the key,
+- **libway**: companion put and get against a temporary directory (the tag,
   the address and the length checked; a torn or grown file a miss; a key
   that is not one line refused; an eighth of the cap; off keeps and reads
   nothing; dropped and cleared with its entry; swept oldest first and
@@ -253,7 +254,7 @@ held to the queue's 64 MiB.
 - **7a** — everything above, for `<script src>`.
 - **7b** — modules. They arrive by the fetch job (slice 2's path, CORS),
   not `script_job.c`, and are compiled with `JS_EVAL_FLAG_NO_RESOLVE`
-  before their imports exist. The blob kind is `module`, the key is the
+  before their imports exist. The blob kind is `module`, the tag is the
   source and the module's name, and the read makes the module and leaves
   its resolution to the loader as a compile does. GitHub's 6.6 MB is all
   modules, so 7b is not optional; it is second because its plumbing is.

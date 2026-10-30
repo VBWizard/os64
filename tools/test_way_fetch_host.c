@@ -341,6 +341,11 @@ static bool whole(const char *url, way_whole_t *out, os64_fetch_options_t *opt)
     memset(&hooks, 0, sizeof(hooks));
     hooks.jar = s_jar;
     hooks.cache = s_cache;
+    // Fetched for one page throughout, as the cache keeps a reply under the
+    // page's site (SCRIPT_CACHE.md § 3).
+    way_origin_t page;
+    way_origin_of("https://page.test/", 0, &page);
+    way_metadata_request(&hooks.metadata, &page, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
     return way_fetch_whole(&hooks, url, opt, 1 << 20, out);
 }
 
@@ -513,6 +518,32 @@ static void kept_bodies(void)
     free(w.bytes);
     expect("kept: a stale body served for want of the server is held",
            whole("http://t.test/", &w, NULL) && w.served == WAY_SERVED_STALE && w.kept, NULL);
+    free(w.bytes);
+}
+
+static bool whole_picture(const char *page, const char *url, way_whole_t *out);
+
+// The cache is partitioned by the page's site (SCRIPT_CACHE.md § 3): one
+// site's page is served what it caused to be kept, another's asks the
+// network for the same address.
+static void partitioned(void)
+{
+    const char *year = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nPIC";
+    fresh();
+    script("u.test", year);
+    script("u.test", year);
+    way_whole_t w;
+    expect("partition: one site's page keeps the picture",
+           whole_picture("https://one.test/", "http://u.test/p.png", &w) && w.kept, NULL);
+    free(w.bytes);
+    int before = s_dials;
+    expect("partition: and is served it again without asking",
+           whole_picture("https://one.test/", "http://u.test/p.png", &w) && w.served == WAY_SERVED_KEPT &&
+               s_dials == before, NULL);
+    free(w.bytes);
+    expect("partition: another site's page asks the network for it",
+           whole_picture("https://two.test/", "http://u.test/p.png", &w) && w.served == WAY_SERVED_NETWORK &&
+               s_dials > before, NULL);
     free(w.bytes);
 }
 
@@ -1285,6 +1316,7 @@ int main(void)
     validator_identity();
     restrictive_304();
     kept_bodies();
+    partitioned();
     redirect_restrictions();
     field_too_long();
     who_is_asking();

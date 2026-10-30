@@ -102,16 +102,30 @@ charset, the address asked for and the one it came from, when it was
 stored — a blank line, and the body. It is written under a name no other
 writer has (`<hash>.<task>.<n>.new`) and renamed over its place, so a
 reader sees the old entry or the new one and two yonder windows share the
-directory safely. Its name is a 64-bit hash of the address asked for, and
-the address inside is checked, so a collision is a miss.
+directory safely.
+
+**An entry is found by its KEY** (2026-10-30, SCRIPT_CACHE.md § 2-3): the
+partition of the page it was fetched for — the page's site, as the
+preflight cache keys (`way_partition_of`) — whether the request sent
+credentials, and the address asked for. So one site's page never finds
+what another's caused to be kept, which closes the timing leak a shared
+cache is (a page learning where you have been by how fast another site's
+picture arrives), at the price every browser pays since 2020: an asset two
+sites share is fetched once for each. A page of an opaque origin keeps
+nothing. The name is a 64-bit hash of the key's parts and the parts inside
+are checked, so a collision is a miss. The head is version 2 since then:
+it carries the key's parts and, after the body, what a script's request
+reads of a kept reply — its header lines, the names of the ones too long to
+read, and the request's own lines for each header its `Vary` names
+(`way_blocks_t`). A version 1 entry is a miss, and ages out.
 
 A face may keep a COMPANION beside an entry (`<hash>.b` beside
-`<hash>.e`, 2026-10-30): something it derived from the body, under a key
-of its own that names what it was derived from — yonder's is a script's
-compiled form, keyed by the source's digest (BYTECODE_CACHE.md). It is
-dropped with its entry, cleared with the entries, swept by the same rule
-and counted in the same cap, and a face reads one only for a body the
-cache holds.
+`<hash>.e`, 2026-10-30): something it derived from the body, under the
+entry's key and a tag of its own that names what it was derived from —
+yonder's is a script's compiled form, tagged by the source's digest
+(BYTECODE_CACHE.md). It is dropped with its entry, cleared with the
+entries, swept by the same rule and counted in the same cap, and a face
+reads one only for a body the cache holds.
 
 **When it is full** the oldest entries and companions by their file's time
 — stored, or revalidated — are removed until it is under nine-tenths of

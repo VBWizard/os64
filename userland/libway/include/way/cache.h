@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "fetch/fetch.h"
+#include "way/origin.h"
 
 #pragma GCC visibility push(default)
 
@@ -131,27 +132,84 @@ const char *way_cache_dir(way_cache_t *cache);
 // Removes every entry, and every companion. How many entries went.
 int32_t way_cache_clear(way_cache_t *cache);
 
+// ── Entries ─────────────────────────────────────────────────────────────
+//
+// What is kept is found by its KEY (SCRIPT_CACHE.md § 2-3): the partition
+// of the page it was fetched for (way_partition_of: one site's page never
+// finds what another's caused to be kept), whether the request sent
+// credentials (an anonymous reply never answers a credentialed request, nor
+// the reverse: each is another key, so another file), and the address
+// asked for. A key's parts are checked against the ones inside, as the
+// file's name is a hash. A page of an opaque origin keeps nothing: its
+// partition names nothing outside this run.
+typedef struct {
+    const char *partition;
+    bool credentials;
+    const char *url;
+} way_cache_key_t;
+
+// One kept reply: its key's parts, the address it came from, what it was,
+// and what it said about keeping it.
+typedef struct {
+    char partition[WAY_PARTITION_MAX];
+    bool credentials;
+    char url[OS64_FETCH_URL_MAX];
+    char final[OS64_FETCH_URL_MAX];
+    int32_t status;
+    char content_type[HTTP_TYPE_MAX];
+    char charset[HTTP_CHARSET_MAX];
+    way_keep_t keep;
+} way_entry_t;
+
+// What a kept reply carries beside its body, each as received: the
+// response's header lines ("Name: value\r\n", no Set-Cookie among them),
+// the names of the lines too long to read ("name\r\n"), which are what the
+// live CORS check reads (way_cors_check), and the request's own lines for
+// each header the response's Vary names, which a later request's must
+// equal. All empty for way_fetch_whole's replies, whose readers read none.
+typedef struct {
+    const char *headers;
+    size_t headers_len;
+    const char *omitted;
+    size_t omitted_len;
+    const char *vary;
+    size_t vary_len;
+} way_blocks_t;
+
+// The entry `key` names, with its body of at most `cap` bytes, when there is
+// a whole one. `*body` is os64_malloc'd and the caller's, and `blocks`, when
+// not NULL, points into the same allocation, after the body. False for none.
+bool way_cache_find(way_cache_t *cache, const way_cache_key_t *key, way_entry_t *e, uint8_t **body,
+                    size_t *len, way_blocks_t *blocks, size_t cap);
+// Keeps an entry (`blocks` may be NULL for none), replacing any for the same
+// key. False when it was not kept: turned off, too large, a partition that
+// names nothing outside this run, or the disk said no.
+bool way_cache_put(way_cache_t *cache, const way_entry_t *e, const way_blocks_t *blocks,
+                   const uint8_t *body, size_t len);
+// Forgets the entry `key` names, and its companion, if there is one.
+void way_cache_drop(way_cache_t *cache, const way_cache_key_t *key);
+
 // ── Companions (BYTECODE_CACHE.md § 5) ──────────────────────────────────
 //
 // What a face derives from a kept body and keeps beside its entry —
-// yonder's is a script's compiled form — under the entry's address and a
-// KEY of the face's naming what it was derived from, so one derived from
+// yonder's is a script's compiled form — under the entry's key and a
+// TAG of the face's naming what it was derived from, so one derived from
 // another body is a miss. It lives and dies with its entry: dropped with
 // it, cleared with it, swept by the same oldest-first rule, counted against
 // the same cap, and like an entry no larger than an eighth of it. A face
 // reads one only for a body the cache holds (way_whole_t.kept).
 
-// A key is one line of text, shorter than this.
-#define WAY_COMPANION_KEY_MAX 128
+// A tag is one line of text, shorter than this.
+#define WAY_COMPANION_TAG_MAX 128
 
-// Keeps `bytes` as `url`'s companion under `key`, replacing any. False when
-// it was not kept: turned off, too large, a key or address that is not one
-// line, or the disk said no.
-bool way_cache_companion_put(way_cache_t *cache, const char *url, const char *key,
+// Keeps `bytes` as the companion of `key`'s entry under `tag`, replacing
+// any. False when it was not kept: turned off, too large, a tag or address
+// that is not one line, or the disk said no.
+bool way_cache_companion_put(way_cache_t *cache, const way_cache_key_t *key, const char *tag,
                              const uint8_t *bytes, size_t len);
-// `url`'s companion, when it was kept under `key` and is whole, of at most
-// `cap` bytes: os64_malloc'd, the caller's. False for none.
-bool way_cache_companion_get(way_cache_t *cache, const char *url, const char *key,
+// The companion of `key`'s entry, when it was kept under `tag` and is whole,
+// of at most `cap` bytes: os64_malloc'd, the caller's. False for none.
+bool way_cache_companion_get(way_cache_t *cache, const way_cache_key_t *key, const char *tag,
                              uint8_t **bytes, size_t *len, size_t cap);
 
 #pragma GCC visibility pop

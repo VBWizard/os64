@@ -43,12 +43,15 @@ typedef struct {
 // A script's compiled form and where it is kept (BYTECODE_CACHE.md): made
 // for a script whose body the cache holds, and only then. The blob is
 // libjs's, read beside the cache's entry, NULL when none was there for
-// this text; a compile's blob is kept under the same address and key.
+// this text; a compile's blob is kept beside the same entry, under the
+// same tag. The entry is the one way_fetch_whole kept the body under: the
+// page's partition, credentialed, the address asked for.
 typedef struct {
     uint8_t *blob;
     size_t length;
-    char url[OS64_FETCH_URL_MAX];       // the entry's: the address asked for
-    char key[WAY_COMPANION_KEY_MAX];    // yonder_script_bytecode_key's
+    char partition[WAY_PARTITION_MAX];  // the entry's key: way_partition_of the page
+    char url[OS64_FETCH_URL_MAX];       // and the address asked for
+    char tag[WAY_COMPANION_TAG_MAX];    // yonder_script_bytecode_tag's
 } yonder_bytecode_t;
 
 void yonder_bytecode_free(yonder_bytecode_t *bytecode);
@@ -64,10 +67,10 @@ typedef struct {
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);
 void yonder_script_release(void *job, void *product);
 
-// The key a script's compiled form is kept under: which text it is the
+// The tag a script's compiled form is kept under: which text it is the
 // compile of (its FNV-1a and length), so a blob is offered only for the
 // very text it came from, whatever became of its entry between. Pure.
-void yonder_script_bytecode_key(const char *source, size_t length, char *out, size_t cap);
+void yonder_script_bytecode_tag(const char *source, size_t length, char *out, size_t cap);
 
 // A compiled form on its way to the disk, on a job of its own: the window
 // never waits on a write. The job owns the blob.
@@ -76,8 +79,9 @@ typedef struct {
     way_cache_t *cache;
     uint8_t *blob;
     size_t length;
+    char partition[WAY_PARTITION_MAX];
     char url[OS64_FETCH_URL_MAX];
-    char key[WAY_COMPANION_KEY_MAX];
+    char tag[WAY_COMPANION_TAG_MAX];
 } yonder_bytecode_job_t;
 
 // The write's own peak: the companion's head. The blob is the job's input.
