@@ -419,3 +419,45 @@ viewport. To avoid its automatic small-window run, open the starter with
 `file:///tests/pages/layout-stream-article.html` directly in the address bar.
 Save the completed report only after checking its recorded viewport. Delivery
 files remain unchanged and the 5b performance gate remains open.
+
+## Correctly sized profiled r3 article: corpus 562
+
+Only the newest record, corpus 562, is used for this rerun, matched to the
+screenshot ending in `stream-delivery3`. It completes 18 checkpoints at
+2,526 × 1,259 CSS pixels, device ratio 1, with heights matching control corpus
+461. Native settings confirm dark appearance, 100% zoom, Scripts and Modern Web
+on. Profiling is present. This is a valid geometry/work-count comparison.
+
+Total geometry time is **485.800 ms**, median checkpoint 23.700 ms and maximum
+61.300 ms, versus control's 407.200 / 20.350 / 40.600 ms. Total time is
+78.600 ms (19.3%) higher. These individual runs establish the outstanding
+regression signal, not a statistical estimate of variability or its cause.
+The scratch change has not cleared the article performance gate.
+
+| Stream phase | Control 461 | R3 candidate 562 |
+|---|---:|---:|
+| Model rebuild | 2.869 ms | 3.016 ms |
+| Cascade | 283.844 ms | 360.303 ms |
+| Computed styles | 6.048 ms | 6.436 ms |
+| Boxes | 1.425 ms | 1.454 ms |
+| Layout | 47.439 ms | 110.038 ms |
+| Public tree | 3.270 ms | 3.143 ms |
+
+Both records have 17 model rebuilds, 18 stream layouts, 7,927 elements,
+5,294 boxes, 3,795 measures and zero refusals/clock errors. The candidate's
+zero cascade updates and copied styles are expected for the broad selectors.
+Its displayed-layout record is separate: 941 elements, 512 boxes, 413 measures,
+one layout, no errors; cascade 30.278 ms and layout 17.036 ms.
+
+The cascade phase boundary still differs from 5a because early release of the
+hidden measurement moved into that phase. Do not attribute its full increase
+to selector computation. The unchanged layout algorithm's phase also costs
+more despite matching work counts, so allocation/lifetime effects and timing
+variation remain investigation targets, not established causes. Relative to
+the preceding profiled candidate corpus 466, cascade time is lower
+(360.303 versus 369.149 ms) but layout time is higher (110.038 versus 83.720 ms).
+
+The hardware evidence collection for this candidate is now usable: retain the
+confirmed original-page result from corpus 560 and this article result. No
+further viewport/profiling correction is needed. Investigation remains before
+5b performance acceptance, review or 5c. Delivery files are unchanged.
