@@ -83,6 +83,9 @@ typedef struct {
     uint64_t model_calls, layouts, refusals, clock_errors;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
+/* Geometry reads while the parser is active, kept separately from layouts
+ * after parsing. These do not imply that a stream chunk was painted. */
+void yonder_diag_layout_stream_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
 
 // A record for the load of `url`, numbered `seq`, begun at `began_us` on
 // the caller's clock (kept for the caller: this file reads no clock).

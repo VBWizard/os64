@@ -45,3 +45,36 @@ static void restyle_browser_cases(void)
           "restyle: media change invalidates an otherwise identical sheet parse");
     probe_drop();
 }
+
+static void restyle_fallback_cases(void)
+{
+    probe_page("<!doctype html><style>#box{color:red}#box:has(.on){color:blue}"
+               "span{background:linear-gradient(red,blue)}</style>"
+               "<div id=box><span id=child>text</span></div>",false);
+    flow_tree_t *shown=g.page.tree;
+    os64_html_node_t *child=probe_id("child");
+    os64_html_document_t *doc=g.page.way.doc;
+    os64_html_set_attr(doc,child,"class","on",2);
+    check(measured_layout(&g.page,g.page.state,g.page.way.url,800,600),
+          "restyle fallback: broad selector measures beside the shown page");
+    const flow_box_t *box=flow_box_for(s_measured.tree,child);
+    check(box && box->style->color==0x0000ff && g.page.tree==shown,
+          "restyle fallback: changed measurement preserves the displayed source");
+    os64_html_set_attr(doc,child,"class","",0);
+    geometry_refuse_layout=true;
+    check(!measured_layout(&g.page,g.page.state,g.page.way.url,800,600),
+          "restyle fallback: replacement refusal is reported");
+    geometry_refuse_layout=false;
+    box=flow_box_for(g.page.tree,child);
+    check(!s_measured.doc && g.page.tree==shown && box && box->style->color==0xff0000,
+          "restyle fallback: refused hidden replacement drops stale geometry but preserves shown styles");
+    check(measured_layout(&g.page,g.page.state,g.page.way.url,800,600),
+          "restyle fallback: measurement recovers after refusal");
+    os64_html_set_attr(doc,child,"class","on",2);
+    check(measured_layout(&g.page,g.page.state,g.page.way.url,800,600),
+          "restyle fallback: cached broad-selector measurement is replaced again");
+    box=flow_box_for(s_measured.tree,child);
+    check(box && box->style->color==0x0000ff && !flow_incomplete(s_measured.tree),
+          "restyle fallback: replacement owns complete styles after the previous source is freed");
+    probe_drop();
+}

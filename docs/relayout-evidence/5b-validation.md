@@ -301,3 +301,9 @@ artifacts. First-run displayed medians and individual raw samples were not
 retrieved. The frozen delivery is unchanged. The original-page result is
 encouraging, while the companion and streamed-Wikipedia comparisons and the
 performance acceptance decision remain open before review or 5c.
+
+## Matched acceptance workloads
+
+[5b-comparison.md](5b-comparison.md) records the separate stream profiling,
+full-fallback retention corrections, matched 5a control, and the remaining
+hardware protocol. It extends this evidence; it does not close the P5 gate.

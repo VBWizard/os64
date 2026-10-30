@@ -10789,10 +10789,19 @@ int main(void)
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     if(getenv("YONDER_RESTYLE_ONLY")) {
         restyle_browser_cases();
+        restyle_fallback_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"restyle: text released");
         check(live==0,"restyle: heap empty");
         printf("yonder restyle: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_PROFILE_ONLY")) {
+        layout_profile_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"profile: text released");
+        check(live==0,"profile: heap empty");
+        printf("yonder profile: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
     classic_browser_cases();
@@ -10803,6 +10812,7 @@ int main(void)
     canvas_window_cases();
     layout_profile_cases();
     restyle_browser_cases();
+    restyle_fallback_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();

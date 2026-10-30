@@ -51,7 +51,7 @@ struct yonder_diag_claim {
 };
 
 struct yonder_diag {
-    yonder_layout_stats_t layout;
+    yonder_layout_stats_t layout, layout_stream;
     char *url;
     uint32_t seq;
     struct yonder_diag_claim claim;
@@ -1176,16 +1176,17 @@ static uint64_t layout_sum(uint64_t a, uint64_t b)
 {
     return b > UINT64_MAX - a ? UINT64_MAX : a + b;
 }
-void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample)
+static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
+                       yonder_layout_stats_t *total, const char *key)
 {
-    if (!d || !sample) return;
-#define ADD(member) d->layout.member = layout_sum(d->layout.member, sample->member)
+    if (!sample) return;
+#define ADD(member) total->member = layout_sum(total->member, sample->member)
     ADD(model_us); ADD(cascade_us); ADD(style_us); ADD(boxes_us); ADD(layout_us); ADD(public_us);
     ADD(elements); ADD(boxes); ADD(measures); ADD(reused);
     ADD(styles_reused); ADD(cascade_updates);
     ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
 #undef ADD
-    const yonder_layout_stats_t *s = &d->layout;
+    const yonder_layout_stats_t *s = total;
     char line[768];
     os64_snprintf(line, sizeof(line),
         "totals: model rebuild %lu us, cascade %lu us, style %lu us, boxes %lu us, "
@@ -1197,5 +1198,13 @@ void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sampl
         (unsigned long)s->elements, (unsigned long)s->boxes, (unsigned long)s->measures, (unsigned long)s->reused,
         (unsigned long)s->model_calls, (unsigned long)s->layouts, (unsigned long)s->refusals,
         (unsigned long)s->clock_errors, (unsigned long)s->styles_reused, (unsigned long)s->cascade_updates);
-    yonder_diag_fact(d, "layout", line);
+    yonder_diag_fact(d, key, line);
+}
+void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample)
+{
+    if (d) layout_add(d, sample, &d->layout, "layout");
+}
+void yonder_diag_layout_stream_add(yonder_diag_t *d, const yonder_layout_stats_t *sample)
+{
+    if (d) layout_add(d, sample, &d->layout_stream, "layout stream");
 }

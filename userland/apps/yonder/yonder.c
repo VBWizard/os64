@@ -1087,21 +1087,30 @@ static uint64_t layout_elapsed(int64_t from, uint64_t *errors)
     if (from < 0 || to < from) { ++*errors; return 0; }
     return (uint64_t)(to - from);
 }
+// A measured stream page borrows its stream's record without becoming an
+// owner. Ordinary Page.diag ownership and teardown stay with the page.
+static yonder_diag_t *layout_profile_diag(const Page *p);
+static void layout_profile_add(const Page *p, const yonder_layout_stats_t *sample)
+{
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (p->diag) yonder_diag_layout_add(diag, sample);
+    else yonder_diag_layout_stream_add(diag, sample);
+}
 static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 {
-    bool enabled = s_layout_profile && p->diag;
+    bool enabled = s_layout_profile && layout_profile_diag(p);
     int64_t began = enabled ? os64_micros() : -1;
     os64_page_t *model = os64_page_rebuild(old);
     if (enabled) {
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
-        yonder_diag_layout_add(p->diag, &sample);
+        layout_profile_add(p, &sample);
     }
     return model;
 }
 static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 {
-    bool enabled = s_layout_profile && p->diag;
+    bool enabled = s_layout_profile && layout_profile_diag(p);
     flow_profile_t profile;
     flow_tree_t *tree = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env,
         p->restyle_from ? p->restyle_from : p->tree, enabled ? &profile : NULL,
@@ -1115,11 +1124,12 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
             .styles_reused = flow_styles_reused(tree),
             .clock_errors = profile.clock_errors, .layouts = 1,
             .refusals = tree == NULL || flow_incomplete(tree)};
-        yonder_diag_layout_add(p->diag, &sample);
+        layout_profile_add(p, &sample);
     }
     return tree;
 }
 
+static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     if (page_rebuild_owed(p))
@@ -1129,7 +1139,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     garb_env_t view = css_view(width, height, zoom);
     view.modern_off = !p->modern;
     view.scripting = p->scripting;
-    int64_t began = s_layout_profile && p->diag ? os64_micros() : -1;
+    int64_t began = s_layout_profile && layout_profile_diag(p) ? os64_micros() : -1;
     garb_sheet_in_t in[SHEETS_MAX];
     int32_t n = 0;
     const os64_page_t *model = page_model(p);
@@ -1142,12 +1152,15 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // instead proves that its immutable inputs still match the source.
     bool updated = (!p->sheets_changed || p->reuse_sheets) &&
                    garb_cascade_matches(cascade, in, n, view) && garb_cascade_update(cascade);
-    if (!updated) cascade = garb_cascade(in, n, page_doc(p), view);
-    if (s_layout_profile && p->diag) {
+    if (!updated) {
+        measured_fallback(p);
+        cascade = garb_cascade(in, n, page_doc(p), view);
+    }
+    if (s_layout_profile && layout_profile_diag(p)) {
         yonder_layout_stats_t sample = {.refusals = cascade == NULL,
             .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates};
         sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
-        yonder_diag_layout_add(p->diag, &sample);
+        layout_profile_add(p, &sample);
     }
     if (cascade == NULL) return false;
     {
@@ -1711,6 +1724,14 @@ static void mark_whole(WholeBy by, bool root)
     os64_ui_mark_dirty(&g.ui, root ? &g.root : &g.view);
 }
 
+static yonder_diag_t *layout_profile_diag(const Page *p)
+{
+    if (p->diag) return p->diag;
+    const os64_html_document_t *doc = page_doc(p);
+    return doc && g.stream.parser && doc == os64_html_parser_document(g.stream.parser)
+        ? g.stream.diag : NULL;
+}
+
 // THE MEASURED LAYOUT (DOM.md § Geometry): a page not on screen, laid out
 // for its scripts' measurements at the view's size — the stream's parse as
 // far as it has gone, the page stream_finish holds, the page waiting for
@@ -1747,12 +1768,30 @@ static void measured_forget(const os64_html_document_t *doc)
     os64_memset(&s_measured, 0, sizeof(s_measured));
 }
 
+// A full cascade changes generation, so the hidden measurement cannot
+// supply copied styles. Its sheets have already been retained by p's new
+// table. Release the cached measurement even when new sheets prevented it
+// from being selected as the source. A displayed source stays owned by its
+// page; clearing this measurement's references does not reclaim that page.
+static void measured_fallback(Page *p)
+{
+    if (!p->measuring)
+        return;
+    p->restyle_from = NULL;
+    p->reuse_sheets = NULL;
+    measured_forget(s_measured.doc);
+    garb_cascade_free(p->cascade);
+    p->cascade = NULL;
+}
+
 // `p`'s measured layout at `width` x `height` and the window's zoom, in
 // s_measured. The model is the tree's version: the last measured one or the
 // page's own while current, else one built beside it, sharing `state`
 // (`url` is where a page with no model came from). There is one measured
-// layout at a time: the one held, whichever page's, is let go first. False
-// when it cannot be had, or the layout ran short: no stale answer is kept.
+// cached measurement at a time. Its source stays alive for style reuse;
+// a full-cascade fallback releases an unusable measured source before the
+// replacement is built. False on refusal or a short layout: no stale answer
+// is kept.
 static bool measured_layout(const Page *p, os64_page_state_t *state, const char *url,
                             int32_t width, int32_t height)
 {

@@ -2454,7 +2454,10 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         c->incomplete = true;
     c->initial_state_bytes = os64_arena_stats(c->self.arena).used_bytes;
     c->retained_budget = c->initial_state_bytes > 4096 ? c->initial_state_bytes : 4096;
-    c->reader = os64_html_reader_new((os64_html_document_t *)doc, c->version);
+    // A cascade that must rebuild cannot consume invalidations. Registering
+    // it would still make DOM/parser mutations allocate and retain log entries.
+    if (!c->incomplete && !c->dependencies.whole_tree)
+        c->reader = os64_html_reader_new((os64_html_document_t *)doc, c->version);
     return c;
 }
 

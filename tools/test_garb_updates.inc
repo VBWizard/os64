@@ -152,7 +152,14 @@ static int cascade_updates(void)
         garb_parsed_t sheet;garb_parse_sheet_text(broad[i],strlen(broad[i]),&sheet);garb_sheet_in_t in={.sheet=&sheet};
         garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
         os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"class","x",1);
+        update_check(!os64_html_changes_bytes(doc),"broad dependency does not retain an unusable mutation log");
         update_check(!garb_cascade_update(c),"nested broad dependency requests full cascade");
+        os64_html_reader_t *reader=os64_html_reader_new(doc,os64_html_version(doc));
+        os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"title","kept",4);
+        const os64_html_change_entry_t *entry=NULL;
+        update_check(reader && os64_html_changes(reader,&entry)==1 && entry && entry->kind==OS64_HTML_CHANGE_ATTR,
+                     "broad cascade leaves another native reader's invalidations intact");
+        os64_html_reader_free(reader);
         garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
     }
     // Broad changes renew by bytes, while small changes keep a large

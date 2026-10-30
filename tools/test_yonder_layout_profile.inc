@@ -1,3 +1,33 @@
+static void layout_profile_stream_cases(void)
+{
+    int64_t saved_step=clock_step;clock_step=17;
+    const char *page="<!doctype html><style>p{color:red}</style><p>first</p>"
+        "<script>var first=document.body.offsetHeight;</script><p>second</p>"
+        "<script>var second=document.body.offsetHeight;</script><p id=out>done</p>";
+    for(int enabled=0;enabled<2;++enabled) {
+        loop_page(page);
+        if(!g.stream.diag)g.stream.diag=diag_new_claimed("http://fixture.test/profile-stream",1);
+        yonder_diag_t *record=g.stream.diag;
+        s_layout_profile=enabled;
+        check(loop_settle() && !g.stream.active && g.page.diag==record && probe_text_is("out","done"),
+              "layout profile: stream measurements survive record ownership transfer");
+        const char *stream=yonder_diag_fact_value(record,"layout stream");
+        const char *shown=yonder_diag_fact_value(record,"layout");
+        if(enabled) {
+            check(stream && strstr(stream,"cascade 34 us") && strstr(stream,"style 34 us") &&
+                  strstr(stream,"2 layout attempts") && strstr(stream,"0 refused/partial") &&
+                  strstr(stream,"0 clock errors"),"layout profile: parser geometry reads have their own totals");
+            check(shown && strstr(shown,"1 layout attempts"),
+                  "layout profile: stream measurements do not inflate the shown-layout total");
+        } else check(!stream && !shown,"layout profile: disabled stream instrumentation writes no totals");
+        loop_drop();
+    }
+    loop_page("<!doctype html><p>No geometry reads while parsing</p>");
+    if(!g.stream.diag)g.stream.diag=diag_new_claimed("http://fixture.test/profile-quiet",1);
+    check(loop_settle() && !yonder_diag_fact_value(g.page.diag,"layout stream"),
+          "layout profile: parser chunks alone are not recorded as layouts");
+    loop_drop();s_layout_profile=false;clock_step=saved_step;
+}
 typedef struct { int64_t now, step; unsigned calls; } ProfileClock;
 static int64_t profile_test_clock(void *opaque)
 {
@@ -47,4 +77,5 @@ static void layout_profile_cases(void)
           "layout profile: model cost remains separate from layout");
     s_layout_profile=false;clock_step=saved_step;
     probe_drop();
+    layout_profile_stream_cases();
 }

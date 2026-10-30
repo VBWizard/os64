@@ -162,7 +162,10 @@ bool garb_style_updated_since(const garb_cascade_t *, const os64_html_node_t *,
                               uint64_t update);
 ```
 
-The cascade owns an optional native reader. Updating consumes its linked
+The cascade owns an optional native reader. Incomplete cascades and cascades
+with whole-tree selector dependencies do not register one: they must rebuild
+after mutation, so retaining mutation history cannot help them. Other native
+readers retain their independent subscriptions. Updating consumes its linked
 change records and keeps its node slot table, erasing removed subtrees and
 inserting connected added subtrees before marking the affected set. The
 cascade's pin predates removals and prevents address recycling while a slot
@@ -202,7 +205,12 @@ identity/order and the complete cascade environment must also match.
 Changed inline styles therefore affect synchronous geometry reads before
 the page is published. A live page's explicit stylesheet invalidation still
 forces a full cascade. Cascades themselves have counted owners; updates
-and queries remain serialized on the window thread.
+and queries remain serialized on the window thread. When a measured layout
+needs a full cascade, it releases the old hidden measurement before building
+the replacement, including when changed sheets prevented selecting that
+measurement as a reuse source. Its new sheet table has already retained the
+parses it needs. The displayed page keeps its own tree and cascade owners;
+a failed measurement leaves no stale geometry answer.
 
 **Pass 1 reuses computed styles.** The additive `flow_layout_restyled`
 entry takes a previous tree without changing `flow_env_t` or
@@ -449,7 +457,16 @@ They include setup, warm-ups, presentation layouts and retries. Reload for
 a fresh comparable page record; do not divide the phase totals by the
 sample count and call that a per-operation measurement. Press `d` with page
 content focused to save the existing corpus report. Diagnostics must be
-attached to the page for costs to be recorded.
+attached to the page or active stream for costs to be recorded.
+
+Geometry queries made by scripts during parsing accumulate a separate
+`layout stream:` fact in the stream diagnostic. The measurement borrows that
+record; it does not take ownership. The fact survives transfer to the displayed
+page, whose subsequent layouts use `layout:`. Receiving a parser chunk alone
+does not trigger a layout. These counters measure script-forced geometry, not
+progressive painting after each chunk. The cascade phase includes releasing
+an unusable hidden measurement on the full-cascade fallback; phase boundaries
+therefore differ from builds that kept that measurement until after layout.
 
 The measurement page separately times a geometry read after no change,
 a paragraph text replacement, and removal/insertion of one list item. It
@@ -471,3 +488,6 @@ successful DOM-version advances within an existing cascade. The existing
 Measured and displayed layouts both use the incremental door. Validation
 and the outstanding P5/design gates are recorded in
 [5b-validation.md](../../relayout-evidence/5b-validation.md).
+
+The matched control/candidate procedure, captured-article workload and stream
+profiling evidence are in [5b-comparison.md](../../relayout-evidence/5b-comparison.md).
