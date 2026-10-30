@@ -382,3 +382,40 @@ information with `yonder --layout-profile` before attributing the remaining
 article cost. Use the article after maximization and reload, and the original
 page's Run measurements button after maximization. No new binary or delivery
 change was made while recording this evidence.
+
+## Profiled delivery rerun: original confirmed, article viewport unmatched
+
+Only the last two new records are used, as requested: corpus **560** is the
+original page, **559** the article. The screenshots ending in `delivery2`
+are retained with both records and a hashed numerical summary. Earlier extra
+runs from this rerun session were not retrieved or used.
+
+The original completes 2,000 rows / 20 samples / five warm-ups at 2,526 × 1,259,
+device ratio 1. Cached/paragraph/list medians are **0.100/40.200/58.050 ms**;
+maxima are **0.100/147.000/63.800 ms**. Compared with profiled control corpus
+458, paragraph and list medians are 38.5% and 4.8% lower. Paragraph maximum
+remains above control's 100.300 ms; list maximum is below its 66.200 ms.
+This confirms the original-page median improvement in a profiled run, without
+establishing better paragraph tail latency or estimating between-run variance.
+
+The native profile is present: 52 model rebuilds, 54 layouts, 106,499 elements,
+105,851 boxes, 105,374 measures, 26 cascade updates and 53,134 copied styles;
+zero refused/partial results and clock errors. Phase totals are model
+12.674 ms, cascade 184.630 ms, styles 105.727 ms, boxes 24.283 ms, layout
+2,953.100 ms and public tree 61.680 ms.
+
+The article also has profiling enabled and completes 18 checkpoints, but its
+measurement JSON records **826 × 459**, not the control's 2,526 × 1,259.
+Its total/median/maximum are 408.400/20.250/47.400 ms. Native work counts are
+7,825 elements, 5,209 boxes and 3,043 measures across 17 model rebuilds and
+18 stream layouts, with zero refusals/clock errors and zero style/cascade
+reuse, as expected. These smaller-viewport counts and screenshot heights
+confirm that this is not a valid comparison to control corpus 461.
+
+Retain the confirmed original-page result; it does not need another run for
+this checkpoint. The article still needs a profiled measurement at the control
+viewport. To avoid its automatic small-window run, open the starter with
+`yonder --layout-profile /tests/pages/layout-stream.html`, maximize, and type
+`file:///tests/pages/layout-stream-article.html` directly in the address bar.
+Save the completed report only after checking its recorded viewport. Delivery
+files remain unchanged and the 5b performance gate remains open.
