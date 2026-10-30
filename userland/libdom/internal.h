@@ -532,6 +532,11 @@ struct os64_dom {
     /* Custom elements (custom.c): the registry, its definitions, the
      * reactions waiting and their queues; NULL with the switch off. */
     struct DCustomState *custom;
+    /* MutationObserver (observer.c): its registrations, observers and their
+     * record queues, NULL with the switch off; and how many observer objects
+     * registrations hold (the registry's eighth list). */
+    struct DObservers *observers;
+    size_t observers_held;
 };
 #define D_NO_SCRIPT UINT32_MAX
 /* d_callback_script's answer when the runtime must stop: the exception is
@@ -1445,6 +1450,21 @@ typedef struct {
     const char *interface, *member;
     uint8_t kind;
 } DReactionRow;
+/* WebIDL's sequence<DOMString> (custom.c): each string copied, the array
+ * and the strings d_alloc'd, freed with d_strings_free. -1 with an exception
+ * pending. */
+int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char ***out, size_t *count);
+void d_strings_free(os64_dom_t *dom, char **strings, size_t count);
+/* ── MutationObserver (observer.c; CUSTOM_ELEMENTS.md, the third cut) ──
+ * The row; the document's listener's first reader (custom.c's `changed`
+ * hands it every change); whether a notify is owed between tasks, and
+ * running it (os64_dom_reactions_run); teardown, as custom elements'. */
+int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_observers_changed(os64_dom_t *dom, const os64_html_change_t *change);
+bool d_observers_owed(const os64_dom_t *dom);
+int d_observers_notify_owed(os64_dom_t *dom, JSContext *ctx);
+void d_observers_drain(os64_dom_t *dom);
+void d_observers_free(os64_dom_t *dom);
 size_t d_reactions_rows(void);
 bool d_reactions_row_name(size_t i, char *out, size_t cap);
 const char *d_reactions_row_state(const os64_dom_t *dom, size_t i);

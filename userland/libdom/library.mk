@@ -43,6 +43,8 @@ LIBDOM_SRCS += libdom/sheets.c
 LIBDOM_SRCS += libdom/importmap.c
 # Custom elements: the registry, upgrades and their reactions.
 LIBDOM_SRCS += libdom/custom.c
+# MutationObserver, fed by the same listener.
+LIBDOM_SRCS += libdom/observer.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
