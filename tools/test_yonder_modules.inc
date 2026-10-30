@@ -36,6 +36,8 @@ static void module_graph_case(void) {
     check(loop_settle() && g.page.tree!=NULL && script_rebuild() && probe_text_is("out","c|b|aB"),
           "modules: the graph runs once it is all in, each module once, its imports first");
     check(strstr(request_record_text(),"MISSING script module")==NULL,"modules: a module that ran is not missing");
+    check(strstr(request_record_text(),"\nmodules compiled: 3 in 0 us, 108 bytes\n")!=NULL,
+          "modules: the record says what the page's compiles cost, all of them on one line");
     request_drop();
 }
 

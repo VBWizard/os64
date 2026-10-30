@@ -5,6 +5,7 @@
 #include "importmap.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
+#include "os64/proc.h"
 #include "os64/str.h"
 #include "os64/url.h"
 #include "script_job.h"
@@ -64,6 +65,12 @@ struct yonder_modules {
     bool taken;             // a fetch the loader took over: graphs to walk again
     yonder_import_map_t *imports;   // the window's import map (importmap.h)
     bool mapped;            // an import map has been registered
+    // What the page's compiles cost, all of them together: one record line
+    // and not one a module, since a page of hundreds would crowd the
+    // record's facts out.
+    uint32_t compiled;
+    int64_t compile_us;
+    uint64_t compile_bytes;
 };
 
 static char *copy(const char *text)
@@ -221,8 +228,23 @@ static void try_compile(yonder_modules_t *m, int32_t i, const char *url)
 {
     os64_js_outcome_t out;
     os64_js_module_t *handle = NULL;
+    int64_t began = os64_micros();
     os64_js_status_t status = os64_js_module_compile(m->runtime, OS64_JS_ABI_ID, m->mods[i].source,
                                                      m->mods[i].length, m->mods[i].name, url, &handle, &out);
+    int64_t ended = os64_micros();
+    // What the compiles cost, on the page's record: the number a module's
+    // kept bytecode would make smaller (BYTECODE_CACHE.md § 9, 7b). A
+    // module the engine's own loader compiles, a dynamic import's, is not
+    // seen here.
+    if (handle != NULL && began >= 0 && ended >= began) {
+        m->compiled++;
+        m->compile_us += ended - began;
+        m->compile_bytes += m->mods[i].length;
+        char took[96];
+        os64_snprintf(took, sizeof(took), "%lu in %ld us, %lu bytes", (unsigned long)m->compiled,
+                      (long)m->compile_us, (unsigned long)m->compile_bytes);
+        yonder_diag_fact(m->diag, "modules compiled", took);
+    }
     if (status == OS64_JS_BUSY) {
         if (m->mods[i].meta == NULL && (m->mods[i].meta = copy(url)) == NULL) {
             fail(m, i, "no memory for the module's address");

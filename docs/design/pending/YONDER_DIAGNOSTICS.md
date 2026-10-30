@@ -650,9 +650,28 @@ replay's record and of a kept page's record of version 2 (one that says
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling
-included. An event's or a timer's task, and a script that never reached
-the engine (its fetch failed), keep the plain `ran`/`failed`. QEMU's
-numbers are not a speed; the P5's are.
+included — or reading the script's kept bytecode instead, when it says
+`ran in 80 us from its bytecode` (BYTECODE_CACHE.md). An event's or a
+timer's task, and a script that never reached the engine (its fetch
+failed), keep the plain `ran`/`failed`. QEMU's numbers are not a speed; the
+P5's are.
+
+**What a page's requests and modules cost** (2026-10-30, the measurement
+BYTECODE_CACHE.md § 9's 7b was asked for): a script's request's line says
+the body's bytes and the fetch's time, from its job's start to its answer —
+`request GET <address>: 200 cors, 0 hops, 6718 bytes in 359 ms` — and the
+page's module compiles are one line together, `modules compiled: 207 in
+3167557 us, 8784400 bytes`, rewritten as each compiles (one line a module
+would crowd a page of hundreds out of the record's facts). A module the
+engine's own loader compiles, a dynamic import's, is not in it.
+
+**`yonder --exit-when-loaded <address>`** is the measuring run: yonder
+leaves once the shown page has settled (streamed, its pictures and fonts
+in, its record not owed, no script waiting) and no job has come back for
+3 s, or after 2 minutes whatever the page is doing, and says which on its
+way out. Leaving is the ordinary way out, so the page's record is written
+whole. Started over ssh it opens its window on the machine's desktop as any
+yonder does, and the shell has its prompt back when the record is written.
 
 ## Batch 1: what the first census taught the instrument
 

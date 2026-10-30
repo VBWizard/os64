@@ -51,8 +51,8 @@ static void request_same_origin_case(void) {
     check(nfake_requests==1 && !strcmp(fake_requests[0].method,"GET") &&
           fake_field(0,"Origin",origin,sizeof(origin))[0]=='\0',
           "requests: a same-origin GET carries no Origin");
-    check(strstr(request_record_text(),"request GET http://fixture.test/data.json: 200 basic, 0 hops")!=NULL,
-          "requests: the page's record has the request's line, with its hops");
+    check(strstr(request_record_text(),"request GET http://fixture.test/data.json: 200 basic, 0 hops, 11 bytes in 0 ms\n")!=NULL,
+          "requests: the page's record has the request's line, with its hops, its bytes and its time");
     request_drop();
 }
 
@@ -105,7 +105,7 @@ static void request_xhr_case(void) {
     check(request_land("/a.txt") && loop_settle() && script_rebuild() && probe_text_is("a","234 async"),
           "requests: an asynchronous one fires its events as its answer's task");
     const char *record=request_record_text();
-    check(strstr(record,"request GET http://fixture.test/s.txt: 200 basic, 0 hops, synchronous")!=NULL,
+    check(strstr(record,"request GET http://fixture.test/s.txt: 200 basic, 0 hops, 4 bytes in 0 ms, synchronous")!=NULL,
           "requests: the record says a synchronous request stopped the page");
     request_drop();
 }
@@ -199,8 +199,8 @@ static void request_redirected_page_case(void) {
         check(i>=0 && origin[0]=='\0' && os64_streq(referer,"https://fixture.test/"),what);
     }
     const char *record=request_record_text();
-    check(strstr(record,"request GET https://fixture.test/ready.json: 200 basic, 0 hops")!=NULL &&
-          strstr(record,"request GET https://fixture.test/sync.json: 200 basic, 0 hops, synchronous")!=NULL &&
+    check(strstr(record,"request GET https://fixture.test/ready.json: 200 basic, 0 hops, 2 bytes in 0 ms\n")!=NULL &&
+          strstr(record,"request GET https://fixture.test/sync.json: 200 basic, 0 hops, 2 bytes in 0 ms, synchronous")!=NULL &&
           strstr(record,"FAILED request")==NULL,
           "requests: the page's record has them as basic, the synchronous one included");
     /* A serial no page has is a page gone: what it asks for is refused,
