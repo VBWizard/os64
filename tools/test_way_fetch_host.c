@@ -473,6 +473,49 @@ static void restrictive_304(void)
     free(w.bytes);
 }
 
+// Whether the cache holds the body it answered with, which is what a face
+// asks before it reads a companion (BYTECODE_CACHE.md § 5).
+static void kept_bodies(void)
+{
+    const char *fresh600 = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=600\r\n\r\nNEW";
+    fresh();
+    script("q.test", fresh600);
+    way_whole_t w;
+    expect("kept: a body stored by its fetch is held",
+           whole("http://q.test/", &w, NULL) && w.served == WAY_SERVED_NETWORK && w.kept, NULL);
+    free(w.bytes);
+    expect("kept: and served from the cache, still held",
+           whole("http://q.test/", &w, NULL) && w.served == WAY_SERVED_KEPT && w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("r.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: no-store\r\n\r\nNOT");
+    expect("kept: a no-store body is not held", whole("http://r.test/", &w, NULL) && !w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("s.test", kOld);
+    script("s.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("s.test", "HTTP/1.1 304 Not Modified\r\nCache-Control: no-store\r\n\r\n");
+    (void)whole("http://s.test/", &w, NULL);
+    free(w.bytes);
+    expect("kept: a body its 304 confirms is held",
+           whole("http://s.test/", &w, NULL) && w.served == WAY_SERVED_CONFIRMED && w.kept, NULL);
+    free(w.bytes);
+    expect("kept: one a 304 forbids keeping is not",
+           whole("http://s.test/", &w, NULL) && w.served == WAY_SERVED_CONFIRMED && !w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("t.test", kOld);
+    script("t.test", NULL);
+    (void)whole("http://t.test/", &w, NULL);
+    free(w.bytes);
+    expect("kept: a stale body served for want of the server is held",
+           whole("http://t.test/", &w, NULL) && w.served == WAY_SERVED_STALE && w.kept, NULL);
+    free(w.bytes);
+}
+
 static void redirect_restrictions(void)
 {
     fresh();
@@ -1241,6 +1284,7 @@ int main(void)
     options_left_alone();
     validator_identity();
     restrictive_304();
+    kept_bodies();
     redirect_restrictions();
     field_too_long();
     who_is_asking();

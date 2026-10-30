@@ -128,8 +128,31 @@ typedef struct {
 void way_cache_stats(way_cache_t *cache, way_cache_stats_t *out);
 const char *way_cache_dir(way_cache_t *cache);
 
-// Removes every entry. How many went.
+// Removes every entry, and every companion. How many entries went.
 int32_t way_cache_clear(way_cache_t *cache);
+
+// ── Companions (BYTECODE_CACHE.md § 5) ──────────────────────────────────
+//
+// What a face derives from a kept body and keeps beside its entry —
+// yonder's is a script's compiled form — under the entry's address and a
+// KEY of the face's naming what it was derived from, so one derived from
+// another body is a miss. It lives and dies with its entry: dropped with
+// it, cleared with it, swept by the same oldest-first rule, counted against
+// the same cap, and like an entry no larger than an eighth of it. A face
+// reads one only for a body the cache holds (way_whole_t.kept).
+
+// A key is one line of text, shorter than this.
+#define WAY_COMPANION_KEY_MAX 128
+
+// Keeps `bytes` as `url`'s companion under `key`, replacing any. False when
+// it was not kept: turned off, too large, a key or address that is not one
+// line, or the disk said no.
+bool way_cache_companion_put(way_cache_t *cache, const char *url, const char *key,
+                             const uint8_t *bytes, size_t len);
+// `url`'s companion, when it was kept under `key` and is whole, of at most
+// `cap` bytes: os64_malloc'd, the caller's. False for none.
+bool way_cache_companion_get(way_cache_t *cache, const char *url, const char *key,
+                             uint8_t **bytes, size_t *len, size_t cap);
 
 #pragma GCC visibility pop
 

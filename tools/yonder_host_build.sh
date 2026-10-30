@@ -34,6 +34,11 @@ yonder_host_build() {
         -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iuserland/libos64
         -Iabi/include -Itools -Itools/fonts
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
+    # JS_ROUND_TRIP=1 builds libjs's round trip (BYTECODE_CACHE.md § 8):
+    # every classic script compiled under a name of its own, written, read
+    # back under its own and run from what was read, so the suite proves
+    # through the bytecode everything it proves.
+    if [ "${JS_ROUND_TRIP:-0}" = 1 ]; then host_flags+=(-DOS64_JS_BYTECODE_ROUND_TRIP); fi
     # Match the production SVG library membership as geometry modules grow.
     local svg_sources=()
     mapfile -t svg_sources < <(python3 -c '

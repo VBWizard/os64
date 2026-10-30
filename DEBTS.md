@@ -606,6 +606,14 @@ how a worklist fills with things nobody intends to do.
 | **`relList` is a link's alone**: HTML gives `<a>`, `<area>` and `<form>` one too (whose supported tokens are `noreferrer`, `noopener`, `opener`), and yonder reflects none of them | Fidelity | XS | a page that feature-detects `noopener` through `a.relList.supports` | `userland/libdom/mixin.c` |
 | **No `import.meta.resolve`, JSON or CSS modules (import attributes), or module workers** | Feature | M each | a site that uses one | `userland/apps/yonder/modules.c`, libdom |
 
+## The bytecode cache (Modern Web slice 7, BYTECODE_CACHE.md, 2026-10-30 — booked the day it was built)
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| **A module is compiled every visit** (7b). Only a classic `src` script runs from its kept bytecode: a module arrives by the fetch job (slice 2's path) and is compiled unresolved (`JS_EVAL_FLAG_NO_RESOLVE`) before its imports exist, so its blob is a module's, keyed by its source and its name (a module's name is its identity for resolution, so the read does not rename it) | Performance | M | next: GitHub's bundles are all modules | yonder `modules.c` (`try_compile`), `fetch_job.c`; libjs `os64_js_module_compile` |
+| **An inline script is compiled every visit.** A page is not cached, so an inline script has no entry to keep a companion beside, and one keyed by its text alone would be a second cache with a cap of its own | Performance | M | a page measured slow on a large inline script | yonder `scripts.c` (`run_item`) |
+| **A classic script past 4 MiB is refused before it compiles** (`SCRIPT_SOURCE_MAX`, the source limit a page's runtime is made with), so YouTube's 10.6 MB bundle never runs, cached or not. The limit and the runtime's memory are a per-page policy (MODERN_WEB.md's reopened decision), and the bytecode cap follows the source limit (`SCRIPT_BYTECODE_MAX`, four times it) | Compatibility | S (the numbers) once the policy is decided | the per-page memory policy | yonder `script_job.h` |
+
 ## Custom elements (CUSTOM_ELEMENTS.md, 2026-10-29 — booked the day it was built)
 
 | Debt | Class | Size | Trigger | Where |

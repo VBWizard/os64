@@ -426,16 +426,28 @@ static uint64_t cap_of(way_cache_t *c)
     return __atomic_load_n(&c->cap, __ATOMIC_RELAXED);
 }
 
-static bool path_of(const way_cache_t *c, const char *url, char *out, size_t cap)
+// A file the store keeps is named for its address and its kind: the
+// reply's ENTRY, or the COMPANION a face derived from its body.
+#define KIND_ENTRY 'e'
+#define KIND_COMPANION 'b'
+
+static bool path_of(const way_cache_t *c, const char *url, char kind, char *out, size_t cap)
 {
-    int n = os64_snprintf(out, cap, "%s/%016lx.e", c->dir, (unsigned long)hash(url));
+    int n = os64_snprintf(out, cap, "%s/%016lx.%c", c->dir, (unsigned long)hash(url), kind);
     return n > 0 && (size_t)n < cap;
 }
 
-static bool is_entry(const char *name)
+static bool is_kind(const char *name, char kind)
 {
     size_t n = os64_strlen(name);
-    return n == 18 && name[16] == '.' && name[17] == 'e';
+    return n == 18 && name[16] == '.' && name[17] == kind;
+}
+
+// Everything the cap counts and the sweep may remove: entries and their
+// companions alike.
+static bool is_kept(const char *name)
+{
+    return is_kind(name, KIND_ENTRY) || is_kind(name, KIND_COMPANION);
 }
 
 static bool is_temp(const char *name)
@@ -466,8 +478,9 @@ static void make_dirs(const char *dir)
         }
 }
 
-// What the directory holds: its entries' count and bytes. Temp files a
-// dead writer left are removed on the way.
+// What the directory holds: its entries' count, and the bytes of the
+// entries and their companions. Temp files a dead writer left are removed
+// on the way.
 static void survey(way_cache_t *c, int32_t *entries, uint64_t *bytes)
 {
     *entries = 0;
@@ -479,8 +492,8 @@ static void survey(way_cache_t *c, int32_t *entries, uint64_t *bytes)
     os64_dirent_t e;
     char path[OS64_PATH_MAX];
     while (os64_readdir((int32_t)d, &e) == 1) {
-        if (is_entry(e.name)) {
-            (*entries)++;
+        if (is_kept(e.name)) {
+            *entries += is_kind(e.name, KIND_ENTRY);
             *bytes += e.size;
         } else if (is_temp(e.name) && e.mtime != 0 && (int64_t)e.mtime + TEMP_ABANDONED < now &&
                    os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0) {
@@ -572,9 +585,9 @@ int32_t way_cache_clear(way_cache_t *c)
     os64_dirent_t e;
     char path[OS64_PATH_MAX];
     while (os64_readdir((int32_t)d, &e) == 1)
-        if (is_entry(e.name) && os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0 &&
+        if (is_kept(e.name) && os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0 &&
             os64_unlink(path) == 0)
-            gone++;
+            gone += is_kind(e.name, KIND_ENTRY);
     os64_close((int32_t)d);
     os64_lock_acquire(&c->lock);
     c->total = 0;
@@ -582,10 +595,16 @@ int32_t way_cache_clear(way_cache_t *c)
     return gone;
 }
 
+// The entry goes, and its companion with it: what was derived from a body
+// the cache no longer holds is not the cache's to offer.
 void way_cache_drop(way_cache_t *c, const char *url)
 {
     char path[OS64_PATH_MAX];
-    if (c != NULL && c->usable && path_of(c, url, path, sizeof(path)))
+    if (c == NULL || !c->usable)
+        return;
+    if (path_of(c, url, KIND_ENTRY, path, sizeof(path)))
+        (void)os64_unlink(path);
+    if (path_of(c, url, KIND_COMPANION, path, sizeof(path)))
         (void)os64_unlink(path);
 }
 
@@ -614,25 +633,25 @@ static bool write_all(int32_t h, const void *buf, size_t len)
     return true;
 }
 
-bool way_cache_find(way_cache_t *c, const char *url, way_entry_t *e, uint8_t **body,
-                    size_t *len, size_t cap)
+// A kept file read whole: its text head, which `parse` reads (NUL-ended,
+// the blank line gone) and answers the body's length from, and the body,
+// of exactly that length and at most `cap`. False for anything else.
+static bool read_headed(const char *path, size_t head_max,
+                        bool (*parse)(char *head, void *ctx, uint64_t *want), void *ctx,
+                        uint8_t **body, size_t *len, size_t cap)
 {
     *body = NULL;
     *len = 0;
-    char path[OS64_PATH_MAX];
-    if (!way_cache_enabled(c) || !path_of(c, url, path, sizeof(path)))
-        return false;
     int64_t h = os64_open(path, "r");
     if (h < 0)
         return false;
     // The head is read a piece at a time up to its blank line; what came
     // with it is the body's first bytes.
-    char *head = os64_malloc(ENTRY_HEAD_MAX + 1);
+    char *head = os64_malloc(head_max + 1);
     bool ok = head != NULL;
     size_t have = 0, end = 0;
     while (ok && end == 0) {
-        int64_t n = have < ENTRY_HEAD_MAX ? os64_read((int32_t)h, head + have, ENTRY_HEAD_MAX - have)
-                                          : 0;
+        int64_t n = have < head_max ? os64_read((int32_t)h, head + have, head_max - have) : 0;
         if (n <= 0) {
             ok = false;
             break;
@@ -648,7 +667,7 @@ bool way_cache_find(way_cache_t *c, const char *url, way_entry_t *e, uint8_t **b
     uint64_t want = 0;
     if (ok) {
         head[end - 1] = '\0';
-        ok = entry_parse(head, e, &want) && os64_streq(e->url, url) && want <= cap;
+        ok = parse(head, ctx, &want) && want <= cap;
     }
     uint8_t *bytes = ok ? os64_malloc(want > 0 ? (size_t)want : 1) : NULL;
     ok = bytes != NULL;
@@ -672,6 +691,88 @@ bool way_cache_find(way_cache_t *c, const char *url, way_entry_t *e, uint8_t **b
     *body = bytes;
     *len = (size_t)want;
     return true;
+}
+
+typedef struct {
+    way_entry_t *e;
+    const char *url;
+} FindEntry;
+
+// An entry's head, and the address in it the one asked for: the file's
+// name is a hash, so a collision is a miss.
+static bool parse_entry(char *head, void *ctx, uint64_t *want)
+{
+    FindEntry *f = ctx;
+    return entry_parse(head, f->e, want) && os64_streq(f->e->url, f->url);
+}
+
+bool way_cache_find(way_cache_t *c, const char *url, way_entry_t *e, uint8_t **body,
+                    size_t *len, size_t cap)
+{
+    *body = NULL;
+    *len = 0;
+    char path[OS64_PATH_MAX];
+    if (!way_cache_enabled(c) || !path_of(c, url, KIND_ENTRY, path, sizeof(path)))
+        return false;
+    FindEntry f = {e, url};
+    return read_headed(path, ENTRY_HEAD_MAX, parse_entry, &f, body, len, cap);
+}
+
+// ── Companions (BYTECODE_CACHE.md § 5) ──────────────────────────────────
+//
+// A head of its own — the magic, the address it belongs to, the face's
+// key, the length — a blank line, and the bytes as the face gave them.
+
+#define COMPANION_MAGIC "os64-cache-companion 1"
+#define COMPANION_HEAD_MAX (OS64_FETCH_URL_MAX + WAY_COMPANION_KEY_MAX + 96)
+
+typedef struct {
+    const char *url, *key;
+} FindCompanion;
+
+static bool parse_companion(char *head, void *ctx, uint64_t *want)
+{
+    FindCompanion *f = ctx;
+    int have = 0;
+    for (char *line = head, *nl; *line != '\0'; line = nl + 1) {
+        nl = find_char(line, '\n');
+        if (nl == NULL)
+            return false;
+        *nl = '\0';
+        if (line == head) {
+            if (!os64_streq(line, COMPANION_MAGIC))
+                return false;
+            continue;
+        }
+        char *sp = find_char(line, ' ');
+        if (sp == NULL)
+            return false;
+        *sp = '\0';
+        const char *v = sp + 1;
+        int64_t x = 0;
+        if (os64_streq(line, "url") && os64_streq(v, f->url))
+            have |= 1;
+        else if (os64_streq(line, "key") && os64_streq(v, f->key))
+            have |= 2;
+        else if (os64_streq(line, "length") && number(v, &x) && x >= 0) {
+            *want = (uint64_t)x;
+            have |= 4;
+        } else
+            return false;
+    }
+    return have == 7;
+}
+
+bool way_cache_companion_get(way_cache_t *c, const char *url, const char *key, uint8_t **bytes,
+                             size_t *len, size_t cap)
+{
+    *bytes = NULL;
+    *len = 0;
+    char path[OS64_PATH_MAX];
+    if (!way_cache_enabled(c) || !path_of(c, url, KIND_COMPANION, path, sizeof(path)))
+        return false;
+    FindCompanion f = {url, key};
+    return read_headed(path, COMPANION_HEAD_MAX, parse_companion, &f, bytes, len, cap);
 }
 
 // ── Keeping the cache under its cap ─────────────────────────────────────
@@ -718,7 +819,7 @@ static bool evict_pass(way_cache_t *c)
     Kept *v = os64_malloc(capn * sizeof(*v));
     os64_dirent_t e;
     while (v != NULL && os64_readdir((int32_t)d, &e) == 1) {
-        if (!is_entry(e.name))
+        if (!is_kept(e.name))
             continue;
         if (n == capn) {
             Kept *grown = os64_realloc(v, capn * 2 * sizeof(*v));
@@ -783,13 +884,14 @@ static void sweep_if_due(way_cache_t *c)
         evict(c);
 }
 
-bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, size_t len)
+// A head and a body published at `path`: written under a name no other
+// writer has and renamed over its place, so a reader sees the old file or
+// the new one whole. Counted against the cap. False when nothing was
+// published.
+static bool publish(way_cache_t *c, const char *path, const char *head, size_t hlen,
+                    const uint8_t *body, size_t len)
 {
-    char path[OS64_PATH_MAX], temp[OS64_PATH_MAX];
-    if (!way_cache_enabled(c) || len > cap_of(c) / 8 || !path_of(c, e->url, path, sizeof(path)))
-        return false;
-    char *head = os64_malloc(ENTRY_HEAD_MAX);
-    size_t hlen = head != NULL ? entry_head(e, len, head, ENTRY_HEAD_MAX) : 0;
+    char temp[OS64_PATH_MAX];
     uint32_t seq = __atomic_add_fetch(&c->seq, 1, __ATOMIC_RELAXED);
     int n = os64_snprintf(temp, sizeof(temp), "%s.%lu.%lu.new", path,
                           (unsigned long)os64_taskid(), (unsigned long)seq);
@@ -800,11 +902,9 @@ bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, si
     ok = ok && os64_rename(temp, path) == 0;
     if (!ok && h >= 0)
         (void)os64_unlink(temp);
-    os64_free(head);
     if (!ok)
         return false;
     os64_lock_acquire(&c->lock);
-    c->stored++;
     c->total += hlen + len;
     c->since += hlen + len;
     if (c->evicting)
@@ -812,6 +912,54 @@ bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, si
     os64_lock_release(&c->lock);
     sweep_if_due(c);
     return true;
+}
+
+bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, size_t len)
+{
+    char path[OS64_PATH_MAX];
+    if (!way_cache_enabled(c) || len > cap_of(c) / 8 ||
+        !path_of(c, e->url, KIND_ENTRY, path, sizeof(path)))
+        return false;
+    char *head = os64_malloc(ENTRY_HEAD_MAX);
+    size_t hlen = head != NULL ? entry_head(e, len, head, ENTRY_HEAD_MAX) : 0;
+    bool ok = publish(c, path, head, hlen, body, len);
+    os64_free(head);
+    if (ok) {
+        os64_lock_acquire(&c->lock);
+        c->stored++;
+        os64_lock_release(&c->lock);
+    }
+    return ok;
+}
+
+// A key or an address is one line of the head: either holding a line
+// break would make a head that reads as something else.
+static bool one_line(const char *s, size_t max)
+{
+    size_t n = 0;
+    for (; s[n] != '\0'; n++)
+        if (s[n] == '\n' || s[n] == '\r' || n == max)
+            return false;
+    return n > 0;
+}
+
+bool way_cache_companion_put(way_cache_t *c, const char *url, const char *key,
+                             const uint8_t *bytes, size_t len)
+{
+    char path[OS64_PATH_MAX];
+    if (!way_cache_enabled(c) || len > cap_of(c) / 8 || !one_line(url, OS64_FETCH_URL_MAX - 1) ||
+        !one_line(key, WAY_COMPANION_KEY_MAX - 1) ||
+        !path_of(c, url, KIND_COMPANION, path, sizeof(path)))
+        return false;
+    char *head = os64_malloc(COMPANION_HEAD_MAX);
+    int n = head != NULL ? os64_snprintf(head, COMPANION_HEAD_MAX,
+                                         COMPANION_MAGIC "\nurl %s\nkey %s\nlength %lu\n\n", url, key,
+                                         (unsigned long)len)
+                         : 0;
+    size_t hlen = n > 0 && (size_t)n < COMPANION_HEAD_MAX ? (size_t)n : 0;
+    bool ok = publish(c, path, head, hlen, bytes, len);
+    os64_free(head);
+    return ok;
 }
 
 void way_cache_set_cap(way_cache_t *c, uint64_t cap)

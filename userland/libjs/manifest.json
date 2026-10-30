@@ -149,6 +149,11 @@
       "path": "patches/0014-regexp-unicode-sets-outside-class.patch",
       "sha256": "6562e5f7e2b97d31e6c0b1fa250e3d26f18d550e3e51b70b4e982304e30d4b8b",
       "reason": "Apply the v flag's ClassSetCharacter rules (no unescaped ( ) [ ] { } / - |, no doubled punctuator) only to a class's atoms and a class string's; upstream applied them to every atom outside a class too, so a v-flag RegExp of `a/b` or `a-b` threw, and with it every HTML pattern holding a slash or a hyphen."
+    },
+    {
+      "path": "patches/0015-read-object-named.patch",
+      "sha256": "a1f042d516d54ad1e9947f2dbfd1f7d3ad44402144f4581c88592311332d7239",
+      "reason": "Read bytecode under a name the reader gives (JS_ReadObjectNamed): every function read takes it in place of the name written, because a browser runs one cached script under a different per-page name, which it reads back off a thrown error to know whose the error is and whether it is muted."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""One deliberate break at a time to the bytecode cache (BYTECODE_CACHE.md),
+each against the suite that holds its rule: a mutant is CAUGHT when the
+suite fails, MISSED when it passes, which means a test is missing and gets
+written. A build failure is neither.
+
+The rules: libjs's blob is refused unless it is this engine's, whole and
+the payload's own (§ 4), is read under the run's name (§ 3), and a write is
+judged by the allocator; the engine's identity follows its
+sources; a companion is the address's and the key's, and lives and dies
+with its entry (§ 5); a face is told whether the cache holds a body; the
+worker looks for a companion only for one it holds; and the window runs
+through the blob, keeps a compile's, lets its queue go, and says which ran.
+
+The shape is test_garb_mutants.py's: each mutant is applied to the
+worktree's copy of its file, the suite is run, and the file is put back
+from the bytes read before the change, checked byte for byte, whatever
+happens. Run it from a clean tree; the per-mutant logs are in --logs.
+"""
+import argparse
+import pathlib
+import re
+import subprocess
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--logs', type=pathlib.Path, default=pathlib.Path('/tmp/bytecode-mutants'))
+parser.add_argument('--only', help='run the mutants whose name contains this')
+args = parser.parse_args()
+root = pathlib.Path(__file__).resolve().parent.parent
+args.logs.mkdir(parents=True, exist_ok=True)
+
+RUNTIME = 'userland/libjs/runtime/runtime.c'
+# The file a mutant breaks, not a suite: mutants_parallel.py runs every
+# quoted tools/ script a harness names as a suite, so it is not spelled
+# that way.
+PREPARE = str(pathlib.Path('tools', 'js_prepare.py'))
+CACHE = 'userland/libway/cache.c'
+LOAD = 'userland/libway/load.c'
+JOB = 'userland/apps/yonder/script_job.c'
+SCRIPTS = 'userland/apps/yonder/scripts.c'
+YONDER = 'userland/apps/yonder/yonder.c'
+JS = 'bash tools/test_js_runtime_host.sh'
+PREPARED = 'python3 tools/test_js_prepare.py'
+WAY = 'bash tools/test_way_host.sh'
+FETCH = 'bash tools/test_way_fetch_host.sh'
+WORKER = 'bash tools/test_yonder_script_job_host.sh'
+WINDOW = 'bash tools/test_yonder_scripts_host.sh'
+
+# (name, file, old, new, harness). Each breaks one rule the design states.
+mutants = [
+    # libjs: the blob, its name, and the allocator's judgment.
+    ('the-name-is-not-given-at-the-read', RUNTIME,
+     'JS_ReadObjectNamed(runtime->context, payload, payload_length,\n'
+     '                                              JS_READ_OBJ_BYTECODE, source_name);',
+     'JS_ReadObject(runtime->context, payload, payload_length,\n'
+     '                                              JS_READ_OBJ_BYTECODE);', JS),
+    ('the-engine-is-not-compared', RUNTIME,
+     ' ||\n        os64_memcmp(blob + BLOB_MAGIC_LENGTH, OS64_JS_ENGINE_ID, BLOB_ENGINE_LENGTH) != 0)',
+     ')', JS),
+    ('the-kind-is-not-compared', RUNTIME,
+     '    if (kind[0] != BLOB_KIND_CLASSIC || kind[1] != 0 || kind[2] != 0 || kind[3] != 0)\n        return NULL;\n',
+     '', JS),
+    ('the-length-is-not-compared', RUNTIME,
+     '    if (said != length - BLOB_HEAD) return NULL;\n', '', JS),
+    ('the-digest-is-not-compared', RUNTIME,
+     '    if (get_u64(kind + 12) != blob_digest(payload, (size_t)said)) return NULL;\n', '', JS),
+    ('a-write-is-judged-by-its-answer', RUNTIME,
+     '    if (payload == NULL || runtime->allocator.failures != failures) {',
+     '    if (payload == NULL) {', JS),
+    ('a-refused-write-fails-the-runtime', RUNTIME,
+     '        discard_exception(runtime->context);\n        runtime->allocator.failures = failures;\n        return;',
+     '        discard_exception(runtime->context);\n        return;', JS),
+    ('a-compile-that-throws-is-kept', RUNTIME,
+     '    if (!JS_IsException(function) && bytecode->keep) blob_keep(runtime, function, bytecode);',
+     '    if (bytecode->keep) blob_keep(runtime, function, bytecode);', JS),
+    # The engine's identity.
+    ('the-identity-ignores-the-sources', PREPARE,
+     "    identity.update(name.encode() + b'\\0' + str(len(data)).encode() + b'\\0' + data)\n",
+     "    identity.update(name.encode())\n", PREPARED),
+    # libway: the companion.
+    ('a-drop-keeps-the-companion', CACHE,
+     '    if (path_of(c, url, KIND_COMPANION, path, sizeof(path)))\n        (void)os64_unlink(path);\n}',
+     '}', WAY),
+    ('a-clear-keeps-the-companions', CACHE,
+     '        if (is_kept(e.name) && os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0 &&',
+     '        if (is_kind(e.name, KIND_ENTRY) && os64_snprintf(path, sizeof(path), "%s/%s", c->dir, e.name) > 0 &&',
+     WAY),
+    ('the-sweep-passes-companions-by', CACHE,
+     '        if (!is_kept(e.name))\n            continue;',
+     '        if (!is_kind(e.name, KIND_ENTRY))\n            continue;', WAY),
+    ('a-companion-is-counted-as-an-entry', CACHE,
+     '            *entries += is_kind(e.name, KIND_ENTRY);', '            (*entries)++;', WAY),
+    ('the-key-is-not-checked', CACHE,
+     'else if (os64_streq(line, "key") && os64_streq(v, f->key))', 'else if (os64_streq(line, "key"))', WAY),
+    ('the-address-is-not-checked', CACHE,
+     'if (os64_streq(line, "url") && os64_streq(v, f->url))', 'if (os64_streq(line, "url"))', WAY),
+    # libway: whether the cache holds a body.
+    ('a-body-a-304-forbids-is-held', LOAD, '        out->kept = keep;', '        out->kept = true;', FETCH),
+    ('a-stale-body-is-not-held', LOAD,
+     '            served = serve(out, e, kept, kept_len, WAY_SERVED_STALE);\n            out->kept = true;',
+     '            served = serve(out, e, kept, kept_len, WAY_SERVED_STALE);', FETCH),
+    # yonder's worker.
+    ('a-body-not-held-has-its-companion-read', JOB,
+     'if (s->ok && body.kept && !cancelled(ctx)', 'if (s->ok && !cancelled(ctx)', WORKER),
+    ('the-key-is-not-the-text', JOB, '        h ^= (uint8_t)source[i];', '        h ^= (uint8_t)(source[i] & 0);', WORKER),
+    # yonder's window.
+    ('the-blob-is-not-run', SCRIPTS, '            bc.blob = bytecode->blob;', '            bc.blob = NULL;', WINDOW),
+    ('a-compile-is-not-kept', SCRIPTS,
+     '            bc.keep = s->options.keep_bytecode != NULL;', '            bc.keep = false;', WINDOW),
+    ('the-queue-is-not-let-go', YONDER,
+     '        s_bytecode_queued -= ((const yonder_bytecode_job_t *)job)->length;\n', '', WINDOW),
+    ('the-record-does-not-say', YONDER,
+     '    const char *from = yonder_scripts_task_from_bytecode(host) ? " from its bytecode" : "";',
+     '    const char *from = "";', WINDOW),
+]
+
+caught, missed, unbuilt = [], [], []
+for name, rel, old, new, harness in mutants:
+    if args.only and args.only not in name:
+        continue
+    path = root / rel
+    original = path.read_bytes()
+    text = original.decode()
+    if text.count(old) != 1:
+        print(f'{name}: the text to break is not found once in {rel}', file=sys.stderr)
+        unbuilt.append(name)
+        continue
+    log = args.logs / f'{name}.log'
+    try:
+        path.write_text(text.replace(old, new))
+        with log.open('w') as out:
+            try:
+                result = subprocess.run(['bash', '-c', harness], cwd=root, stdout=out, stderr=out, timeout=1800)
+                code = result.returncode
+            except subprocess.TimeoutExpired:
+                code = 'timeout'
+    finally:
+        path.write_bytes(original)
+        if path.read_bytes() != original:
+            print(f'{name}: {rel} WAS NOT RESTORED', file=sys.stderr)
+            sys.exit(2)
+    body = log.read_text(errors='replace')
+    # A compiler's error, not a sanitizer's "runtime error:", which is a catch.
+    built = re.search(r'\.(c|h|inc):\d+:\d+: error:', body) is None and 'undefined reference' not in body
+    if not built:
+        unbuilt.append(name)
+        verdict = 'did not build'
+    elif code != 0:
+        caught.append(name)
+        verdict = 'caught'
+    else:
+        missed.append(name)
+        verdict = 'MISSED'
+    print(f'{name}: {verdict}', flush=True)
+
+print(f'\nbytecode cache mutants: {len(caught)} caught, {len(missed)} missed, {len(unbuilt)} did not build')
+if missed:
+    print('missed: ' + ', '.join(missed))
+if unbuilt:
+    print('did not build: ' + ', '.join(unbuilt))
+sys.exit(1 if missed or unbuilt else 0)
