@@ -1301,14 +1301,24 @@ static void dependencies(const List *list, garb_selector_dependencies_t *out)
         const Complex *x = &list->v[i];
         for (int32_t j = 0; j < x->n; ++j) {
             const Compound *c = &x->c[j];
-            out->siblings |= c->left == C_NEXT || c->left == C_SUBSEQUENT;
+            out->following |= c->left == C_NEXT || c->left == C_SUBSEQUENT;
             for (int32_t k = 0; k < c->n; ++k) {
                 const Simple *s = &c->s[k];
                 if (s->kind != S_PSEUDO) continue;
-                out->siblings |= s->pseudo >= P_FIRST_CHILD && s->pseudo <= P_EMPTY;
-                // :dir()'s dir=auto text search and :has's relational search can
-                // reach above the changed node's immediate parent.
-                out->whole_tree |= s->pseudo == P_HAS || s->pseudo == P_DIR;
+                switch (s->pseudo) {
+                case P_FIRST_CHILD: case P_FIRST_OF_TYPE:
+                case P_NTH_CHILD: case P_NTH_OF_TYPE:
+                    out->position_front = true; break;
+                case P_LAST_CHILD: case P_LAST_OF_TYPE: case P_ONLY_CHILD: case P_ONLY_OF_TYPE:
+                case P_NTH_LAST_CHILD: case P_NTH_LAST_OF_TYPE:
+                    out->position_back = true; break;
+                case P_EMPTY: out->parent_state = true; break;
+                // An ancestor's dir=auto can depend on descendant text.
+                case P_HAS: case P_DIR: out->whole_tree = true; break;
+                default: break;
+                }
+                if ((s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD) && s->list)
+                    out->filtered = true;
                 if (s->list) dependencies(s->list, out);
             }
         }

@@ -4277,6 +4277,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     if (out == NULL)
         return NULL;
     size_t before_lists = c->out->lists_left;
+    // The previous tree pins the document: a removed node cannot be
+    // reclaimed and have its address mistaken for this node in its map.
     const FStyled *old = c->previous ? f_style_of(c->previous, n) : NULL;
     bool untouched = old && !garb_style_updated_since(c->env->cascade, n, c->previous->cascade_updates);
     bool ancestry = !up || up->reuse_safe;
@@ -4360,7 +4362,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->style = sp.s;
     out->motion = motion;
     out->list_cost = before_lists - c->out->lists_left;
-    out->steady = old && !old->motion && !motion && style_values_equal(&old->style, &out->style);
+    out->steady = copied || (old && !old->motion && !motion &&
+                             style_values_equal(&old->style, &out->style));
     out->subtree_steady = out->steady;
     out->reuse_safe = untouched && ancestry && out->steady;
     if (motion != NULL) {

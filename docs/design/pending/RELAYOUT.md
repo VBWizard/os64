@@ -4,9 +4,10 @@
 then `requestAnimationFrame`. Original design by Fable, 2026-10-21;
 5a implementation and reconciliation by Quinn, 2026-10-29.
 5b implementation adds incremental cascade and computed-style reuse; hardware
-acceptance and restyle design-review follow-up remain pending. The sequence
-with Canvas is recorded in [CANVAS.md](CANVAS.md). Fable reviews the
-restyle rule and layout graft before those cuts merge.*
+acceptance remains pending. Fable reviewed the restyle rule; the refined
+invalidation and update bookkeeping below address that review. The sequence
+with Canvas is recorded in [CANVAS.md](CANVAS.md). The layout graft receives
+its own design review before 5c merges.*
 
 ## What this settles
 
@@ -63,9 +64,10 @@ synchronously, charged to the script (DOM.md ruling 7). The numbers that
 exist: Wikipedia lays out in 600 ms on the P5 and fetch.spec.whatwg.org in
 6 s (YONDER.md § Booked); danlegt's layouts take over 200 ms in QEMU and
 run 11.6 a second on the P5 when its animations drive them
-(YONDER_PERF.md). Nothing yet says how the chain's cost divides between
-its steps. The first cut's instrument does; it is the number that decides
-what beyond libflow follows.
+(YONDER_PERF.md). The [5a P5 baseline](../../relayout-evidence/5a-validation.md)
+measures about 80% in layout and 14% in cascade on the synthetic mutation
+workloads. That split directs 5c toward layout; it is not a claim about every
+page or workload.
 
 ## The change log (libhtml, implemented in 5a)
 
@@ -120,19 +122,32 @@ not in this bounded, lossy history.
 
 ## Restyle: the cascade and pass 1
 
-**The restyle set.** For an entry whose target is T: T itself, every
-descendant of T, and, when the cascade has any SIBLING-SENSITIVE selector
-(`+`, `~`, `:nth-child` and its family, `:first-child`/`:last-child`/
-`:only-child`, `:empty`, `:nth-of-type` and kin), T's parent and the
-parent's whole subtree, because a change under T can change which rule
-matches T's siblings and the parent's own `:empty`. Descendant combinators
-look UP, so nothing outside those sets can change its match. A cascade
-with any `:has()` restyles everything, every time: `:has()` makes an
-ancestor's match depend on its descendants, and the honest bound is the
-document. `:dir()` also takes the whole-cascade fallback: resolving an
-ancestor's `dir=auto` can depend on changed text below the immediate parent.
-Dependency discovery walks nested selector lists, including `:is()`, `:not()`,
-`:where()` and the selector filter in `:nth-child()`.
+**The restyle set depends on the kind of mutation.** Parsed selectors record
+following-sibling combinators, front/back positional pseudo-classes,
+`:empty`, filtered `:nth-child(... of S)` / `:nth-last-child(... of S)`,
+and whole-tree dependencies. Discovery recurses through functional selector
+lists, including `:is()`, `:not()` and `:where()`.
+
+Attribute/state changes restyle the target's subtree; text changes use the
+text's parent. Following-sibling combinators also mark following siblings'
+subtrees; filtered positional selectors mark all siblings' subtrees.
+Unfiltered positional selectors alone do not widen a text/attribute change.
+
+Child-list changes mark added subtrees. Front-position selectors and
+following-sibling combinators mark the following suffix of children for a
+pure insertion batch. A batch containing a removal under that parent marks
+all its children: a saved previous-sibling identity can have moved within
+the same parent, so its current links are not a historical boundary.
+Back-position and filtered positional selectors also mark all children.
+`:empty` marks the parent and its descendants, with following/filtered
+propagation, since its changed winners can affect inheritance and matches
+outside the parent. The UA first-summary/first-legend behavior likewise
+marks a changed `details`/`fieldset` subtree.
+
+`:has()` and `:dir()` request a full cascade: their ancestor matches can
+depend on descendants beyond these local sets. Changes to the body's
+`link`, `vlink`, `alink`, `text` or `bgcolor` attributes also request a full
+cascade. Appending children to `body` does not trigger that hint rule.
 
 **The cascade is updated in place.**
 
@@ -148,10 +163,16 @@ bool garb_style_updated_since(const garb_cascade_t *, const os64_html_node_t *,
 ```
 
 The cascade owns an optional native reader. Updating consumes its linked
-change records, rebuilds the node slot table from the current document,
-and recomputes affected winners in parent-first order. Removed nodes have
-no slot in the new table. New elements start dirty. Body hints invalidate
-the document because they can colour links beyond the body's subtree.
+change records and keeps its node slot table, erasing removed subtrees and
+inserting connected added subtrees before marking the affected set. The
+cascade's pin predates removals and prevents address recycling while a slot
+can still name that node. The table grows when needed; deletion closes hash
+clusters instead of leaving tombstones. A reusable dirty-node vector supplies
+minimal roots for parent-first winner computation. Sibling suffix marks avoid
+repeated walks for parser batches; removal stamps avoid rescanning the log
+per parent. Once marking exceeds half the current element count, the update
+requests a full cascade before computing winners. Sparse updates do not
+count, copy or traverse the whole document's slots.
 The generation identifies a full build; successful updates advance a
 separate counter. Each computed-style tree records both, so a measured
 layout can advance the shared cascade while the displayed tree still
@@ -169,7 +190,9 @@ This ties retention to allocation growth: many small edits can reuse a cascade,
 while repeated broad restyles cannot accumulate dozens of states. Reaching a limit, losing
 history, lacking a reader, or encountering broad selector dependencies
 requests a fresh cascade. A failed update preserves old borrowed values
-but requires replacement before further queries. The displayed tree keeps
+but requires replacement before further queries. A frame layout that cannot
+obtain a complete replacement can be refused; the shown tree does not make
+the failed cascade valid again. The displayed tree keeps
 its own document pin; successful updates rotate the cascade's pin.
 
 Yonder shares immutable stylesheet parses through counted owners. A staged
@@ -355,7 +378,7 @@ behind itself.
 | Cut | Builds | Oracle |
 |---|---|---|
 | 5a | Bounded native change log and readers; opt-in phase profiling; repeatable measurement page | Native mutations, parser entries, immutable lists, eviction/OOM and lifetime checks; fake clocks; page completion/cancel/resize tests; P5 baseline |
-| 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Fable reviews the restyle rule |
+| 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; P5 performance gate remains open |
 | 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Fable reviews the rule and graft |
 | 5d | `requestAnimationFrame` on the loop, after 5c | WPT animation-frame tests and scripted-page fake-clock cases |
 

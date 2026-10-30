@@ -147,7 +147,7 @@ bool garb_cascade_matches(const garb_cascade_t *cascade, const garb_sheet_in_t *
 bool garb_cascade_retain(garb_cascade_t *cascade);
 /* Consume this cascade's native change reader and update affected winners.
  * Sheets and environment must be unchanged. False requests a fresh cascade:
- * lost history, broad selector dependencies, periodic arena renewal or refusal.
+ * lost history, broad dependencies/dirty sets, arena renewal or refusal.
  * On failure, previously returned values remain alive but no new queries may
  * use this cascade until it is replaced. On success, old values also remain
  * alive until free, for displayed animation records borrowing keyframes.

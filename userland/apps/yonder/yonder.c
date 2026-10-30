@@ -1791,6 +1791,9 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     s_measuring.plain_model = NULL;
     s_measuring.restyle_from = source.tree;
     s_measuring.tree = NULL;
+    // Geometry reads may advance this shared cascade beyond the shown
+    // tree. Tasks and rendering are serialized: frame/parts work resumes
+    // after the rendering step has brought that tree to the DOM version.
     s_measuring.cascade = garb_cascade_retain(source.cascade) ? source.cascade : NULL;
     s_measuring.model_version = version;
     s_measuring.reuse_sheets = &source;

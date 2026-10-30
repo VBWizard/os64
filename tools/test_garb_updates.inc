@@ -27,8 +27,86 @@ static bool update_or_rebuild(garb_cascade_t **c, os64_html_document_t *doc, gar
     garb_cascade_free(*c); *c=fresh;
     return true;
 }
+// Isolate a small changing subtree inside a larger document so these cases
+// exercise incremental winners, rather than passing through dense fallback.
+static void update_dependencies(void)
+{
+    const char *rules[]={
+        "p:nth-child(2n){color:red}p:first-of-type{opacity:.5}",
+        "p:last-child{color:red}p:nth-last-of-type(2){opacity:.5}",
+        "p:empty{--ink:red}p:not(:empty){--ink:blue}span{color:var(--ink)}p:empty + p{color:green}",
+        "p.on ~ p span{color:red}p:not(:is(.on + p)){opacity:.5}",
+        "p:nth-child(2 of :is(.on, .on + p)){color:red}p:nth-last-child(1 of .on){opacity:.5}",
+        "x-item:defined{color:red}x-item:not(:defined) + p{color:blue}"
+    };
+    for(size_t k=0;k<sizeof(rules)/sizeof(*rules);++k) {
+        size_t baseline=live;
+        char html[8192]="<!doctype html><aside>";
+        for(int i=0;i<50;++i)strcat(html,"<i></i>");
+        strcat(html,"</aside><div id=box><p id=a>A</p><p id=b class=on><span>B</span></p><p id=c>C</p><x-item id=x></x-item><p id=e></p></div><section id=other></section>");
+        os64_html_document_t *doc=update_doc(html);
+        garb_parsed_t sheet;garb_parse_sheet_text(rules[k],strlen(rules[k]),&sheet);
+        garb_sheet_in_t in={.sheet=&sheet};
+        garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+        os64_html_node_t *box=(void *)by_id(doc->document,"box"),*a=(void *)by_id(doc->document,"a"),
+            *b=(void *)by_id(doc->document,"b"),*last=(void *)by_id(doc->document,"c"),
+            *x=(void *)by_id(doc->document,"x"),*empty=(void *)by_id(doc->document,"e"),
+            *other=(void *)by_id(doc->document,"other");
+        os64_html_set_text(doc,a->first_child,"",0);
+        update_check(garb_cascade_update(c),"text/empty dependency updates incrementally");update_equal(c,doc,&in);
+        if(k==0)update_check(!garb_style_updated_since(c,b,0),"positional selectors do not dirty siblings for text edits");
+        os64_html_set_attr(doc,a,"class","on",2);
+        update_check(garb_cascade_update(c),"attribute/filter/following update");update_equal(c,doc,&in);
+        os64_html_set_ce(doc,x,OS64_HTML_CE_CUSTOM);
+        update_check(garb_cascade_update(c),"custom-element STATE update");update_equal(c,doc,&in);
+        // The historical previous sibling moves to a new position in the
+        // same parent before the log is read.
+        os64_html_insert(doc,box,empty,b);
+        os64_html_insert(doc,box,a,NULL);
+        os64_html_insert(doc,box,last,empty);
+        update_check(garb_cascade_update(c),"batched moves preserve positional matches");update_equal(c,doc,&in);
+        os64_html_node_t *span=b->first_child;
+        os64_html_remove(doc,b);
+        os64_html_insert(doc,other,span,NULL);
+        os64_html_node_t *replacement=os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL);
+        update_check(replacement && replacement!=b,"cascade pin prevents remove/create address alias");
+        os64_html_insert(doc,box,replacement,NULL);
+        update_check(garb_cascade_update(c),"removed ancestor and rescued descendant update");update_equal(c,doc,&in);
+        os64_html_node_t *text=os64_html_create_text(doc,"filled",6,NULL);
+        os64_html_insert(doc,empty,text,NULL);
+        update_check(garb_cascade_update(c),"empty parent changes after insertion");update_equal(c,doc,&in);
+        garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+        update_check(live==baseline,"dependency fixtures release node pins");
+    }
+    // Stream appends grow the persistent table, while removed slots exercise
+    // collision backshifts. Compare each published version with a rebuild.
+    size_t baseline=live;
+    os64_html_options_t opt=os64_html_options_default();
+    os64_html_parser_t *parser=os64_html_parser_new(&opt);
+    const char *start="<!doctype html><body>";
+    os64_html_parser_feed(parser,start,strlen(start));
+    for(int i=0;i<20;++i)os64_html_parser_feed(parser,"<i></i>",7);
+    os64_html_document_t *doc=os64_html_parser_document(parser);
+    garb_parsed_t sheet;const char *css="p{color:red;opacity:.5}";
+    garb_parse_sheet_text(css,strlen(css),&sheet);garb_sheet_in_t in={.sheet=&sheet};
+    garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+    for(int i=0;i<80;++i) {
+        os64_html_parser_feed(parser,"<p>stream</p>",13);
+        update_check(i<12 ? garb_cascade_update(c) : update_or_rebuild(&c,doc,&in),
+                     "parser-fed cascade update including slot growth");update_equal(c,doc,&in);
+    }
+    doc=os64_html_parser_finish(parser);
+    update_check(update_or_rebuild(&c,doc,&in),"parser finish update");update_equal(c,doc,&in);
+    for(int i=0;i<60;++i) {
+        os64_html_remove(doc,doc->body->first_child);
+        update_check(update_or_rebuild(&c,doc,&in),"repeated slot removal");update_equal(c,doc,&in);
+    }
+    garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    update_check(live==baseline,"streaming fixture releases allocations");
+}
 static int cascade_updates(void)
 {
+    update_dependencies();
     size_t baseline=live;
     const char *css[] = {
         "div{--ink:red}p{color:var(--ink)}.on{--ink:blue}span{opacity:.5}",
@@ -103,19 +181,30 @@ static int cascade_updates(void)
         update_check(live==baseline,"retention-pressure ownership released");
     }
     size_t points=0;
-    for(size_t failure=0;failure<=points;++failure) {
-        os64_html_document_t *doc=update_doc("<!doctype html><div id=a><p>text</p></div>");
-        garb_parsed_t sheet;const char *text="div{--x:red}p{color:var(--x)}";
-        garb_parse_sheet_text(text,strlen(text),&sheet);garb_sheet_in_t in={.sheet=&sheet};
-        garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
-        os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"style","--x:blue",8);
-        size_t before=allocations;fail_single=true;fail_at=failure?before+failure:0;
-        bool updated=garb_cascade_update(c);fail_at=0;fail_single=false;
-        if(!failure){points=allocations-before;update_check(updated,"unfailed update");}
-        if(updated)update_equal(c,doc,&in);
-        garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
-        update_check(live==baseline,"allocation refusal releases ownership");
+    for(int growth=0;growth<2;++growth) {
+        points=0;
+        for(size_t failure=0;failure<=points;++failure) {
+            char html[1024]="<!doctype html><body>";
+            for(int i=0;i<27;++i)strcat(html,"<p></p>");
+            os64_html_document_t *doc=update_doc(growth?html:"<!doctype html><div id=a><p>text</p></div>");
+            garb_parsed_t sheet;const char *text="div{--x:red}p{color:var(--x)}";
+            garb_parse_sheet_text(text,strlen(text),&sheet);garb_sheet_in_t in={.sheet=&sheet};
+            garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+            if(growth) {
+                for(int i=0;i<3;++i) {
+                    os64_html_node_t *p=os64_html_create_element(doc,OS64_HTML_NS_HTML,"p",NULL);
+                    os64_html_insert(doc,doc->body,p,NULL);
+                }
+            } else os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"style","--x:blue",8);
+            size_t before=allocations;fail_single=true;fail_at=failure?before+failure:0;
+            bool updated=garb_cascade_update(c);fail_at=0;fail_single=false;
+            if(!failure){points=allocations-before;update_check(updated,"unfailed update");}
+            if(updated)update_equal(c,doc,&in);
+            garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+            update_check(live==baseline,"allocation refusal releases ownership");
+        }
+        printf("libgarb updates: %s sweep, %zu allocation positions\n",growth?"slot growth":"inline style",points);
     }
-    printf("libgarb updates: %u checks, %u failed, %zu allocation positions\n",update_checks,update_failures,points);
+    printf("libgarb updates: %u checks, %u failed\n",update_checks,update_failures);
     return update_failures?1:0;
 }

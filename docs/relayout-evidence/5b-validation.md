@@ -166,3 +166,90 @@ The screenshot and original corpus report are retained with the local proof
 artifacts. Raw individual sample values have not been retrieved. The frozen
 replacement bundle remains unchanged. The broad restyle rule, update
 bookkeeping and design-review findings require follow-up before merge.
+
+## Refinement after the design review
+
+The follow-up narrows invalidation by mutation kind. A text edit under
+`:nth-child(even)` restyles its row without changing the other rows' selector
+matches. Child-list changes still account for positional selectors. `:empty`
+propagates inherited/following effects, and removal batches conservatively
+ignore historical sibling boundaries whose current links may have moved.
+UA disclosure/legend behavior is also preserved.
+
+The cascade keeps its node table and dirty-node buffer. Removed slots are
+erased before the document pin rotates, connected additions create slots,
+and broad dirty sets request a fresh cascade before winner computation.
+Rule match stamps avoid resetting the rule array. Sibling-suffix marks and
+per-parent removal stamps bound repeated bookkeeping within a parser batch.
+The retained-byte renewal limit remains. Copied computed styles are steady
+by construction, avoiding their redundant semantic comparison; a size
+assertion prompts review of the deep-copy inventory when its structure grows.
+
+Validation on this refinement:
+
+- Full libgarb suite passes. The final update suite has 1,699 checks, zero
+  failures; allocation sweeps cover nine inline-style and six table-growth
+  positions. State changes, `:empty`, nested filtered selectors, batched
+  moves, removal with a rescued descendant, remove/create identity safety,
+  parser appends across table growth, and repeated deletion compare with
+  fresh cascade dumps.
+- Full libflow: 49,556 checks, zero failures. After the final sibling-walk
+  refinement, focused restyle revalidation passes 25,463 checks, including
+  the 164-position single/persistent allocation-failure sweep.
+- Full Yonder scripts: 12,548 checks, zero failures. Final focused browser
+  restyle revalidation: 19 checks, zero failures.
+- The original and non-positional measurement fixtures both complete at
+  200/3 and 2,000/20: four runs of 16 checks, zero failures. ASan, UBSan and
+  LeakSanitizer remain enabled throughout the host validation.
+
+The first QEMU run of the refinement completed the original 2,000/20 page:
+
+| Median | Original 5a QEMU | Refined 5b QEMU |
+|---|---:|---:|
+| Change one paragraph | 715.250 ms | 457.200 ms |
+| Replace one list item | 708.700 ms | 639.950 ms |
+
+The unchanged-read control was 0.400 ms. Native counters record 52 model
+rebuilds, 53 layout attempts, 26 cascade updates and 53,134 reused styles;
+zero refused/partial results and clock errors. Cumulative phases were model
+54.849 ms, cascade 1,795.003 ms, style 1,405.784 ms, boxes 302.711 ms,
+layout 23,660.909 ms and public tree 661.138 ms. This run preceded the last
+sibling-suffix bookkeeping refinement. The final candidate repeated the original workload at 0.400 ms cached,
+463.150 ms paragraph and 622.900 ms list medians (worst 0.500, 622.300 and
+663.900 ms respectively). These are about 35% and 12% below the original 5a
+mutation medians. Single emulator runs, including the first run with host
+suites running alongside it, are directional evidence only.
+
+The final original-page report repeats 52 model rebuilds, 53 layouts,
+26 updates and 53,134 copied styles, with zero refusals or clock errors.
+Its cumulative cascade/style/layout times are 1,793.069 / 1,386.261 /
+23,280.913 ms.
+
+The non-positional companion also completes on target. In a fresh QEMU
+browser process its cached/paragraph/list medians are 0.400 / 521.250 /
+475.900 ms (worst 0.600 / 1,344.200 / 524.300). Its native report has 52
+model rebuilds, 53 layouts, 51 cascade updates and 104,209 copied styles,
+with zero refusals or clock errors. Cumulative cascade/style/layout times
+are 85.788 / 1,835.535 / 27,744.346 ms. A preceding companion run after the
+original benchmark in the same browser was noisier: paragraph/list medians
+584.950 / 515.450 ms. These observations motivate fresh browser processes
+for comparisons; they do not establish a cause for the variance. There is
+no 5a companion baseline yet, so neither run establishes its speedup.
+
+Generate the non-positional companion with:
+
+```
+python3 tools/layout_measure_local.py /path/to/pages/layout-measure-local.html
+```
+
+It preserves the measurement DOM and script, replacing just the striped
+positional row rule with a uniform background and identifying its report as
+`yonder-layout-local-v1`. `tools/test_layout_measure.sh` generates and runs
+both pages. The frozen handoff includes both fixtures and matching libraries.
+
+**P5 acceptance remains open.** Remeasure the original page against the 5a
+baseline, then compare the companion under both cohorts. The streamed
+Wikipedia article comparison requested by the design review also remains
+open: retain its input and settings and compare the native `cascade` phase
+with the stream-layout count. A final-load screenshot alone does not prove
+streaming reuse. These gates precede the 5b PR and work on 5c.

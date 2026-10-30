@@ -59,6 +59,7 @@ typedef struct {
     // The element this rule last matched, and the specificity it matched
     // with — so one rule matched through two selectors is counted once.
     const os64_html_node_t *seen;
+    uint64_t seen_update;
     int32_t slot;
 } Rule;
 
@@ -138,8 +139,8 @@ typedef struct {
     const CustomMap *customs;
     OwnFrames *frames;
     int32_t nframes;
-    bool needs_substitution, dirty;
-    uint64_t changed;
+    bool needs_substitution, dirty, dirty_suffix;
+    uint64_t changed, removed_children;
 } Slot;
 
 typedef struct {
@@ -185,7 +186,9 @@ struct garb_cascade {
     Table ids, classes, types;
     int32_t universal;
     Slot *slots;                // open addressing, keyed by node
-    uint32_t slotcap;
+    uint32_t slotcap, slotcount;
+    const os64_html_node_t **dirty_nodes;
+    size_t ndirty, dirtycap;
     garb_parsed_t *attrs;       // `style` attributes' parses, freed with the cascade
     int32_t nattrs, attrcap;
     // What the build passed over because this library does not read it
@@ -1343,21 +1346,56 @@ static uint32_t hash_ptr(const void *p)
     return (uint32_t)v;
 }
 
+// The document pin predates removals: an address cannot be recycled while
+// its slot exists. Removed slots are erased before rotating that pin.
+static bool slots_grow(garb_cascade_t *c)
+{
+    if (c->slotcap > UINT32_MAX / 2) return false;
+    uint32_t cap = c->slotcap ? c->slotcap * 2 : 64;
+    Slot *slots = os64_calloc(cap, sizeof(*slots));
+    if (!slots) return false;
+    for (uint32_t i = 0; i < c->slotcap; ++i) if (c->slots[i].node) {
+        uint32_t at = hash_ptr(c->slots[i].node) & (cap - 1);
+        while (slots[at].node) at = (at + 1) & (cap - 1);
+        slots[at] = c->slots[i];
+    }
+    os64_free(c->slots);
+    c->slots = slots; c->slotcap = cap;
+    return true;
+}
 static Slot *slot_for(const garb_cascade_t *c, const os64_html_node_t *node, bool create)
 {
-    if (c->slotcap == 0)
-        return NULL;
+    if (!c->slotcap) return NULL;
     uint32_t h = hash_ptr(node) & (c->slotcap - 1);
-    while (c->slots[h].node != NULL) {
-        if (c->slots[h].node == node)
-            return &c->slots[h];
+    while (c->slots[h].node) {
+        if (c->slots[h].node == node) return &c->slots[h];
         h = (h + 1) & (c->slotcap - 1);
     }
-    if (!create)
-        return NULL;
-    Slot *s = (Slot *)&c->slots[h];
-    s->node = node;
+    if (!create) return NULL;
+    garb_cascade_t *write = (garb_cascade_t *)c;
+    if (c->slotcount >= c->slotcap / 2) {
+        if (!slots_grow(write)) { write->incomplete = true; return NULL; }
+        h = hash_ptr(node) & (c->slotcap - 1);
+        while (c->slots[h].node) h = (h + 1) & (c->slotcap - 1);
+    }
+    Slot *s = &write->slots[h];
+    s->node = node; ++write->slotcount;
     return s;
+}
+static void slot_remove(garb_cascade_t *c, const os64_html_node_t *node)
+{
+    Slot *s = slot_for(c, node, false);
+    if (!s) return;
+    uint32_t hole = (uint32_t)(s - c->slots), mask = c->slotcap - 1;
+    // Backshift the cluster: stopping at an empty slot remains a valid
+    // lookup rule without accumulating tombstones after repeated moves.
+    for (uint32_t at = (hole + 1) & mask; c->slots[at].node; at = (at + 1) & mask) {
+        uint32_t home = hash_ptr(c->slots[at].node) & mask;
+        if (((at - home) & mask) >= ((at - hole) & mask)) {
+            c->slots[hole] = c->slots[at]; hole = at;
+        }
+    }
+    c->slots[hole] = (Slot){0}; --c->slotcount;
 }
 
 // ── var() and env() (Custom Properties 1 § 3, Environment Variables 1) ─
@@ -1890,14 +1928,15 @@ static bool before(const Applied *a, const Applied *b)
 static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rule *r,
                      uint32_t spec, const os64_html_node_t *el)
 {
-    if (r->seen == el) {
+    uint64_t update = c->updates + (c->updating ? 1 : 0);
+    if (r->seen == el && r->seen_update == update) {
         if (spec > (*m)[r->slot].spec)
             (*m)[r->slot].spec = spec;
         return;
     }
     if (!grow(c, (void **)m, *n, cap, sizeof(Match)))
         return;
-    r->seen = el;
+    r->seen = el; r->seen_update = update;
     r->slot = *n;
     (*m)[(*n)++] = (Match){r, spec};
 }
@@ -2354,7 +2393,11 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     }
     for (int32_t i = 0; i < c->nrules; ++i) {
         garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
-        c->dependencies.siblings |= d.siblings;
+        c->dependencies.following |= d.following;
+        c->dependencies.position_front |= d.position_front;
+        c->dependencies.position_back |= d.position_back;
+        c->dependencies.parent_state |= d.parent_state;
+        c->dependencies.filtered |= d.filtered;
         c->dependencies.whole_tree |= d.whole_tree;
     }
     keyframes_settle(c);
@@ -2415,11 +2458,98 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     return c;
 }
 
-static const os64_html_node_t *cascade_next(const os64_html_node_t *x)
+static const os64_html_node_t *subtree_next(const os64_html_node_t *x,
+                                              const os64_html_node_t *root, bool children)
 {
-    if (x->first_child) return x->first_child;
-    while (x && !x->next) x = x->parent;
-    return x ? x->next : NULL;
+    if (children && x->first_child) return x->first_child;
+    while (x != root && !x->next) x = x->parent;
+    return x == root ? NULL : x->next;
+}
+static bool connected(const garb_cascade_t *c, const os64_html_node_t *x)
+{
+    if (!x) return false;
+    while (x->parent) x = x->parent;
+    return x == c->doc->document;
+}
+static bool mark_subtree(garb_cascade_t *c, const os64_html_node_t *root)
+{
+    if (!connected(c, root)) return true;
+    for (const os64_html_node_t *x = root; x;) {
+        if (!is_el(x)) { x = subtree_next(x, root, true); continue; }
+        Slot *s = slot_for(c, x, false);
+        if (!s) return false;
+        if (s->dirty) { x = subtree_next(x, root, false); continue; }
+        if (c->ndirty == c->dirtycap) {
+            size_t cap = c->dirtycap ? c->dirtycap * 2 : 32;
+            if (cap > SIZE_MAX / sizeof(*c->dirty_nodes)) return false;
+            void *more = os64_realloc(c->dirty_nodes, cap * sizeof(*c->dirty_nodes));
+            if (!more) return false;
+            c->dirty_nodes = more; c->dirtycap = cap;
+        }
+        s->dirty = true; c->dirty_nodes[c->ndirty++] = x;
+        // A broad update would recompute most winners and retain the old
+        // versions too. Ask for the fresh build before producing winners.
+        if (c->ndirty > c->slotcount / 2) return false;
+        x = subtree_next(x, root, true);
+    }
+    return true;
+}
+static bool mark_siblings(garb_cascade_t *c, const os64_html_node_t *first)
+{
+    for (const os64_html_node_t *x = first; x; x = x->next) {
+        if (!is_el(x)) continue;
+        Slot *s = slot_for(c, x, false);
+        // A previous sibling walk covered this suffix. Parser feeds can
+        // append many siblings in one batch; do not walk that suffix again.
+        if (s && s->dirty_suffix) break;
+        if (!mark_subtree(c, x)) return false;
+        s = slot_for(c, x, false);
+        s->dirty_suffix = true;
+    }
+    return true;
+}
+static bool mark_changed(garb_cascade_t *c, const os64_html_node_t *node)
+{
+    if (!connected(c, node)) return true;
+    if (!mark_subtree(c, node)) return false;
+    if (c->dependencies.filtered && node->parent)
+        return mark_siblings(c, node->parent->first_child);
+    return !c->dependencies.following || mark_siblings(c, node->next);
+}
+static bool body_hint(const os64_html_change_entry_t *e, const os64_html_document_t *doc)
+{
+    if (e->kind != OS64_HTML_CHANGE_ATTR || e->target != doc->body || !e->attr_name)
+        return false;
+    // Match the qualified-name lookup used by the HTML hint consumer.
+    const char *names[] = {"link", "vlink", "alink", "text", "bgcolor"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i)
+        if (os64_streq(e->attr_name, names[i])) return true;
+    return false;
+}
+static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
+{
+    const os64_html_node_t *parent = e->target;
+    if (!connected(c, parent)) return true;
+    // :empty can change inherited winners and a following sibling's match.
+    // The UA first-summary/first-legend rules also depend on child order.
+    if (c->dependencies.parent_state || (parent->ns == OS64_HTML_NS_HTML &&
+        (parent->tag == OS64_HTML_TAG_DETAILS || parent->tag == OS64_HTML_TAG_FIELDSET)))
+        if (!mark_changed(c, parent)) return false;
+    for (size_t i = 0; i < e->nadded; ++i)
+        if (!mark_subtree(c, e->added[i])) return false;
+    if (c->dependencies.position_back || c->dependencies.filtered)
+        return mark_siblings(c, parent->first_child);
+    if (c->dependencies.position_front || c->dependencies.following) {
+        const os64_html_node_t *previous = e->previous_sibling;
+        bool boundary = !previous || previous->parent == parent;
+        // A removed/moved boundary may now sit elsewhere in the same parent.
+        // Pure insert batches preserve existing relative order; removals use
+        // all children because the log preserves identities, not old links.
+        const Slot *p = slot_for(c, parent, false);
+        if (p && p->removed_children == c->updates + 1) boundary = false;
+        return mark_siblings(c, boundary && previous ? previous->next : parent->first_child);
+    }
+    return true;
 }
 uint64_t garb_cascade_generation(const garb_cascade_t *c) { return c ? c->generation : 0; }
 uint64_t garb_cascade_updates(const garb_cascade_t *c) { return c ? c->updates : 0; }
@@ -2448,60 +2578,62 @@ bool garb_cascade_update(garb_cascade_t *c)
     int64_t count = os64_html_changes(c->reader, &changes);
     c->update_failed = true;
     if (count < 0) return false;
-    size_t elements = 0;
-    for (const os64_html_node_t *x = c->doc->document; x; x = cascade_next(x))
-        elements += is_el(x);
-    uint32_t cap = 64;
-    if (elements > (UINT32_MAX - 2) / 2) return false;
-    while (cap < elements * 2 + 2) {
-        if (cap > UINT32_MAX / 2) return false;
-        cap *= 2;
-    }
-    Slot *slots = os64_calloc(cap, sizeof(*slots));
-    if (!slots) return false;
-    garb_cascade_t fresh = *c;
-    fresh.slots = slots; fresh.slotcap = cap;
-    for (const os64_html_node_t *x = c->doc->document; x; x = cascade_next(x)) {
-        if (!is_el(x)) continue;
-        Slot *to = slot_for(&fresh, x, true);
-        const Slot *from = slot_for(c, x, false);
-        if (from) { *to = *from; to->dirty = false; }
-        else to->dirty = true;
-    }
+    // Process removals before additions: a node may have moved several
+    // times since the last read, and entry arrays preserve its identity.
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next)
+        for (size_t i = 0; i < e->nremoved; ++i)
+            for (const os64_html_node_t *x = e->removed[i]; x;
+                 x = subtree_next(x, e->removed[i], true))
+                if (is_el(x)) slot_remove(c, x);
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next)
+        for (size_t i = 0; i < e->nadded; ++i) {
+            const os64_html_node_t *root = e->added[i];
+            if (!connected(c, root)) continue;
+            for (const os64_html_node_t *x = root; x; x = subtree_next(x, root, true))
+                if (is_el(x) && !slot_for(c, x, true)) return false;
+        }
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next)
+        if (e->kind == OS64_HTML_CHANGE_CHILDREN && e->nremoved) {
+            Slot *parent = slot_for(c, e->target, false);
+            if (parent) parent->removed_children = c->updates + 1;
+        }
+    c->ndirty = 0;
     for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
-        const os64_html_node_t *root = e->target;
-        if (root && !is_el(root)) root = root->parent ? root->parent : c->doc->html;
-        if (root && c->dependencies.siblings && is_el(root->parent)) root = root->parent;
-        // Body hints can colour links outside the body's current subtree.
-        if (root == c->doc->body) root = c->doc->html;
-        Slot *s = root ? slot_for(&fresh, root, false) : NULL;
-        if (s) s->dirty = true;
+        if (body_hint(e, c->doc)) return false;
+        if (e->kind == OS64_HTML_CHANGE_CHILDREN) {
+            if (!mark_children(c, e)) return false;
+        } else {
+            const os64_html_node_t *root = e->target;
+            if (root && !is_el(root)) root = root->parent;
+            if (!mark_changed(c, root)) return false;
+        }
     }
-    Slot *old_slots = c->slots;
-    uint32_t old_cap = c->slotcap;
-    c->slots = slots; c->slotcap = cap; c->updating = true;
-    for (int32_t i = 0; i < c->nrules; ++i) c->rules[i].seen = NULL;
+    c->updating = true;
+    int32_t old_nattrs = c->nattrs;
     Match *m = NULL; int32_t mcap = 0;
-    for (const os64_html_node_t *x = c->doc->document; x; x = cascade_next(x)) {
-        if (!is_el(x)) continue;
-        Slot *s = slot_for(c, x, false);
-        const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
-        s->dirty |= up && up->dirty;
-        if (!s->dirty) continue;
-        *s = (Slot){.node = x, .dirty = true, .changed = c->updates + 1};
-        cascade_element(c, x, up ? up->customs : NULL, &m, &mcap);
-        if (c->incomplete || c->self.incomplete) break;
+    for (size_t i = 0; i < c->ndirty; ++i) {
+        const os64_html_node_t *root = c->dirty_nodes[i];
+        Slot *s = slot_for(c, root, false);
+        const Slot *up = is_el(root->parent) ? slot_for(c, root->parent, false) : NULL;
+        if (!s || !s->dirty || (up && up->dirty)) continue;
+        // Minimal dirty roots traverse their dirty descendants in tree order,
+        // so inherited custom properties have their new parent values.
+        for (const os64_html_node_t *x = root; x; x = subtree_next(x, root, true)) {
+            if (!is_el(x)) continue;
+            s = slot_for(c, x, false);
+            if (!s || !s->dirty) continue;
+            up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
+            *s = (Slot){.node = x, .changed = c->updates + 1};
+            cascade_element(c, x, up ? up->customs : NULL, &m, &mcap);
+            if (c->incomplete || c->self.incomplete) { c->updating = false; return false; }
+        }
     }
     c->updating = false;
-    for (int32_t i = 0; i < c->nattrs; ++i) c->incomplete |= c->attrs[i].incomplete;
+    for (int32_t i = old_nattrs; i < c->nattrs; ++i) c->incomplete |= c->attrs[i].incomplete;
     os64_html_pin_t pin = c->incomplete || c->self.incomplete ? 0 : os64_html_pin(c->doc);
-    if (!pin) {
-        c->slots = old_slots; c->slotcap = old_cap; os64_free(slots);
-        return false;
-    }
-    os64_free(old_slots);
+    if (!pin) return false;
     os64_html_unpin(c->doc, c->pin); c->pin = pin;
-    c->version = version; ++c->updates; c->update_failed = false;
+    c->version = version; ++c->updates; c->update_failed = false; c->ndirty = 0;
     return true;
 }
 
@@ -2642,6 +2774,7 @@ void garb_cascade_free(garb_cascade_t *c)
         garb_free(&c->attrs[i]);
     garb_free(&c->reads);
     os64_free(c->slots);
+    os64_free(c->dirty_nodes);
     os64_arena_destroy(c->self.arena);
     os64_html_reader_free(c->reader);
     if (c->pin != 0)

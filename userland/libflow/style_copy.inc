@@ -1,5 +1,8 @@
 /* Deep copies of derived style lists. Memoizing source slices preserves
  * sharing within the new arena; no pointer into the old tree is retained. */
+// Size changes require reviewing both the copy and equality inventories.
+// This tripwire does not replace checking pointer fields in a same-size edit.
+_Static_assert(sizeof(flow_style_t) == 1264, "review style copy/equality fields");
 typedef struct { void *data; size_t bytes; } FCopySlice;
 typedef struct { FArena *arena; FMap slices; size_t bytes; bool budget; } FStyleCopy;
 static void *style_copy_bytes(FStyleCopy *c, const void *from, size_t bytes, bool *fresh)
