@@ -45,6 +45,9 @@ typedef struct {
     char *source;           // the text the loader answers from (CONTRACT.md)
     size_t length;
     os64_js_module_t *handle;
+    // Until it is compiled: its compiled form, when the cache holds its
+    // body (yonder_modules_answered).
+    yonder_bytecode_t *bytecode;
     int32_t *deps;          // the modules its static imports name
     uint32_t ndeps, depcap;
     char *why;              // FAILED
@@ -71,6 +74,7 @@ struct yonder_modules {
     uint32_t compiled;
     int64_t compile_us;
     uint64_t compile_bytes;
+    uint32_t from_bytecode;         // of them, read from a kept blob
 };
 
 static char *copy(const char *text)
@@ -136,6 +140,8 @@ static void fail(yonder_modules_t *m, int32_t i, const char *why)
         return;
     mod->state = MOD_FAILED;
     mod->job = 0;
+    yonder_bytecode_free(mod->bytecode);
+    mod->bytecode = NULL;
     os64_free(mod->why);
     mod->why = copy(why);
     record(m, i, why, "");
@@ -222,27 +228,39 @@ static bool accept(const os64_dom_response_t *response, char **source, size_t *l
 static void each_request(void *opaque, const char *specifier);
 
 // The module's source compiled under its name with import.meta.url `url`,
-// and its imports found or fetched. A runtime in a call (a script is
-// running) cannot compile: the module waits, PENDING, for settle.
+// or read from its kept blob (BYTECODE_CACHE.md § 9), and its imports
+// found or fetched. A compile from a body the cache holds is kept beside
+// it. A runtime in a call (a script is running) cannot compile: the module
+// waits, PENDING, for settle.
 static void try_compile(yonder_modules_t *m, int32_t i, const char *url)
 {
     os64_js_outcome_t out;
     os64_js_module_t *handle = NULL;
+    yonder_bytecode_t *kept = m->mods[i].bytecode;
+    os64_js_bytecode_t bc = {0};
+    if (kept != NULL)
+        bc = (os64_js_bytecode_t){.blob = kept->blob, .blob_length = kept->length, .keep = m->net.keep != NULL};
     int64_t began = os64_micros();
-    os64_js_status_t status = os64_js_module_compile(m->runtime, OS64_JS_ABI_ID, m->mods[i].source,
-                                                     m->mods[i].length, m->mods[i].name, url, &handle, &out);
+    os64_js_status_t status =
+        kept != NULL ? os64_js_module_compile_bytecode(m->runtime, OS64_JS_ABI_ID, m->mods[i].source,
+                                                       m->mods[i].length, m->mods[i].name, url, &bc, &handle, &out)
+                     : os64_js_module_compile(m->runtime, OS64_JS_ABI_ID, m->mods[i].source, m->mods[i].length,
+                                              m->mods[i].name, url, &handle, &out);
     int64_t ended = os64_micros();
-    // What the compiles cost, on the page's record: the number a module's
-    // kept bytecode would make smaller (BYTECODE_CACHE.md § 9, 7b). A
+    // What the compiles cost, on the page's record: one read from its kept
+    // bytecode counts its read's cost, and the line says how many were. A
     // module the engine's own loader compiles, a dynamic import's, is not
     // seen here.
     if (handle != NULL && began >= 0 && ended >= began) {
         m->compiled++;
         m->compile_us += ended - began;
         m->compile_bytes += m->mods[i].length;
-        char took[96];
-        os64_snprintf(took, sizeof(took), "%lu in %ld us, %lu bytes", (unsigned long)m->compiled,
-                      (long)m->compile_us, (unsigned long)m->compile_bytes);
+        m->from_bytecode += bc.from_blob;
+        char took[128];
+        size_t at = (size_t)os64_snprintf(took, sizeof(took), "%lu in %ld us, %lu bytes", (unsigned long)m->compiled,
+                                          (long)m->compile_us, (unsigned long)m->compile_bytes);
+        if (m->from_bytecode > 0 && at < sizeof(took))
+            os64_snprintf(took + at, sizeof(took) - at, ", %lu from bytecode", (unsigned long)m->from_bytecode);
         yonder_diag_fact(m->diag, "modules compiled", took);
     }
     if (status == OS64_JS_BUSY) {
@@ -253,6 +271,11 @@ static void try_compile(yonder_modules_t *m, int32_t i, const char *url)
         m->mods[i].state = MOD_PENDING;
         return;
     }
+    // Compiled or read, or refused: the compiled form is done with.
+    if (bc.kept != NULL)
+        m->net.keep(m->net.opaque, kept, bc.kept, bc.kept_length);
+    yonder_bytecode_free(kept);
+    m->mods[i].bytecode = NULL;
     if (handle == NULL && status == OS64_JS_EXCEPTION) {
         // A syntax error: the module's to rethrow when an entry runs.
         m->mods[i].state = MOD_BROKEN;
@@ -453,6 +476,7 @@ void yonder_modules_free(yonder_modules_t *m)
         os64_free(m->mods[i].base);
         os64_free(m->mods[i].meta);
         os64_free(m->mods[i].source);
+        yonder_bytecode_free(m->mods[i].bytecode);
         os64_free(m->mods[i].deps);
         os64_free(m->mods[i].why);
     }
@@ -552,14 +576,17 @@ yonder_graph_t yonder_modules_graph(yonder_modules_t *m, int32_t entry, const ch
     return result;
 }
 
-void yonder_modules_answered(yonder_modules_t *m, uint32_t token, const os64_dom_response_t *response)
+void yonder_modules_answered(yonder_modules_t *m, uint32_t token, const os64_dom_response_t *response,
+                             yonder_bytecode_t *bytecode)
 {
-    if (m == NULL || m->dropped || (token & YONDER_MODULE_TOKEN) == 0 || response == NULL)
-        return;
     uint32_t slot = (token & ~YONDER_MODULE_TOKEN) - 1;
-    if (slot >= m->count || m->mods[slot].state != MOD_FETCHING || m->mods[slot].job == 0)
+    if (m == NULL || m->dropped || (token & YONDER_MODULE_TOKEN) == 0 || response == NULL || slot >= m->count ||
+        m->mods[slot].state != MOD_FETCHING || m->mods[slot].job == 0) {
+        yonder_bytecode_free(bytecode);
         return;
+    }
     m->mods[slot].job = 0;
+    m->mods[slot].bytecode = bytecode;
     char *source;
     size_t length;
     const char *why = NULL;

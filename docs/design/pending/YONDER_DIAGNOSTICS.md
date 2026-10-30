@@ -662,8 +662,10 @@ the body's bytes and the fetch's time, from its job's start to its answer —
 `request GET <address>: 200 cors, 0 hops, 6718 bytes in 359 ms` — and the
 page's module compiles are one line together, `modules compiled: 207 in
 3167557 us, 8784400 bytes`, rewritten as each compiles (one line a module
-would crowd a page of hundreds out of the record's facts). A module the
-engine's own loader compiles, a dynamic import's, is not in it. A request
+would crowd a page of hundreds out of the record's facts). A module read
+from its kept bytecode counts among them with its read's time, and the
+line ends `, N from bytecode` when any was. A module the engine's own
+loader compiles, a dynamic import's, is not in it. A request
 the HTTP cache answered says so after its time (SCRIPT_CACHE.md): `, kept`
 when it was served with nothing asked, `, confirmed` after a 304.
 

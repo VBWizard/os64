@@ -580,19 +580,26 @@ JS_PUBLIC bool os64_js_turn_open(const os64_js_runtime_t *runtime)
  *
  *     "os64-jsbc 1\n"     magic, 12 bytes
  *     engine identity     OS64_JS_ENGINE_ID, 64 hex digits
- *     kind                'c', a classic script; three zero bytes after
+ *     kind                'c', a classic script, or 'm', a module; three
+ *                         zero bytes after
  *     payload length      8 bytes, little-endian
  *     payload digest      FNV-1a 64 of the payload, 8 bytes, little-endian
+ *     a module's name     its length (8 bytes, little-endian), then its
+ *                         bytes; a classic script has none
  *
  * JS_ReadObject trusts what it reads, so nothing reaches it that this head
  * does not describe exactly: the identity says the engine that wrote it is
  * this one (a patch can change what the compiler emits without changing
  * upstream's BC_VERSION), and the digest that the bytes are the bytes it
- * wrote. */
+ * wrote. A module's name is in the head because reading a module enters it
+ * in the context's modules under the name it was written with, which is
+ * its identity for resolution, and no read undoes that: a module blob is
+ * read only by a compile of that same name (BYTECODE_CACHE.md § 9). */
 #define BLOB_MAGIC "os64-jsbc 1\n"
 #define BLOB_MAGIC_LENGTH 12
 #define BLOB_ENGINE_LENGTH 64
 #define BLOB_KIND_CLASSIC 'c'
+#define BLOB_KIND_MODULE 'm'
 #define BLOB_HEAD (BLOB_MAGIC_LENGTH + BLOB_ENGINE_LENGTH + 4 + 8 + 8)
 
 _Static_assert(sizeof(BLOB_MAGIC) - 1 == BLOB_MAGIC_LENGTH, "blob magic length");
@@ -620,19 +627,29 @@ static uint64_t get_u64(const uint8_t *at)
     return v;
 }
 
-/* The payload of a blob this engine wrote, or NULL. */
-static const uint8_t *blob_payload(const uint8_t *blob, size_t length, size_t *payload_length)
+/* The payload of a blob this engine wrote of `want` kind — a module's, of
+ * the module `name` — or NULL. */
+static const uint8_t *blob_payload(const uint8_t *blob, size_t length, char want, const char *name,
+                                   size_t *payload_length)
 {
     if (blob == NULL || length < BLOB_HEAD ||
         os64_memcmp(blob, BLOB_MAGIC, BLOB_MAGIC_LENGTH) != 0 ||
         os64_memcmp(blob + BLOB_MAGIC_LENGTH, OS64_JS_ENGINE_ID, BLOB_ENGINE_LENGTH) != 0)
         return NULL;
     const uint8_t *kind = blob + BLOB_MAGIC_LENGTH + BLOB_ENGINE_LENGTH;
-    if (kind[0] != BLOB_KIND_CLASSIC || kind[1] != 0 || kind[2] != 0 || kind[3] != 0)
+    if (kind[0] != want || kind[1] != 0 || kind[2] != 0 || kind[3] != 0)
         return NULL;
+    size_t at = BLOB_HEAD;
+    if (want == BLOB_KIND_MODULE) {
+        size_t nlen = os64_strlen(name);
+        if (length - at < 8 || get_u64(blob + at) != nlen || length - at - 8 < nlen ||
+            os64_memcmp(blob + at + 8, name, nlen) != 0)
+            return NULL;
+        at += 8 + nlen;
+    }
     uint64_t said = get_u64(kind + 4);
-    if (said != length - BLOB_HEAD) return NULL;
-    const uint8_t *payload = blob + BLOB_HEAD;
+    if (said != length - at) return NULL;
+    const uint8_t *payload = blob + at;
     if (get_u64(kind + 12) != blob_digest(payload, (size_t)said)) return NULL;
     *payload_length = (size_t)said;
     return payload;
@@ -648,29 +665,36 @@ static const uint8_t *blob_payload(const uint8_t *blob, size_t length, size_t *p
  * atom index left out of it, a payload that reads back as a broken function
  * (yonder's round trip, under a cut allocation, crashed running one). So a
  * write the allocator refused anything during is no blob. */
-static void blob_keep(os64_js_runtime_t *runtime, JSValueConst function, os64_js_bytecode_t *bytecode)
+static void blob_keep(os64_js_runtime_t *runtime, JSValueConst value, os64_js_bytecode_t *bytecode, char kind_of,
+                      const char *name)
 {
     unsigned failures = runtime->allocator.failures;
     size_t size = 0;
-    uint8_t *payload = JS_WriteObject(runtime->context, &size, function, JS_WRITE_OBJ_BYTECODE);
+    uint8_t *payload = JS_WriteObject(runtime->context, &size, value, JS_WRITE_OBJ_BYTECODE);
     if (payload == NULL || runtime->allocator.failures != failures) {
         if (payload != NULL) js_free(runtime->context, payload);
         discard_exception(runtime->context);
         runtime->allocator.failures = failures;
         return;
     }
-    uint8_t *blob = size <= SIZE_MAX - BLOB_HEAD ? os64_malloc(BLOB_HEAD + size) : NULL;
+    size_t nlen = kind_of == BLOB_KIND_MODULE ? os64_strlen(name) : 0;
+    size_t head = BLOB_HEAD + (kind_of == BLOB_KIND_MODULE ? 8 + nlen : 0);
+    uint8_t *blob = size <= SIZE_MAX - head ? os64_malloc(head + size) : NULL;
     if (blob != NULL) {
         os64_memcpy(blob, BLOB_MAGIC, BLOB_MAGIC_LENGTH);
         os64_memcpy(blob + BLOB_MAGIC_LENGTH, OS64_JS_ENGINE_ID, BLOB_ENGINE_LENGTH);
         uint8_t *kind = blob + BLOB_MAGIC_LENGTH + BLOB_ENGINE_LENGTH;
-        kind[0] = BLOB_KIND_CLASSIC;
+        kind[0] = (uint8_t)kind_of;
         kind[1] = kind[2] = kind[3] = 0;
         put_u64(kind + 4, size);
         put_u64(kind + 12, blob_digest(payload, size));
-        os64_memcpy(blob + BLOB_HEAD, payload, size);
+        if (kind_of == BLOB_KIND_MODULE) {
+            put_u64(blob + BLOB_HEAD, nlen);
+            os64_memcpy(blob + BLOB_HEAD + 8, name, nlen);
+        }
+        os64_memcpy(blob + head, payload, size);
         bytecode->kept = blob;
-        bytecode->kept_length = BLOB_HEAD + size;
+        bytecode->kept_length = head + size;
     }
     js_free(runtime->context, payload);
 }
@@ -686,7 +710,8 @@ static JSValue prepare(os64_js_runtime_t *runtime, const char *source, size_t le
                        const char *source_name, os64_js_bytecode_t *bytecode)
 {
     size_t payload_length = 0;
-    const uint8_t *payload = blob_payload(bytecode->blob, bytecode->blob_length, &payload_length);
+    const uint8_t *payload =
+        blob_payload(bytecode->blob, bytecode->blob_length, BLOB_KIND_CLASSIC, NULL, &payload_length);
     if (payload != NULL) {
         JSValue function = JS_ReadObjectNamed(runtime->context, payload, payload_length,
                                               JS_READ_OBJ_BYTECODE, source_name);
@@ -703,7 +728,7 @@ static JSValue prepare(os64_js_runtime_t *runtime, const char *source, size_t le
     }
     JSValue function = JS_Eval(runtime->context, source, length, source_name,
                                JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    if (!JS_IsException(function) && bytecode->keep) blob_keep(runtime, function, bytecode);
+    if (!JS_IsException(function) && bytecode->keep) blob_keep(runtime, function, bytecode, BLOB_KIND_CLASSIC, NULL);
     return function;
 }
 
@@ -1679,10 +1704,41 @@ JS_PUBLIC os64_js_status_t os64_js_set_module_loader(os64_js_runtime_t *runtime,
     return refuse(runtime, outcome, OS64_JS_OK, NULL);
 }
 
+/* A module compiled, or read from its blob when `bytecode` gives one framed
+ * for this module's name (and is this engine's, and whole), its blob kept
+ * when asked. A read the engine refuses is a miss, as a classic script's
+ * is, unless the runtime failed under it. `through_bytecode` is the
+ * bytecode verb's, which requires one. */
+static os64_js_status_t module_compile(os64_js_runtime_t *runtime, const char *caller_abi, const void *source,
+                                       size_t length, const char *name, const char *url, bool through_bytecode,
+                                       os64_js_bytecode_t *bytecode, os64_js_module_t **module,
+                                       os64_js_outcome_t *outcome);
+
 JS_PUBLIC os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, const char *caller_abi,
                                                 const void *source, size_t length, const char *name,
                                                 const char *url, os64_js_module_t **module,
                                                 os64_js_outcome_t *outcome)
+{
+    return module_compile(runtime, caller_abi, source, length, name, url, false, NULL, module, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_module_compile_bytecode(os64_js_runtime_t *runtime, const char *caller_abi,
+                                                         const void *source, size_t length, const char *name,
+                                                         const char *url, os64_js_bytecode_t *bytecode,
+                                                         os64_js_module_t **module, os64_js_outcome_t *outcome)
+{
+    if (bytecode != NULL) {
+        bytecode->kept = NULL;
+        bytecode->kept_length = 0;
+        bytecode->from_blob = false;
+    }
+    return module_compile(runtime, caller_abi, source, length, name, url, true, bytecode, module, outcome);
+}
+
+static os64_js_status_t module_compile(os64_js_runtime_t *runtime, const char *caller_abi, const void *source,
+                                       size_t length, const char *name, const char *url, bool through_bytecode,
+                                       os64_js_bytecode_t *bytecode, os64_js_module_t **module,
+                                       os64_js_outcome_t *outcome)
 {
     if (module != NULL) *module = NULL;
     os64_js_status_t result = enter(runtime, outcome);
@@ -1692,6 +1748,8 @@ JS_PUBLIC os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, co
                       "binding header ABI mismatch");
     if ((source == NULL && length != 0) || name == NULL || module == NULL)
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "source bytes, name and handle are required");
+    if (through_bytecode && bytecode == NULL)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "bytecode is required");
     runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), name);
     if (length > runtime->limits.source_bytes) {
         latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_SOURCE, 0);
@@ -1706,8 +1764,29 @@ JS_PUBLIC os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, co
     }
     if (length != 0) os64_memcpy(copy, source, length);
     copy[length] = 0;
-    JSValue value = JS_Eval(runtime->context, copy, length, name,
-                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE);
+    JSValue value = JS_UNDEFINED;
+    size_t payload_length = 0;
+    const uint8_t *payload = bytecode != NULL ? blob_payload(bytecode->blob, bytecode->blob_length, BLOB_KIND_MODULE,
+                                                             name, &payload_length)
+                                              : NULL;
+    if (payload != NULL) {
+        value = JS_ReadObject(runtime->context, payload, payload_length, JS_READ_OBJ_BYTECODE);
+        if (JS_VALUE_GET_TAG(value) == JS_TAG_MODULE) {
+            bytecode->from_blob = true;
+        } else if (JS_IsException(value) && !observe(runtime)) {
+            discard_exception(runtime->context);
+            value = JS_UNDEFINED;
+        } else if (!JS_IsException(value)) {
+            JS_FreeValue(runtime->context, value);
+            value = JS_UNDEFINED;
+        }
+    }
+    if (JS_IsUndefined(value)) {
+        value = JS_Eval(runtime->context, copy, length, name,
+                        JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE);
+        if (!JS_IsException(value) && bytecode != NULL && bytecode->keep)
+            blob_keep(runtime, value, bytecode, BLOB_KIND_MODULE, name);
+    }
     js_free_rt(runtime->engine, copy);
     if (!JS_IsException(value) &&
         module_meta(runtime->context, JS_VALUE_GET_PTR(value), url != NULL ? url : name) < 0) {

@@ -61,8 +61,8 @@ alternative, keying the blob by name too, would miss whenever a script
 moved in a page's order and thrash between pages that share a bundle.
 
 A module is named by its address, which is its identity for resolution
-too (`import` resolves against it), so 7b keys by it rather than renaming
-(§ 9).
+too (`import` resolves against it), so 7b's blob carries the name and is
+read only under it, rather than renamed (§ 9).
 
 ## 4. The blob (libjs)
 
@@ -137,7 +137,10 @@ key's parts (checked, as an entry's are: the file name is a hash), the
 `tag`, and the length. A tag is one line of the face's choosing; yonder's
 for a classic script is the decoded source's FNV-1a and length
 (`yonder_script_bytecode_tag`), so a companion is used only for the very
-text it was compiled from, whatever became of its entry between.
+text it was compiled from, whatever became of its entry between. A
+module's (`yonder_module_bytecode_tag`) is its body's, which names its text
+because a module is always read as UTF-8; the two kinds tag apart, so an
+address fetched as both keeps both.
 
 **Stored as it is, not gzip'd** — the slice paragraph said compressed with
 libgzip, and measurement said otherwise. On the host, libgzip deflates a
@@ -164,7 +167,7 @@ one that stops being kept takes its companion with it.
 | Step | Thread | Why there |
 |---|---|---|
 | fetch, decode, the source's key | the script's worker (`script_job.c`) | as before |
-| the companion read | the same worker, after the fetch, for a kept body | disk never on the window |
+| the companion read | the same worker, after the fetch, for a kept body (a module's: its fetch job's worker, § 9) | disk never on the window |
 | blob checks, `JS_ReadObjectNamed`, run | the window thread, at the script's turn | the runtime is the window's |
 | compile, `JS_WriteObject`, run | the window thread | as before, plus the write: a copy |
 | the companion write | a job of its own (`YONDER_JOB_BYTECODE`) | the window never waits on a disk |
@@ -252,12 +255,15 @@ held to the queue's 64 MiB.
 ## 9. Cuts, and what waits
 
 - **7a** — everything above, for `<script src>`.
-- **7b** — modules. They arrive by the fetch job (slice 2's path, CORS),
-  not `script_job.c`, and are compiled with `JS_EVAL_FLAG_NO_RESOLVE`
-  before their imports exist. The blob kind is `module`, the tag is the
-  source and the module's name, and the read makes the module and leaves
-  its resolution to the loader as a compile does. GitHub's 6.6 MB is all
-  modules, so 7b is not optional; it is second because its plumbing is.
+- **7b** — modules, built 2026-10-30 on the HTTP cache's script requests
+  (SCRIPT_CACHE.md § 8 and § 11). They arrive by the fetch job (slice 2's
+  path, CORS), not `script_job.c`, which reads the companion on its worker
+  for an answer whose body the entry holds, and are compiled with
+  `JS_EVAL_FLAG_NO_RESOLVE` before their imports exist. The blob kind is
+  `m`, with the module's name in its head (libjs CONTRACT.md § Modules);
+  the read makes the module unresolved and leaves its resolution to the
+  loader as a compile does. A dynamic `import()`'s module, which the
+  engine's own loader compiles, is not among them (DEBTS.md).
 
 Booked, with triggers (DEBTS.md):
 

@@ -1830,6 +1830,241 @@ static void bytecode_cases(void)
     os64_free(blob);
 }
 
+/* BYTECODE_CACHE.md § 9: a module's blob, written under the module's name
+ * and read only by a compile of that name. */
+static os64_js_module_t *module_compile_through(os64_js_runtime_t *runtime, const char *name,
+                                                os64_js_bytecode_t *bc, os64_js_outcome_t *outcome)
+{
+    const char *source = module_text(name);
+    os64_js_module_t *module = NULL;
+    os64_js_status_t result = os64_js_module_compile_bytecode(runtime, OS64_JS_ABI_ID, source, strlen(source), name,
+                                                              NULL, bc, &module, outcome);
+    check(result == outcome->status, "module bytecode compile status matches outcome");
+    return module;
+}
+/* A fresh module runtime: the store's loader, and an empty order. */
+static os64_js_runtime_t *module_bytecode_fixture(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = task_fixture(&config, "globalThis.order = '';");
+    const os64_js_module_loader_t loader = {(void *)module_store, module_resolve, module_source};
+    if (runtime != NULL) os64_js_set_module_loader(runtime, OS64_JS_ABI_ID, &loader, &outcome);
+    return runtime;
+}
+static void module_bytecode_fixture_end(os64_js_runtime_t *runtime)
+{
+    os64_js_destroy(runtime);
+    fixture_runtime = NULL;
+    task_context = NULL;
+}
+static bool module_order_is(os64_js_runtime_t *runtime, const char *want)
+{
+    JSValue order = task_global(runtime, "order");
+    bool is = host_value_is(order, want);
+    task_free(runtime, order);
+    return is;
+}
+/* A module compiled through `bytecode`, compile only: its handle is the
+ * runtime's to let go at destroy. */
+static os64_js_status_t module_bytecode_compile(os64_js_runtime_t *runtime, const char *source,
+                                                os64_js_bytecode_t *bc, os64_js_outcome_t *outcome)
+{
+    os64_js_module_t *module = NULL;
+    return os64_js_module_compile_bytecode(runtime, OS64_JS_ABI_ID, source, strlen(source), "https://m.test/sweep.js",
+                                           NULL, bc, &module, outcome);
+}
+/* bytecode_keep_sweep's rules for a module's compile: a failed allocation
+ * of the write is taken back and the compile stands, keeping nothing; any
+ * other fails the runtime; every blob kept reads back as the module. A
+ * module's compile under a failed allocation is DEBTS' 0011b row
+ * (resolve_labels), so the sweep starts at the last allocation and stops at
+ * the write's first: every cut it makes falls after the compile. */
+static void module_bytecode_keep_sweep(const char *name, const char *source)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    size_t start = attempts;
+    os64_js_bytecode_t bc = {.keep = true};
+    bool whole = module_bytecode_compile(runtime, source, &bc, &outcome) == OS64_JS_OK;
+    size_t inventory = attempts - start;
+    check(whole && bc.kept != NULL, "a module sweep's compile is whole and keeps its blob");
+    os64_free(bc.kept);
+    os64_js_destroy(runtime);
+    runtime = create_fixture(&config);
+    start = attempts;
+    bc = (os64_js_bytecode_t){0};
+    module_bytecode_compile(runtime, source, &bc, &outcome);
+    size_t writes = inventory - (attempts - start);
+    os64_js_destroy(runtime);
+    size_t held = live, absorbed = 0, kept = 0, wrong = 0, swept = 0;
+    for (size_t cut = inventory; cut > 0 && absorbed < writes; cut--) {
+        swept++;
+        runtime = create_fixture(&config);
+        bc = (os64_js_bytecode_t){.keep = true};
+        fail_at = attempts + cut;
+        os64_js_status_t result = module_bytecode_compile(runtime, source, &bc, &outcome);
+        fail_at = 0;
+        bool bad = result != OS64_JS_OK && result != OS64_JS_HOST_FAILURE;
+        if (result == OS64_JS_OK && bc.kept == NULL) absorbed++;
+        os64_js_destroy(runtime);
+        if (bc.kept != NULL) {
+            kept++;
+            runtime = create_fixture(&config);
+            os64_js_bytecode_t again = {.blob = bc.kept, .blob_length = bc.kept_length};
+            bad |= module_bytecode_compile(runtime, source, &again, &outcome) != OS64_JS_OK || !again.from_blob;
+            os64_js_destroy(runtime);
+        }
+        os64_free(bc.kept);
+        bad |= live != held;
+        if (bad)
+            fprintf(stderr, "libjs module bytecode: %s keeping cut %zu answered %d, %zu live\n", name, cut,
+                    (int)result, live - held);
+        wrong += bad;
+    }
+    printf("libjs module bytecode: %s: keeping the last %zu of %zu allocations swept, %zu absorbed by the write "
+           "of %zu, %zu blobs read back\n", name, swept, inventory, absorbed, writes, kept);
+    check(absorbed > 0 && absorbed == writes && wrong == 0,
+          "a keeping module compile's failed allocation is the write's to absorb or the runtime's, every blob "
+          "kept reads back, and nothing leaks");
+}
+/* bytecode_read_sweep's rule for a module's: a failed allocation reading
+ * the blob fails the runtime, and nothing leaks. */
+static void module_bytecode_read_sweep(const char *name, const char *source)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    os64_js_bytecode_t bc = {.keep = true};
+    module_bytecode_compile(runtime, source, &bc, &outcome);
+    os64_js_destroy(runtime);
+    uint8_t *blob = bc.kept;
+    size_t length = bc.kept_length;
+    if (blob == NULL) { check(false, "a module read sweep's blob"); return; }
+    runtime = create_fixture(&config);
+    size_t start = attempts;
+    bc = (os64_js_bytecode_t){.blob = blob, .blob_length = length};
+    bool whole = module_bytecode_compile(runtime, source, &bc, &outcome) == OS64_JS_OK;
+    size_t inventory = attempts - start;
+    check(whole && bc.from_blob, "a module read sweep's compile is whole from its blob");
+    os64_js_destroy(runtime);
+    size_t held = live, wrong = 0;
+    for (size_t cut = 1; cut <= inventory; cut++) {
+        runtime = create_fixture(&config);
+        bc = (os64_js_bytecode_t){.blob = blob, .blob_length = length};
+        fail_at = attempts + cut;
+        os64_js_status_t result = module_bytecode_compile(runtime, source, &bc, &outcome);
+        fail_at = 0;
+        bool bad = result != OS64_JS_HOST_FAILURE;
+        os64_js_destroy(runtime);
+        bad |= live != held;
+        if (bad)
+            fprintf(stderr, "libjs module bytecode: %s reading cut %zu answered %d, %zu live\n", name, cut,
+                    (int)result, live - held);
+        wrong += bad;
+    }
+    printf("libjs module bytecode: %s: reading %zu allocations swept\n", name, inventory);
+    check(wrong == 0, "a failed allocation reading a module's blob fails the runtime and leaks nothing");
+    os64_free(blob);
+}
+static void module_bytecode_cases(void)
+{
+    os64_js_outcome_t outcome;
+    const char *a_name = "https://m.test/a.js", *b_name = "https://m.test/b.js";
+
+    // A graph compiled keeping each module's blob, and run.
+    os64_js_runtime_t *runtime = module_bytecode_fixture();
+    if (runtime == NULL) return;
+    os64_js_bytecode_t kept_a = {.keep = true}, kept_b = {.keep = true};
+    os64_js_module_t *a = module_compile_through(runtime, a_name, &kept_a, &outcome);
+    os64_js_module_t *b = module_compile_through(runtime, b_name, &kept_b, &outcome);
+    check(a != NULL && b != NULL && kept_a.kept != NULL && kept_b.kept != NULL && !kept_a.from_blob &&
+          !kept_b.from_blob, "a module's compile keeps its blob when asked");
+    check(module_task(runtime, a, &outcome) == OS64_JS_OK && module_order_is(runtime, "ba"),
+          "the graph whose blobs were kept runs");
+    module_bytecode_fixture_end(runtime);
+
+    // The blobs, in another runtime, are the graph: its requests named, its
+    // imports found by name, import.meta.url the compile's own.
+    runtime = module_bytecode_fixture();
+    if (runtime == NULL) return;
+    os64_js_bytecode_t read_a = {.blob = kept_a.kept, .blob_length = kept_a.kept_length, .keep = true};
+    os64_js_bytecode_t read_b = {.blob = kept_b.kept, .blob_length = kept_b.kept_length, .keep = true};
+    a = module_compile_through(runtime, a_name, &read_a, &outcome);
+    module_requests[0] = '\0';
+    check(a != NULL && read_a.from_blob && read_a.kept == NULL &&
+          os64_js_module_requests(runtime, OS64_JS_ABI_ID, a, module_request, NULL, &outcome) == OS64_JS_OK &&
+          !strcmp(module_requests, "./b.js"), "a module read from its blob names its requests, and keeps nothing");
+    b = module_compile_through(runtime, b_name, &read_b, &outcome);
+    module_loads = 0;
+    check(b != NULL && read_b.from_blob && module_task(runtime, a, &outcome) == OS64_JS_OK &&
+          os64_js_module_state(runtime, a, NULL) == OS64_JS_MODULE_FULFILLED && module_order_is(runtime, "ba") &&
+          module_loads == 0, "a graph read from its blobs runs as compiled, each import found by name");
+    const char *meta_source = "globalThis.meta = import.meta.url;";
+    os64_js_bytecode_t meta_kept = {.keep = true};
+    os64_js_module_t *meta = NULL;
+    os64_js_module_compile_bytecode(runtime, OS64_JS_ABI_ID, meta_source, strlen(meta_source),
+                                    "https://m.test/page#inline-1", "https://m.test/page", &meta_kept, &meta, &outcome);
+    module_bytecode_fixture_end(runtime);
+    runtime = module_bytecode_fixture();
+    if (runtime == NULL) return;
+    os64_js_bytecode_t meta_read = {.blob = meta_kept.kept, .blob_length = meta_kept.kept_length};
+    check(os64_js_module_compile_bytecode(runtime, OS64_JS_ABI_ID, meta_source, strlen(meta_source),
+                                          "https://m.test/page#inline-1", "https://m.test/other", &meta_read, &meta,
+                                          &outcome) == OS64_JS_OK && meta_read.from_blob &&
+          module_task(runtime, meta, &outcome) == OS64_JS_OK, "an inline module runs from its blob");
+    JSValue url = task_global(runtime, "meta");
+    check(host_value_is(url, "https://m.test/other"), "import.meta.url is the reading compile's, not the blob's");
+    task_free(runtime, url);
+    os64_free(meta_kept.kept);
+    module_bytecode_fixture_end(runtime);
+
+    // A blob written for another module, or for a classic script, or a
+    // module's offered to a classic run, is a miss: the source is compiled.
+    runtime = module_bytecode_fixture();
+    if (runtime == NULL) return;
+    os64_js_bytecode_t other = {.blob = kept_a.kept, .blob_length = kept_a.kept_length, .keep = true};
+    b = module_compile_through(runtime, b_name, &other, &outcome);
+    check(b != NULL && !other.from_blob && other.kept != NULL, "a blob written under another name is refused");
+    os64_free(other.kept);
+    size_t classic_length = 0;
+    uint8_t *classic = bytecode_blob(bytecode_source, "https://m.test/a.js", &classic_length);
+    os64_js_bytecode_t script = {.blob = classic, .blob_length = classic_length};
+    a = module_compile_through(runtime, a_name, &script, &outcome);
+    check(a != NULL && !script.from_blob, "a classic script's blob is refused by a module compile");
+    check(module_task(runtime, a, &outcome) == OS64_JS_OK && module_order_is(runtime, "ba"),
+          "the modules compiled after refusals run");
+    os64_js_bytecode_t as_script = {.blob = kept_b.kept, .blob_length = kept_b.kept_length};
+    check(os64_js_run_bytecode(runtime, bytecode_source, strlen(bytecode_source), "https://m.test/b.js", &as_script,
+                               &outcome) == OS64_JS_OK && !as_script.from_blob && bytecode_answer_is(runtime, 42),
+          "a module's blob is refused by a classic run");
+    os64_free(classic);
+
+    // A compile that throws keeps nothing; no bytecode is refused.
+    os64_js_bytecode_t bad = {.keep = true};
+    check(module_compile_through(runtime, "https://m.test/bad.js", &bad, &outcome) == NULL &&
+          outcome.status == OS64_JS_EXCEPTION && bad.kept == NULL && !bad.from_blob,
+          "a module compile that throws keeps no blob");
+    os64_js_module_t *none = NULL;
+    check(os64_js_module_compile_bytecode(runtime, OS64_JS_ABI_ID, "", 0, "https://m.test/none.js", NULL, NULL, &none,
+                                          &outcome) == OS64_JS_BAD_ARGUMENT && none == NULL,
+          "a module compile through no bytecode is refused");
+    module_bytecode_fixture_end(runtime);
+    os64_free(kept_a.kept);
+    os64_free(kept_b.kept);
+
+    const char *small = module_text("https://m.test/a.js");
+    module_bytecode_keep_sweep("small", small);
+    module_bytecode_read_sweep("small", small);
+    char *large = bytecode_large_source();
+    if (large != NULL) {
+        module_bytecode_keep_sweep("large", large);
+        module_bytecode_read_sweep("large", large);
+    }
+    free(large);
+}
+
 int main(int argc, char **argv)
 {
     if ((argc == 2 && !strcmp(argv[1], "--compile-failure")) ||
@@ -1885,6 +2120,7 @@ int main(int argc, char **argv)
     module_cases();
     module_sweep_cases();
     bytecode_cases();
+    module_bytecode_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

@@ -148,12 +148,11 @@ and anything but GET.
 ## 8. Then 7b
 
 With modules' bodies in the cache, 7b is 7a again: a companion beside the
-module's entry, keyed by the source's digest and the module's name, read on
-the fetch's worker, run through a module verb in libjs
-(`os64_js_module_compile` from bytes, its resolution left to the loader as
-a compile leaves it), with 7a's round-trip oracle widened to modules. The
-name is not renamed at the read: a module's name is its identity for
-resolution, so a blob made under another name is a miss.
+module's entry, tagged by its body's digest, read on the fetch's worker,
+and run through a module verb in libjs (`os64_js_module_compile_bytecode`,
+its resolution left to the loader as a compile leaves it). The name is not
+renamed at the read: a module's name is its identity for resolution, so
+the blob carries it and one made under another name is a miss.
 
 ## 9. Proof
 
@@ -169,6 +168,12 @@ resolution, so a blob made under another name is a miss.
 - WPT: the existing directories unchanged. `fetch/http-cache/` cannot be
   run here: its pages are driven by a wptserve handler (`http-cache.py`),
   and the runner answers a `.py` handler with a network error.
+- 7b: libjs's module cases (a graph read from its blobs in another
+  runtime, every refusal, each allocation of a read and of a keep's write
+  failed in turn); the fetch job's (a module's blob read only for a body
+  the entry holds, under the module's tag, the credentials in its key);
+  yonder's end to end (a module kept, its blob written, the next visit's
+  module from the cache and read from it, the record saying so).
 - The P5: the pull-request page loaded twice with `--exit-when-loaded`; the
   second record's request lines say how many came from the cache (a new
   `kept` on the line) and the module fetching's sum falls.
@@ -199,3 +204,18 @@ resolution, so a blob made under another name is a miss.
   Settings shows, are still `way_fetch_whole`'s alone (DEBTS.md).
 - **`way_served_t` moved to `way/cache.h`**, since the fetch job, which
   does not include all of `way/way.h`, says it too.
+- **7b's blob is read by the fetch job** (`module_bytecode`) for a module's
+  request whose answer the entry holds — served kept, confirmed by a 304,
+  or just stored — and rides to the module map with the answer
+  (`yonder_modules_answered`); a compile is kept by 7a's write job, whose
+  key now carries the credentials (a cross-origin module's entry is
+  anonymous). The bytecode record and its tags moved to
+  `yonder/bytecode.c`, so the fetch job's host test links them.
+- **The round-trip oracle stays classic.** Reading a module enters it in
+  the context's modules under its stored name, and nothing undoes that, so
+  a module cannot be written and read back in the runtime that compiled
+  it. The libjs and yonder cases above are its proof instead.
+- **Engine patch 0016**: a module read that fails part way is unlisted and
+  freed (libjs CONTRACT.md). Upstream's failure path left a half-read
+  module listed under its name, which the GC walked at teardown — a
+  crash on a runtime that ran out of memory reading one.

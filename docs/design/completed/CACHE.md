@@ -122,8 +122,8 @@ read, and the request's own lines for each header its `Vary` names
 A face may keep a COMPANION beside an entry (`<hash>.b` beside
 `<hash>.e`, 2026-10-30): something it derived from the body, under the
 entry's key and a tag of its own that names what it was derived from —
-yonder's is a script's compiled form, tagged by the source's digest
-(BYTECODE_CACHE.md). It is dropped with its entry, cleared with the
+yonder's is a script's or a module's compiled form, tagged by the text's
+digest (BYTECODE_CACHE.md). It is dropped with its entry, cleared with the
 entries, swept by the same rule and counted in the same cap, and a face
 reads one only for a body the cache holds.
 

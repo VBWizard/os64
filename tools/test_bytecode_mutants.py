@@ -13,6 +13,10 @@ companion by its entry's key and its tag, living and dying with its entry
 (§ 5, SCRIPT_CACHE.md § 2-3); a face is told whether the cache holds a body; the
 worker looks for a companion only for one it holds; and the window runs
 through the blob, keeps a compile's, lets its queue go, and says which ran.
+A script's request uses the cache under its mode, a kept answer judged by
+the live CORS check (SCRIPT_CACHE.md § 5-6); a module's blob is read only
+under its name (§ 9), by its fetch job for an answer the entry holds, and
+kept under the entry's key, credentials and all.
 
 The shape is test_garb_mutants.py's: each mutant is applied to the
 worktree's copy of its file, the suite is run, and the file is put back
@@ -40,6 +44,10 @@ PREPARE = str(pathlib.Path('tools', 'js_prepare.py'))
 CACHE = 'userland/libway/cache.c'
 LOAD = 'userland/libway/load.c'
 JOB = 'userland/apps/yonder/script_job.c'
+BYTECODE = 'userland/apps/yonder/bytecode.c'
+FETCHJOB = 'userland/apps/yonder/fetch_job.c'
+MODULES = 'userland/apps/yonder/modules.c'
+DOMFETCH = 'userland/libdom/fetch.c'
 SCRIPTS = 'userland/apps/yonder/scripts.c'
 YONDER = 'userland/apps/yonder/yonder.c'
 JS = 'bash tools/test_js_runtime_host.sh'
@@ -47,6 +55,7 @@ PREPARED = 'python3 tools/test_js_prepare.py'
 WAY = 'bash tools/test_way_host.sh'
 FETCH = 'bash tools/test_way_fetch_host.sh'
 WORKER = 'bash tools/test_yonder_script_job_host.sh'
+FETCHJOBS = 'bash tools/test_yonder_fetch_job_host.sh'
 WINDOW = 'bash tools/test_yonder_scripts_host.sh'
 
 # (name, file, old, new, harness). Each breaks one rule the design states.
@@ -61,10 +70,10 @@ mutants = [
      ' ||\n        os64_memcmp(blob + BLOB_MAGIC_LENGTH, OS64_JS_ENGINE_ID, BLOB_ENGINE_LENGTH) != 0)',
      ')', JS),
     ('the-kind-is-not-compared', RUNTIME,
-     '    if (kind[0] != BLOB_KIND_CLASSIC || kind[1] != 0 || kind[2] != 0 || kind[3] != 0)\n        return NULL;\n',
+     '    if (kind[0] != want || kind[1] != 0 || kind[2] != 0 || kind[3] != 0)\n        return NULL;\n',
      '', JS),
     ('the-length-is-not-compared', RUNTIME,
-     '    if (said != length - BLOB_HEAD) return NULL;\n', '', JS),
+     '    if (said != length - at) return NULL;\n', '', JS),
     ('the-digest-is-not-compared', RUNTIME,
      '    if (get_u64(kind + 12) != blob_digest(payload, (size_t)said)) return NULL;\n', '', JS),
     ('a-write-is-judged-by-its-answer', RUNTIME,
@@ -74,8 +83,19 @@ mutants = [
      '        discard_exception(runtime->context);\n        runtime->allocator.failures = failures;\n        return;',
      '        discard_exception(runtime->context);\n        return;', JS),
     ('a-compile-that-throws-is-kept', RUNTIME,
-     '    if (!JS_IsException(function) && bytecode->keep) blob_keep(runtime, function, bytecode);',
-     '    if (bytecode->keep) blob_keep(runtime, function, bytecode);', JS),
+     '    if (!JS_IsException(function) && bytecode->keep) blob_keep(runtime, function, bytecode, BLOB_KIND_CLASSIC, NULL);',
+     '    if (bytecode->keep) blob_keep(runtime, function, bytecode, BLOB_KIND_CLASSIC, NULL);', JS),
+    # libjs: a module's blob (BYTECODE_CACHE.md § 9).
+    ('a-module-blob-of-another-name-is-read', RUNTIME,
+     '            os64_memcmp(blob + at + 8, name, nlen) != 0)', '            false)', JS),
+    ('a-module-is-not-read-from-its-blob', RUNTIME,
+     '        if (JS_VALUE_GET_TAG(value) == JS_TAG_MODULE) {\n            bytecode->from_blob = true;',
+     '        if (false) {\n            bytecode->from_blob = true;', JS),
+    ('a-module-compile-is-not-kept', RUNTIME,
+     '            blob_keep(runtime, value, bytecode, BLOB_KIND_MODULE, name);', '            ;', JS),
+    ('a-module-compile-that-throws-is-kept', RUNTIME,
+     '        if (!JS_IsException(value) && bytecode != NULL && bytecode->keep)',
+     '        if (bytecode != NULL && bytecode->keep)', JS),
     # The engine's identity.
     ('the-identity-ignores-the-sources', PREPARE,
      "    identity.update(name.encode() + b'\\0' + str(len(data)).encode() + b'\\0' + data)\n",
@@ -120,11 +140,48 @@ mutants = [
     # yonder's worker.
     ('a-body-not-held-has-its-companion-read', JOB,
      'if (s->ok && body.kept && !cancelled(ctx)', 'if (s->ok && !cancelled(ctx)', WORKER),
-    ('the-key-is-not-the-text', JOB, '        h ^= (uint8_t)source[i];', '        h ^= (uint8_t)(source[i] & 0);', WORKER),
+    ('the-key-is-not-the-text', BYTECODE, '        h ^= bytes[i];', '        h ^= (uint8_t)(bytes[i] & 0);', WORKER),
+    # yonder's fetch job: a script's request through the cache
+    # (SCRIPT_CACHE.md § 5-6), and a module's blob beside its entry.
+    ('a-kept-reply-is-not-checked-live', FETCHJOB,
+     '    if (r->tainting == WAY_TAINT_CORS && !way_cors_check(r, &resp))\n        return false;\n', '', FETCHJOBS),
+    ('the-job-key-forgets-the-credentials', FETCHJOB,
+     'way_credentials_included(r), c->url};', 'true, c->url};', FETCHJOBS),
+    ('the-job-key-forgets-the-partition', FETCHJOB,
+     '    way_partition_of(&r->origin, c->partition, sizeof(c->partition));',
+     '    os64_strcopy(c->partition, sizeof(c->partition), "https all");', FETCHJOBS),
+    ('a-redirected-answer-is-kept', FETCHJOB,
+     ' && r->urls == 1 && head->status == 200 &&', ' && head->status == 200 &&', FETCHJOBS),
+    ('only-if-cached-asks-on-a-miss', FETCHJOB,
+     '    if (!c->have)\n        return mode == WAY_CACHE_ONLY_IF_CACHED ? CACHE_REFUSED : CACHE_MISS;',
+     '    if (!c->have)\n        return CACHE_MISS;', FETCHJOBS),
+    ('force-cache-minds-the-age', FETCHJOB,
+     '    bool any_age = mode == WAY_CACHE_FORCE_CACHE || mode == WAY_CACHE_ONLY_IF_CACHED;',
+     '    bool any_age = mode == WAY_CACHE_ONLY_IF_CACHED;', FETCHJOBS),
+    ('no-cache-serves-fresh', FETCHJOB, '(mode != WAY_CACHE_NO_CACHE && way_keep_fresh(', '(way_keep_fresh(',
+     FETCHJOBS),
+    ('reload-reads', FETCHJOB, '    if (job->cache_mode != WAY_CACHE_RELOAD &&\n', '    if (\n', FETCHJOBS),
+    ('no-store-uses-the-cache', FETCHJOB, ' && job->cache_mode != WAY_CACHE_NO_STORE &&', ' &&', FETCHJOBS),
+    ('a-range-uses-the-cache', FETCHJOB, '    return !range && way_cache_enabled(', '    return way_cache_enabled(',
+     FETCHJOBS),
+    ('vary-is-not-matched', FETCHJOB,
+     '        c->have = way_vary_matches(c->blocks.vary, c->blocks.vary_len, request_value, c);',
+     '        c->have = true;', FETCHJOBS),
+    ('any-fetch-reads-a-module-blob', FETCHJOB, '    if (job->module && got->ok && cached != NULL',
+     '    if (got->ok && cached != NULL', FETCHJOBS),
+    ('a-body-not-held-has-its-module-blob-read', FETCHJOB, 'cached != NULL && cached->held &&', 'cached != NULL &&',
+     FETCHJOBS),
+    ('the-module-record-forgets-the-credentials', FETCHJOB, '    bc->credentials = c->key.credentials;',
+     '    bc->credentials = true;', FETCHJOBS),
+    ('the-cache-mode-is-not-carried', DOMFETCH, '.cache = (uint8_t)q->cache,', '.cache = 0,', WINDOW),
     # yonder's window.
     ('the-blob-is-not-run', SCRIPTS, '            bc.blob = bytecode->blob;', '            bc.blob = NULL;', WINDOW),
     ('a-compile-is-not-kept', SCRIPTS,
      '            bc.keep = s->options.keep_bytecode != NULL;', '            bc.keep = false;', WINDOW),
+    ('a-module-blob-is-not-run', MODULES, '{.blob = kept->blob, .blob_length', '{.blob = NULL, .blob_length', WINDOW),
+    ('the-map-keeps-no-module-compile', MODULES, '.keep = m->net.keep != NULL};', '.keep = false};', WINDOW),
+    ('a-module-fetch-is-not-said', YONDER, '    job->module = (token & YONDER_MODULE_TOKEN) != 0;\n', '', WINDOW),
+    ('the-keep-job-forgets-the-credentials', YONDER, '    job->credentials = where->credentials;\n', '', WINDOW),
     ('the-queue-is-not-let-go', YONDER,
      '        s_bytecode_queued -= ((const yonder_bytecode_job_t *)job)->length;\n', '', WINDOW),
     ('the-record-does-not-say', YONDER,

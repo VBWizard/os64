@@ -522,24 +522,11 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void 
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
 }
-/* As script_job.c frees a compiled form, and releases a script job and a
- * compiled form's write. */
-void yonder_bytecode_free(yonder_bytecode_t *bytecode) {
-    if(bytecode) { os64_free(bytecode->blob); os64_free(bytecode); }
-}
+/* As script_job.c releases a script job. */
 void yonder_script_release(void *job, void *product) {
     yonder_script_t *got=product;
     if(got) { os64_free(got->source); yonder_bytecode_free(got->bytecode); os64_free(got); }
     os64_free(job);
-}
-int64_t yonder_bytecode_keep_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
-    (void)job; (void)cancelled; (void)ctx; (void)out;
-    check(false,"unexpected worker execution"); return -1;
-}
-void yonder_bytecode_keep_release(void *job, void *product) {
-    (void)product; yonder_bytecode_job_t *j=job;
-    if(j) os64_free(j->blob);
-    os64_free(j);
 }
 /* The worker's answer to the script job whose address ends with `tail`:
  * its source, or NULL for a fetch that failed. False when no such job is
@@ -10999,6 +10986,47 @@ static void bytecode_cases(void) {
     g.cache=NULL;
 }
 
+static bool never_cancelled(void *ctx) { (void)ctx; return false; }
+
+/* A module's compiled form (BYTECODE_CACHE.md § 9), end to end: its fetch
+ * through a real cache, its compile's form kept beside the entry, and the
+ * next visit's module read from it. */
+static void module_bytecode_cases(void) {
+    fake_reset();
+    way_cache_t *cache=way_cache_open("/tmp/cache",16<<20);
+    check(cache!=NULL,"module bytecode: a cache on the fake disk");
+    const char *page="<script type=module src=/m/k.js></script>";
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/k.js",200,MODULE_JS "Cache-Control: max-age=600\r\n","note('k');");
+    module_page(page);
+    g.cache=cache;                  /* the window is made afresh with each page */
+    check(loop_settle() && request_land("/m/k.js") && loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+        probe_text_is("out","k"),"module bytecode: a module whose answer the cache keeps runs");
+    check(nbytecode_jobs==1 && has(bytecode_jobs[0].job->url,"/m/k.js") &&
+        !strncmp(bytecode_jobs[0].job->tag,"module ",7) && bytecode_jobs[0].job->length>96,
+        "module bytecode: its compile's form goes to a job of its own, under the module's tag");
+    if(nbytecode_jobs==1) {
+        check(yonder_bytecode_keep_run(bytecode_jobs[0].job,never_cancelled,NULL,NULL)==1,
+            "module bytecode: and is written beside the entry");
+        reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
+        nbytecode_jobs=0;
+    }
+    request_drop();
+
+    int sent=nfake_requests;
+    module_page(page);
+    g.cache=cache;
+    check(loop_settle() && request_land("/m/k.js") && nfake_requests==sent && loop_settle() &&
+        g.page.tree!=NULL && script_rebuild() && probe_text_is("out","k"),
+        "module bytecode: the next visit's module comes from the cache and runs");
+    check(strstr(request_record_text(),", 1 from bytecode\n")!=NULL && nbytecode_jobs==0,
+        "module bytecode: read from its kept form, the record says so, and nothing new is kept");
+    request_drop();
+    way_cache_close(cache);
+    g.cache=NULL;
+    fake_reset();
+}
+
 /* `--exit-when-loaded`: yonder leaves once the shown page is settled and
  * nothing has come back for the quiet, or once it has waited as long as it
  * will, and not before. */
@@ -11106,6 +11134,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) bytecode_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) module_bytecode_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) exit_when_loaded_cases();
     webfont_cases();
     paint_cost_cases();

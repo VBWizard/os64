@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "bytecode.h"
 #include "fetch/fetch.h"
 #include "jobs.h"
 #include "way/cache.h"
@@ -35,6 +36,8 @@
 #define YONDER_FETCH_DATA_URL_MAX ((size_t)(YONDER_FETCH_BODY_MAX / 3 * 4 + 4096))
 // A job's peak: the body, the head and the request's own bytes beside it.
 #define YONDER_FETCH_RESERVE ((size_t)YONDER_FETCH_BODY_MAX * 2 + ((size_t)4 << 20))
+// A module's job's: its compiled form read beside them.
+#define YONDER_FETCH_MODULE_RESERVE (YONDER_FETCH_RESERVE + SCRIPT_BYTECODE_MAX)
 
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_FETCH
@@ -62,6 +65,9 @@ typedef struct {
     // nothing, and how this request uses it.
     way_cache_t *cache;
     way_cache_mode_t cache_mode;
+    // A module script's fetch: its compiled form is read beside the entry
+    // that holds its body (BYTECODE_CACHE.md § 9).
+    bool module;
 } yonder_fetch_job_t;
 
 typedef struct {
@@ -89,6 +95,10 @@ typedef struct {
     // Where the answer came from: the network, or the cache, fresh or
     // after a 304 (way_served_t; the page record says which).
     way_served_t served;
+    // A module's compiled form, when the cache holds the body it answered
+    // with: the blob kept for that body (NULL for none) and where a compile
+    // of it is kept. NULL for any other answer.
+    yonder_bytecode_t *bytecode;
 } yonder_fetched_t;
 
 int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);

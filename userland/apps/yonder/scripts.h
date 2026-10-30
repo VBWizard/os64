@@ -32,8 +32,8 @@ typedef struct {
     uint64_t (*fetch)(void *opaque, uint64_t serial, uint32_t token, const char *url,
                       const char *fallback);
     void (*cancel)(void *opaque, uint64_t job);
-    // A `src` script compiled from its source, whose body the cache holds:
-    // its blob (libjs's, taken) to be kept where `where` says
+    // A `src` script or a module compiled from its source, whose body the
+    // cache holds: its blob (libjs's, taken) to be kept where `where` says
     // (BYTECODE_CACHE.md). NULL keeps nothing.
     void (*keep_bytecode)(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
     void (*activate)(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what);
@@ -234,9 +234,10 @@ bool yonder_scripts_idle_run(yonder_scripts_t *scripts, os64_js_outcome_t *outco
 // The answer to the page's request `token` (os64_dom_fetched), as one
 // task. False when nothing ran: the runtime is gone, or never was, or the
 // answer was a module's (YONDER_MODULE_TOKEN), which the page's module map
-// compiles without a task.
+// compiles without a task. `bytecode`, a module's compiled form when the
+// cache holds its body (fetch_job.h), is TAKEN, and freed for any other.
 bool yonder_scripts_answered(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *response,
-                             os64_js_outcome_t *outcome);
+                             yonder_bytecode_t *bytecode, os64_js_outcome_t *outcome);
 // The navigation the last task asked for; nodes arrive held.
 bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigation_t *ask);
 // A new task budget, from the next task on, and the budget tasks have.

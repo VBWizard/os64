@@ -540,6 +540,17 @@ wrapper's module entry (`js_engine.h`) is built on that:
 - **A handle is the host's until it lets go**: `os64_js_module_release`, or
   destroy for the ones still held (TEARDOWN.md). The module stays the
   engine's while anything imports it.
+- **A module's bytecode is kept and read as a classic script's is**
+  (`os64_js_module_compile_bytecode`, BYTECODE_CACHE.md § 9): the same
+  framing, kind `m`, with the module's NAME in the head. Reading a module
+  enters it among the context's modules under the name it was written
+  with, and no read can give it another, so a blob is read only by a
+  compile of that same name; any other is a miss and the source compiled.
+  `url` is the compile's, as it is uncached: `import.meta.url` is set
+  after the read and is not in the blob. A module is written unresolved,
+  as it was compiled, and read unresolved. A read keeps nothing, and a
+  NULL bytecode is BAD_ARGUMENT. Patch 0016 makes a read that fails part
+  way leave nothing listed.
 
 `tools/test_js_runtime_host.c`'s module cases hold each rule: a graph
 compiled before it is resolved and run once found by name, with no load
@@ -556,7 +567,14 @@ cycle whose entry failed, by a later graph and by `import()`. The module
 sweep fails
 every allocation of a graph's run in turn, on the target core and the
 instrumented engine, under RECLAIM; it compiles uncut, because a compile
-under memory pressure is DEBTS.md's 0011b row.
+under memory pressure is DEBTS.md's 0011b row. The module bytecode cases
+run a graph compiled keeping its blobs, then read from them in another
+runtime (requests named, imports found by name, nothing loaded); an inline
+module's blob read under another URL; blobs refused for another module's
+name, a classic script's kind, and a module's offered to a classic run;
+and a throwing compile keeping nothing. Their sweeps fail each allocation
+of a read, and, for the same 0011b reason, each from a keeping compile's
+last back through its write's first.
 
 ## Reserved for later work
 
@@ -700,3 +718,13 @@ afresh instead of linking through the NULL of an import never found or,
 in a cycle (whose members point back at the module that failed), through
 a module the failure unlisted or freed. § Modules is the wrapper built
 on it.
+
+### A module read that fails part way
+
+Patch 0016 adds no export. A module read from bytecode is born holding two
+references, the context's list's and the value the read returns, and
+upstream's failure path dropped one: a read that failed part way (an
+allocation refused) left a half-read module listed under its name, found
+by the next import of it, and walked by the GC through entry counts read
+before their arrays were allocated. The read now unlists and frees it,
+zeroing first any count whose array it never got.

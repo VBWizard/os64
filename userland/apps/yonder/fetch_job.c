@@ -467,6 +467,7 @@ void yonder_fetched_free(yonder_fetched_t *got)
     os64_free(got->url);
     os64_free(got->headers);
     os64_free(got->body);
+    yonder_bytecode_free(got->bytecode);
     os64_free(got);
 }
 
@@ -703,6 +704,7 @@ typedef struct {
     char *url;                      // the address the key names
     bool have;                      // an entry, the Vary'd lines the request's
     bool asked;                     // its validator went with the request
+    bool held;                      // the entry holds the body the answer has
     way_entry_t e;
     uint8_t *body;                  // the entry's body, its blocks after it (way_cache_find)
     size_t len;
@@ -838,8 +840,10 @@ static CacheAnswer cache_answer(const yonder_fetch_job_t *job, way_request_t *r,
         return mode == WAY_CACHE_ONLY_IF_CACHED ? CACHE_REFUSED : CACHE_MISS;
     bool any_age = mode == WAY_CACHE_FORCE_CACHE || mode == WAY_CACHE_ONLY_IF_CACHED;
     if (any_age || (mode != WAY_CACHE_NO_CACHE && way_keep_fresh(&c->e.keep, now_utc()))) {
-        if (serve_kept(c, r, current, &c->blocks, got, max_body, WAY_SERVED_KEPT))
+        if (serve_kept(c, r, current, &c->blocks, got, max_body, WAY_SERVED_KEPT)) {
+            c->held = got->ok;
             return CACHE_ANSWERED;
+        }
         c->have = false;
         return mode == WAY_CACHE_ONLY_IF_CACHED ? CACHE_REFUSED : CACHE_MISS;
     }
@@ -880,7 +884,7 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
     if (!ok)
         network_error(got, "CORS: the answer does not allow this origin to read it");
     else if (way_keep_confirm(&c->e.keep, fields, now_utc()))
-        (void)way_cache_put(job->cache, &c->e, &b, c->body, c->len);
+        c->held = way_cache_put(job->cache, &c->e, &b, c->body, c->len);
     else
         way_cache_drop(job->cache, &c->key);
     os64_free(merged);
@@ -915,12 +919,34 @@ static void cache_store(const yonder_fetch_job_t *job, Cached *c, const way_requ
         os64_strcopy(e->charset, sizeof(e->charset), head->charset);
         way_blocks_t b = {headers, hlen, h->omitted != NULL ? h->omitted : "", h->olen, vary, vlen};
         keep = way_cache_put(job->cache, e, &b, got->body, got->body_len);
+        c->held = keep;
     }
     if (!keep && c->have)
         way_cache_drop(job->cache, &c->key);
     os64_free(vary);
     os64_free(headers);
     os64_free(e);
+}
+
+// A module's compiled form (BYTECODE_CACHE.md § 9), for an answer whose
+// body the entry holds: where a compile of it is kept, and the blob kept
+// for this very body, read beside the entry. Without memory for the
+// record, or an address too long for it, the module is compiled as source.
+static void module_bytecode(const yonder_fetch_job_t *job, const Cached *c, yonder_fetched_t *got)
+{
+    yonder_bytecode_t *bc = os64_calloc(1, sizeof(*bc));
+    if (bc == NULL)
+        return;
+    os64_strcopy(bc->partition, sizeof(bc->partition), c->partition);
+    bc->credentials = c->key.credentials;
+    if (os64_strcopy(bc->url, sizeof(bc->url), c->url) >= sizeof(bc->url)) {
+        os64_free(bc);
+        return;
+    }
+    yonder_module_bytecode_tag(got->has_body ? got->body : NULL, got->has_body ? got->body_len : 0, bc->tag,
+                               sizeof(bc->tag));
+    (void)way_cache_companion_get(job->cache, &c->key, bc->tag, &bc->blob, &bc->length, SCRIPT_BYTECODE_MAX);
+    got->bytecode = bc;
 }
 
 static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out);
@@ -1157,6 +1183,8 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     }
     got->hops = r->urls > 0 ? r->urls - 1 : 0;
     branches_clear(&branches, job, r, !got->ok);
+    if (job->module && got->ok && cached != NULL && cached->held && !(cancelled != NULL && cancelled(ctx)))
+        module_bytecode(job, cached, got);
     cached_free(cached);
     os64_free(current);
     os64_free(h.block);

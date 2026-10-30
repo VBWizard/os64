@@ -730,12 +730,19 @@ static void module_release(void *opaque, os64_dom_response_t *response)
         s->options.release(s->options.opaque, response);
 }
 
+static void module_keep(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length)
+{
+    yonder_scripts_t *s = opaque;
+    s->options.keep_bytecode(s->options.opaque, where, blob, length);
+}
+
 // The page's module map, with its network: what ensure_runtime makes with
 // the runtime.
 static yonder_modules_t *module_map_new(yonder_scripts_t *s)
 {
     const yonder_modules_net_t net = {s, module_start, net_cancel, module_run_now, module_release,
-                                      module_document_base, module_script_base};
+                                      module_document_base, module_script_base,
+                                      s->options.keep_bytecode != NULL ? module_keep : NULL};
     return yonder_modules_new(s->runtime, &net, s->options.diag);
 }
 
@@ -1603,15 +1610,16 @@ bool yonder_scripts_idle_run(yonder_scripts_t *s, os64_js_outcome_t *out)
 }
 
 bool yonder_scripts_answered(yonder_scripts_t *s, uint32_t token, const os64_dom_response_t *response,
-                             os64_js_outcome_t *out)
+                             yonder_bytecode_t *bytecode, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     // A module's answer is the map's: compiled, no task run (modules.h).
     if (s != NULL && !s->dead && (token & YONDER_MODULE_TOKEN) != 0) {
-        yonder_modules_answered(s->modules, token, response);
+        yonder_modules_answered(s->modules, token, response, bytecode);
         modules_progress(s);
         return false;
     }
+    yonder_bytecode_free(bytecode);
     if (s == NULL || s->dead || !os64_dom_fetch_waiting(s->dom, token))
         return false;
     s->written = 0;

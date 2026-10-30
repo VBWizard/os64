@@ -15,7 +15,7 @@ host_flags=(-std=gnu11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined
     -Iuserland/apps/yonder -Iuserland/libway/include -Iuserland/libfetch/include -Iuserland/libhtml/include
     -Iuserland/libhtml -Iuserland/libpage/include -Iuserland/libgzip/include -Iuserland/libtls/include
     -Iuserland/libos64/include -Iabi/include)
-host_sources=(tools/test_yonder_script_job_host.c userland/apps/yonder/script_job.c
+host_sources=(tools/test_yonder_script_job_host.c userland/apps/yonder/script_job.c userland/apps/yonder/bytecode.c
     userland/apps/yonder/script_decode.c userland/libway/origin.c userland/libos64/str.c userland/libos64/fmt.c
     userland/libos64/url.c)
 host_objects "$work"

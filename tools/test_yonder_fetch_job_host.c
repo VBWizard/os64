@@ -140,6 +140,7 @@ typedef struct {
     uint64_t max_body;
     const way_identity_t *identity;     // the agent's preset lines, NULL for none
     way_cache_mode_t cache_mode;        // how the request uses http_cache
+    bool module;                        // a module script's fetch
 } Ask;
 
 static yonder_fetch_job_t *job_of(const Ask *a)
@@ -183,6 +184,7 @@ static yonder_fetch_job_t *job_of(const Ask *a)
     j->preflight = cache;
     j->cache = http_cache;
     j->cache_mode = a->cache_mode;
+    j->module = a->module;
     return j;
 }
 
@@ -968,6 +970,163 @@ static bool cache_holds_text(const char *dir, const char *text)
     return system(cmd) == 0;
 }
 
+static bool never_cancelled(void *ctx)
+{
+    (void)ctx;
+    return false;
+}
+
+// A blob kept where a module's record says, as yonder's keep job keeps one.
+static bool keep_where(const yonder_bytecode_t *where, const char *blob)
+{
+    yonder_bytecode_job_t *k = os64_calloc(1, sizeof(*k));
+    if (k == NULL)
+        return false;
+    k->cache = http_cache;
+    k->blob = os64_malloc(strlen(blob));
+    k->length = strlen(blob);
+    memcpy(k->blob, blob, k->length);
+    snprintf(k->partition, sizeof(k->partition), "%s", where->partition);
+    k->credentials = where->credentials;
+    snprintf(k->url, sizeof(k->url), "%s", where->url);
+    snprintf(k->tag, sizeof(k->tag), "%s", where->tag);
+    bool kept = yonder_bytecode_keep_run(k, never_cancelled, NULL, NULL) == 1;
+    yonder_bytecode_keep_release(k, NULL);
+    return kept;
+}
+
+static bool blob_is(const yonder_fetched_t *g, const char *blob)
+{
+    return g != NULL && g->bytecode != NULL && g->bytecode->blob != NULL && g->bytecode->length == strlen(blob) &&
+           memcmp(g->bytecode->blob, blob, g->bytecode->length) == 0;
+}
+
+// A module's compiled form (BYTECODE_CACHE.md § 9): read beside the entry
+// that holds its body, under the module tag of that body, for a module's
+// fetch alone.
+static void module_bytecode_cases(const char *page)
+{
+    char tag[WAY_COMPANION_TAG_MAX];
+    yonder_module_bytecode_tag((const uint8_t *)kModule, strlen(kModule), tag, sizeof(tag));
+    fake_answer_t *a = fake_answer(NULL, "https://cdn.test/bc.js", 200,
+                                   MODULE_HEAD "Cache-Control: max-age=60\r\nETag: \"b1\"\r\n", kModule);
+    yonder_fetched_t *g = run(&(Ask){page, "https://cdn.test/bc.js", .module = true});
+    bool where = g != NULL && g->ok && g->served == WAY_SERVED_NETWORK && g->bytecode != NULL &&
+                 g->bytecode->blob == NULL && !strcmp(g->bytecode->partition, "https a.test") &&
+                 !strcmp(g->bytecode->url, "https://cdn.test/bc.js") && !strcmp(g->bytecode->tag, tag);
+    expect("bytecode: a module's answer the cache now holds says where its compile is kept, with no blob yet",
+           where, g ? g->why : NULL);
+    expect("bytecode: a blob is kept where it says", where && keep_where(g->bytecode, "compiled"), NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/bc.js", .module = true});
+    expect("bytecode: the kept answer brings the blob kept for its body",
+           g != NULL && g->served == WAY_SERVED_KEPT && blob_is(g, "compiled"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/bc.js"});
+    expect("bytecode: a fetch that is not a module's brings none", g != NULL && g->ok && g->bytecode == NULL, NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/bc.js", .module = true, .cache_mode = WAY_CACHE_NO_STORE});
+    expect("bytecode: nor does an answer the cache is not asked about", g != NULL && g->ok && g->bytecode == NULL,
+           NULL);
+    yonder_fetched_free(g);
+    fake_answer(NULL, "https://cdn.test/unkept.js", 200, MODULE_HEAD "Cache-Control: no-store\r\n", kModule);
+    g = run(&(Ask){page, "https://cdn.test/unkept.js", .module = true});
+    expect("bytecode: nor an answer the cache was asked to keep and did not",
+           g != NULL && g->ok && g->served == WAY_SERVED_NETWORK && g->bytecode == NULL, NULL);
+    yonder_fetched_free(g);
+
+    // Confirmed by a 304, the same body: the same blob.
+    s_epoch += 120;
+    a->status = 304;
+    a->reason = "Not Modified";
+    a->headers = "ETag: \"b1\"\r\nCache-Control: max-age=60\r\n";
+    a->body = NULL;
+    g = run(&(Ask){page, "https://cdn.test/bc.js", .module = true});
+    expect("bytecode: a confirmed answer brings its body's blob",
+           g != NULL && g->served == WAY_SERVED_CONFIRMED && blob_is(g, "compiled"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // A new body: its own tag, and no blob until one is kept for it.
+    s_epoch += 120;
+    a->status = 200;
+    a->reason = "OK";
+    a->headers = MODULE_HEAD "Cache-Control: max-age=60\r\n";
+    a->body = "export const changed = 1;";
+    g = run(&(Ask){page, "https://cdn.test/bc.js", .module = true});
+    expect("bytecode: a new body is not offered the old body's blob",
+           g != NULL && g->served == WAY_SERVED_NETWORK && g->bytecode != NULL && g->bytecode->blob == NULL &&
+               strcmp(g->bytecode->tag, tag) != 0, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // An anonymous module's entry is keyed without credentials, and so is
+    // where its compile is kept.
+    fake_answer(NULL, "https://cdn.test/anon.js", 200, MODULE_HEAD "Cache-Control: max-age=600\r\n", kModule);
+    g = run(&(Ask){page, "https://cdn.test/anon.js", .module = true, .credentials = WAY_CREDENTIALS_OMIT});
+    expect("bytecode: an anonymous module's record says so",
+           g != NULL && g->bytecode != NULL && !g->bytecode->credentials && keep_where(g->bytecode, "anon"),
+           g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/anon.js", .module = true, .credentials = WAY_CREDENTIALS_OMIT});
+    expect("bytecode: and its blob is read back under that key", g != NULL && blob_is(g, "anon"), NULL);
+    yonder_fetched_free(g);
+}
+
+// A module's fetch through the cache with each allocation failed in turn,
+// three ways: a miss that stores, a kept answer that brings its blob, and a
+// stale one a 304 confirms. Whatever failed, the answer is whole or a
+// network error, a record it brings is whole, and nothing leaks.
+typedef enum { SWEEP_STORE, SWEEP_KEPT, SWEEP_CONFIRMED } CacheSweep;
+
+static void cache_sweep(const char *page, CacheSweep how)
+{
+    static const char *const kName[] = {"store", "kept", "confirmed"};
+    size_t n;
+    for (n = 1; n < 2000; n++) {
+        fresh();
+        char url[64];
+        snprintf(url, sizeof(url), "https://cdn.test/sweep-%d-%zu.js", (int)how, how == SWEEP_STORE ? n : 0);
+        fake_answer_t *a = fake_answer(NULL, url, 200, MODULE_HEAD "Cache-Control: max-age=60\r\nETag: \"s\"\r\n",
+                                       kModule);
+        if (how != SWEEP_STORE && n == 1) {
+            yonder_fetched_t *g = run(&(Ask){page, url, .module = true});
+            if (g == NULL || g->bytecode == NULL || !keep_where(g->bytecode, "swept")) {
+                expect("cache sweep: its entry and blob are planted", false, kName[how]);
+                yonder_fetched_free(g);
+                return;
+            }
+            yonder_fetched_free(g);
+        }
+        if (how == SWEEP_CONFIRMED) {
+            s_epoch += 120;
+            a->status = 304;
+            a->reason = "Not Modified";
+            a->headers = "ETag: \"s\"\r\nCache-Control: max-age=60\r\n";
+            a->body = NULL;
+        }
+        size_t base = live;
+        allocations = 0;
+        fail_at = n;
+        yonder_fetched_t *g = run(&(Ask){page, url, .module = true});
+        fail_at = 0;
+        char name[96];
+        snprintf(name, sizeof(name), "cache sweep %s %zu: whole or a network error", kName[how], n);
+        expect(name, g == NULL || (g->ok ? g->body_len == strlen(kModule) : g->type == WAY_TYPE_ERROR), NULL);
+        snprintf(name, sizeof(name), "cache sweep %s %zu: a record it brings is whole", kName[how], n);
+        expect(name, g == NULL || g->bytecode == NULL ||
+                         (g->bytecode->tag[0] != '\0' &&
+                          (g->bytecode->blob == NULL ||
+                           (g->bytecode->length == 5 && memcmp(g->bytecode->blob, "swept", 5) == 0))), NULL);
+        yonder_fetched_free(g);
+        snprintf(name, sizeof(name), "cache sweep %s %zu: nothing leaked", kName[how], n);
+        expect(name, live == base, NULL);
+        if (allocations < n)
+            break;
+    }
+    char name[64];
+    snprintf(name, sizeof(name), "cache sweep %s reached the end", kName[how]);
+    expect(name, n < 2000, NULL);
+}
+
 static void http_cache_cases(void)
 {
     char root[] = "/tmp/fetch_cacheXXXXXX";
@@ -1140,6 +1299,11 @@ static void http_cache_cases(void)
     g = run(&(Ask){page, "https://cdn.test/from.js"});
     expect("never: an answer reached by a redirect", g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
     yonder_fetched_free(g);
+
+    module_bytecode_cases(page);
+    cache_sweep(page, SWEEP_STORE);
+    cache_sweep(page, SWEEP_KEPT);
+    cache_sweep(page, SWEEP_CONFIRMED);
 
     way_cache_close(http_cache);
     http_cache = NULL;
