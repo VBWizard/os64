@@ -788,14 +788,15 @@ static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, 
     int32_t entry;
     const os64_html_attr_t *src = os64_html_attr(script, "src");
     if (src != NULL) {
-        char url[OS64_DOM_URL_MAX];
-        os64_strcopy(it->name, sizeof(it->name), src->value);
-        if (src->value[0] == '\0' || !os64_dom_resolve(s->doc, s->url, src->value, url, sizeof(url))) {
+        // A data: module at any length (os64_page_resolve_in_alloc): it
+        // carries its source in its address.
+        char *url = src->value[0] != '\0' ? os64_page_resolve_in_alloc(s->doc, s->url, src->value) : NULL;
+        os64_strcopy(it->name, sizeof(it->name), url != NULL ? url : src->value);
+        if (url == NULL) {
             fail_item(s, it, "the script's address cannot be fetched");
             return;
         }
-        os64_strcopy(it->name, sizeof(it->name), url);
-        it->address = keep(url);
+        it->address = url;
         entry = yonder_modules_entry_src(s->modules, url);
     } else {
         if (!inline_source(s, it)) {
@@ -937,14 +938,15 @@ void yonder_scripts_preload(yonder_scripts_t *s)
     const os64_html_node_t *root = s->doc->document;
     for (const os64_html_node_t *n = root; n != NULL;) {
         if (preload_link(n)) {
-            char url[OS64_DOM_URL_MAX];
-            if (os64_dom_resolve(s->doc, s->url, os64_html_attr(n, "href")->value, url, sizeof(url))) {
-                // The map is made for the first preload, as for the first
-                // module script; its runtime may retire the host.
-                if (!ensure_modules(s))
-                    return;
+            char *url = os64_page_resolve_in_alloc(s->doc, s->url, os64_html_attr(n, "href")->value);
+            // The map is made for the first preload, as for the first
+            // module script; its runtime may retire the host.
+            bool ready = url != NULL && ensure_modules(s);
+            if (ready)
                 (void)yonder_modules_entry_src(s->modules, url);
-            }
+            os64_free(url);
+            if (url != NULL && !ready)
+                return;
         }
         // The next node in tree order.
         if (n->first_child != NULL) {

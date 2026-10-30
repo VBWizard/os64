@@ -76,14 +76,20 @@ static bool ends_with_slash(const char *text)
 }
 
 // The URL Standard's parse of `input` against `base` (NULL: none),
-// serialized, by the page's rule; false when it is no URL (an address with
-// no scheme included) or the answer is longer than `cap`.
-static bool url_parse(const char *input, const char *base, char *out, size_t cap)
+// serialized by the page's rule, in memory of its own; NULL when it is no
+// URL (an address with no scheme included), when it is longer than an
+// address is held to, or on no memory. An opaque data: URL is spelled at
+// whatever length (os64_page_resolve_in_alloc): it carries its module in
+// itself.
+static char *url_parse(const char *input, const char *base)
 {
-    if (!os64_page_resolve_in(NULL, base, input, out, cap))
-        return false;
+    char *out = os64_page_resolve_in_alloc(NULL, base, input);
     char scheme[OS64_URL_SCHEME_MAX];
-    return os64_url_scheme_of(out, scheme, sizeof(scheme));
+    if (out != NULL && !os64_url_scheme_of(out, scheme, sizeof(scheme))) {
+        os64_free(out);
+        out = NULL;
+    }
+    return out;
 }
 
 // The URL Standard's special schemes, whose paths a prefix rule may extend.
@@ -97,13 +103,20 @@ static bool special(const char *url)
 }
 
 // HTML's "resolve a URL-like module specifier": a specifier that begins
-// "/", "./" or "../" parsed against `base`, any other parsed alone. False
-// when it is not URL-like: a bare name, or one that will not parse.
-static bool url_like(const char *specifier, const char *base, char *out, size_t cap)
+// "/", "./" or "../" parsed against `base`, any other parsed alone, in
+// memory of its own (url_parse). NULL when it is not URL-like: a bare name,
+// or one that will not parse; `*too_long` (when asked) says it would have
+// been a URL but for its length, which is no bare name either.
+static char *url_like(const char *specifier, const char *base, bool *too_long)
 {
-    if (starts_with(specifier, "/") || starts_with(specifier, "./") || starts_with(specifier, "../"))
-        return url_parse(specifier, base, out, cap);
-    return url_parse(specifier, NULL, out, cap);
+    bool relative = starts_with(specifier, "/") || starts_with(specifier, "./") || starts_with(specifier, "../");
+    char *url = url_parse(specifier, relative ? base : NULL);
+    if (too_long != NULL) {
+        char scheme[OS64_URL_SCHEME_MAX];
+        *too_long = url == NULL && os64_strlen(specifier) >= OS64_URL_REF_MAX &&
+                    (relative || os64_url_scheme_of(specifier, scheme, sizeof(scheme)));
+    }
+    return url;
 }
 
 // ── Rules ──────────────────────────────────────────────────────────────
@@ -269,29 +282,31 @@ bool yonder_import_map_add(yonder_import_map_t *map, const char *base, const cha
     // one is its URL, serialized.
     if (key[0] == '\0')
         return true;
-    char normalized[OS64_URL_REF_MAX];
-    if (!url_like(key, base, normalized, sizeof(normalized))) {
-        if (os64_strlen(key) >= sizeof(normalized))
-            return true;                // a key no specifier yonder keeps can name
-        os64_strcopy(normalized, sizeof(normalized), key);
-    }
+    bool too_long;
+    char *normalized = url_like(key, base, &too_long);
+    if (normalized == NULL && too_long)
+        return true;                    // a key no specifier yonder resolves can name
+    if (normalized == NULL && (normalized = copy(key)) == NULL)
+        return false;
     // The address: a URL-like specifier, ending in a slash when its key
     // does; anything else is a null rule.
-    char address[OS64_URL_REF_MAX];
-    bool valid = value != NULL && url_like(value, base, address, sizeof(address)) &&
-                 (!ends_with_slash(key) || ends_with_slash(address));
+    char *address = value != NULL ? url_like(value, base, NULL) : NULL;
+    bool valid = address != NULL && (!ends_with_slash(key) || ends_with_slash(address));
     Rules *list = &map->imports;
+    bool ok = true;
     if (scope != NULL) {
         // "sort and normalize scopes": a prefix that is no URL is skipped.
-        char prefix[OS64_URL_REF_MAX];
-        if (!url_parse(scope, base, prefix, sizeof(prefix)))
-            return true;
-        Scope *s = scope_of(map, prefix, os64_strlen(prefix), true);
-        if (s == NULL)
-            return false;
-        list = &s->rules;
+        char *prefix = url_parse(scope, base);
+        Scope *s = prefix != NULL ? scope_of(map, prefix, os64_strlen(prefix), true) : NULL;
+        ok = prefix == NULL || s != NULL;
+        list = s != NULL ? &s->rules : NULL;
+        os64_free(prefix);
     }
-    return rule_put(map, list, normalized, valid ? address : NULL, true);
+    if (list != NULL)
+        ok = rule_put(map, list, normalized, valid ? address : NULL, true);
+    os64_free(normalized);
+    os64_free(address);
+    return ok;
 }
 
 // ── Merging ────────────────────────────────────────────────────────────
@@ -481,8 +496,9 @@ typedef enum { MATCH_NONE, MATCH_FOUND, MATCH_BLOCKED, MATCH_FAILED } Match;
 // slash that a prefix rule may extend (`as_url` NULL for a bare
 // specifier). Every such key is a prefix of `normalized`, and of two
 // prefixes of one string the longer sorts first, so the first is the
-// longest that is there: looked up, longest first.
-static Match imports_match(const Rules *list, const char *normalized, const char *as_url, char *out, size_t cap)
+// longest that is there: looked up, longest first. FOUND with the answer
+// in `*out`, in memory of its own.
+static Match imports_match(const Rules *list, const char *normalized, const char *as_url, char **out)
 {
     size_t len = os64_strlen(normalized);
     bool prefixes = as_url == NULL || special(as_url);
@@ -497,30 +513,40 @@ static Match imports_match(const Rules *list, const char *normalized, const char
         if (rule->url == NULL)
             return MATCH_BLOCKED;
         if (n == len)
-            return os64_strcopy(out, cap, rule->url) < cap ? MATCH_FOUND : MATCH_FAILED;
+            return (*out = copy(rule->url)) != NULL ? MATCH_FOUND : MATCH_FAILED;
         // What follows the prefix, parsed against the rule's address, which
         // must stay beneath it.
         const char *after = normalized + n;
-        if (!url_parse(after, rule->url, out, cap))
-            return os64_strlen(after) + os64_strlen(rule->url) >= cap ? MATCH_FAILED : MATCH_BLOCKED;
-        return starts_with(out, rule->url) ? MATCH_FOUND : MATCH_BLOCKED;
+        char *joined = url_parse(after, rule->url);
+        if (joined == NULL)
+            return os64_strlen(after) + os64_strlen(rule->url) >= OS64_URL_REF_MAX ? MATCH_FAILED : MATCH_BLOCKED;
+        if (!starts_with(joined, rule->url)) {
+            os64_free(joined);
+            return MATCH_BLOCKED;
+        }
+        *out = joined;
+        return MATCH_FOUND;
     }
     return MATCH_NONE;
 }
 
 yonder_specifier_t yonder_import_map_resolve(yonder_import_map_t *window, const char *base, const char *specifier,
-                                             char *out, size_t cap)
+                                             char **out)
 {
-    if (base == NULL || specifier == NULL || out == NULL || cap == 0)
+    if (out == NULL)
+        return YONDER_SPECIFIER_FAILED;
+    *out = NULL;
+    if (base == NULL || specifier == NULL)
         return YONDER_SPECIFIER_FAILED;
     // The base URL serialized, as the map's prefixes are.
-    char serialized[OS64_URL_REF_MAX];
-    if (!url_parse(base, NULL, serialized, sizeof(serialized)))
+    char *serialized = url_parse(base, NULL);
+    if (serialized == NULL)
         return YONDER_SPECIFIER_FAILED;
-    char as_url[OS64_URL_REF_MAX];
-    bool url = url_like(specifier, serialized, as_url, sizeof(as_url));
+    bool too_long;
+    char *as_url = url_like(specifier, serialized, &too_long);
+    bool url = as_url != NULL;
     const char *normalized = url ? as_url : specifier;
-    Match match = MATCH_NONE;
+    Match match = too_long ? MATCH_FAILED : MATCH_NONE;
     if (window != NULL) {
         // The scopes that apply, most specific first: the base URL itself,
         // then each prefix of it ending in a slash, longest first, which is
@@ -531,24 +557,24 @@ yonder_specifier_t yonder_import_map_resolve(yonder_import_map_t *window, const 
                 continue;
             const Scope *scope = scope_of(window, serialized, n, false);
             if (scope != NULL)
-                match = imports_match(&scope->rules, normalized, url ? as_url : NULL, out, cap);
+                match = imports_match(&scope->rules, normalized, as_url, out);
         }
         if (match == MATCH_NONE)
-            match = imports_match(&window->imports, normalized, url ? as_url : NULL, out, cap);
+            match = imports_match(&window->imports, normalized, as_url, out);
     }
-    if (match == MATCH_BLOCKED)
-        return YONDER_SPECIFIER_BLOCKED;
-    if (match == MATCH_FAILED)
-        return YONDER_SPECIFIER_FAILED;
-    if (match == MATCH_NONE) {
-        if (!url)
-            return YONDER_SPECIFIER_BARE;
-        if (os64_strcopy(out, cap, as_url) >= cap)
-            return YONDER_SPECIFIER_FAILED;
-    }
-    if (window != NULL)
+    yonder_specifier_t result = match == MATCH_BLOCKED ? YONDER_SPECIFIER_BLOCKED
+                              : match == MATCH_FAILED ? YONDER_SPECIFIER_FAILED
+                              : match == MATCH_FOUND || url ? YONDER_SPECIFIER_OK : YONDER_SPECIFIER_BARE;
+    if (result == YONDER_SPECIFIER_OK && window != NULL)
         record_add(window, serialized, normalized, !url || special(as_url));
-    return YONDER_SPECIFIER_OK;
+    if (result == YONDER_SPECIFIER_OK && match == MATCH_NONE) {
+        // No rule: the specifier's own URL is the answer.
+        *out = as_url;
+        as_url = NULL;
+    }
+    os64_free(as_url);
+    os64_free(serialized);
+    return result;
 }
 
 // ── For the tests ──────────────────────────────────────────────────────

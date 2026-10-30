@@ -204,7 +204,11 @@ scratch page with no model, so a script and a link in one document can
 never disagree about where an address goes. With no document (a script's
 `new URL`), it takes no `<base href>`, and a query is UTF-8. An absolute
 reference resolved with nothing to resolve against still has its dot
-segments removed. Two more answers come off the
+segments removed. `os64_page_resolve_in_alloc` is the same answer in
+memory of its own, and spells an opaque `data:` URL at any length, by the
+same cleaning and a lowercase scheme: a `data:` URL carries its document in
+itself, so it may be longer than the 8 KiB an address is held to (a page's
+module written as one). Two more answers come off the
 same kind of scratch page, for a document still being parsed, so they
 cannot disagree with the model that will be built when it ends:
 `os64_page_sheets_in` lists the sheets the tree names by the model's own

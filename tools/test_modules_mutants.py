@@ -34,6 +34,7 @@ REPORT_C = 'userland/libdom/report.c'
 MIXIN_C = 'userland/libdom/mixin.c'
 IMPORTMAP_C = 'userland/apps/yonder/importmap.c'
 LIBDOM_MAP_C = 'userland/libdom/importmap.c'
+RESOLVE_C = 'userland/libpage/resolve.c'
 JS = 'tools/test_js_runtime_host.sh'
 SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 DOM = 'tools/test_dom_host.sh'
@@ -147,15 +148,15 @@ mutants = [
      '        int order = -order_n(list->rules[mid].key, key, n);', (IMPORTMAP,)),
     # The scopes' order has no mutant: a scope is only ever looked up, so
     # any one order the lookup shares is the same map.
-    ('first-duplicate-kept', IMPORTMAP_C, '    return rule_put(map, list, normalized, valid ? address : NULL, true);',
-     '    return rule_put(map, list, normalized, valid ? address : NULL, false);', (IMPORTMAP,)),
-    ('key-as-written', IMPORTMAP_C, '    if (!url_like(key, base, normalized, sizeof(normalized))) {',
-     '    if (true) {', (IMPORTMAP,)),
+    ('first-duplicate-kept', IMPORTMAP_C, '        ok = rule_put(map, list, normalized, valid ? address : NULL, true);',
+     '        ok = rule_put(map, list, normalized, valid ? address : NULL, false);', (IMPORTMAP,)),
+    ('key-as-written', IMPORTMAP_C, '    char *normalized = url_like(key, base, &too_long);',
+     '    char *normalized = NULL;\n    too_long = false;', (IMPORTMAP,)),
     ('slash-key-any-address', IMPORTMAP_C,
-     '                 (!ends_with_slash(key) || ends_with_slash(address));',
-     '                 (!ends_with_slash(key) || ends_with_slash(address) || true);', (IMPORTMAP,)),
-    ('scope-prefix-as-written', IMPORTMAP_C, '        if (!url_parse(scope, base, prefix, sizeof(prefix)))\n            return true;',
-     '        if (os64_strcopy(prefix, sizeof(prefix), scope) >= sizeof(prefix))\n            return true;', (IMPORTMAP,)),
+     '    bool valid = address != NULL && (!ends_with_slash(key) || ends_with_slash(address));',
+     '    bool valid = address != NULL && (!ends_with_slash(key) || ends_with_slash(address) || true);', (IMPORTMAP,)),
+    ('scope-prefix-as-written', IMPORTMAP_C, '        char *prefix = url_parse(scope, base);',
+     '        char *prefix = copy(scope);', (IMPORTMAP,)),
     ('merge-new-wins', IMPORTMAP_C,
      '        if (!rule_put(map, into, incoming->rules[i].key, incoming->rules[i].url, false))',
      '        if (!rule_put(map, into, incoming->rules[i].key, incoming->rules[i].url, true))', (IMPORTMAP,)),
@@ -179,8 +180,8 @@ mutants = [
      '    bool prefixes = as_url == NULL || special(as_url) || true;', (IMPORTMAP,)),
     ('prefixes-never-match', IMPORTMAP_C, '        if (n != len && (!prefixes || normalized[n - 1] != \'/\'))',
      '        if (n != len && (!prefixes || normalized[n - 1] != \'/\' || true))', (IMPORTMAP,)),
-    ('backtrack-allowed', IMPORTMAP_C, '        return starts_with(out, rule->url) ? MATCH_FOUND : MATCH_BLOCKED;',
-     '        return MATCH_FOUND;', (IMPORTMAP,)),
+    ('backtrack-allowed', IMPORTMAP_C, '        if (!starts_with(joined, rule->url)) {',
+     '        if (false) {', (IMPORTMAP,)),
     ('null-rule-falls-back', IMPORTMAP_C,
      '        if (rule->url == NULL)\n            return MATCH_BLOCKED;\n        if (n == len)',
      '        if (rule->url == NULL)\n            continue;\n        if (n == len)', (IMPORTMAP,)),
@@ -235,12 +236,24 @@ mutants = [
      '    else if ((void)base, (it->base = keep(s->url)) == NULL)', (SCRIPTS,)),
     ('connected-after-the-parse', YONDER_C,
      '            if (yonder_scripts_connected_pending(host))\n                return true;', '', (SCRIPTS,)),
-    ('resolution-past-the-map', MODULES_C, '    return yonder_import_map_resolve(m->imports, base, specifier, out, cap);',
-     '    return yonder_import_map_resolve(NULL, base, specifier, out, cap);', (SCRIPTS,)),
+    ('resolution-past-the-map', MODULES_C, '    return yonder_import_map_resolve(m->imports, base, specifier, out);',
+     '    return yonder_import_map_resolve(NULL, base, specifier, out);', (SCRIPTS,)),
     ('inline-meta-the-documents', MODULES_C, '    compile(m, i, text, length, m->mods[i].base);',
      '    compile(m, i, text, length, m->mods[i].name);', (SCRIPTS,)),
     ('unmapped-says-no-map', MODULES_C, '                      : m->mapped ? "the import', '                      : false ? "the import',
      (SCRIPTS,)),
+    # 7. a data: module at any length: it carries its source in its address
+    # (os64_page_resolve_in_alloc), spelled as a short one is, and every
+    # buffer it passes through is its own length.
+    ('data-held-to-the-cap', RESOLVE_C, '    bool data = n >= OS64_URL_REF_MAX && (clean[0] | 0x20)',
+     '    bool data = false && n >= OS64_URL_REF_MAX && (clean[0] | 0x20)', (IMPORTMAP, SCRIPTS)),
+    ('data-scheme-as-written', RESOLVE_C, '        os64_memcpy(out, "data", 4);\n', '', (IMPORTMAP,)),
+    ('too-long-is-bare', IMPORTMAP_C, '    Match match = too_long ? MATCH_FAILED : MATCH_NONE;',
+     '    Match match = MATCH_NONE;', (IMPORTMAP,)),
+    ('rethrow-name-cut', MODULES_C, "        for (const char *p = target; *p != '\\0'; p++) {",
+     "        for (const char *p = target; *p != '\\0' && at + 4 < 2 * 8192 + 16; p++) {", (SCRIPTS,)),
+    ('static-import-url-kept', MODULES_C, '    os64_free(url);\n    Module *mod = &m->mods[from];',
+     '    Module *mod = &m->mods[from];', (SCRIPTS,)),
 ]
 
 caught, missed, unbuilt = [], [], []

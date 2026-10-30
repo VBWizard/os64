@@ -14,7 +14,10 @@
 // they are spelled alike, so every address here is parsed and serialized
 // by libpage's rule (os64_page_resolve_in), the rule a page's links and its
 // scripts' URLs are: the map's keys, its addresses, the base URLs it is
-// asked against, and every specifier it resolves.
+// asked against, and every specifier it resolves. An opaque data: URL is
+// spelled by that rule at any length (os64_page_resolve_in_alloc), since
+// it carries its module in itself; any other address is held to
+// OS64_URL_REF_MAX.
 //
 // Integrity is not kept: yonder checks no Subresource Integrity (DEBTS).
 //
@@ -69,16 +72,19 @@ typedef enum {
     // A null rule matched it, or a prefix rule's address took it nowhere
     // or above the prefix: the TypeError HTML throws, with no fallback.
     YONDER_SPECIFIER_BLOCKED,
-    // It or its answer is longer than `cap`, or memory ran out.
+    // The base URL is no URL; the specifier, or a prefix rule's answer
+    // for it, is a URL longer than an address may be here; or memory ran
+    // out for the answer.
     YONDER_SPECIFIER_FAILED,
 } yonder_specifier_t;
 
 // HTML's "resolve a module specifier": what `specifier` means to a script
-// whose base URL is `base`, through `window`'s map, written to `out`. A
+// whose base URL is `base`, through `window`'s map. OK with the answer in
+// `*out`, os64_malloc'd (the caller frees it); `*out` NULL otherwise. A
 // resolution is added to the window's resolved module set. `window` NULL is
 // the empty map, with no set: a resolution then is a plain URL's.
 yonder_specifier_t yonder_import_map_resolve(yonder_import_map_t *window, const char *base, const char *specifier,
-                                             char *out, size_t cap);
+                                             char **out);
 
 // The map as text, its rules in the order resolution reads them: one line
 // `imports\t<key>\t<address>` per rule, then `scope\t<prefix>\t<key>\t

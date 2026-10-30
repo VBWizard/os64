@@ -146,17 +146,18 @@ static void fetch_start(yonder_modules_t *m, int32_t i)
 
 // HTML's "resolve a module specifier", through the window's import map,
 // for a script whose base URL is `base` (NULL: the document's, as a
-// classic inline script's is when it imports).
-static yonder_specifier_t resolve_against(yonder_modules_t *m, const char *base, const char *specifier, char *out,
-                                          size_t cap)
+// classic inline script's is when it imports): OK with the answer in
+// `*out`, the caller's to free (yonder_import_map_resolve).
+static yonder_specifier_t resolve_against(yonder_modules_t *m, const char *base, const char *specifier, char **out)
 {
+    *out = NULL;
     char document[OS64_DOM_URL_MAX];
     if (base == NULL) {
         if (m->net.base == NULL || !m->net.base(m->net.opaque, document, sizeof(document)))
             return YONDER_SPECIFIER_FAILED;
         base = document;
     }
-    return yonder_import_map_resolve(m->imports, base, specifier, out, cap);
+    return yonder_import_map_resolve(m->imports, base, specifier, out);
 }
 
 // Whether a header's name (not NUL-terminated) is `want`, in any case.
@@ -272,8 +273,8 @@ static void each_request(void *opaque, const char *specifier)
     int32_t from = m->reading;
     if (from < 0 || m->mods[from].state != MOD_COMPILED)
         return;
-    char url[OS64_DOM_URL_MAX];
-    yonder_specifier_t resolved = resolve_against(m, m->mods[from].base, specifier, url, sizeof(url));
+    char *url;
+    yonder_specifier_t resolved = resolve_against(m, m->mods[from].base, specifier, &url);
     if (resolved != YONDER_SPECIFIER_OK) {
         // Not the graph's failure: the run resolves it again and throws a
         // TypeError, which the window hears (HTML's specifier error).
@@ -291,11 +292,13 @@ static void each_request(void *opaque, const char *specifier)
     if (dep < 0) {
         dep = slot_new(m, url);
         if (dep < 0) {
+            os64_free(url);
             fail(m, from, "the page has more modules than yonder keeps");
             return;
         }
         fetch_start(m, dep);
     }
+    os64_free(url);
     Module *mod = &m->mods[from];
     if (mod->ndeps == mod->depcap) {
         uint32_t cap = mod->depcap != 0 ? mod->depcap * 2 : 4;
@@ -319,13 +322,12 @@ static char *engine_resolve(void *opaque, const char *base, const char *specifie
 {
     yonder_modules_t *m = opaque;
     int32_t from = find(m, base);
-    char url[OS64_DOM_URL_MAX];
     // A base that is no module is a classic script's dynamic import(): it
     // resolves against that script's address (the page's when inline).
     const char *script = from < 0 && m->net.script_base != NULL ? m->net.script_base(m->net.opaque, base) : NULL;
-    return resolve_against(m, from >= 0 ? m->mods[from].base : script, specifier, url, sizeof(url)) ==
-                   YONDER_SPECIFIER_OK
-               ? copy(url) : NULL;
+    char *url;
+    (void)resolve_against(m, from >= 0 ? m->mods[from].base : script, specifier, &url);
+    return url;
 }
 
 static bool engine_source(void *opaque, const char *name, const char **bytes, size_t *length)
@@ -585,23 +587,31 @@ bool yonder_modules_owed(const yonder_modules_t *m)
 // entry's handle. NULL on no memory.
 static os64_js_module_t *rethrower(yonder_modules_t *m, int32_t entry)
 {
-    char source[2 * OS64_DOM_URL_MAX + 16], name[OS64_DOM_URL_MAX + 16];
-    size_t at = 0;
-    const char *head = "import '";
-    while (*head != '\0')
-        source[at++] = *head++;
-    for (const char *p = m->mods[entry].name; *p != '\0' && at + 4 < sizeof(source); p++) {
-        if (*p == '\'' || *p == '\\')
-            source[at++] = '\\';
-        source[at++] = *p;
-    }
-    source[at++] = '\'';
-    source[at++] = ';';
-    source[at] = '\0';
-    os64_snprintf(name, sizeof(name), "%s#rethrow", m->mods[entry].name);
-    os64_js_outcome_t out;
+    // As long as the entry's name, which a data: URL makes any length:
+    // every byte of it escaped at worst, and the import around it.
+    const char *target = m->mods[entry].name;
+    size_t length = os64_strlen(target);
+    char *source = os64_malloc(2 * length + 16), *name = os64_malloc(length + 16);
     os64_js_module_t *handle = NULL;
-    os64_js_module_compile(m->runtime, OS64_JS_ABI_ID, source, at, name, NULL, &handle, &out);
+    if (source != NULL && name != NULL) {
+        size_t at = 0;
+        const char *head = "import '";
+        while (*head != '\0')
+            source[at++] = *head++;
+        for (const char *p = target; *p != '\0'; p++) {
+            if (*p == '\'' || *p == '\\')
+                source[at++] = '\\';
+            source[at++] = *p;
+        }
+        source[at++] = '\'';
+        source[at++] = ';';
+        source[at] = '\0';
+        os64_snprintf(name, length + 16, "%s#rethrow", target);
+        os64_js_outcome_t out;
+        os64_js_module_compile(m->runtime, OS64_JS_ABI_ID, source, at, name, NULL, &handle, &out);
+    }
+    os64_free(source);
+    os64_free(name);
     return handle;
 }
 

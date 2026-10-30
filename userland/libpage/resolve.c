@@ -503,6 +503,41 @@ bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_
     return ok;
 }
 
+char *os64_page_resolve_in_alloc(const os64_html_document_t *doc, const char *document_url,
+                                 const char *reference)
+{
+    if (reference == NULL)
+        return NULL;
+    char *scratch = os64_malloc(OS64_URL_REF_MAX), *out = NULL;
+    if (scratch == NULL)
+        return NULL;
+    bool resolved = os64_page_resolve_in(doc, document_url, reference, scratch, OS64_URL_REF_MAX);
+    if (resolved && (out = os64_malloc(os64_strlen(scratch) + 1)) != NULL)
+        os64_memcpy(out, scratch, os64_strlen(scratch) + 1);
+    os64_free(scratch);
+    if (resolved)
+        return out;
+    // Refused. A data: URL too long for the resolve is spelled as it would
+    // have spelled it: cleaned as a link's input (url_input), its scheme in
+    // lower case as p_canonical writes an opaque address's. One the resolve
+    // refused at a length it holds was refused for another reason.
+    os64_page_t *page = os64_calloc(1, sizeof(*page));
+    if (page == NULL)
+        return NULL;
+    page->doc = doc;
+    const char *clean = url_input(page, reference);
+    size_t n = clean != NULL ? os64_strlen(clean) : 0;
+    bool data = n >= OS64_URL_REF_MAX && (clean[0] | 0x20) == 'd' && (clean[1] | 0x20) == 'a' &&
+                (clean[2] | 0x20) == 't' && (clean[3] | 0x20) == 'a' && clean[4] == ':' && clean[5] != '/';
+    if (data && (out = os64_malloc(n + 1)) != NULL) {
+        os64_memcpy(out, clean, n + 1);
+        os64_memcpy(out, "data", 4);
+    }
+    p_arena_free(&page->arena);
+    os64_free(page);
+    return out;
+}
+
 bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url, char *out,
                        size_t cap)
 {
