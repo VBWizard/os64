@@ -175,6 +175,13 @@ typedef struct {
     // garb_sheet_parse: the encoding the bytes were read in (§3.2) — a
     // BOM's, the protocol's, an @charset's, the environment's, or UTF-8.
     const char *encoding;
+    // The scratch its block reads (garb_rules_of, garb_items_of) build
+    // their lists on, lent to each read in turn and freed by garb_free. It
+    // doubles until it holds the largest read's lists, and no read's lists
+    // may outgrow what the arena could still keep of them, so it needs no
+    // cap of its own.
+    char *scratch;
+    size_t scratch_cap;
 } garb_parsed_t;
 
 // §3.2 and §5.3.3: a stylesheet from BYTES into `items`. `protocol` is the
@@ -212,10 +219,11 @@ garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *
 // arena, so the answer lives and dies with it: the parse the block came
 // from, or a result of the reader's own that it frees before that parse
 // (the strings and nested values it points to are the block's parse's).
-// An owner and its reads belong to one thread at a time: the arena has no
-// lock. False when the answer came out short (the owner is marked
-// incomplete too): what is in `items` is then a prefix, and a reader that
-// shows it says so.
+// An owner and its reads belong to one thread at a time, one read at a
+// time: neither the arena nor the scratch the reads share has a lock.
+// False when the answer came out short (the owner is marked incomplete
+// too): what is in `items` is then a prefix, and a reader that shows it
+// says so.
 bool garb_rules_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                    garb_item_t **items, int32_t *nitems);
 bool garb_items_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,

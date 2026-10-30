@@ -46,6 +46,8 @@
 // held now and in how many bytes — what a cascade holds while it lives is
 // those bytes then less those before it (`--cost`, `--cascades`).
 static size_t allocations, fail_at, live, live_bytes;
+// Reallocs of nothing: how a parse's scratch starts (`--scratch`).
+static size_t reallocs_from_nothing;
 // Fail only allocation fail_at, the rest succeeding: the failure that a
 // later success would otherwise paper over.
 static bool fail_single;
@@ -86,6 +88,7 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
     allocations++;
+    reallocs_from_nothing += ptr == NULL;
     if (fail_now())
         return NULL;
     size_t was = ptr != NULL ? malloc_usable_size(ptr) : 0;
@@ -1490,6 +1493,53 @@ static int cascades(int times)
     return failures != 0;
 }
 
+// A CASCADE STARTS ITS PARSE SCRATCH ONCE (HEAP_BINS.md § Part A): every
+// rule's block is read on the scratch the cascade keeps, so a sheet of
+// twice the rules — style rules and `@media` blocks of them — starts no
+// more scratches than the first, and only a few; were each read to start
+// its own, there would be one a rule. Every element is still styled, and
+// the heap holds after each cascade what it held before.
+static int scratch(void)
+{
+    static const int kRules[] = {1000, 2000};
+    size_t started[2] = {0, 0};
+    int failures = 0;
+    const char *page = "<!doctype html><body><p class=r7>a</p><p class=m7>b</p>";
+    os64_html_document_t *doc = page_of(page, strlen(page));
+    for (int k = 0; k < 2; k++) {
+        size_t cap = (size_t)kRules[k] * 96, len = 0;
+        char *text = malloc(cap);
+        for (int i = 0; i < kRules[k]; i += 2) {
+            len += (size_t)snprintf(text + len, cap - len, ".r%d { color: red; margin: %dpx }\n", i + 1, i);
+            len += (size_t)snprintf(text + len, cap - len,
+                                    "@media (min-width: 10px) { .m%d { padding: %dpx } }\n", i + 1, i);
+        }
+        garb_parsed_t r;
+        garb_status_t st = garb_parse_sheet_text(text, len, &r);
+        garb_sheet_in_t in = {.sheet = &r, .parent = -1};
+        size_t base_live = live, base_bytes = live_bytes, before = reallocs_from_nothing;
+        garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 1200, .height = 900});
+        started[k] = reallocs_from_nothing - before;
+        int styled = 0;
+        for (const os64_html_node_t *x = doc->body->first_child; x != NULL; x = x->next)
+            styled += x->kind == OS64_HTML_ELEMENT && garb_style_for(c, x).n > 0;
+        bool whole = c != NULL && !garb_cascade_incomplete(c);
+        garb_cascade_free(c);
+        if (st != GARB_OK || !whole || styled != 2 || live != base_live || live_bytes != base_bytes) {
+            fprintf(stderr, "FAIL scratch: %d rules: %s, %d of 2 elements styled, the heap %zu blocks "
+                    "(from %zu)\n", kRules[k], whole ? "whole" : "short", styled, live, base_live);
+            failures++;
+        }
+        garb_free(&r);
+        free(text);
+    }
+    bool ok = failures == 0 && started[1] == started[0] && started[1] <= 4;
+    printf("libgarb scratch: scratches started by a cascade of %d rules: %zu, of %d rules: %zu%s\n",
+           kRules[0], started[0], kRules[1], started[1], ok ? "" : " - FAILED");
+    os64_html_document_free(doc);
+    return !ok;
+}
+
 static const os64_html_node_t *by_id(const os64_html_node_t *n, const char *id)
 {
     for (; n != NULL; n = n->next) {
@@ -2053,6 +2103,8 @@ int main(int argc, char **argv)
         return cascades(atoi(argv[2]));
     if (argc == 2 && strcmp(argv[1], "--read-budget") == 0)
         return read_budget();
+    if (argc == 2 && strcmp(argv[1], "--scratch") == 0)
+        return scratch();
     if (argc == 2 && strcmp(argv[1], "--deep") == 0)
         return deep();
     if (argc == 2 && strcmp(argv[1], "--numbers") == 0)
