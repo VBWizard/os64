@@ -257,6 +257,15 @@ mutants = [
     ('claim-placeholder-left-behind', DIAG,
      '    if (!whole)\n        (void)os64_unlink(path);',
      '', WINDOW),
+    # A data: address is shortened as a line is kept (diag.h), in a line's
+    # fields and a fact's value, at a word's start, and a lookup by the
+    # whole key finds it.
+    ('data-kept-whole', DIAG, '        if (run <= DATA_RUN_MAX)\n            return s;',
+     '        if (run <= DATA_RUN_MAX || true)\n            return s;', WINDOW),
+    ('data-inside-a-word', DIAG, "        if (!word || at[1] != 'a'", "        if ((void)word, at[1] != 'a'", WINDOW),
+    ('data-value-whole', DIAG, '    value = shown(value, &made_value);\n', '    made_value = NULL;\n', WINDOW),
+    ('data-lookup-whole', DIAG, '    char *made;\n    key = shown(key, &made);',
+     '    char *made = NULL;', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

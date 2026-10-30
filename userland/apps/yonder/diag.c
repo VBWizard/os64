@@ -95,6 +95,41 @@ static char *copy(const char *s)
     return c;
 }
 
+// A DATA: ADDRESS IS SHORTENED (diag.h): from the first `data:` that
+// begins a word to the field's end, a run longer than DATA_RUN_MAX keeps
+// its first DATA_HEAD bytes and its last DATA_TAIL, which hold the
+// address's media type and the field's end (a failure's line and column,
+// when the field ends in one), and says how many bytes went between. A shortened run is shorter than DATA_RUN_MAX, so a
+// field shortened again is unchanged, and a key looked up finds the line it
+// was stored as.
+#define DATA_RUN_MAX 200
+#define DATA_HEAD 100
+#define DATA_TAIL 40
+
+// `s` as the record holds it: `*made` (the caller frees it) when it was
+// shortened, else `s` itself, as it is also on no memory.
+static const char *shown(const char *s, char **made)
+{
+    *made = NULL;
+    for (const char *at = s; (at = os64_strchr(at, 'd')) != NULL; at++) {
+        bool word = at == s || !((at[-1] >= 'a' && at[-1] <= 'z') || (at[-1] >= 'A' && at[-1] <= 'Z') ||
+                                 (at[-1] >= '0' && at[-1] <= '9'));
+        if (!word || at[1] != 'a' || at[2] != 't' || at[3] != 'a' || at[4] != ':')
+            continue;
+        size_t before = (size_t)(at - s), run = os64_strlen(at);
+        if (run <= DATA_RUN_MAX)
+            return s;
+        char *out = os64_malloc(before + DATA_HEAD + DATA_TAIL + 48);
+        if (out == NULL)
+            return s;
+        os64_snprintf(out, before + DATA_HEAD + DATA_TAIL + 48, "%.*s%.*s...(%lu more bytes)...%s", (int)before, s,
+                      DATA_HEAD, at, (unsigned long)(run - DATA_HEAD - DATA_TAIL), at + run - DATA_TAIL);
+        *made = out;
+        return out;
+    }
+    return s;
+}
+
 static void table_free(Table *t)
 {
     for (uint32_t i = 0; i < t->n; i++) {
@@ -261,8 +296,8 @@ static void table_found(Table *t, const char *a, const char *b, bool both)
 // The line keyed `a` (and `b`, when `both`), found or added. NULL when the
 // table holds `max` lines already (the facts' rooms are decided by
 // fact_set, which passes no room as 0) or memory ran out: the line is then
-// counted as lost, once.
-static Line *table_line(Table *t, const char *a, const char *b, bool both, uint32_t max)
+// counted as lost, once. `a` and `b` are as the record holds them (shown).
+static Line *table_line_shown(Table *t, const char *a, const char *b, bool both, uint32_t max)
 {
     int64_t at = list_find(&t->by_line, t->lines, t->n, a, b, both);
     if (at >= 0)
@@ -295,6 +330,16 @@ static Line *table_line(Table *t, const char *a, const char *b, bool both, uint3
     t->lines[t->n] = one;
     *index_slot(&t->by_line, t->lines, a, b, both) = t->n + 1;
     return &t->lines[t->n++];
+}
+
+// table_line_shown, for `a` and `b` as their writer gave them.
+static Line *table_line(Table *t, const char *a, const char *b, bool both, uint32_t max)
+{
+    char *made_a, *made_b;
+    Line *l = table_line_shown(t, shown(a, &made_a), shown(b, &made_b), both, max);
+    os64_free(made_a);
+    os64_free(made_b);
+    return l;
 }
 
 yonder_diag_t *yonder_diag_new(const char *url, uint32_t seq, int64_t began_us)
@@ -377,26 +422,30 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool 
     if (d == NULL)
         return;
     Table *t = &d->facts;
+    char *made_key, *made_value;
+    key = shown(key, &made_key);
+    value = shown(value, &made_value);
     int64_t at = list_find(&t->by_line, t->lines, t->n, key, "", false);
     Line *l = at >= 0 ? &t->lines[at] : NULL;
     if (l == NULL) {
         bool room = head ? d->head_facts < YONDER_DIAG_HEAD_FACTS : t->n - d->head_facts < YONDER_DIAG_FACTS_MAX;
-        l = table_line(t, key, "", false, room ? UINT32_MAX : 0);
+        l = table_line_shown(t, key, "", false, room ? UINT32_MAX : 0);
         if (l != NULL && head) {
             l->head = true;
             d->head_facts++;
         }
     }
-    if (l == NULL)
-        return;
     // A value with no memory to keep is not left empty, nor the one before
     // it standing as if it were this one: the line says it went.
-    char *v = copy(value);
-    l->count = v == NULL;
-    if (v == NULL)
-        return;
-    os64_free(l->b);
-    l->b = v;
+    char *v = l != NULL ? copy(value) : NULL;
+    if (l != NULL)
+        l->count = v == NULL;
+    if (v != NULL) {
+        os64_free(l->b);
+        l->b = v;
+    }
+    os64_free(made_key);
+    os64_free(made_value);
 }
 
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
@@ -458,7 +507,10 @@ void yonder_diag_unjudged(yonder_diag_t *d, const char *why)
 
 const char *yonder_diag_fact_value(const yonder_diag_t *d, const char *key)
 {
+    char *made;
+    key = shown(key, &made);
     int64_t at = d != NULL ? list_find(&d->facts.by_line, d->facts.lines, d->facts.n, key, "", false) : -1;
+    os64_free(made);
     return at >= 0 && d->facts.lines[at].count == 0 ? d->facts.lines[at].b : NULL;
 }
 

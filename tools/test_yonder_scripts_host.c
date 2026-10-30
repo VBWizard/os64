@@ -6842,6 +6842,37 @@ static void diag_lookup_bound_case(void) {
     if(steps>=100000u*8) fprintf(stderr,"diag lookup steps: %llu\n",(unsigned long long)steps);
     yonder_diag_free(d);
 }
+/* A data: address is its document: a line keeps its start and its end and
+ * counts what went between, a key given whole finds the line it was kept
+ * as, and a run within the limit, or a word that only ends in "data:", is
+ * kept as it is. */
+static void diag_data_short_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char url[6000], what[6100], where[6100], key[6100], word[400], text[16384];
+    snprintf(url,sizeof(url),"data:text/javascript,%05000dend:1:602",0);
+    snprintf(what,sizeof(what),"script %s",url);
+    snprintf(where,sizeof(where),"SyntaxError, at %s",url);
+    snprintf(key,sizeof(key),"request GET %s",url);
+    yonder_diag_failed(d,what,where);
+    yonder_diag_failed(d,what,where);
+    yonder_diag_fact(d,key,"200");
+    yonder_diag_fact(d,"source",url);
+    snprintf(word,sizeof(word),"metadata:%0300d",0);
+    yonder_diag_fact(d,"short","see data:text/plain,hi");
+    yonder_diag_fact(d,"word",word);
+    const char *value=yonder_diag_fact_value(d,key);
+    check(yonder_diag_failed_lines(d)==1 && value!=NULL && strcmp(value,"200")==0,
+          "diag: a long data: key finds the line it was kept as, given whole");
+    yonder_diag_render(d,text,sizeof(text));
+    char kept[512];
+    snprintf(kept,sizeof(kept),"script data:text/javascript,%079d...(4890 more bytes)...%031dend:1:602: SyntaxError, at "
+             "data:text/javascript,%079d...(4890 more bytes)...%031dend:1:602 (2)",0,0,0,0);
+    check(strstr(text,kept)!=NULL && strstr(text,"request GET data:text/javascript,")!=NULL &&
+              strstr(text,"source: data:text/javascript,0")!=NULL &&
+              strstr(text,"see data:text/plain,hi")!=NULL && strstr(text,word)!=NULL && strlen(text)<2000,
+          "diag: a long data: run keeps its start and its end, and a short one or a word that ends in it is whole");
+    yonder_diag_free(d);
+}
 /* A page let go before it was shown takes the families staged for it. */
 static void diag_arriving_released_case(void) {
     static Page p;
@@ -10562,6 +10593,7 @@ static void diag_cases(void) {
     diag_fact_short_case();
     diag_lost_overflow_case();
     diag_lookup_bound_case();
+    diag_data_short_case();
     diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
