@@ -341,3 +341,44 @@ allocation reduction is verified, and the article result is encouraging, but
 the P5 regressions remain unresolved until remeasurement. Preserve the old
 cohorts; use the replacement only for the candidate's original-page and
 matched-viewport article follow-up.
+
+## P5 delivery follow-up: missing native profile facts
+
+The screenshots ending in `delivery` show completed runs of the r3 delivery
+(`483df1bb`). Corpus 555 is the original page; corpus 557 is the latest,
+maximized/reloaded article. Intermediate article record 556 is excluded.
+Screenshots, both reports and a numerical summary are retained with hashes
+outside `/tmp`.
+
+Both screenshots report 2,526 × 1,259 CSS pixels and device ratio 1. The original
+uses 2,000 rows, 20 samples and five warm-ups. Native records confirm dark
+appearance, 100% zoom, Scripts and Modern Web on. The original report's
+`laid out at: 826x459` describes arrival before maximization; its measurement
+JSON records the larger viewport used for the completed experiment.
+
+| Original workload | Profiled control median | Delivery median | Delivery worst |
+|---|---:|---:|---:|
+| Unchanged geometry | 0.100 ms | 0.100 ms | 0.200 ms |
+| Paragraph change | 65.400 ms | 37.000 ms | 159.200 ms |
+| List replacement | 61.000 ms | 57.900 ms | 67.600 ms |
+
+The observed paragraph/list medians are 43.4%/5.1% below control. The maxima
+remain above control's 100.300/66.200 ms. The article completes 18 checkpoints
+with heights matching control, but reports 483.000 ms total, 24.050 ms median
+and 48.300 ms maximum. Its total is 18.6% above control's 407.200 ms and 3.0%
+above the preceding candidate's 469.100 ms. The article regression has not
+been resolved by the scratch change.
+
+**Neither new native report contains `layout:` or `layout stream:` facts.**
+This is consistent with layout profiling being disabled in these launches.
+Pressing `d` saves the current diagnostic; it does not enable profiling.
+The previous controls/candidates were profiled, so these displayed times must
+not be treated as a fully matched profiled comparison. Phase timings, refusal
+counts, clock-error counts and reuse counts are unavailable for these runs;
+their absence is not evidence that those counts were zero.
+
+Acceptance remains open. Retain these observations, but obtain native phase
+information with `yonder --layout-profile` before attributing the remaining
+article cost. Use the article after maximization and reload, and the original
+page's Run measurements button after maximization. No new binary or delivery
+change was made while recording this evidence.
