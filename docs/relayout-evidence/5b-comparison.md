@@ -23,7 +23,10 @@ Compare these three workloads in fresh browser processes:
    selector replaced by a uniform background. This isolates the effect of
    narrower dependencies without rewriting the baseline.
 3. `layout-stream.html`: a starter for an instrumented captured Wikipedia
-   article. Set the viewport before following its link. The article forces
+   article. Set the viewport on the starter, then type
+   `file:///tests/pages/layout-stream-article.html` in the address bar. Clicked
+   file links are refused by the current navigation policy; the address bar
+   uses the local-file route. The article forces
    geometry at 18 fixed parser checkpoints and reports the raw durations,
    heights, total, median, maximum and viewport. The checkpoints have different
    document sizes; their median is not a repeated-operation latency estimate.
@@ -131,3 +134,72 @@ the phase difference alone cannot be attributed to selector work.
 three workloads. Do not infer a streamed-page speedup from a final screenshot,
 zero counters, or the paragraph result, and do not proceed to 5c on emulator
 numbers alone.
+
+## First matched P5 session: two gains, a regression signal, one invalid pair
+
+The 2026-10-30 session used the frozen control `9dca4a7d` and candidate
+`8406bc21`. Six completed screenshots and native reports are retained outside
+`/tmp`, with hashes and a machine-readable summary. Corpus 458/459 are the
+control original/companion pages, 461 the control article, and 462/463/464
+are the corresponding candidate pages. Corpus 460 is the starter page and
+is excluded from timing comparisons.
+
+Both original/companion pairs show the same 2,526 × 1,259 CSS-pixel viewport,
+device ratio 1, 2,000 rows, 20 samples and five warm-ups. Native records confirm
+Scripts and Modern Web enabled, dark appearance and 100% zoom.
+
+| Workload | Control median | Candidate median | Change | Control worst | Candidate worst |
+|---|---:|---:|---:|---:|---:|
+| Original: paragraph | 65.400 ms | 43.850 ms | -33.0% | 100.300 ms | 159.100 ms |
+| Original: list replacement | 61.000 ms | 67.900 ms | +11.3% | 66.200 ms | 75.200 ms |
+| Companion: paragraph | 60.200 ms | 43.750 ms | -27.3% | 82.800 ms | 100.700 ms |
+| Companion: list replacement | 60.350 ms | 40.350 ms | -33.1% | 62.700 ms | 51.700 ms |
+
+Unchanged geometry is 0.100 ms median / 0.200 ms worst in all four runs.
+The candidate improves typical paragraph timing and both companion medians,
+but the original list replacement is slower in this session. Paragraph maxima
+also increase. These are individual runs, not estimates of between-run
+variance; the original list result requires follow-up rather than dismissal.
+The earlier refined candidate's near-baseline list result does not override it.
+
+All four native records have 52 model rebuilds, 54 layout attempts, 106,499
+elements, 105,851 boxes and 105,374 measures, with zero refusals/clock errors.
+Candidate original/companion records show 26/51 cascade updates and
+53,134/104,209 copied styles. Layout reuse remains zero.
+
+| Cumulative phase | Original control | Original candidate | Companion control | Companion candidate |
+|---|---:|---:|---:|---:|
+| Model rebuild | 10.661 ms | 12.565 ms | 10.400 ms | 15.128 ms |
+| Cascade | 528.709 ms | 268.350 ms | 346.790 ms | 14.246 ms |
+| Computed styles | 122.580 ms | 120.669 ms | 138.108 ms | 156.917 ms |
+| Boxes | 26.923 ms | 28.236 ms | 25.131 ms | 22.607 ms |
+| Layout | 2,408.234 ms | 3,113.027 ms | 2,368.605 ms | 2,541.204 ms |
+| Public tree | 58.642 ms | 59.887 ms | 46.052 ms | 55.427 ms |
+
+These totals span setup, warm-ups and all workloads, so they cannot isolate
+the list-replacement cost. The original candidate's cascade total is lower
+while its layout total is higher; no cause is established from that alone.
+
+### Article pair: viewport mismatch
+
+Both articles complete 18 checkpoints with zero native refusals or clock
+errors. Control reports 407.200 ms total, 20.350 ms median and 40.600 ms worst
+at **2,526 × 1,259**. Candidate reports 402.400 / 20.000 / 47.300 ms at
+**826 × 459**. Their checkpoint heights and native work counts differ:
+control 7,927 elements / 5,294 boxes / 3,795 measures; candidate
+7,825 / 5,209 / 3,043. Both report 17 model rebuilds and 18 stream layouts.
+
+This is not a valid timing pair. A completed result only guarantees a stable
+viewport during its own measurements, not agreement with another run; resizing
+after completion does not rerun the checkpoints. Repeat the candidate article
+at the control viewport before drawing a performance conclusion. Its zero
+updates/copied styles remains expected for this broad-selector workload.
+
+The starter's file link was refused on the P5. QEMU had opened the article
+directly, missing that route. The corrected protocol uses typed address-bar
+navigation after maximizing the starter, leaving the frozen cohorts unchanged.
+
+**Acceptance remains open.** Next hardware evidence is a fresh candidate
+original-page run to check the list regression signal, plus a candidate article
+run with the matching viewport. Preserve the existing control/companion results;
+there is no reason to discard or repeat all six runs.
