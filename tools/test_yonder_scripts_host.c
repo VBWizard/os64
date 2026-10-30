@@ -10720,8 +10720,16 @@ static void downloads_list_cases(void) {
     job.got=job.total; job.whole=true;
     download_arrived(d->id,&job);
     check(!strcmp(yonder_host_list.labels[0],"ubuntu.iso - 6.0 GB, done (768.0 MB/s average)") &&
-          yonder_host_list.enabled[1] && downloads_due()==YONDER_NEVER,
-          "downloads: a finished download is said at once, with its average");
+          yonder_host_list.enabled[1] && download_flash_lit() && downloads_due()==now_ms+DOWNLOAD_FLASH_STEP_MS,
+          "downloads: a finished download is said at once, with its average, and the meter flashes");
+    now_ms+=DOWNLOAD_FLASH_STEP_MS;
+    check(downloads_due()<=now_ms,"downloads: when the step comes, it is owed (the ticker's ring meets it)");
+    downloads_heard();
+    check(!download_flash_lit() && downloads_due()==now_ms+DOWNLOAD_FLASH_STEP_MS,
+          "downloads: the flash blinks off, and owes the next step");
+    for(int i=0;i<5;i++) { now_ms=downloads_due(); downloads_heard(); }
+    check(!s_download_flashing && downloads_due()==YONDER_NEVER,
+          "downloads: the flash steps through its run, runs out, and owes nothing");
     unsigned relabels=yonder_host_list.relabels;
     check(yonder_host_list_pick(1) && s_ndownloads==0 && !s_downloads_listed &&
           yonder_host_list.relabels==relabels,
@@ -10748,6 +10756,60 @@ static void downloads_list_cases(void) {
     s_ndownloads=0;
     g.menus=menus;
     os64_ui_font_release(&g.ui);            /* what measuring a row's width laid out */
+}
+
+/* The head row's pictures: taken at the size the row holds, beside the
+ * caption, swapped when the row's height crosses a size, kept when the set
+ * refuses, painted in their slot, and all given back as yonder leaves. */
+static void head_faces_cases(void) {
+    static int theme;
+    os64_icon_theme_t *icons=s_icons;
+    s_icons=(os64_icon_theme_t *)&theme;            /* the hosts' provider answers for it */
+    s_face_size=0; yonder_host_icons=(yonder_host_icons_t){0};
+    /* Back made as yonder's start makes it: the hosts do not run that. */
+    os64_ui_widget_t back=g.back;
+    void (*stock)(os64_ui_widget_t *,os64_draw_ctx_t *,const os64_ui_theme_t *)=s_button_paint;
+    os64_ui_button(&g.back,"Back",NULL,NULL);
+    g.back.ui=&g.ui;
+    s_button_paint=g.back.cls->paint;
+    s_head_class=*g.back.cls; s_head_class.paint=head_paint;
+    g.back.cls=&s_head_class;
+    int32_t plain=button_width(g.back.text);
+    head_faces_take(32);
+    check(yonder_host_icons.out==5 && s_face_size==24 && s_head_faces[4].icon.width==24 &&
+          head_width(&g.back,32)==plain+24+g.ui.theme.gap,
+          "head: a row 32 high takes 24-pixel pictures, each beside its caption");
+    head_faces_take(28);
+    check(yonder_host_icons.out==5 && s_face_size==16 && s_head_faces[0].icon.width==16,
+          "head: a shorter row trades them for 16-pixel ones, none kept twice");
+    yonder_host_icons.refuse=true;
+    head_faces_take(32);
+    check(yonder_host_icons.out==5 && s_head_faces[0].icon.width==16,
+          "head: a picture the set will not give keeps the one it has");
+    yonder_host_icons.refuse=false;
+    os64_draw_ctx_t screen={0};
+    screen.surf.width=screen.surf.pitch_px=200; screen.surf.height=40;
+    screen.surf.pixels=os64_calloc(200u*40u,sizeof(uint32_t));
+    os64_gui_rect_t saved=g.back.bounds;
+    g.back.bounds=(os64_gui_rect_t){0,0,head_width(&g.back,32),32};
+    g.back.cls->paint(&g.back,&screen,&g.ui.theme);
+    int32_t cx=2*g.ui.theme.pad+(int32_t)s_face_size/2;
+    check(screen.surf.pixels[16*200+cx]==0xff40a040u,"head: the picture is painted at the face's left");
+    s_head_faces[0].icon.pixels=NULL;               /* as a set without the icon leaves it */
+    memset(screen.surf.pixels,0,200u*40u*sizeof(uint32_t));
+    g.back.cls->paint(&g.back,&screen,&g.ui.theme);
+    check(screen.surf.pixels[16*200+cx]!=0xff40a040u && head_width(&g.back,32)==plain,
+          "head: a button with no picture is the captioned button");
+    s_head_faces[0].icon.pixels=s_head_faces[1].icon.pixels;
+    g.back.bounds=saved;
+    os64_ui_run_release(g.back.run);
+    g.back=back; s_button_paint=stock;
+    os64_free(screen.surf.pixels);
+    head_faces_drop();
+    check(yonder_host_icons.out==0 && s_icons==NULL,"head: every picture goes back as yonder leaves");
+    s_icons=icons; s_face_size=0;
+    for(size_t i=0;i<sizeof(s_head_faces)/sizeof(s_head_faces[0]);i++) s_head_faces[i].icon=(os64_ui_icon_lease_t){0};
+    os64_ui_font_release(&g.ui);
 }
 
 static void title_fit_cases(void)
@@ -10802,6 +10864,7 @@ int main(void)
     clipped_control_cases();
     classic_downloaded_cases();
     downloads_list_cases();
+    head_faces_cases();
     hover_batch_cases();
     classic_hover_profile();
     geometry_cases();

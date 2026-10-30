@@ -1,7 +1,8 @@
 /* The menu session as the yonder hosts see it (yonder_host_build.sh): no
  * popup, only a record of the list a dropdown last asked for, so a case can
  * play the person's pick (yonder_host_menus.h). os64_ui_shortcut_match
- * answers no named key: a host types characters and ESC [ bursts. */
+ * answers no named key: a host types characters and ESC [ bursts. And the
+ * icon theme: a provider of solid pictures, counted. */
 #include "yonder_host_menus.h"
 #include <string.h>
 
@@ -87,4 +88,49 @@ bool yonder_host_list_pick(size_t row)
     yonder_host_list.pick = NULL;
     pick(user, row);
     return true;
+}
+
+/* The icon theme the head row asks: every key a solid square of the size
+ * asked, its leases counted out and back. */
+yonder_host_icons_t yonder_host_icons;
+static uint32_t host_icon_pixels[64 * 64];
+
+static os64_ui_icon_status_t host_icon_acquire(void *user, const char *key, uint32_t size,
+                                               os64_ui_icon_lease_t *out)
+{
+    (void)user;
+    (void)key;
+    if (yonder_host_icons.refuse) return OS64_UI_ICON_MISSING;
+    for (size_t i = 0; i < sizeof(host_icon_pixels) / sizeof(host_icon_pixels[0]); i++)
+        host_icon_pixels[i] = 0xff40a040u;
+    *out = (os64_ui_icon_lease_t){.pixels = host_icon_pixels, .width = size, .height = size, .pitch = size};
+    yonder_host_icons.out++;
+    return OS64_UI_ICON_OK;
+}
+
+static void host_icon_release(void *user, os64_ui_icon_lease_t *lease)
+{
+    (void)user;
+    (void)lease;
+    yonder_host_icons.out--;
+}
+
+static const os64_ui_icon_provider_t host_icon_provider = {NULL, host_icon_acquire, host_icon_release};
+
+const os64_ui_icon_provider_t *os64_icon_theme_provider(os64_icon_theme_t *theme)
+{
+    (void)theme;
+    return &host_icon_provider;
+}
+
+os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out)
+{
+    *out = NULL;
+    return OS64_UI_ERROR;
+}
+
+os64_ui_status_code_t os64_icon_theme_destroy(os64_icon_theme_t *theme)
+{
+    (void)theme;
+    return OS64_UI_OK;
 }

@@ -39,6 +39,10 @@ works in the address field too.
 +------------------------------------------------------------------+
 ```
 
+The five buttons wear the icon set's pictures beside their labels (the
+set `icons.conf` names, the shipped one beneath it); without a set they
+are their labels alone.
+
 - **The address field** takes an address (`https://...`, `http://...`, or
   a bare `host/path`, which means http) or a path that begins with `/`.
   Press Enter to go. **Ctrl+L** takes you there from anywhere in the
@@ -107,8 +111,8 @@ cancelled leaves nothing behind. Downloads go on while you move to other
 pages, three at a time (the rest wait their turn), and stop when yonder
 closes. Nothing about them goes on the status line: **Downloads**' bar
 fills as they arrive (a short band moves along it when a server does not
-say how big the file is), and turns red when one fails, until you open
-the list. Click
+say how big the file is), blinks green three times when one finishes, and
+turns red when one fails, until you open the list. Click
 **Downloads** for the list, newest first: each file's name and how far it
 got, or why it failed and how far it had got. While it is open it keeps
 up: a running row says its speed over the last few seconds and the time
