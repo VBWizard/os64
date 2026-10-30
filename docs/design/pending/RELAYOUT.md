@@ -386,7 +386,7 @@ behind itself.
 | Cut | Builds | Oracle |
 |---|---|---|
 | 5a | Bounded native change log and readers; opt-in phase profiling; repeatable measurement page | Native mutations, parser entries, immutable lists, eviction/OOM and lifetime checks; fake clocks; page completion/cancel/resize tests; P5 baseline |
-| 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; P5 performance gate remains open |
+| 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; controlled P5 comparisons support review, with earlier timing outliers disclosed |
 | 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Fable reviews the rule and graft |
 | 5d | `requestAnimationFrame` on the loop, after 5c | WPT animation-frame tests and scripted-page fake-clock cases |
 
@@ -486,7 +486,7 @@ Validation and remaining hardware evidence are recorded in
 successful DOM-version advances within an existing cascade. The existing
 `reused` field continues to count layout reuse and remains zero until 5c.
 Measured and displayed layouts both use the incremental door. Validation
-and the outstanding P5/design gates are recorded in
+and the history of the P5/design gates are recorded in
 [5b-validation.md](../../relayout-evidence/5b-validation.md).
 
 The matched control/candidate procedure, captured-article workload and stream

@@ -1,9 +1,11 @@
 # Relayout 5b: matched comparison
 
-The original P5 paragraph median improved by 43.2% after targeted
-invalidation. List replacement was near its earlier baseline, while the
-non-positional and captured-article comparisons remained open. The evidence
-in [5b-validation.md](5b-validation.md) is not yet performance acceptance.
+The current original-page paragraph/list medians are below the 5a control,
+and the non-positional companion improves both mutations. Repeated article
+measurements on the P5 are comparable to control; the earlier large article
+slowdown did not recur in the controlled follow-up below. This evidence
+supports review of 5b. The earlier article result and elevated paragraph
+maximum remain disclosed; neither has an established root cause.
 
 ## Workloads and control
 
@@ -461,3 +463,75 @@ The hardware evidence collection for this candidate is now usable: retain the
 confirmed original-page result from corpus 560 and this article result. No
 further viewport/profiling correction is needed. Investigation remains before
 5b performance acceptance, review or 5c. Delivery files are unchanged.
+
+## Automated P5 follow-up: repeated measurements, unchanged implementation
+
+The follow-up ran control and candidate on the same P5, with automatic
+checkpoint collection and exit. Production source was unchanged. Temporary
+diagnostic copies used private dependencies so the installed browser and
+libraries could remain intact. All 22 installed files were read back and
+SHA-256 checked against the frozen r3 delivery: every file matched.
+
+First, temporary text counters isolated work inside layout. At the P5's
+2,526 × 1,259 viewport, both builds made 9,741 text-layout calls over 141,819
+bytes, with 140,733 glyph-cache hits, 361 misses, 26 font opens and no glyph
+evictions during the 18 measurements. QEMU and the P5 agreed on these work
+counts. Four successful P5 runs per build had overlapping layout-phase
+times: control 55.708–69.650 ms and candidate 56.564–68.495 ms. These probes
+add timing overhead and are diagnostic evidence, not acceptance timings.
+
+The extra text counters and clocks were then removed. The remaining harness
+uses the existing layout profiler, reads the page's completed JSON, and exits
+after the final displayed layout. Output occurs after measurement. Three
+control/candidate runs were collected for each entry route, alternating build
+order. The fixture, dark appearance, zoom, scripts and final viewport match
+the earlier comparison.
+
+| Entry route and build | Total geometry time, three runs | Median total |
+|---|---|---:|
+| Direct article, control | 406.5 / 424.2 / 413.5 ms | 413.5 ms |
+| Direct article, r3 candidate | 411.8 / 415.3 / 418.4 ms | 415.3 ms |
+| Starter, resize, address navigation, control | 420.4 / 424.0 / 421.7 ms | 421.7 ms |
+| Starter, resize, address navigation, r3 candidate | 406.7 / 414.9 / 422.1 ms | 414.9 ms |
+| Same starter route, installed r3 libraries | 409.2 / 420.1 / 417.9 ms | 417.9 ms |
+
+The starter route opens the original starter page at the normal initial
+window size, requests larger window content through the window API, waits
+for layout at 2,526 × 1,259, then calls the browser's typed-address navigation
+path. It does not simulate typing or the window manager's maximize gesture.
+The isolated dependencies are relinked as floating libraries, changing their
+virtual placement. The last row checks that limitation with a separate
+automatic runner linked to the actual installed r3 libraries; it does not
+replace those libraries or the installed browser. No other diagnostic I/O was
+started until the timed repetition batch had completed.
+
+All 15 runs complete 18 checkpoints with identical heights, 7,927 styled
+elements, 5,294 boxes, 3,795 measurements, 17 model rebuilds and zero
+refused/partial results or clock errors. The expected full-cascade fallback
+still has zero cascade updates and copied styles. Direct-entry candidate
+median total is 0.4% above control; the starter-route candidate median is
+1.6% below control. The installed-library median is 0.9% below the
+starter-route control median. These small differences do not establish an
+article speedup.
+
+The installed-library layout phase is 50.009 / 58.563 / 52.717 ms, versus
+110.038 ms in corpus 562. Its cascade phase is 344.018 / 345.926 / 349.807 ms.
+As above, the cascade total includes hidden-measurement cleanup that the
+control charges outside that phase; total geometry time is the comparable
+end-to-end measurement.
+
+**Conclusion:** the controlled repetitions do not reproduce a material
+article regression and support presenting 5b for review alongside the
+confirmed mutation improvements. They do not explain or invalidate corpus
+562's 485.8 ms, prove better paragraph tail latency, or establish that a
+production fix occurred during this investigation. Retain those limitations
+in review. There is no new candidate delivery to install and no additional
+manual viewport/profiling correction owed. 5c has not started.
+
+The probe sources, link plans, captured output, numerical summaries and hashes
+are retained in the local proof directory. An immediately repeated diagnostic
+launch was refused once; a later retry and repetitions separated by a short
+cleanup interval completed. That refused launch produced no timing sample
+and is excluded. All temporary P5 diagnostic directories were removed after
+the processes exited. Ordinary local binaries were rebuilt from restored
+source, and the frozen r3 manifest still verifies in full.

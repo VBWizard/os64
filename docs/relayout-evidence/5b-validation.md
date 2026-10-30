@@ -306,4 +306,9 @@ performance acceptance decision remain open before review or 5c.
 
 [5b-comparison.md](5b-comparison.md) records the separate stream profiling,
 full-fallback retention corrections, matched 5a control, and the remaining
-hardware protocol. It extends this evidence; it does not close the P5 gate.
+hardware protocol. Its automated P5 follow-up records repeated article totals
+comparable to control, including a check against the actual installed r3
+libraries. Together with the confirmed mutation improvements, that evidence
+supports presenting 5b for review. The earlier article slowdown and elevated
+paragraph maximum remain disclosed and unexplained; no production fix was
+made during the follow-up. 5c has not started.
