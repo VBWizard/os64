@@ -669,6 +669,15 @@ loader compiles, a dynamic import's, is not in it. A request
 the HTTP cache answered says so after its time (SCRIPT_CACHE.md): `, kept`
 when it was served with nothing asked, `, confirmed` after a 304.
 
+**Where an arrival went** (2026-10-30): beside `arrived after`, a
+`navigation:` line gives performance.timing's milestones, each after the
+navigation began — `navigation: first byte 410 ms, last byte 1630 ms,
+parsed 2050 ms, DOMContentLoaded 6900 ms, load 7300 ms`: the document's
+first and last bytes, its parse done, DOMContentLoaded (after the deferred
+scripts and the module graphs have run), and load's end; `-` for one the
+page never reached. It is how a page whose module costs fell to nothing
+showed that its time was spent elsewhere.
+
 **`yonder --exit-when-loaded <address>`** is the measuring run: yonder
 leaves once the shown page has settled (streamed, its pictures and fonts
 in, its record not owed, no script waiting) and no job has come back for

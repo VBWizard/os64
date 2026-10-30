@@ -2520,6 +2520,37 @@ static void diag_observe(Page *p, const char *when)
         diag_paint(p);
 }
 
+// Where an arrival's time went, from performance.timing's milestones,
+// each after the navigation began: the document's first byte and its last,
+// its parse done, DOMContentLoaded (after the deferred scripts and the
+// module graphs have run), and load's end. "-" for one not reached.
+static void diag_navigation(Page *p)
+{
+    static const struct {
+        os64_dom_milestone_t which;
+        const char *name;
+    } kMarks[] = {{OS64_DOM_TIMING_RESPONSE_START, "first byte"}, {OS64_DOM_TIMING_RESPONSE_END, "last byte"},
+                  {OS64_DOM_TIMING_DOM_INTERACTIVE, "parsed"},
+                  {OS64_DOM_TIMING_DOM_CONTENT_LOADED_START, "DOMContentLoaded"},
+                  {OS64_DOM_TIMING_LOAD_END, "load"}};
+    const os64_dom_timing_t *t = yonder_scripts_timing(p->scripts);
+    if (t == NULL)
+        return;
+    char v[256];
+    size_t at = 0;
+    for (size_t i = 0; i < sizeof(kMarks) / sizeof(kMarks[0]) && at < sizeof(v); i++) {
+        uint64_t us = t->at[kMarks[i].which];
+        int n = us == OS64_DOM_TIMING_NOT_YET
+                    ? os64_snprintf(v + at, sizeof(v) - at, "%s%s -", i ? ", " : "", kMarks[i].name)
+                    : os64_snprintf(v + at, sizeof(v) - at, "%s%s %lu ms", i ? ", " : "", kMarks[i].name,
+                                    (unsigned long)(us / 1000));
+        if (n < 0)
+            return;
+        at += (size_t)n;
+    }
+    yonder_diag_fact(p->diag, "navigation", v);
+}
+
 // The page has arrived: what it is now is written, and the badge is its.
 static void diag_arrived(Page *p, uint64_t laid_ms)
 {
@@ -2533,6 +2564,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
                   (unsigned long)laid_ms);
     yonder_diag_head_fact(p->diag, "laid out at", v);
