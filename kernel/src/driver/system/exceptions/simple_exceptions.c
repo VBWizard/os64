@@ -759,9 +759,49 @@ static bool try_catch_segv(task_t *task)
 	return signal_deliver_segv(task, thread, ctx);
 }
 
+// Which side of a thread's user stack a faulting address fell on, if it
+// fell in the unmapped guard on either side: a word for the headline, or
+// NULL. The stack is `task_alloc_guarded_stack`'s layout — esp3BaseV is the
+// lowest usable byte, THREAD_USER_STACK_SIZE above it, and
+// THREAD_STACK_GUARD_PAGE_COUNT unmapped pages beyond each end.
+//
+// A fault in the guard below is a stack overflow: a frame the stack had no
+// room for. A frame smaller than the guard cannot miss it; a larger one,
+// allocated in one `sub rsp`, can step over it and fault wherever its first
+// write falls — which is why userland is built -fstack-clash-protection,
+// lowering a big frame a page at a time so every overflow lands here. The
+// guard above is the underflow nobody has met; it costs the same compare.
+// (Before this check existed a guard fault was reported as a plain "access
+// to unmapped address": a 16KB frame sixty calls deep landed 11KB into the
+// guard on 2026-10-30 and left the arithmetic to the reader.)
+static const char *stack_guard_side(const thread_t *thread, uint64_t cr2)
+{
+	if (thread == NULL || thread == NO_THREAD || thread->esp3BaseV == 0)
+		return NULL;
+	uint64_t guard = (uint64_t)THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE;
+	uint64_t low   = thread->esp3BaseV;
+	uint64_t high  = low + THREAD_USER_STACK_SIZE;
+	if (cr2 >= low - guard && cr2 < low)
+		return "Stack overflow";
+	if (cr2 >= high && cr2 < high + guard)
+		return "Stack underflow";
+	return NULL;
+}
+
 static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *why,
     uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
+	// A fault in the thread's own stack guard is named for what it is. The
+	// exit code stays 139 — it is still a segmentation fault; the headline
+	// is the diagnosis the reader would otherwise have to do by hand.
+	core_local_storage_t *gcls = try_get_core_local_storage();
+	thread_t *gthr = gcls ? gcls->currentThread : NULL;
+	const char *guard_side = stack_guard_side(gthr, cr2);
+	const char *headline = guard_side ? guard_side : "Segmentation fault";
+	if (guard_side != NULL)
+		why = cr2 < gthr->esp3BaseV ? "the guard below the thread's stack"
+		                            : "the guard above the thread's stack";
+
 	// One narrator per report (exception_report.h). Ring-3 kills are the most
 	// COMMON concurrent reporters — two tops segfaulting on two cores is
 	// exactly what braided the 2026-08-11 soak log — and this whole report,
@@ -773,7 +813,7 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	// DEBUG_EXCEPTIONS is permanently on (see CONFIG.h), so the printd copy
 	// is not a hedge — it is the one a script greps. The direct serial write
 	// is the one that survives the session.
-	user_death_headline(task, "\nSegmentation fault: %s (task %lu, %s) - exit 139\n",
+	user_death_headline(task, "\n%s: %s (task %lu, %s) - exit 139\n", headline,
 	                    task->exename[0] ? task->exename : "(unnamed)", task->taskID, why);
 	s_fault_glass = false;
 	exception_glass_mute(true);
@@ -787,6 +827,14 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 		page_fault_decode(bits, sizeof(bits), error_code);
 		FAULT_PRINT(false, "  address 0x%016lx  RIP 0x%016lx  error 0x%lx [%s]\n",
 		            cr2, rip, error_code, bits);
+	}
+	// A guard hit: where the stack is, and how far past it the fault fell.
+	if (guard_side != NULL) {
+		uint64_t low  = gthr->esp3BaseV;
+		uint64_t high = low + THREAD_USER_STACK_SIZE;
+		FAULT_PRINT(false, "  stack: thread 0x%08x user stack 0x%016lx-0x%016lx (%u guard pages each side); fault %lu bytes %s it\n",
+		            gthr->threadID, low, high, (unsigned)THREAD_STACK_GUARD_PAGE_COUNT,
+		            cr2 < low ? low - cr2 : cr2 - high + 1, cr2 < low ? "below" : "above");
 	}
 
 	// The registers the program died holding — same argument as the kernel
