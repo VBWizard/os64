@@ -1,140 +1,26 @@
 // The browser's cache (way/cache.h, CACHE.md): RFC 9111's rules as pure
 // functions, and the store against a real temporary directory, reached
-// through the libos64 file calls below — each a few lines over POSIX. Every
+// through libos64's file calls over POSIX (test_os64_files.inc). Every
 // epoch was worked out with a calendar: 1790758509 is danlegt.com's Date,
 // Wed, 30 Sep 2026 08:55:09 GMT; 1790195818 its pictures' Last-Modified,
 // Wed, 23 Sep 2026 20:36:58 GMT.
 
-#include <dirent.h>
-#include <fcntl.h>
-#include <sys/stat.h>
 #include <utime.h>
 
 #include "os64/date.h"
-#include "os64/io.h"
 
 #define D 1790758509
 #define LM 1790195818
 
-// ── libos64's file calls, over POSIX ────────────────────────────────────
-//
-// A handle is a descriptor, or a directory stream, plus FILE_BASE, so it
-// cannot be mistaken for the console the rest of the harness writes to.
+// libos64's file calls over POSIX, shared with the fetch job's suite.
+#include "test_os64_files.inc"
 
-#define FILE_BASE 1000
-#define DIRS_MAX 8
-static DIR *s_dirs[DIRS_MAX];
 static int64_t s_clock = D;
 
 int64_t os64_time(os64_time_t *t)
 {
     memset(t, 0, sizeof(*t));
     t->epoch = s_clock;
-    return 0;
-}
-
-uint64_t os64_taskid(void)
-{
-    return (uint64_t)getpid();
-}
-
-int64_t os64_open(const char *path, const char *mode)
-{
-    int flags = mode == NULL || mode[0] == 'r' ? O_RDONLY
-              : mode[0] == 'x'                 ? O_WRONLY | O_CREAT | O_EXCL
-                                               : O_WRONLY | O_CREAT | O_TRUNC;
-    int fd = open(path, flags, 0644);
-    return fd < 0 ? -1 : fd + FILE_BASE;
-}
-
-int64_t os64_read(int32_t handle, void *buf, size_t len)
-{
-    return handle >= FILE_BASE ? read(handle - FILE_BASE, buf, len) : -1;
-}
-
-int64_t os64_close(int32_t handle)
-{
-    if (handle >= FILE_BASE + 4096 && handle < FILE_BASE + 4096 + DIRS_MAX) {
-        closedir(s_dirs[handle - FILE_BASE - 4096]);
-        s_dirs[handle - FILE_BASE - 4096] = NULL;
-        return 0;
-    }
-    return handle >= FILE_BASE ? close(handle - FILE_BASE) : -1;
-}
-
-int64_t os64_unlink(const char *path)
-{
-    return unlink(path) == 0 || rmdir(path) == 0 ? 0 : -1;
-}
-
-int64_t os64_rename(const char *from, const char *to)
-{
-    return rename(from, to) == 0 ? 0 : -1;
-}
-
-int64_t os64_mkdir(const char *path)
-{
-    return mkdir(path, 0755) == 0 ? 0 : -1;
-}
-
-static void dirent_of(const struct stat *st, const char *name, os64_dirent_t *e)
-{
-    memset(e, 0, sizeof(*e));
-    e->size = S_ISDIR(st->st_mode) ? 0 : (uint64_t)st->st_size;
-    e->flags = S_ISDIR(st->st_mode) ? OS64_DE_DIR : 0;
-    e->mtime = (uint64_t)st->st_mtime;
-    snprintf(e->name, sizeof(e->name), "%s", name);
-}
-
-int64_t os64_stat(const char *path, os64_dirent_t *e)
-{
-    struct stat st;
-    if (stat(path, &st) != 0)
-        return -1;
-    const char *slash = strrchr(path, '/');
-    dirent_of(&st, slash != NULL ? slash + 1 : path, e);
-    return 0;
-}
-
-static char s_dir_paths[DIRS_MAX][512];
-
-int64_t os64_opendir(const char *path)
-{
-    for (int i = 0; i < DIRS_MAX; i++)
-        if (s_dirs[i] == NULL) {
-            s_dirs[i] = opendir(path);
-            if (s_dirs[i] == NULL)
-                return -1;
-            snprintf(s_dir_paths[i], sizeof(s_dir_paths[i]), "%s", path);
-            return FILE_BASE + 4096 + i;
-        }
-    return -1;
-}
-
-// Called once, the next time a directory has been read to its end: what
-// another thread does between a sweep's count of the directory and its
-// last word on it.
-static void (*s_after_listing)(void);
-
-int64_t os64_readdir(int32_t handle, os64_dirent_t *e)
-{
-    int i = handle - FILE_BASE - 4096;
-    struct dirent *d;
-    while ((d = readdir(s_dirs[i])) != NULL) {
-        if (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0)
-            continue;
-        char path[1024];
-        struct stat st;
-        snprintf(path, sizeof(path), "%s/%s", s_dir_paths[i], d->d_name);
-        if (stat(path, &st) != 0)
-            continue;
-        dirent_of(&st, d->d_name, e);
-        return 1;
-    }
-    void (*after)(void) = s_after_listing;
-    s_after_listing = NULL;
-    if (after != NULL)
-        after();
     return 0;
 }
 
@@ -876,10 +762,83 @@ static void key_cases(void)
         expect("keys: the temporary directory is removed", false, root);
 }
 
+// A request that sends Origin and Accept, says nothing of X-Absent, and
+// cannot say what it would send for X-Unknown.
+static bool request_value(void *ctx, const char *name, size_t nlen, char *out, size_t cap)
+{
+    const char *origin = ctx;
+    if (nlen == 6 && strncasecmp(name, "origin", 6) == 0) {
+        snprintf(out, cap, "%s", origin);
+        return true;
+    }
+    if (nlen == 6 && strncasecmp(name, "accept", 6) == 0) {
+        snprintf(out, cap, "*/*");
+        return true;
+    }
+    if (nlen == 8 && strncasecmp(name, "x-absent", 8) == 0) {
+        snprintf(out, cap, "%s", "");
+        return true;
+    }
+    return false;
+}
+
+// SCRIPT_CACHE.md § 4, § 6: Vary recorded and held to, the cookies never
+// kept, a 304 laid over what was kept.
+static void reply_rules(void)
+{
+    char lines[512];
+    size_t n = way_vary_lines("Origin, accept-encoding, Accept, X-Absent", request_value, "https://a.test", lines,
+                              sizeof(lines));
+    expect("vary: what the request said of each header, the encoding left out",
+           n != SIZE_MAX && n == strlen("Origin: https://a.test\r\nAccept: */*\r\nX-Absent: \r\n") &&
+               memcmp(lines, "Origin: https://a.test\r\nAccept: */*\r\nX-Absent: \r\n", n) == 0, NULL);
+    expect("vary: the same request matches", way_vary_matches(lines, n, request_value, "https://a.test"), NULL);
+    expect("vary: another origin does not", !way_vary_matches(lines, n, request_value, "https://b.test"), NULL);
+    expect("vary: a header nobody can say keeps nothing",
+           way_vary_lines("X-Unknown", request_value, "https://a.test", lines, sizeof(lines)) == SIZE_MAX, NULL);
+    expect("vary: nor does *", way_vary_lines("Origin, *", request_value, "https://a.test", lines, sizeof(lines)) ==
+                                   SIZE_MAX, NULL);
+    expect("vary: nor lines that do not fit",
+           way_vary_lines("Origin", request_value, "https://a.test", lines, 10) == SIZE_MAX, NULL);
+    expect("vary: nothing varied on matches anything", way_vary_matches("", 0, request_value, "https://z.test"),
+           NULL);
+
+    os64_fetch_keep_t f;
+    memset(&f, 0, sizeof(f));
+    snprintf(f.cache_control, sizeof(f.cache_control), "max-age=60");
+    snprintf(f.vary, sizeof(f.vary), "Origin");
+    way_keep_t k;
+    expect("vary: way_keep_read keeps no reply that varies on Origin", !way_keep_read(&f, D, &k), NULL);
+    expect("vary: way_keep_read_varied does, the caller recording it", way_keep_read_varied(&f, D, &k), NULL);
+    snprintf(f.vary, sizeof(f.vary), "Origin, *");
+    expect("vary: but never one that varies on *", !way_keep_read_varied(&f, D, &k), NULL);
+
+    const char got[] = "Content-Type: text/javascript\r\nSet-Cookie: sid=1\r\nETag: \"v1\"\r\nset-cookie2: x=2\r\n";
+    char kept[256];
+    n = way_headers_storable(got, sizeof(got) - 1, kept, sizeof(kept));
+    expect("storable: the cookies are never kept",
+           n != SIZE_MAX && n == strlen("Content-Type: text/javascript\r\nETag: \"v1\"\r\n") &&
+               memcmp(kept, "Content-Type: text/javascript\r\nETag: \"v1\"\r\n", n) == 0, NULL);
+    expect("storable: a block that does not fit is SIZE_MAX",
+           way_headers_storable(got, sizeof(got) - 1, kept, 8) == SIZE_MAX, NULL);
+
+    const char stored[] = "Content-Type: text/javascript\r\nContent-Length: 1200\r\nETag: \"v1\"\r\n"
+                          "Access-Control-Allow-Origin: https://a.test\r\nCache-Control: max-age=60\r\n";
+    const char three04[] = "ETag: \"v1\"\r\nCache-Control: max-age=600\r\nContent-Length: 0\r\n"
+                           "Access-Control-Allow-Origin: *\r\nSet-Cookie: sid=2\r\n";
+    char merged[512];
+    n = way_headers_update(stored, sizeof(stored) - 1, three04, sizeof(three04) - 1, merged, sizeof(merged));
+    const char want[] = "Content-Type: text/javascript\r\nContent-Length: 1200\r\nETag: \"v1\"\r\n"
+                        "Cache-Control: max-age=600\r\nAccess-Control-Allow-Origin: *\r\n";
+    expect("update: the 304's headers replace the kept ones; the body's length and the cookies do not",
+           n != SIZE_MAX && n == sizeof(want) - 1 && memcmp(merged, want, n) == 0, merged);
+}
+
 static void cache_cases(void)
 {
     keep_rules();
     chain_rules();
+    reply_rules();
     store_cases();
     companion_cases();
     key_cases();

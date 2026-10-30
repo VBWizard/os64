@@ -111,7 +111,20 @@ static int64_t http_date(const char *text)
     return n != 0 && way_cookie_date(text, n, &when) ? when : -1;
 }
 
+static bool keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out, bool varied);
+
 bool way_keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out)
+{
+    return keep_read(f, now, out, false);
+}
+
+bool way_keep_read_varied(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out)
+{
+    return keep_read(f, now, out, true);
+}
+
+// `varied`: a Vary on any header but `*` is the caller's to record.
+static bool keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out, bool varied)
 {
     os64_memset(out, 0, sizeof(*out));
     out->stored = now;
@@ -145,10 +158,11 @@ bool way_keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out)
     }
     // A reply that varies by what the request said is kept only when what
     // it varies by is the encoding, which libfetch asks for the same way
-    // every time.
+    // every time — or, `varied`, by headers the caller records; never by
+    // `*`, which no request's lines can stand for.
     Members v = {f->vary, 0, os64_strlen(f->vary)};
     while (member(&v, &name, &nlen, &value, &vlen))
-        if (!same_nocase(name, nlen, "accept-encoding"))
+        if (varied ? same_nocase(name, nlen, "*") : !same_nocase(name, nlen, "accept-encoding"))
             return false;
     out->date = http_date(f->date);
     // An Expires that is not a date is a time already past (§ 5.3).
@@ -279,6 +293,113 @@ bool way_chain_apply(const way_chain_t *chain, way_keep_t *k, int64_t now)
             k->max_age = end;
     }
     return true;
+}
+
+// ── What a script's request reads of a kept reply ───────────────────────
+
+// Appends `n` bytes to `out` at `*at`, within `cap`. False when they do
+// not fit.
+static bool put_bytes(char *out, size_t cap, size_t *at, const char *s, size_t n)
+{
+    if (n > cap || *at > cap - n)
+        return false;
+    os64_memcpy(out + *at, s, n);
+    *at += n;
+    return true;
+}
+
+static bool put_line(char *out, size_t cap, size_t *at, const char *name, size_t nlen, const char *value,
+                     size_t vlen)
+{
+    return put_bytes(out, cap, at, name, nlen) && put_bytes(out, cap, at, ": ", 2) &&
+           put_bytes(out, cap, at, value, vlen) && put_bytes(out, cap, at, "\r\n", 2);
+}
+
+size_t way_vary_lines(const char *vary, way_request_value_t value_of, void *ctx, char *out, size_t cap)
+{
+    Members m = {vary, 0, os64_strlen(vary)};
+    const char *name, *value;
+    size_t nlen, vlen, at = 0;
+    char said[WAY_VARY_VALUE_MAX];
+    while (member(&m, &name, &nlen, &value, &vlen)) {
+        if (same_nocase(name, nlen, "accept-encoding"))
+            continue;
+        if (same_nocase(name, nlen, "*") || !value_of(ctx, name, nlen, said, sizeof(said)) ||
+            !put_line(out, cap, &at, name, nlen, said, os64_strlen(said)))
+            return SIZE_MAX;
+    }
+    return at;
+}
+
+bool way_vary_matches(const char *lines, size_t len, way_request_value_t value_of, void *ctx)
+{
+    size_t at = 0;
+    way_header_t h;
+    char now[WAY_VARY_VALUE_MAX];
+    while (way_header_next(lines, len, &at, &h))
+        if (!value_of(ctx, h.name, h.name_len, now, sizeof(now)) || os64_strlen(now) != h.value_len ||
+            os64_memcmp(now, h.value, h.value_len) != 0)
+            return false;
+    return at == len;
+}
+
+static bool is_set_cookie(const way_header_t *h)
+{
+    return same_nocase(h->name, h->name_len, "set-cookie") || same_nocase(h->name, h->name_len, "set-cookie2");
+}
+
+size_t way_headers_storable(const char *block, size_t len, char *out, size_t cap)
+{
+    size_t at = 0, written = 0;
+    way_header_t h;
+    while (way_header_next(block, len, &at, &h))
+        if (!is_set_cookie(&h) && !put_line(out, cap, &written, h.name, h.name_len, h.value, h.value_len))
+            return SIZE_MAX;
+    return written;
+}
+
+// Whether `block` has a line named `name` (`nlen` bytes, any case).
+static bool block_names(const char *block, size_t len, const char *name, size_t nlen)
+{
+    size_t at = 0;
+    way_header_t h;
+    while (way_header_next(block, len, &at, &h))
+        if (h.name_len == nlen) {
+            size_t i = 0;
+            while (i < nlen && lower(h.name[i]) == lower(name[i]))
+                i++;
+            if (i == nlen)
+                return true;
+        }
+    return false;
+}
+
+static bool frames_the_body(const way_header_t *h)
+{
+    return same_nocase(h->name, h->name_len, "content-length") ||
+           same_nocase(h->name, h->name_len, "content-encoding") ||
+           same_nocase(h->name, h->name_len, "transfer-encoding");
+}
+
+size_t way_headers_update(const char *kept, size_t klen, const char *update, size_t ulen, char *out,
+                          size_t cap)
+{
+    size_t at = 0, written = 0;
+    way_header_t h;
+    // The kept lines the 304 does not replace...
+    while (way_header_next(kept, klen, &at, &h)) {
+        bool replaced = !frames_the_body(&h) && block_names(update, ulen, h.name, h.name_len);
+        if (!replaced && !is_set_cookie(&h) &&
+            !put_line(out, cap, &written, h.name, h.name_len, h.value, h.value_len))
+            return SIZE_MAX;
+    }
+    // ...then the 304's own, but those that frame its own (empty) body.
+    at = 0;
+    while (way_header_next(update, ulen, &at, &h))
+        if (!frames_the_body(&h) && !is_set_cookie(&h) &&
+            !put_line(out, cap, &written, h.name, h.name_len, h.value, h.value_len))
+            return SIZE_MAX;
+    return written;
 }
 
 // ── An entry on disk ────────────────────────────────────────────────────

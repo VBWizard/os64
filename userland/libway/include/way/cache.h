@@ -87,6 +87,70 @@ void way_chain_hop(way_chain_t *chain, const os64_fetch_keep_t *fields, int64_t 
 // forbids keeping it at all.
 bool way_chain_apply(const way_chain_t *chain, way_keep_t *k, int64_t now);
 
+// Where an answer came from: the network, or the cache (way_fetch_whole's
+// and the fetch job's alike).
+typedef enum {
+    WAY_SERVED_NETWORK = 0,
+    WAY_SERVED_KEPT,            // the cache, fresh: nothing went out
+    WAY_SERVED_CONFIRMED,       // the cache, after the server answered 304
+    WAY_SERVED_STALE,           // the cache, stale, because the server could not be reached
+} way_served_t;
+
+// ── What a script's request reads of a kept reply (SCRIPT_CACHE.md § 4) ─
+
+// How a request uses the cache (Fetch's cache mode, fetch()'s `cache`), in
+// the order the API lists them (SCRIPT_CACHE.md § 5): default — fresh
+// served, stale asked again; no-store — neither read nor kept; reload — not
+// read, kept; no-cache — always asked again; force-cache — served whatever
+// its age; only-if-cached — served whatever its age, and a miss is an error.
+typedef enum {
+    WAY_CACHE_DEFAULT,
+    WAY_CACHE_NO_STORE,
+    WAY_CACHE_RELOAD,
+    WAY_CACHE_NO_CACHE,
+    WAY_CACHE_FORCE_CACHE,
+    WAY_CACHE_ONLY_IF_CACHED,
+} way_cache_mode_t;
+
+// way_keep_read, keeping a reply that varies on any header but `*` (whose
+// answer varies on things a request does not say): the caller records what
+// the request said of each (way_vary_lines) and holds a later request to it
+// (way_vary_matches).
+bool way_keep_read_varied(const os64_fetch_keep_t *fields, int64_t now, way_keep_t *out);
+
+// The value a request sends for header `name` (`nlen` bytes, any case), into
+// `out`: "" when it sends none. False when the caller cannot say, which
+// keeps nothing that varies on that header.
+typedef bool (*way_request_value_t)(void *ctx, const char *name, size_t nlen, char *out, size_t cap);
+
+// A header line's value is at most this long here; one longer is a header
+// nothing that varies on it is kept for.
+#define WAY_VARY_VALUE_MAX 1024
+
+// What the request said of each header `vary` (a response's Vary value)
+// names, as lines "name: value\r\n" into `out` — but Accept-Encoding, which
+// libfetch asks for the same way every time. The length written; SIZE_MAX
+// when `vary` is `*`, or names a header `value_of` cannot say, or the lines
+// do not fit.
+size_t way_vary_lines(const char *vary, way_request_value_t value_of, void *ctx, char *out, size_t cap);
+// Whether a request says, of each header `lines` (way_vary_lines') names,
+// the value written there.
+bool way_vary_matches(const char *lines, size_t len, way_request_value_t value_of, void *ctx);
+
+// A response's header block as the cache keeps it: without Set-Cookie and
+// Set-Cookie2, whose cookies were the jar's when the reply came and are no
+// one's to hear again. The length written; SIZE_MAX when it does not fit.
+size_t way_headers_storable(const char *block, size_t len, char *out, size_t cap);
+
+// A kept header block with a 304's laid over it (RFC 9111 § 3.2): each
+// header the 304 sends replaces the kept lines of that name, but the ones
+// that frame the body (Content-Length, Content-Encoding,
+// Transfer-Encoding), which describe the kept body, not the 304's; Set-Cookie
+// is not kept from either. The length written; SIZE_MAX when it does not
+// fit.
+size_t way_headers_update(const char *kept, size_t klen, const char *update, size_t ulen, char *out,
+                          size_t cap);
+
 // ── The store ───────────────────────────────────────────────────────────
 
 typedef struct way_cache way_cache_t;

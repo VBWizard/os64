@@ -901,7 +901,8 @@ bool os64_dom_resolve(const os64_html_document_t *document, const char *document
  * parsed it), its normalized method, its author headers as a header block
  * (way/origin.h), its body bytes (NULL for none), its mode, credentials
  * mode, redirect mode and referrer policy, whether an upload listener asks
- * for a preflight, and the address its Referer names ("" for none). */
+ * for a preflight, the address its Referer names ("" for none), and its
+ * cache mode. */
 typedef struct {
     const char *url;
     const char *method;
@@ -915,6 +916,10 @@ typedef struct {
     way_policy_t policy;
     bool preflight;
     const char *referrer;
+    // Fetch's cache mode, by its place in the API's list — default,
+    // no-store, reload, no-cache, force-cache, only-if-cached — which is
+    // way_cache_mode_t's order; zero, default, for a request that names none.
+    uint8_t cache;
 } os64_dom_request_t;
 /* The answer, borrowed for the call: `ok` false is a network error, which
  * carries nothing else (Fetch: a network error tells the page nothing; the

@@ -8384,6 +8384,10 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
                  os64_strlen(referrer) < sizeof(job->referrer) ? referrer : "");
     job->jar = g.way.jar;
     job->preflight = s_preflight;
+    // The browser's cache, as the request's cache mode says to use it
+    // (SCRIPT_CACHE.md § 5); a mode past the list is a request's default.
+    job->cache = g.cache;
+    job->cache_mode = q->cache <= WAY_CACHE_ONLY_IF_CACHED ? (way_cache_mode_t)q->cache : WAY_CACHE_DEFAULT;
     return job;
 }
 
@@ -8442,8 +8446,13 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
     if (got->elapsed_us >= 0)
         os64_snprintf(took, sizeof(took), " in %ld ms", (long)(got->elapsed_us / 1000));
     os64_snprintf(key, sizeof(key), "request %s %s", job->request.method, job->url);
-    os64_snprintf(value, sizeof(value), "%d %s, %u hops, %lu bytes%s%s", (int)got->status,
-                  way_type_name(got->type), (unsigned)got->hops, (unsigned long)got->body_len, took,
+    // An answer the cache gave says so (SCRIPT_CACHE.md § 9): kept, served
+    // without asking; confirmed, served after a 304.
+    const char *from = got->served == WAY_SERVED_KEPT        ? ", kept"
+                       : got->served == WAY_SERVED_CONFIRMED ? ", confirmed"
+                                                             : "";
+    os64_snprintf(value, sizeof(value), "%d %s, %u hops, %lu bytes%s%s%s", (int)got->status,
+                  way_type_name(got->type), (unsigned)got->hops, (unsigned long)got->body_len, took, from,
                   sync ? ", synchronous" : "");
     yonder_diag_fact(diag, key, value);
 }

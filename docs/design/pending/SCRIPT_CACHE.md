@@ -166,16 +166,36 @@ resolution, so a blob made under another name is a miss.
   answering a credentialed request and the reverse; the conditional lines
   not making a request preflight; a 304 merged and checked; each cache mode
   of § 5; `Set-Cookie` never replayed.
-- WPT: `fetch/http-cache/` added to the expectations, and the existing
-  directories unchanged.
+- WPT: the existing directories unchanged. `fetch/http-cache/` cannot be
+  run here: its pages are driven by a wptserve handler (`http-cache.py`),
+  and the runner answers a `.py` handler with a network error.
 - The P5: the pull-request page loaded twice with `--exit-when-loaded`; the
   second record's request lines say how many came from the cache (a new
   `kept` on the line) and the module fetching's sum falls.
 
-## 10. For Chris to decide
+## 10. Ruled (Chris, 2026-10-30)
 
-1. **The whole cache partitioned** (§ 3), not only the new entries. Lean:
-   yes.
+1. **The whole cache partitioned** (§ 3), not only the new entries: yes.
 2. **A stored response that fails the live CORS check is a miss**, not a
-   network error (§ 6). Lean: yes.
-3. **The cache-mode table** of § 5 as the slice's scope. Lean: yes.
+   network error (§ 6): yes.
+3. **The cache-mode table** of § 5 as the slice's scope: yes.
+
+## 11. As built
+
+- **What the job can say a request sent** (`request_value`, for `Vary`):
+  its Accept, and the lines the page and the hop added, Origin among them.
+  The lines libfetch and the agent's preset add (User-Agent,
+  Accept-Language, Cookie, Referer, `Sec-*`) it cannot, so a reply varying
+  on one is not kept (DEBTS.md).
+- **A hit reaches the page by the network's own path**: the final
+  response's filtering is one function (`finish`), the network's body or
+  the kept one handed to it.
+- **The cookies never reach the disk**: a kept head is
+  `way_headers_storable`'s, Set-Cookie and Set-Cookie2 struck; a 304's are
+  struck again as it is laid over (`way_headers_update`, which also leaves
+  the kept body's framing lines alone).
+- **The answer's source is on the page record's request line**: `, kept`
+  or `, confirmed` (YONDER_DIAGNOSTICS.md). The cache's own counts, which
+  Settings shows, are still `way_fetch_whole`'s alone (DEBTS.md).
+- **`way_served_t` moved to `way/cache.h`**, since the fetch job, which
+  does not include all of `way/way.h`, says it too.

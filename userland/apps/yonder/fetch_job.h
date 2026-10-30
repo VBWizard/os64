@@ -21,6 +21,7 @@
 
 #include "fetch/fetch.h"
 #include "jobs.h"
+#include "way/cache.h"
 #include "way/jar.h"
 #include "way/origin.h"
 
@@ -57,6 +58,10 @@ typedef struct {
     uint64_t max_body;              // 0: YONDER_FETCH_BODY_MAX
     way_jar_t *jar;                 // the browser's cookies; NULL keeps none and sends none
     way_preflight_t *preflight;     // the browser's preflight cache; NULL asks every time
+    // The browser's HTTP cache (SCRIPT_CACHE.md), NULL to keep and read
+    // nothing, and how this request uses it.
+    way_cache_t *cache;
+    way_cache_mode_t cache_mode;
 } yonder_fetch_job_t;
 
 typedef struct {
@@ -81,6 +86,9 @@ typedef struct {
     // microseconds; -1 when the clock could not say. The page record's
     // number for what a request cost.
     int64_t elapsed_us;
+    // Where the answer came from: the network, or the cache, fresh or
+    // after a 304 (way_served_t; the page record says which).
+    way_served_t served;
 } yonder_fetched_t;
 
 int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);

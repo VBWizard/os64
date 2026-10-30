@@ -663,7 +663,9 @@ the body's bytes and the fetch's time, from its job's start to its answer —
 page's module compiles are one line together, `modules compiled: 207 in
 3167557 us, 8784400 bytes`, rewritten as each compiles (one line a module
 would crowd a page of hundreds out of the record's facts). A module the
-engine's own loader compiles, a dynamic import's, is not in it.
+engine's own loader compiles, a dynamic import's, is not in it. A request
+the HTTP cache answered says so after its time (SCRIPT_CACHE.md): `, kept`
+when it was served with nothing asked, `, confirmed` after a 304.
 
 **`yonder --exit-when-loaded <address>`** is the measuring run: yonder
 leaves once the shown page has settled (streamed, its pictures and fonts

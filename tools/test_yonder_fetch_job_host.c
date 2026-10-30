@@ -66,17 +66,16 @@ void os64_yield(void)
 {
 }
 
-int64_t os64_write(int32_t handle, const void *buf, size_t len)
-{
-    (void)handle;
-    (void)buf;
-    return (int64_t)len;
-}
+// libos64's file calls (os64_write among them) over POSIX, for libway's
+// cache against a real temporary directory (http_cache_cases).
+#include "test_os64_files.inc"
 
+// The wall clock, which a case moves to make a kept reply stale.
+static int64_t s_epoch = 1792600000;
 int64_t os64_time(os64_time_t *t)
 {
     memset(t, 0, sizeof(*t));
-    t->epoch = 1792600000;
+    t->epoch = s_epoch;
     return 0;
 }
 
@@ -121,6 +120,8 @@ static void expect_text(const char *name, const char *got, const char *want)
 
 static way_jar_t *jar;
 static way_preflight_t *cache;
+// The browser's HTTP cache, NULL but in the cases that open one.
+static way_cache_t *http_cache;
 static bool cancel_now;
 
 static bool cancel_cb(void *ctx)
@@ -138,6 +139,7 @@ typedef struct {
     bool flag;
     uint64_t max_body;
     const way_identity_t *identity;     // the agent's preset lines, NULL for none
+    way_cache_mode_t cache_mode;        // how the request uses http_cache
 } Ask;
 
 static yonder_fetch_job_t *job_of(const Ask *a)
@@ -179,6 +181,8 @@ static yonder_fetch_job_t *job_of(const Ask *a)
     j->max_body = a->max_body;
     j->jar = jar;
     j->preflight = cache;
+    j->cache = http_cache;
+    j->cache_mode = a->cache_mode;
     return j;
 }
 
@@ -951,6 +955,199 @@ static void cookie_room(void)
     }
 }
 
+// SCRIPT_CACHE.md § 2-6: a script's request through the HTTP cache, a real
+// one in a temporary directory. A module is a cors GET with same-origin
+// credentials; from another host, it sends none.
+static const char *kModule = "export const x = 1;";
+#define MODULE_HEAD "Content-Type: text/javascript\r\nAccess-Control-Allow-Origin: *\r\n"
+
+static bool cache_holds_text(const char *dir, const char *text)
+{
+    char cmd[1200];
+    snprintf(cmd, sizeof(cmd), "grep -rqF '%s' '%s'", text, dir);
+    return system(cmd) == 0;
+}
+
+static void http_cache_cases(void)
+{
+    char root[] = "/tmp/fetch_cacheXXXXXX";
+    if (mkdtemp(root) == NULL) {
+        expect("cache: a temporary directory", false, NULL);
+        return;
+    }
+    char dir[600];
+    snprintf(dir, sizeof(dir), "%s/cache", root);
+    http_cache = way_cache_open(dir, 16 << 20);
+    const char *page = "https://a.test/page";
+    char line[256];
+
+    // Kept, then served from the cache with nothing asked; no cookie kept.
+    fresh();
+    fake_answer(NULL, "https://cdn.test/m.js", 200,
+                MODULE_HEAD "Cache-Control: max-age=600\r\nSet-Cookie: sid=secret\r\n", kModule);
+    yonder_fetched_t *g = run(&(Ask){page, "https://cdn.test/m.js"});
+    expect("cache: a module's first fetch asks the network and keeps the answer",
+           g != NULL && g->ok && g->served == WAY_SERVED_NETWORK && nfake_requests == 1, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/m.js"});
+    expect("cache: the next is the kept answer, nothing asked",
+           g != NULL && g->ok && g->served == WAY_SERVED_KEPT && nfake_requests == 1 && g->type == WAY_TYPE_CORS &&
+               g->body_len == strlen(kModule) && memcmp(g->body, kModule, g->body_len) == 0 &&
+               has_line(g, "Content-Type: text/javascript\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    expect("cache: no cookie is kept", !cache_holds_text(dir, "secret"), NULL);
+
+    // A Range request is neither served what is kept nor kept: its answer
+    // is a part, and the cache keeps a whole.
+    int before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/m.js", .headers = "Range: bytes=0-3\r\n"});
+    expect("never: a Range request is not served the kept whole",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+
+    // The key: another site's page, and the other credentials, are misses.
+    before = nfake_requests;
+    g = run(&(Ask){"https://b.test/page", "https://cdn.test/m.js"});
+    expect("cache: another site's page asks the network", g != NULL && g->served == WAY_SERVED_NETWORK &&
+           nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+    fake_answer(NULL, "https://a.test/s.js", 200, "Content-Type: text/javascript\r\nCache-Control: max-age=600\r\n",
+                kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/s.js"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/s.js", .credentials = WAY_CREDENTIALS_OMIT});
+    expect("cache: a reply kept for a credentialed request does not answer an anonymous one",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+
+    // A kept reply the live CORS check refuses is a miss, not an error.
+    const char refused[] = "Content-Type: text/javascript\r\nAccess-Control-Allow-Origin: https://other.test\r\n";
+    way_entry_t e;
+    memset(&e, 0, sizeof(e));
+    snprintf(e.partition, sizeof(e.partition), "https a.test");
+    snprintf(e.url, sizeof(e.url), "https://cdn.test/r.js");
+    snprintf(e.final, sizeof(e.final), "https://cdn.test/r.js");
+    e.status = 200;
+    e.keep.stored = s_epoch;
+    e.keep.max_age = 600;
+    e.keep.date = e.keep.expires = e.keep.last_modified = -1;
+    way_blocks_t refused_blocks = {refused, sizeof(refused) - 1, "", 0, "", 0};
+    expect("cache: a reply whose CORS answer is another origin's is planted",
+           way_cache_put(http_cache, &e, &refused_blocks, (const uint8_t *)"old", 3), NULL);
+    fake_answer(NULL, "https://cdn.test/r.js", 200, MODULE_HEAD, kModule);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/r.js"});
+    expect("cache: the live CORS check refuses it, and the network answers",
+           g != NULL && g->ok && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1 &&
+               g->body_len == strlen(kModule), g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // Stale: asked about with its validator, below the preflight; the 304,
+    // with no CORS header of its own, laid over the kept head and served.
+    fake_answer_t *v = fake_answer(NULL, "https://cdn.test/v.js", 200,
+                                   MODULE_HEAD "Cache-Control: max-age=60\r\nETag: \"v1\"\r\n", kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/v.js"}));
+    s_epoch += 120;
+    v->status = 304;
+    v->reason = "Not Modified";
+    v->headers = "ETag: \"v1\"\r\nCache-Control: max-age=600\r\n";
+    v->body = NULL;
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/v.js"});
+    expect("cache: a stale reply is asked about with its validator",
+           nfake_requests == before + 1 && !strcmp(field(before, "If-None-Match"), "\"v1\"") &&
+               strcmp(fake_requests[before].method, "OPTIONS") != 0, NULL);
+    expect("cache: its 304 serves the kept body, judged with the kept CORS head",
+           g != NULL && g->ok && g->served == WAY_SERVED_CONFIRMED && g->body_len == strlen(kModule) &&
+               memcmp(g->body, kModule, g->body_len) == 0, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/v.js"});
+    expect("cache: and its freshness started again", g != NULL && g->served == WAY_SERVED_KEPT &&
+           nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+
+    // Vary: on Origin, kept and held to it; on a header the job cannot say,
+    // not kept.
+    fake_answer(NULL, "https://cdn.test/o.js", 200,
+                "Content-Type: text/javascript\r\nAccess-Control-Allow-Origin: https://a.test\r\nVary: Origin\r\n"
+                "Cache-Control: max-age=600\r\n", kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/o.js"}));
+    g = run(&(Ask){page, "https://cdn.test/o.js"});
+    expect("cache: a reply that varies on Origin is kept for that origin",
+           g != NULL && g->served == WAY_SERVED_KEPT, NULL);
+    yonder_fetched_free(g);
+    fake_answer(NULL, "https://cdn.test/u.js", 200, MODULE_HEAD "Vary: User-Agent\r\nCache-Control: max-age=600\r\n",
+                kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/u.js"}));
+    g = run(&(Ask){page, "https://cdn.test/u.js"});
+    expect("cache: one that varies on what the browser adds is not kept",
+           g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
+    yonder_fetched_free(g);
+
+    // The cache modes (SCRIPT_CACHE.md § 5).
+    fake_answer_t *m = fake_answer(NULL, "https://cdn.test/n.js", 200,
+                                   MODULE_HEAD "Cache-Control: max-age=600\r\nETag: \"n1\"\r\n", kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/n.js", .cache_mode = WAY_CACHE_NO_STORE}));
+    g = run(&(Ask){page, "https://cdn.test/n.js"});
+    expect("modes: no-store keeps nothing", g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/n.js", .cache_mode = WAY_CACHE_NO_STORE});
+    expect("modes: and reads nothing", g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/n.js", .cache_mode = WAY_CACHE_RELOAD});
+    expect("modes: reload asks the network over a fresh reply", g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
+    yonder_fetched_free(g);
+    before = nfake_requests;
+    m->status = 304;
+    m->reason = "Not Modified";
+    m->headers = "ETag: \"n1\"\r\n";
+    m->body = NULL;
+    g = run(&(Ask){page, "https://cdn.test/n.js", .cache_mode = WAY_CACHE_NO_CACHE});
+    expect("modes: no-cache asks about even a fresh reply",
+           g != NULL && g->served == WAY_SERVED_CONFIRMED && !strcmp(field(before, "If-None-Match"), "\"n1\""),
+           g ? g->why : NULL);
+    yonder_fetched_free(g);
+    s_epoch += 100000;
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/n.js", .cache_mode = WAY_CACHE_FORCE_CACHE});
+    expect("modes: force-cache serves a stale reply without asking",
+           g != NULL && g->served == WAY_SERVED_KEPT && nfake_requests == before, NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/n.js", .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+    expect("modes: only-if-cached serves it too", g != NULL && g->served == WAY_SERVED_KEPT && nfake_requests == before,
+           NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/never.js", .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+    expect("modes: and a miss is a network error, nothing asked",
+           g != NULL && !g->ok && nfake_requests == before && strstr(g->why, "only-if-cached") != NULL, NULL);
+    yonder_fetched_free(g);
+
+    // Never kept: a POST, an opaque answer, an answer reached by a redirect.
+    fake_answer(NULL, "https://cdn.test/p", 200, MODULE_HEAD "Cache-Control: max-age=600\r\n", "posted");
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/p", "POST", "Content-Type: text/plain\r\n", "x"}));
+    g = run(&(Ask){page, "https://cdn.test/p", "POST", "Content-Type: text/plain\r\n", "x"});
+    expect("never: a POST", g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
+    yonder_fetched_free(g);
+    fake_answer(NULL, "https://cdn.test/q.js", 200, "Cache-Control: max-age=600\r\n", kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/q.js", .mode = WAY_MODE_NO_CORS}));
+    g = run(&(Ask){page, "https://cdn.test/q.js", .mode = WAY_MODE_NO_CORS});
+    expect("never: an opaque answer", g != NULL && g->type == WAY_TYPE_OPAQUE && g->served == WAY_SERVED_NETWORK,
+           NULL);
+    yonder_fetched_free(g);
+    fake_answer(NULL, "https://cdn.test/from.js", 301, "Location: https://cdn.test/to.js\r\n", NULL);
+    fake_answer(NULL, "https://cdn.test/to.js", 200, MODULE_HEAD "Cache-Control: max-age=600\r\n", kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/from.js"}));
+    g = run(&(Ask){page, "https://cdn.test/from.js"});
+    expect("never: an answer reached by a redirect", g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
+    yonder_fetched_free(g);
+
+    way_cache_close(http_cache);
+    http_cache = NULL;
+    snprintf(line, sizeof(line), "rm -rf '%s'", root);
+    if (system(line) != 0)
+        expect("cache: the temporary directory is removed", false, root);
+}
+
 int main(void)
 {
     cookie_room();
@@ -966,6 +1163,7 @@ int main(void)
     fields();
     sweep();
     sweep_once();
+    http_cache_cases();
     way_jar_free(jar);
     way_preflight_free(cache);
     expect("nothing leaked", live == 0, NULL);

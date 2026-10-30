@@ -724,10 +724,6 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, con
     fake_cookie_encrypted=encrypted;
     snprintf(fake_cookie_set,sizeof(fake_cookie_set),"%.*s",(int)len,text);
 }
-void way_cache_enable(way_cache_t *cache, bool enabled) { (void)enabled; check(cache==NULL,"no test cache"); }
-void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cache==NULL,"no test cache"); }
-void way_cache_stats(way_cache_t *cache, way_cache_stats_t *out) { (void)out; check(cache==NULL,"no test cache"); }
-const char *way_cache_dir(way_cache_t *cache) { check(cache==NULL,"no test cache"); return ""; }
 
 static os64_text_context_t *probe_text;
 static os64_text_font_t *probe_font;
