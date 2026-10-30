@@ -2298,11 +2298,12 @@ static const char *const kPaintStage[PS_COUNT] = {
 // clock's next tick when the loop meets it itself (pictures_schedule), so a
 // source counted often here is rings that may do no work.
 typedef enum {
-    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_COUNT
+    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_DOWNLOADS,
+    PAST_COUNT
 } PastDeadline;
 
 static const char *const kPastDeadline[PAST_COUNT] = {
-    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures",
+    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures", "downloads",
 };
 
 static const char *const kWholeBy[WHOLE_COUNT] = {
@@ -2988,6 +2989,8 @@ static void download_ask(const char *url, const char *referrer, const char *disp
 static void download_arrived(os64_work_id_t id, yonder_download_job_t *job);
 static void downloads_follow(void);
 static void downloads_orphaned(void);
+static void downloads_heard(void);
+static uint64_t downloads_due(void);
 static bool script_rebuild(void);
 static void stream_drop(void);
 static void stream_sheets(void);
@@ -6479,7 +6482,7 @@ typedef struct {
 // (storage_turn), a cookie file's write (cookies_turn, offered as a timer
 // is), the settle (pictures_settle) and the stream's wait for its
 // sheets (stream_turn) itself, after the events; the bell meets the rest (pictures_tick,
-// motion_tick, coming_show). Two at one moment are common — the clock
+// motion_tick, coming_show, downloads_heard). Two at one moment are common — the clock
 // steps by the tick — and the moment is the bell's if either is.
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
 {
@@ -6537,6 +6540,7 @@ static void pictures_schedule(void)
     }
     if (seen != NULL)
         picture_flags_free(seen, small);
+    deadline_offer(&d, downloads_due(), PAST_DOWNLOADS);
     uint64_t next = d.next, now = yonder_now_ms();
     if (next != YONDER_NEVER && next <= now) {
         s_cost.past[d.from]++;
@@ -11120,8 +11124,8 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         // The head, the body and the verdict are the stream's: the loop
         // feeds a slice after the events (stream_turn, in main).
     }
-    if (mask & BELL_DOWNLOAD)
-        downloads_follow();
+    if ((mask & BELL_DOWNLOAD) || ((mask & BELL_TICK) && downloads_due() <= yonder_now_ms()))
+        downloads_heard();
     if (mask & BELL_TICK) {
         s_cost.bells++;
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
@@ -12703,6 +12707,10 @@ typedef struct {
     // before the cancel).
     yonder_download_job_t *job;
     uint64_t got, total;        // the last the job said; a finished one's size
+    // Its recent pace, noted as the bytes arrive, for the list's speed and
+    // time left; when it began running and when it finished, for its average.
+    yonder_download_pace_t pace;
+    uint64_t began, ended;
     char why[160];
 } Download;
 
@@ -12717,6 +12725,14 @@ static bool s_download_failed_unseen;           // a failure the list has not sh
 // data gets a copy relocation, which the kernel's linker does not perform.
 static os64_ui_class_t s_downloads_class;
 static void (*s_button_paint)(os64_ui_widget_t *, os64_draw_ctx_t *, const os64_ui_theme_t *);
+// The list while it is open: said again when a download changes state, as
+// the bytes arrive at most every DOWNLOADS_RELIST_MS, and every
+// DOWNLOADS_STALL_MS while one runs, so a stall shows as one rather than as
+// the last speed seen. Its address is the list's owner for the menu session.
+#define DOWNLOADS_RELIST_MS 500
+#define DOWNLOADS_STALL_MS 1000
+static bool s_downloads_listed;
+static uint64_t s_downloads_listed_at;
 
 // The question the Save dialog is asked, one at a time: `url` NULL when
 // nothing is asked. The dialog opens between turns (downloads_turn).
@@ -12788,10 +12804,13 @@ static int32_t downloads_running(void)
     return n;
 }
 
+static void downloads_relist(bool now);
+
 static void downloads_follow(void)
 {
     os64_ui_set_enabled(&g.ui, &g.downloads, s_ndownloads > 0);
     os64_ui_mark_dirty(&g.ui, &g.downloads);
+    downloads_relist(true);
 }
 
 static void download_failed(Download *d, const char *why)
@@ -12842,6 +12861,8 @@ static void downloads_feed(void)
         }
         d->job = job;
         d->state = DL_RUNNING;
+        d->began = yonder_now_ms();
+        yonder_download_pace_note(&d->pace, d->began, 0);
         running++;
     }
     downloads_follow();
@@ -12942,6 +12963,7 @@ static void download_arrived(os64_work_id_t id, yonder_download_job_t *job)
         d->job = NULL;
         d->got = job->got;
         d->total = job->total;
+        d->ended = yonder_now_ms();
         if (job->whole)
             d->state = DL_DONE;
         else
@@ -13000,6 +13022,27 @@ static void downloads_progress(uint64_t *got, uint64_t *total, bool *unknown)
     }
 }
 
+// Bytes arrived, or a stall's moment came (downloads_due): each running
+// download's pace noted, the meter moved, and the open list said again.
+static void downloads_heard(void)
+{
+    uint64_t got, total, now = yonder_now_ms();
+    bool unknown;
+    downloads_progress(&got, &total, &unknown);
+    for (int32_t i = 0; i < s_ndownloads; i++)
+        if (s_downloads[i].state == DL_RUNNING)
+            yonder_download_pace_note(&s_downloads[i].pace, now, s_downloads[i].got);
+    os64_ui_mark_dirty(&g.ui, &g.downloads);
+    downloads_relist(false);
+}
+
+// When the open list is next said again though no bytes arrive: YONDER_NEVER
+// while it is shut or nothing runs.
+static uint64_t downloads_due(void)
+{
+    return s_downloads_listed && downloads_running() > 0 ? s_downloads_listed_at + DOWNLOADS_STALL_MS : YONDER_NEVER;
+}
+
 // The button, and its meter along its foot: the share that has arrived
 // while every running download's size is known, a band that moves with the
 // bytes while one's is not, red across after a failure the list has not
@@ -13030,61 +13073,155 @@ static void downloads_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os6
     }
 }
 
-// One row of the list: the file's name, and how far it got or why not.
-static void download_row(const Download *d, char *out, size_t cap)
+// A row's name for the file: cut, at a character's start, to leave the
+// row's news room inside the 127 bytes the list keeps of a row.
+#define DOWNLOAD_ROW_NAME 40
+
+static void download_row_name(const Download *d, char *out, size_t cap)
 {
     const char *slash = os64_strrchr(d->path, '/');
     const char *name = slash != NULL ? slash + 1 : d->path;
-    char got[32], total[32];
+    size_t n = os64_strlen(name);
+    if (n <= DOWNLOAD_ROW_NAME || cap < DOWNLOAD_ROW_NAME + 4) {
+        os64_strcopy(out, cap, name);
+        return;
+    }
+    n = DOWNLOAD_ROW_NAME;
+    while (n > 0 && ((unsigned char)name[n] & 0xC0) == 0x80)
+        n--;
+    os64_memcpy(out, name, n);
+    os64_memcpy(out + n, "\xe2\x80\xa6", 4);
+}
+
+// One row of the list at `now`: the file's name, and how far it got and how
+// fast (the last few seconds' speed and the time that leaves while it runs,
+// its average once it is done), or why not.
+static void download_row(const Download *d, uint64_t now, char *out, size_t cap)
+{
+    char name[DOWNLOAD_ROW_NAME + 4], got[32], total[32], speed[32], left[32];
+    download_row_name(d, name, sizeof(name));
     yonder_download_size(d->got, got, sizeof(got));
     yonder_download_size(d->total, total, sizeof(total));
+    uint64_t rate = 0;
     switch (d->state) {
     case DL_WAITING: os64_snprintf(out, cap, "%s - waiting", name); break;
     case DL_RUNNING:
+        if (!yonder_download_pace_rate(&d->pace, now, d->got, &rate))
+            speed[0] = '\0';
+        else if (rate == 0)
+            os64_strcopy(speed, sizeof(speed), ", stalled");
+        else {
+            char size[32];
+            yonder_download_size(rate, size, sizeof(size));
+            os64_snprintf(speed, sizeof(speed), ", %s/s", size);
+        }
+        left[0] = '\0';
+        if (d->total > d->got && rate != 0 && yonder_download_left(d->total - d->got, rate, left + 2, sizeof(left) - 2))
+            os64_memcpy(left, ", ", 2);
         if (d->total != 0)
-            os64_snprintf(out, cap, "%s - %s of %s", name, got, total);
+            os64_snprintf(out, cap, "%s - %s of %s%s%s", name, got, total, speed, left);
         else
-            os64_snprintf(out, cap, "%s - %s", name, got);
+            os64_snprintf(out, cap, "%s - %s%s", name, got, speed);
         break;
-    case DL_DONE: os64_snprintf(out, cap, "%s - %s, done", name, got); break;
-    case DL_FAILED: os64_snprintf(out, cap, "%s - failed: %s", name, d->why); break;
+    case DL_DONE:
+        if (d->ended - d->began >= 1000) {
+            yonder_download_size(d->got * 1000 / (d->ended - d->began), speed, sizeof(speed));
+            os64_snprintf(out, cap, "%s - %s, done (%s/s average)", name, got, speed);
+        } else {
+            os64_snprintf(out, cap, "%s - %s, done", name, got);
+        }
+        break;
+    case DL_FAILED:
+        if (d->got != 0)
+            os64_snprintf(out, cap, "%s - failed at %s: %s", name, got, d->why);
+        else
+            os64_snprintf(out, cap, "%s - failed: %s", name, d->why);
+        break;
     case DL_CANCELLED: os64_snprintf(out, cap, "%s - cancelled", name); break;
     }
 }
 
-static void downloads_picked(void *user, size_t row);
-
-// The list, newest first, and "Clear finished" at its foot. Read afresh
-// each time it opens: it shows what was true then.
-static void click_downloads(os64_ui_widget_t *w, void *user)
+// The list's rows, newest first, and "Clear finished" at its foot, into
+// `labels` and `enabled` (DOWNLOADS_MAX + 1 of each): how many. The rows
+// shown are counted as seen.
+static size_t downloads_rows(const char **labels, bool *enabled)
 {
-    (void)user;
-    if (g.menus == NULL || s_ndownloads == 0)
-        return;
     static char rows[DOWNLOADS_MAX + 1][224];
-    const char *labels[DOWNLOADS_MAX + 1];
-    bool enabled[DOWNLOADS_MAX + 1];
-    uint64_t got, total;
+    uint64_t got, total, now = yonder_now_ms();
     bool unknown;
     downloads_progress(&got, &total, &unknown);
     bool finished = false;
     for (int32_t i = 0; i < s_ndownloads; i++) {
         const Download *d = &s_downloads[s_ndownloads - 1 - i];
-        download_row(d, rows[i], sizeof(rows[i]));
+        download_row(d, now, rows[i], sizeof(rows[i]));
         labels[i] = rows[i];
         enabled[i] = true;
         finished |= download_finished(d);
     }
     labels[s_ndownloads] = "Clear finished";
     enabled[s_ndownloads] = finished;
-    s_download_failed_unseen = false;
-    os64_ui_mark_dirty(&g.ui, w);
+    if (s_download_failed_unseen) {
+        s_download_failed_unseen = false;
+        os64_ui_mark_dirty(&g.ui, &g.downloads);
+    }
+    return (size_t)s_ndownloads + 1;
+}
+
+// The open list said again (s_downloads_listed): now, or, unless `now`, once
+// DOWNLOADS_RELIST_MS has passed since it last was. A list the person shut
+// is found shut here, and not said again.
+static void downloads_relist(bool now)
+{
+    uint64_t at = yonder_now_ms();
+    if (!s_downloads_listed || (!now && at - s_downloads_listed_at < DOWNLOADS_RELIST_MS))
+        return;
+    const char *labels[DOWNLOADS_MAX + 1];
+    bool enabled[DOWNLOADS_MAX + 1];
+    size_t count = downloads_rows(labels, enabled);
+    s_downloads_listed = g.menus != NULL &&
+                         os64_ui_menu_list_relabel(g.menus, &s_downloads_listed, labels, enabled, count) == OS64_UI_OK;
+    s_downloads_listed_at = at;
+}
+
+static void downloads_picked(void *user, size_t row);
+
+// The list, said again while it is open (downloads_relist).
+static void click_downloads(os64_ui_widget_t *w, void *user)
+{
+    (void)user;
+    if (g.menus == NULL || s_ndownloads == 0)
+        return;
+    const char *labels[DOWNLOADS_MAX + 1];
+    bool enabled[DOWNLOADS_MAX + 1];
+    size_t count = downloads_rows(labels, enabled);
+    // A list keeps the width it opened at, so it opens wide enough for the
+    // longest a waiting or running row's news grows to: its speed and the
+    // time left are not cut when they come. The room around a label is the
+    // list's mark and margins, with some to spare.
+    int32_t width = w->bounds.w;
+    for (int32_t i = 0; i < s_ndownloads; i++) {
+        const Download *d = &s_downloads[i];
+        if (d->state != DL_WAITING && d->state != DL_RUNNING)
+            continue;
+        char name[DOWNLOAD_ROW_NAME + 4], widest[224];
+        download_row_name(d, name, sizeof(name));
+        os64_snprintf(widest, sizeof(widest), "%s - 999.9 MB of 999.9 MB, 999.9 MB/s, 99 h 59 min left", name);
+        int32_t px = 0;
+        if (os64_ui_text_measure(&g.ui, OS64_FONT_ROLE_UI, widest, os64_strlen(widest), &px) == OS64_FONT_OK &&
+            px + 48 > width)
+            width = px + 48;
+    }
     os64_ui_menu_list_t list = {
-        .labels = labels, .enabled = enabled, .count = (size_t)s_ndownloads + 1,
-        .selected = (size_t)s_ndownloads + 1, .min_width = w->bounds.w, .widget = w,
-        .pick = downloads_picked, .user = NULL,
+        .labels = labels, .enabled = enabled, .count = count,
+        .selected = count, .min_width = width, .widget = w,
+        .pick = downloads_picked, .user = &s_downloads_listed,
     };
-    if (os64_ui_menu_open_list(g.menus, &list, w->bounds) != OS64_UI_OK)
+    // BUSY: it opens once a menu just shut has gone, and is said again
+    // meanwhile like an open one.
+    os64_ui_status_code_t rc = os64_ui_menu_open_list(g.menus, &list, w->bounds);
+    s_downloads_listed = rc == OS64_UI_OK || rc == OS64_UI_BUSY;
+    s_downloads_listed_at = yonder_now_ms();
+    if (!s_downloads_listed)
         status_rest("The downloads list would not open.");
 }
 

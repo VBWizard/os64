@@ -1,15 +1,17 @@
 #ifndef YONDER_HOST_MENUS_H
 #define YONDER_HOST_MENUS_H
 /* The yonder hosts' menu session (yonder_host_menus.c): the last list a
- * dropdown opened, and a pick played into it. */
+ * dropdown opened (and its rows as last relabeled), and a pick played into
+ * it. */
 #include <stdbool.h>
 #include <stdio.h>
+#include "os64/ui_action.h"
 #include "os64/ui_menu.h"
 
 #define YONDER_HOST_LIST_ROWS 16
 
 typedef struct {
-    unsigned opens, detaches;
+    unsigned opens, detaches, relabels, menus;     /* menus: os64_ui_menu_open's */
     bool open;
     size_t count, selected;
     char labels[YONDER_HOST_LIST_ROWS][64];

@@ -281,6 +281,25 @@ void os64_ui_menu_list_detach(os64_ui_menu_session_t *s,void *user)
     /* With no native window yet (pending) the close cannot be refused. */
     if(os64_ui_menu_close(s,OS64_UI_MENU_GEOMETRY)!=OS64_UI_OK) s->close_retry=true;
 }
+os64_ui_status_code_t os64_ui_menu_list_relabel(os64_ui_menu_session_t *s,void *user,
+    const char *const *labels,const bool *enabled,size_t count)
+{
+    if(!s||!user||!labels||!enabled) return OS64_UI_INVALID;
+    menu_list *old=s->list;
+    if(!s->active||!old||old->user!=user) return OS64_UI_STALE;
+    if(count!=old->count) return OS64_UI_INVALID;
+    os64_ui_menu_list_t l={.labels=labels,.enabled=enabled,.count=count,.pick=old->pick,.user=old->user};
+    menu_list *copy=NULL;
+    os64_ui_status_code_t rc=list_copy(&l,&copy);
+    if(rc) return rc;
+    copy->value=old->value; copy->min_width=old->min_width;
+    copy->widget=old->widget; copy->widget_bounds=old->widget_bounds;
+    s->list=copy;
+    /* A list is always level 0; a pending one has no popup yet. */
+    if(s->depth&&s->panels[0].widget&&s->panels[0].widget->list==old) menu_popup_relist(s->panels[0].widget,copy);
+    os64_free(old);
+    return OS64_UI_OK;
+}
 static bool same_rect(os64_gui_rect_t a,os64_gui_rect_t b)
 { return a.x==b.x&&a.y==b.y&&a.w==b.w&&a.h==b.h; }
 static void boundary(void *user,bool empty)

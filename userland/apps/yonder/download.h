@@ -2,8 +2,8 @@
 #define YONDER_DOWNLOAD_H
 
 // What a download is called (YONDER_HONEY_DO.md § 6), the name the Save
-// dialog proposes, and how its size is said. Pure — no file system, no
-// window — so the host suite drives every rule.
+// dialog proposes, how its size is said, and how fast it goes. Pure — no
+// file system, no window — so the host suite drives every rule.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -36,5 +36,32 @@ bool yonder_download_free_name(const char *name, bool (*taken)(void *ctx, const 
 // (rounded up, so a byte is never "0 KB"), megabytes and gigabytes to a
 // tenth (cut, never rounded up past what there is).
 void yonder_download_size(uint64_t bytes, char *out, size_t cap);
+
+// A download's recent pace: how many bytes it had at moments a quarter of a
+// second or more apart, the oldest forgotten as new ones come, so the speed
+// it gives is the average over the last few seconds, and falls to nothing
+// across a stall rather than holding the last speed seen. Zeroed is empty.
+#define YONDER_DOWNLOAD_SAMPLES 24
+#define YONDER_DOWNLOAD_SAMPLE_MS 250
+#define YONDER_DOWNLOAD_WINDOW_MS 5000
+typedef struct {
+    uint64_t at[YONDER_DOWNLOAD_SAMPLES], got[YONDER_DOWNLOAD_SAMPLES];
+    uint32_t count, newest;
+} yonder_download_pace_t;
+
+// `got` bytes at `now_ms`, kept unless it comes under
+// YONDER_DOWNLOAD_SAMPLE_MS after the last one kept.
+void yonder_download_pace_note(yonder_download_pace_t *pace, uint64_t now_ms, uint64_t got);
+// Bytes a second from the oldest note of the last YONDER_DOWNLOAD_WINDOW_MS
+// to `got` bytes at `now_ms` (from the newest note, when none is that
+// recent; from the one before it, when it is under a second old). False
+// when that spans less than a second: there is no speed to say yet.
+bool yonder_download_pace_rate(const yonder_download_pace_t *pace, uint64_t now_ms, uint64_t got,
+                               uint64_t *rate);
+
+// About how long `left` bytes take at `rate` a second, as a person reads
+// it, into `out`: "40 s left", "12 min left", "2 h left", "2 h 5 min left",
+// rounded up so it never says less than it will be. False when `rate` is 0.
+bool yonder_download_left(uint64_t left, uint64_t rate, char *out, size_t cap);
 
 #endif

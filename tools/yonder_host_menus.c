@@ -35,6 +35,42 @@ void os64_ui_menu_list_detach(os64_ui_menu_session_t *s, void *user)
     yonder_host_list.detaches++;
 }
 
+os64_ui_status_code_t os64_ui_menu_list_relabel(os64_ui_menu_session_t *s, void *user, const char *const *labels,
+                                                const bool *enabled, size_t count)
+{
+    (void)s;
+    if (!yonder_host_list.open || yonder_host_list.user != user) return OS64_UI_STALE;
+    if (count != yonder_host_list.count) return OS64_UI_INVALID;
+    size_t n = count < YONDER_HOST_LIST_ROWS ? count : YONDER_HOST_LIST_ROWS;
+    for (size_t i = 0; i < n; i++) {
+        snprintf(yonder_host_list.labels[i], sizeof(yonder_host_list.labels[i]), "%s", labels[i]);
+        yonder_host_list.enabled[i] = enabled[i];
+    }
+    yonder_host_list.relabels++;
+    return OS64_UI_OK;
+}
+
+/* A row's own menu opens over a picked downloads row: the hosts have no
+ * popups, so it is only counted. */
+os64_ui_status_code_t os64_ui_actions_refresh(os64_ui_action_view_t *view)
+{
+    (void)view;
+    return OS64_UI_OK;
+}
+
+os64_ui_status_code_t os64_ui_menu_open(os64_ui_menu_session_t *s, os64_ui_menu_model_t *model,
+                                        os64_ui_action_view_t *view, os64_gui_rect_t anchor,
+                                        os64_ui_menu_invocation_t invocation)
+{
+    (void)s;
+    (void)model;
+    (void)view;
+    (void)anchor;
+    (void)invocation;
+    yonder_host_list.menus++;
+    return OS64_UI_OK;
+}
+
 bool os64_ui_shortcut_match(os64_ui_shortcut_t shortcut, const os64_gui_event_t *ev)
 {
     (void)shortcut;
