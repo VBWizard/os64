@@ -1293,3 +1293,30 @@ bool garb_selector_matches_in(const garb_selectors_t *list, int32_t i,
         return false;
     return match_complex(list, &list->list.v[i], element, scope);
 }
+
+// Walk the parsed form, including :is/:not/:where and nth-child's filter.
+static void dependencies(const List *list, garb_selector_dependencies_t *out)
+{
+    for (int32_t i = 0; i < list->n; ++i) {
+        const Complex *x = &list->v[i];
+        for (int32_t j = 0; j < x->n; ++j) {
+            const Compound *c = &x->c[j];
+            out->siblings |= c->left == C_NEXT || c->left == C_SUBSEQUENT;
+            for (int32_t k = 0; k < c->n; ++k) {
+                const Simple *s = &c->s[k];
+                if (s->kind != S_PSEUDO) continue;
+                out->siblings |= s->pseudo >= P_FIRST_CHILD && s->pseudo <= P_EMPTY;
+                // :dir()'s dir=auto text search and :has's relational search can
+                // reach above the changed node's immediate parent.
+                out->whole_tree |= s->pseudo == P_HAS || s->pseudo == P_DIR;
+                if (s->list) dependencies(s->list, out);
+            }
+        }
+    }
+}
+garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list)
+{
+    garb_selector_dependencies_t out = {0};
+    if (list) dependencies(&list->list, &out);
+    return out;
+}

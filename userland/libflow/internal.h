@@ -433,6 +433,9 @@ void f_blend_matrix(const flow_transform_t *f, int64_t w, int64_t h, double out[
 
 typedef struct {
     flow_style_t style;
+    // Style equality does not imply unchanged text or child order.
+    bool steady, subtree_steady, reuse_safe;
+    size_t list_cost;
     // The element's animations, or NULL for none (motion.c).
     FMotion *motion;
     // Pass 2's question, answered bottom-up here: does this element make,
@@ -497,6 +500,9 @@ typedef struct {
 typedef struct {
     const os64_html_document_t *doc;
     const flow_env_t *env;
+    flow_env_t inputs;
+    uint64_t cascade_generation, cascade_updates, reused;
+    bool lists_refused;
     FArena arena;
     FMap map;               // element node -> FStyled
     size_t lists_left;      // of F_STYLE_LISTS_BUDGET
@@ -516,6 +522,8 @@ typedef struct {
 // differently (LAYOUT.md § Proof, the prefix rule).
 FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
                        const flow_env_t *env);
+FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
+                              const flow_env_t *env, const FStyles *previous);
 // NULL for a node with no style: not an element, or inside a
 // `display: none` subtree, which pass 1 does not descend into.
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);

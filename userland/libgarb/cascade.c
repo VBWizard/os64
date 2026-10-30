@@ -138,12 +138,29 @@ typedef struct {
     const CustomMap *customs;
     OwnFrames *frames;
     int32_t nframes;
-    bool needs_substitution;
+    bool needs_substitution, dirty;
+    uint64_t changed;
 } Slot;
 
+typedef struct {
+    const garb_parsed_t *sheet;
+    const char *media;
+    garb_import_t via;
+    bool imported;
+    int32_t parent;
+} CascadeInput;
+
 struct garb_cascade {
+    uint32_t refs;
+    CascadeInput *inputs;
+    int32_t ninputs;
     const os64_html_document_t *doc;
     os64_html_pin_t pin;
+    os64_html_reader_t *reader;
+    uint64_t generation, updates, version;
+    garb_selector_dependencies_t dependencies;
+    bool update_failed, updating;
+    size_t update_attribute_bytes;
     garb_parsed_t self;         // the cascade's own arena, in a parse's shape
     // What it read of the sheets it applied, all of them: one arena held to
     // the selected read limit, in a parse's shape, so a read that ran short —
@@ -1951,12 +1968,16 @@ static int32_t inline_decls(garb_cascade_t *c, const os64_html_node_t *el, Decl 
     if (!grow(c, (void **)&c->attrs, c->nattrs, &c->attrcap, sizeof(garb_parsed_t)))
         return 0;
     garb_parsed_t *p = &c->attrs[c->nattrs];
-    if (garb_parse_block_limited(a->value, os64_strlen(a->value), c->limits.attribute_bytes, p) != GARB_OK) {
+    size_t cap = c->limits.attribute_bytes;
+    if (c->updating && cap > c->limits.state_bytes - c->update_attribute_bytes)
+        cap = c->limits.state_bytes - c->update_attribute_bytes;
+    if (garb_parse_block_limited(a->value, os64_strlen(a->value), cap, p) != GARB_OK) {
         garb_free(p);
         c->incomplete = true;           // a style the page gave was not read
         return 0;
     }
     c->nattrs++;
+    if (c->updating) c->update_attribute_bytes += os64_arena_stats(p->arena).reserved_bytes;
     Decl *d = alloc(c, (size_t)(p->nitems > 0 ? p->nitems : 1) * sizeof(Decl));
     if (d == NULL)
         return 0;
@@ -2271,6 +2292,7 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     garb_cascade_t *c = os64_calloc(1, sizeof(*c));
     if (c == NULL)
         return NULL;
+    c->refs = 1;
     c->limits = limits;
     c->self.arena_max = limits.state_bytes;
     c->self.arena = os64_arena_create(0, limits.state_bytes);
@@ -2284,6 +2306,9 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         garb_cascade_free(c);
         return NULL;
     }
+    static uint64_t generation;
+    c->generation = __atomic_add_fetch(&generation, 1, __ATOMIC_RELAXED);
+    c->version = os64_html_version(doc);
     c->env = env;
     c->quirks = doc->quirks;
     c->universal = -1;
@@ -2298,6 +2323,22 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         if (c->reads.arena != NULL)
             into = &c->reads;
     }
+    c->inputs = n > 0 ? alloc(c, (size_t)n * sizeof(*c->inputs)) : NULL;
+    if (n > 0 && !c->inputs) { garb_cascade_free(c); return NULL; }
+    c->ninputs = n;
+    for (int32_t i = 0; i < n; ++i) {
+        c->inputs[i].sheet = sheets[i].sheet;
+        c->inputs[i].parent = sheets[i].parent;
+        c->inputs[i].imported = sheets[i].via != NULL;
+        if (sheets[i].via) c->inputs[i].via = *sheets[i].via;
+        if (sheets[i].media) {
+            size_t len = os64_strlen(sheets[i].media) + 1;
+            char *copy = alloc(c, len);
+            if (!copy) { garb_cascade_free(c); return NULL; }
+            os64_memcpy(copy, sheets[i].media, len);
+            c->inputs[i].media = copy;
+        }
+    }
     uint32_t order = 0;
     for (int32_t s = 0; s < n; s++) {
         const garb_parsed_t *sheet = sheets[s].sheet;
@@ -2309,6 +2350,11 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         if (sheet->incomplete)
             c->incomplete = true;
         add_rules(c, into, sheet->items, sheet->nitems, &order, 0, s);
+    }
+    for (int32_t i = 0; i < c->nrules; ++i) {
+        garb_selector_dependencies_t d = garb_selectors_dependencies(c->rules[i].sel);
+        c->dependencies.siblings |= d.siblings;
+        c->dependencies.whole_tree |= d.whole_tree;
     }
     keyframes_settle(c);
     // Each @keyframes read for no element: what an element shares.
@@ -2362,7 +2408,92 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         short_read |= c->attrs[i].incomplete;
     if (short_read)
         c->incomplete = true;
+    c->reader = os64_html_reader_new((os64_html_document_t *)doc, c->version);
     return c;
+}
+
+static const os64_html_node_t *cascade_next(const os64_html_node_t *x)
+{
+    if (x->first_child) return x->first_child;
+    while (x && !x->next) x = x->parent;
+    return x ? x->next : NULL;
+}
+uint64_t garb_cascade_generation(const garb_cascade_t *c) { return c ? c->generation : 0; }
+uint64_t garb_cascade_updates(const garb_cascade_t *c) { return c ? c->updates : 0; }
+uint64_t garb_cascade_version(const garb_cascade_t *c) { return c ? c->version : 0; }
+bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *node, uint64_t update)
+{
+    const Slot *s = c ? slot_for(c, node, false) : NULL;
+    return !s || s->changed > update;
+}
+
+bool garb_cascade_update(garb_cascade_t *c)
+{
+    if (!c || c->incomplete || c->update_failed) return false;
+    uint64_t version = os64_html_version(c->doc);
+    if (version == c->version) return true;
+    // Old derived values stay alive for displayed trees. Renew periodically
+    // rather than accumulate retired values or attribute parses indefinitely.
+    if (!c->reader || c->dependencies.whole_tree || c->updates >= 64) return false;
+    const os64_html_change_entry_t *changes = NULL;
+    int64_t count = os64_html_changes(c->reader, &changes);
+    c->update_failed = true;
+    if (count < 0) return false;
+    size_t elements = 0;
+    for (const os64_html_node_t *x = c->doc->document; x; x = cascade_next(x))
+        elements += is_el(x);
+    uint32_t cap = 64;
+    if (elements > (UINT32_MAX - 2) / 2) return false;
+    while (cap < elements * 2 + 2) {
+        if (cap > UINT32_MAX / 2) return false;
+        cap *= 2;
+    }
+    Slot *slots = os64_calloc(cap, sizeof(*slots));
+    if (!slots) return false;
+    garb_cascade_t fresh = *c;
+    fresh.slots = slots; fresh.slotcap = cap;
+    for (const os64_html_node_t *x = c->doc->document; x; x = cascade_next(x)) {
+        if (!is_el(x)) continue;
+        Slot *to = slot_for(&fresh, x, true);
+        const Slot *from = slot_for(c, x, false);
+        if (from) { *to = *from; to->dirty = false; }
+        else to->dirty = true;
+    }
+    for (const os64_html_change_entry_t *e = changes; e; e = e->next) {
+        const os64_html_node_t *root = e->target;
+        if (root && !is_el(root)) root = root->parent ? root->parent : c->doc->html;
+        if (root && c->dependencies.siblings && is_el(root->parent)) root = root->parent;
+        // Body hints can colour links outside the body's current subtree.
+        if (root == c->doc->body) root = c->doc->html;
+        Slot *s = root ? slot_for(&fresh, root, false) : NULL;
+        if (s) s->dirty = true;
+    }
+    Slot *old_slots = c->slots;
+    uint32_t old_cap = c->slotcap;
+    c->slots = slots; c->slotcap = cap; c->updating = true;
+    for (int32_t i = 0; i < c->nrules; ++i) c->rules[i].seen = NULL;
+    Match *m = NULL; int32_t mcap = 0;
+    for (const os64_html_node_t *x = c->doc->document; x; x = cascade_next(x)) {
+        if (!is_el(x)) continue;
+        Slot *s = slot_for(c, x, false);
+        const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
+        s->dirty |= up && up->dirty;
+        if (!s->dirty) continue;
+        *s = (Slot){.node = x, .dirty = true, .changed = c->updates + 1};
+        cascade_element(c, x, up ? up->customs : NULL, &m, &mcap);
+        if (c->incomplete || c->self.incomplete) break;
+    }
+    c->updating = false;
+    for (int32_t i = 0; i < c->nattrs; ++i) c->incomplete |= c->attrs[i].incomplete;
+    os64_html_pin_t pin = c->incomplete || c->self.incomplete ? 0 : os64_html_pin(c->doc);
+    if (!pin) {
+        c->slots = old_slots; c->slotcap = old_cap; os64_free(slots);
+        return false;
+    }
+    os64_free(old_slots);
+    os64_html_unpin(c->doc, c->pin); c->pin = pin;
+    c->version = version; ++c->updates; c->update_failed = false;
+    return true;
 }
 
 bool garb_cascade_incomplete(const garb_cascade_t *c)
@@ -2462,15 +2593,48 @@ int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t ca
     return c->nskips;
 }
 
+// Retained users share updates; each keeps its old computed-style snapshot
+// and update number. The host serializes updates with reads.
+bool garb_cascade_retain(garb_cascade_t *c)
+{
+    if (!c || c->refs == UINT32_MAX) return false;
+    ++c->refs;
+    return true;
+}
+
+bool garb_cascade_matches(const garb_cascade_t *c, const garb_sheet_in_t *in,
+                          int32_t n, garb_env_t env)
+{
+    if (!c || c->ninputs != n || c->env.width != env.width || c->env.height != env.height ||
+        c->env.dark != env.dark || c->env.reduced_motion != env.reduced_motion ||
+        c->env.scripting != env.scripting || c->env.modern_off != env.modern_off ||
+        c->env.device_width != env.device_width || c->env.device_height != env.device_height ||
+        c->env.resolution != env.resolution) return false;
+    for (int32_t i = 0; i < n; ++i) {
+        const CascadeInput *a = &c->inputs[i];
+        const garb_sheet_in_t *b = &in[i];
+        if (a->sheet != b->sheet || a->parent != b->parent || a->imported != (b->via != NULL) ||
+            ((a->media == NULL) != (b->media == NULL)) ||
+            (a->media && !os64_streq(a->media, b->media))) return false;
+        if (a->imported && (a->via.url != b->via->url || a->via.len != b->via->len ||
+            a->via.media != b->via->media || a->via.nmedia != b->via->nmedia ||
+            a->via.has_supports != b->via->has_supports || a->via.supports != b->via->supports ||
+            a->via.nsupports != b->via->nsupports)) return false;
+    }
+    return true;
+}
+
 void garb_cascade_free(garb_cascade_t *c)
 {
     if (c == NULL)
         return;
+    if (--c->refs) return;
     for (int32_t i = 0; i < c->nattrs; i++)
         garb_free(&c->attrs[i]);
     garb_free(&c->reads);
     os64_free(c->slots);
     os64_arena_destroy(c->self.arena);
+    os64_html_reader_free(c->reader);
     if (c->pin != 0)
         os64_html_unpin(c->doc, c->pin);
     os64_free(c);

@@ -2,7 +2,9 @@
 
 *Slice 5 of [MODERN_WEB.md](MODERN_WEB.md): D13, incremental relayout,
 then `requestAnimationFrame`. Original design by Fable, 2026-10-21;
-5a implementation and reconciliation by Quinn, 2026-10-29. The sequence
+5a implementation and reconciliation by Quinn, 2026-10-29.
+5b implementation adds incremental cascade and computed-style reuse; hardware
+acceptance and the restyle design review are pending. The sequence
 with Canvas is recorded in [CANVAS.md](CANVAS.md). Fable reviews the
 restyle rule and layout graft before those cuts merge.*
 
@@ -94,7 +96,7 @@ The chain avoids a second allocation to flatten records into an array at
 read time. Internal holds are released without collecting during a mutation;
 collection happens at stable verb/reader boundaries. Entries passed by all
 readers are pruned at the next boundary. With no readers, no log records or
-holds are created. Yonder starts using readers in 5b; 5a exposes and tests
+holds are created. The cascade uses readers in 5b; 5a exposes and tests
 the native contract without retaining an unused log for browsing.
 
 The default record budget is one sixteenth of the document arena budget.
@@ -127,62 +129,78 @@ matches T's siblings and the parent's own `:empty`. Descendant combinators
 look UP, so nothing outside those sets can change its match. A cascade
 with any `:has()` restyles everything, every time: `:has()` makes an
 ancestor's match depend on its descendants, and the honest bound is the
-document. The cascade computes the two facts at build (`uses_has`,
-`sibling_sensitive`), and `garb_cascade_dump` prints them.
+document. `:dir()` also takes the whole-cascade fallback: resolving an
+ancestor's `dir=auto` can depend on changed text below the immediate parent.
+Dependency discovery walks nested selector lists, including `:is()`, `:not()`,
+`:where()` and the selector filter in `:nth-child()`.
 
 **The cascade is updated in place.**
 
 ```c
-/* Recompute the winners of the elements `changes` reach, by the restyle
- * rule above, drop the slots of removed nodes, and move the UPDATE
- * counter; the SHEET generation does not move (no sheet and no
- * environment changed, or the caller would have cascaded afresh). False
- * when memory ran out or a change asks for everything: the caller then
- * cascades afresh, as today, and that moves the sheet generation.
- * Entries are the document's log's; the cascade must have been built
- * over `doc` at this env. */
-bool garb_cascade_update(garb_cascade_t *c, const os64_html_change_t *changes, size_t n);
-/* The sheet generation: what a layout's reuse compares (RELAYOUT.md's
- * clause 7). Moves only when a cascade is built. */
-uint64_t garb_cascade_generation(const garb_cascade_t *c);
-/* The update counter: how many times the cascade was updated in place,
- * for the instrument and the dumps. Never compared by the memo. */
-uint64_t garb_cascade_updates(const garb_cascade_t *c);
+bool garb_cascade_matches(const garb_cascade_t *, const garb_sheet_in_t *,
+                          int32_t count, garb_env_t);
+bool garb_cascade_update(garb_cascade_t *);
+uint64_t garb_cascade_generation(const garb_cascade_t *);
+uint64_t garb_cascade_updates(const garb_cascade_t *);
+uint64_t garb_cascade_version(const garb_cascade_t *);
+bool garb_style_updated_since(const garb_cascade_t *, const os64_html_node_t *,
+                              uint64_t update);
 ```
 
-In place, because the cascade is the window thread's alone and nothing
-points into it: libflow copies winners into its own `flow_style_t` and its
-own lists (the `F_STYLE_LISTS_BUDGET` arena), and the document strings a
-winner names are pinned by the cascade itself. Dropping a removed node's
-slot is not optional: the slots are hashed by node POINTER, a freed node's
-address may be given to a new node, and a stale slot would hand that node
-another element's winners. The log names every removed node; the update
-drops them before any element is asked again, which yonder guarantees by
-updating the cascade before every layout of a moved document.
+The cascade owns an optional native reader. Updating consumes its linked
+change records, rebuilds the node slot table from the current document,
+and recomputes affected winners in parent-first order. Removed nodes have
+no slot in the new table. New elements start dirty. Body hints invalidate
+the document because they can colour links beyond the body's subtree.
+The generation identifies a full build; successful updates advance a
+separate counter. Each computed-style tree records both, so a measured
+layout can advance the shared cascade while the displayed tree still
+knows which updates it has not incorporated.
 
-**Pass 1 reuses styled elements.** `flow_env_t` gains `previous`, the tree
-last shown of this document, and `f_style_build` walks as it does today but,
-for an element outside the restyle set whose ancestors are all outside it,
-COPIES its `FStyled` from the previous tree's styles (the struct, and its
-lists into the new arena) instead of computing it. Then the bits that are
-computed bottom-up (`holds_block`, `has_rp`) are recomputed along the
-ancestor chain of every restyled root, since a child's change can change
-them; the top-down ones (`anchor`, `link`, `transparent`, `lays_out_items`,
-the list depths) are stable for an element whose ancestors are stable,
-which is what "outside the restyle set" means. An element with animations
-(`FStyled.motion`) is never copied: its values are the timeline's at this
-layout's time, computed as today.
+The earlier claim that nothing points into the cascade was wrong:
+animation keyframe records borrow declaration data. Updates preserve the
+cascade's prior arena allocations while its users are alive. This first
+cut renews the cascade after at most 64 updates; state allocations remain
+bounded by `state_bytes`, and additional inline-attribute parse allocations
+also have a cumulative `state_bytes` ceiling. Reaching a limit, losing
+history, lacking a reader, or encountering broad selector dependencies
+requests a fresh cascade. A failed update preserves old borrowed values
+but requires replacement before further queries. The displayed tree keeps
+its own document pin; successful updates rotate the cascade's pin.
 
-**Style equality is the second gate.** After pass 1, every restyled
-element's new `flow_style_t` is compared with its previous one (the struct
-by `memcmp`, the lists by content): equal means `steady`. A class toggled
-that no rule reads, a `style` attribute set to what it already said, a
-`:hover`-shaped rule that changed only colours: steady. `subtree_steady`
-is bubbled up, one more bit beside `holds_block`, and it is what pass 3
-reads. (Today `:hover` never matches in libgarb, select.h's rule; the day
-the between-arcs batch makes it match, the hovered chain enters as a change
-through this same door, the old chain and the new one, and a hover that
-changes only paint will be steady and cost the parts path, not a layout.)
+Yonder shares immutable stylesheet parses through counted owners. A staged
+or measured sheet table retains matching linked parses and inline parses
+whose complete text is equal. Media conditions, import metadata, sheet
+identity/order and the complete cascade environment must also match.
+Changed inline styles therefore affect synchronous geometry reads before
+the page is published. A live page's explicit stylesheet invalidation still
+forces a full cascade. Cascades themselves have counted owners; updates
+and queries remain serialized on the window thread.
+
+**Pass 1 reuses computed styles.** The additive `flow_layout_restyled`
+entry takes a previous tree without changing `flow_env_t` or
+`flow_profile_t`. Ordinary layout calls still compute fresh styles. It
+copies unaffected scalar styles and deep-copies their lists into the new
+arena, memoizing shared slices. The new tree can outlive the old one.
+List-budget refusal falls back to a whole pass; allocation failure remains
+an explicit layout failure. Full quirks mode uses the whole style pass
+because its content-sensitive UA rules need broader invalidation.
+
+The root and body are computed fresh to establish root-font and body-link
+context. Derived tree/model facts (link indices, list depths, decoration
+ancestry, `holds_block`, `has_rp`) are recomputed rather than copied. Link
+indices can change after an insertion elsewhere even when the link's CSS
+does not. Styles with animation names or active motion are computed fresh;
+unchanged nonanimated styles may be reused across timeline creation.
+
+**Style equality is the second gate.** Scalar fields and list contents are
+compared independently of storage addresses. Equal, nonanimated values set
+`steady`; `subtree_steady` is propagated bottom-up. A class toggle that no
+rule reads can be steady. A colour change is not whole-style equality:
+the previous design incorrectly called that steady. A future paint-only
+path must prove its own narrower equivalence. These bits do not prove that
+text or child lists are unchanged; 5c still needs its separate untouched
+condition. Passes 2 and 3 remain whole builds in 5b.
 
 ## The layout memo: passes 2 and 3
 
@@ -417,3 +435,12 @@ baseline; they do not substitute for the real-page acceptance above.
 
 Validation and remaining hardware evidence are recorded in
 [5a-validation.md](../../relayout-evidence/5a-validation.md).
+
+## 5b implemented profile
+
+`styles reused` counts copied computed styles; `cascade updates` counts
+successful DOM-version advances within an existing cascade. The existing
+`reused` field continues to count layout reuse and remains zero until 5c.
+Measured and displayed layouts both use the incremental door. Validation
+and the outstanding P5/design gates are recorded in
+[5b-validation.md](../../relayout-evidence/5b-validation.md).

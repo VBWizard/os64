@@ -742,6 +742,23 @@ flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_
     if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
     return tree;
 }
+flow_tree_t *__real_flow_layout_restyled(const os64_html_document_t *,const os64_page_t *,int32_t,
+    const flow_env_t *,const flow_tree_t *,flow_profile_t *,int64_t (*)(void *),void *);
+flow_tree_t *__wrap_flow_layout_restyled(const os64_html_document_t *doc,const os64_page_t *model,
+    int32_t width,const flow_env_t *env,const flow_tree_t *previous,flow_profile_t *profile,
+    int64_t (*clock)(void *),void *clock_ctx) {
+    // A refusal after reclaiming the old geometry exercises the retry's
+    // teardown and recovery, rather than the usual preserve-old-tree path.
+    if(budget_active && budget_refuse_retry && g.page.tree==NULL) {
+        budget_refuse_retry=false;budget_retry_refusals++;
+        return NULL;
+    }
+    if(geometry_refuse_layout) return NULL;
+    flow_tree_t *tree=__real_flow_layout_restyled(doc,model,width,env,previous,profile,clock,clock_ctx);
+    clock_us+=geometry_layout_delay;
+    if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
+    return tree;
+}
 static void *probe_alloc(void *ctx, size_t n) { (void)ctx; return os64_malloc(n); }
 static void probe_free(void *ctx, void *p, size_t n) { (void)ctx; (void)n; os64_free(p); }
 /* Whether a case's layouts go through yonder's own resolver (page_fonts). */
@@ -2277,12 +2294,14 @@ static void stylesheet_reuse(void) {
             Sheet *sheet=&g.page.sheets[i];
             bool child=strstr(sheet->url,"child.css")!=NULL;
             const char *text=child?"h1{font-weight:bold}":css;
-            check(garb_parse_sheet_text(text,strlen(text),&sheet->parsed)==GARB_OK,"linked sheet fixture parses");
+            sheet->source=os64_calloc(1,sizeof(*sheet->source));
+            sheet->source->refs=1;
+            check(garb_parse_sheet_text(text,strlen(text),&sheet->source->parsed)==GARB_OK,"linked sheet fixture parses");
             sheet_ready(&g.page,i);
         }
         check(g.page.nsheets==4 && page_lay_out(&g.page,800,600,g.zoom,&g.page),"duplicate links and imports lay out");
         const void *arenas[4];
-        for(int i=0; i<4; i++) arenas[i]=g.page.sheets[i].parsed.arena;
+        for(int i=0; i<4; i++) arenas[i]=g.page.sheets[i].source->parsed.arena;
         check(os64_html_set_text(g.page.way.doc,probe_id("heading")->first_child,"new",3)==OS64_HTML_OK,
             "linked sheet fixture text changes");
         if(cut) fail_at=attempts+cut;
@@ -2290,16 +2309,17 @@ static void stylesheet_reuse(void) {
         fail_at=0;
         if(!complete) {
             refused++;
-            check(g.page.sheets[0].parsed.arena==arenas[0] && g.page.sheets[0].ready,
+            check(g.page.sheets[0].source->parsed.arena==arenas[0] && g.page.sheets[0].ready,
                 "failed recascade keeps original linked parse");
             check(script_rebuild(),"linked parse survives failure and retry");
         }
         bool transferred=g.page.nsheets==4;
         for(int i=0; i<g.page.nsheets; i++) {
+            if(!g.page.sheets[i].source) { transferred=false; continue; }
             bool found=false;
-            for(int j=0; j<4; j++) found |= g.page.sheets[i].parsed.arena==arenas[j];
-            transferred &= found && g.page.sheets[i].ready && g.page.sheets[i].borrowed_from==NULL;
-            for(int j=0; j<i; j++) transferred &= g.page.sheets[i].parsed.arena!=g.page.sheets[j].parsed.arena;
+            for(int j=0; j<4; j++) found |= g.page.sheets[i].source->parsed.arena==arenas[j];
+            transferred &= found && g.page.sheets[i].ready && g.page.sheets[i].source->refs>0;
+
         }
         // An optional sheet metadata allocation can fail while geometry still
         // succeeds; that sheet is omitted and its unused old parse is released.
@@ -2310,7 +2330,7 @@ static void stylesheet_reuse(void) {
             for(int i=0;i<g.page.nsheets;i++) omitted |= !g.page.sheets[i].ready;
             check(omitted,"refused import metadata may omit a sheet");
         } else {
-            check(transferred,"ready duplicate parses and imports transfer without aliasing ownership");
+            check(transferred,"ready duplicate parses and imports retain shared ownership");
         }
         probe_drop();
     }
@@ -6205,6 +6225,7 @@ static void classic_browser_cases(void)
  * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
  * of it, so the replay runner's every file goes through its own door. */
 #include "test_yonder_layout_profile.inc"
+#include "test_yonder_restyle.inc"
 
 #ifndef YONDER_HOST_FAKES_ONLY
 /* Optional consumer proof reads locally downloaded primary scripts. Site
@@ -6968,7 +6989,7 @@ static void diag_style_case(void) {
     probe_page(html,false);
     free(html);
     g.page.diag=diag_new_claimed("http://big.test/",1);
-    const garb_parsed_t *sheet=g.page.nsheets==1 ? &g.page.sheets[0].parsed : NULL;
+    const garb_parsed_t *sheet=g.page.nsheets==1 ? &g.page.sheets[0].source->parsed : NULL;
     size_t parsed=sheet!=NULL ? os64_arena_stats(sheet->arena).used_bytes : 0;
     bool whole=sheet!=NULL && !sheet->incomplete;
     for(int i=0;i<8 && whole;i++) {
@@ -10766,6 +10787,14 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if(getenv("YONDER_RESTYLE_ONLY")) {
+        restyle_browser_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"restyle: text released");
+        check(live==0,"restyle: heap empty");
+        printf("yonder restyle: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     classic_browser_cases();
     address_key_cases();
     interface_font_cases();
@@ -10773,6 +10802,7 @@ int main(void)
     stand_in_paint_cases();
     canvas_window_cases();
     layout_profile_cases();
+    restyle_browser_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();
