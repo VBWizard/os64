@@ -13142,8 +13142,7 @@ static void download_row(const Download *d, uint64_t now, char *out, size_t cap)
 }
 
 // The list's rows, newest first, and "Clear finished" at its foot, into
-// `labels` and `enabled` (DOWNLOADS_MAX + 1 of each): how many. The rows
-// shown are counted as seen.
+// `labels` and `enabled` (DOWNLOADS_MAX + 1 of each): how many.
 static size_t downloads_rows(const char **labels, bool *enabled)
 {
     static char rows[DOWNLOADS_MAX + 1][224];
@@ -13160,11 +13159,17 @@ static size_t downloads_rows(const char **labels, bool *enabled)
     }
     labels[s_ndownloads] = "Clear finished";
     enabled[s_ndownloads] = finished;
+    return (size_t)s_ndownloads + 1;
+}
+
+// The rows went to a list that shows them: a failure among them is seen,
+// and the button's red goes. Rows built for a list found shut were not.
+static void downloads_seen(void)
+{
     if (s_download_failed_unseen) {
         s_download_failed_unseen = false;
         os64_ui_mark_dirty(&g.ui, &g.downloads);
     }
-    return (size_t)s_ndownloads + 1;
 }
 
 // The open list said again (s_downloads_listed): now, or, unless `now`, once
@@ -13181,6 +13186,8 @@ static void downloads_relist(bool now)
     s_downloads_listed = g.menus != NULL &&
                          os64_ui_menu_list_relabel(g.menus, &s_downloads_listed, labels, enabled, count) == OS64_UI_OK;
     s_downloads_listed_at = at;
+    if (s_downloads_listed)
+        downloads_seen();
 }
 
 static void downloads_picked(void *user, size_t row);
@@ -13221,7 +13228,9 @@ static void click_downloads(os64_ui_widget_t *w, void *user)
     os64_ui_status_code_t rc = os64_ui_menu_open_list(g.menus, &list, w->bounds);
     s_downloads_listed = rc == OS64_UI_OK || rc == OS64_UI_BUSY;
     s_downloads_listed_at = yonder_now_ms();
-    if (!s_downloads_listed)
+    if (s_downloads_listed)
+        downloads_seen();
+    else
         status_rest("The downloads list would not open.");
 }
 

@@ -10726,7 +10726,28 @@ static void downloads_list_cases(void) {
     check(yonder_host_list_pick(1) && s_ndownloads==0 && !s_downloads_listed &&
           yonder_host_list.relabels==relabels,
           "downloads: Clear finished shuts the list, which is not said again");
+    /* Shut by the person, and a failure arrives before yonder has looked:
+     * the rows built for it are not shown, so the failure stays unseen. */
+    memset(&job,0,sizeof(job));
+    memset(d,0,sizeof(*d));
+    s_ndownloads=1;
+    d->state=DL_RUNNING; d->job=&job; d->began=now_ms;
+    snprintf(d->path,sizeof(d->path),"/home/downloads/gone.zip");
+    click_downloads(&g.downloads,NULL);
+    yonder_host_list.open=false;
+    snprintf(job.why,sizeof(job.why),"the server answered 404");
+    download_arrived(d->id,&job);
+    check(!s_downloads_listed && s_download_failed_unseen && d->state==DL_FAILED,
+          "downloads: a failure arriving after the list was shut stays unseen, and the button red");
+    click_downloads(&g.downloads,NULL);
+    check(s_downloads_listed && !s_download_failed_unseen &&
+          !strcmp(yonder_host_list.labels[0],"gone.zip - failed: the server answered 404"),
+          "downloads: the list opened again shows it, and it is seen");
+    yonder_host_list.open=false;
+    s_downloads_listed=false;
+    s_ndownloads=0;
     g.menus=menus;
+    os64_ui_font_release(&g.ui);            /* what measuring a row's width laid out */
 }
 
 static void title_fit_cases(void)
