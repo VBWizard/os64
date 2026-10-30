@@ -4,8 +4,9 @@ The current original-page paragraph/list medians are below the 5a control,
 and the non-positional companion improves both mutations. Repeated article
 measurements on the P5 are comparable to control; the earlier large article
 slowdown did not recur in the controlled follow-up below. This evidence
-supports review of 5b. The earlier article result and elevated paragraph
-maximum remain disclosed; neither has an established root cause.
+supports review of 5b. **Merge remains blocked on the alternating manual
+article comparison described below.** The earlier article result and elevated
+paragraph maximum remain disclosed; neither has an established root cause.
 
 ## Workloads and control
 
@@ -156,6 +157,11 @@ Scripts and Modern Web enabled, dark appearance and 100% zoom.
 | Original: list replacement | 61.000 ms | 67.900 ms | +11.3% | 66.200 ms | 75.200 ms |
 | Companion: paragraph | 60.200 ms | 43.750 ms | -27.3% | 82.800 ms | 100.700 ms |
 | Companion: list replacement | 60.350 ms | 40.350 ms | -33.1% | 62.700 ms | 51.700 ms |
+
+The companion results in this table are from candidate `8406bc21` (corpus
+463), not the later r3 build `483df1bb`. The production-code delta between
+those candidates is confined to libgarb declaration-order scratch reuse;
+there is no fresh companion hardware measurement at r3.
 
 Unchanged geometry is 0.100 ms median / 0.200 ms worst in all four runs.
 The candidate improves typical paragraph timing and both companion medians,
@@ -535,3 +541,64 @@ cleanup interval completed. That refused launch produced no timing sample
 and is excluded. All temporary P5 diagnostic directories were removed after
 the processes exited. Ordinary local binaries were rebuilt from restored
 source, and the frozen r3 manifest still verifies in full.
+
+
+## Fable's remeasure review: review allowed, manual merge gate open
+
+The architecture review at `bc2bb84b` accepts the dependency flags, persistent
+slot table, dirty-majority fallback and declaration scratch. Its ruling permits
+code review now but requires a further alternating manual article comparison
+before merge. 5c has not started.
+
+**Update accounting.** Removing the first list row changes the positions tested
+by `:nth-child(even)`; invalidation marks the surviving children and crosses
+the dirty-majority threshold, so each of the 25 list operations (five warm-ups
+plus 20 samples) falls back to a full cascade. The 25 paragraph operations can
+update locally. The reported 26 updates are consistent with those paragraph
+operations plus the completion/report update. The 54 layouts also include the
+list fallbacks, bulk setup, initial display and maximization; unchanged geometry
+reads add no layout. This is accounting from the fixture and invalidation code,
+not a captured per-update trace. The non-positional companion's 51 updates are
+consistent with both sets of 25 mutations plus the completion update.
+
+**Tail latency remains unexplained.** Original-page paragraph maxima of
+159.1, 159.2 and 147.0 ms exceed the matched control's 100.3 ms. The aggregate
+reports do not identify which sample renewed a cascade or what consumed its
+time. Neither renewal-by-bytes nor allocator traversal is an established
+explanation. Lower medians do not establish better tail latency.
+
+**Manual protocol correction.** The tester confirms that corpus 562 used a
+title-bar double-click to maximize, not edge dragging through intermediate
+sizes. That removes the intermediate-drag premise from the retention
+hypothesis. The automated route still did not reproduce the actual maximize
+gesture or keyboard input, so the manual comparison remains required. Of the
+three earlier slow candidate article runs, corpus 466 and 562 were profiled;
+557 was not. All three have displayed geometry timings, but only the profiled
+runs provide native layout-phase evidence.
+
+**Navigation lifetime checked.** `page_departs` retires the script runtime;
+it does not clear the displayed page's layout or cascade. `page_show` calls
+`page_clear` after the replacement has a usable layout, and that call frees the
+old flow tree and cascade. This preserves the old page when navigation fails.
+The hidden measurement cache has separate cleanup through `measured_forget`.
+Keeping the displayed page alive across navigation is intentional, and its
+lifetime alone does not establish an allocator regression or justify freeing
+its cascade early. No production change was made on this hypothesis.
+
+**Remaining acceptance session.** Use the frozen control `9dca4a7d` and r3
+candidate `483df1bb`, alternating control/candidate three times. Each run starts
+a fresh installed Yonder with `--layout-profile /tests/pages/layout-stream.html`.
+Double-click its title bar to maximize, wait for the starter to settle, then
+type `file:///tests/pages/layout-stream-article.html` in the address bar. Keep
+Scripts and Modern Web enabled, dark appearance and 100% zoom. Do not resize
+after navigating. Verify completion, 18 sample/height entries and the same
+2,526 × 1,259 viewport; save the screen and native record with `d` for each run.
+
+Compare all six totals and native work counts. If candidate timings sit within
+the control spread, the article gate passes and the earlier slowdown stays in
+the evidence as an unresolved anomaly. If the roughly 15% slowdown recurs,
+capture both builds' `/proc/<yonder>/heap` immediately before typing the article
+address on a follow-up pair. Compare live regions and allocator state before
+choosing a fix; more retained regions would support the hypothesis, not by
+itself prove that a particular allocator or lifetime change cures it. Merge
+and 5c remain on hold until this gate is resolved.

@@ -311,4 +311,8 @@ comparable to control, including a check against the actual installed r3
 libraries. Together with the confirmed mutation improvements, that evidence
 supports presenting 5b for review. The earlier article slowdown and elevated
 paragraph maximum remain disclosed and unexplained; no production fix was
-made during the follow-up. 5c has not started.
+made during the follow-up. Fable permits code review now; merge remains on
+hold for three manual control/candidate article pairs using title-bar
+double-click maximization and actual address-bar input. The final section of
+the comparison records the protocol, update accounting, companion revision
+and navigation-lifetime check. 5c has not started.
