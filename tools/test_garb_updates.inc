@@ -19,6 +19,14 @@ static void update_equal(garb_cascade_t *c, os64_html_document_t *doc, garb_shee
                  "updated winners equal a fresh cascade");
     garb_cascade_free(whole);
 }
+static bool update_or_rebuild(garb_cascade_t **c, os64_html_document_t *doc, garb_sheet_in_t *in)
+{
+    if (garb_cascade_update(*c)) return true;
+    garb_cascade_t *fresh=garb_cascade(in,1,doc,garb_cascade_env(*c));
+    if (!fresh || garb_cascade_incomplete(fresh)) { garb_cascade_free(fresh); return false; }
+    garb_cascade_free(*c); *c=fresh;
+    return true;
+}
 static int cascade_updates(void)
 {
     size_t baseline=live;
@@ -40,12 +48,12 @@ static int cascade_updates(void)
         update_check(garb_cascade_generation(c)==generation && garb_cascade_updates(c)==1 &&
                      garb_style_updated_since(c,a,0) && !garb_style_updated_since(c,aside,0),"generation stable, unrelated branch untouched");
         update_equal(c,doc,&in);
-        update_check(!os64_html_set_attr(doc,box,"class","on",2) && garb_cascade_update(c),"inherited custom property update");update_equal(c,doc,&in);
-        update_check(!os64_html_set_text(doc,a->first_child,"",0) && garb_cascade_update(c),"text update");update_equal(c,doc,&in);
-        update_check(!os64_html_insert(doc,box,b,a) && garb_cascade_update(c),"move update");update_equal(c,doc,&in);
-        update_check(!os64_html_remove(doc,b) && garb_cascade_update(c),"removed slots discarded");update_equal(c,doc,&in);
+        update_check(!os64_html_set_attr(doc,box,"class","on",2) && update_or_rebuild(&c,doc,&in),"inherited custom property update");update_equal(c,doc,&in);
+        update_check(!os64_html_set_text(doc,a->first_child,"",0) && update_or_rebuild(&c,doc,&in),"text update");update_equal(c,doc,&in);
+        update_check(!os64_html_insert(doc,box,b,a) && update_or_rebuild(&c,doc,&in),"move update");update_equal(c,doc,&in);
+        update_check(!os64_html_remove(doc,b) && update_or_rebuild(&c,doc,&in),"removed slots discarded");update_equal(c,doc,&in);
         update_check(!os64_html_set_attr(doc,a,"style","color:purple;background:linear-gradient(red,blue)",49) &&
-                     garb_cascade_update(c),"inline parse update");update_equal(c,doc,&in);
+                     update_or_rebuild(&c,doc,&in),"inline parse update");update_equal(c,doc,&in);
         for(int k=0;k<150;k++) {
             update_check(!os64_html_set_attr(doc,a,"title",k%2?"x":"y",1),"repeated edit");
             if(!garb_cascade_update(c)) {
@@ -68,6 +76,31 @@ static int cascade_updates(void)
         os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"class","x",1);
         update_check(!garb_cascade_update(c),"nested broad dependency requests full cascade");
         garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+    }
+    // Broad changes renew by bytes, while small changes keep a large
+    // cascade reusable. These are allocator-pressure regressions, not clocks.
+    for (int broad=0;broad<2;++broad) {
+        char html[65536]; size_t len=(size_t)sprintf(html,"<!doctype html><div id=box>");
+        for(int i=0;i<2000;++i) len+=(size_t)sprintf(html+len,"<p>%d</p>",i);
+        strcpy(html+len,"</div>");
+        os64_html_document_t *doc=update_doc(html);
+        const char *css="p{color:red;background:blue;border:1px solid green;padding:2px}";
+        garb_parsed_t sheet;garb_parse_sheet_text(css,strlen(css),&sheet);
+        garb_sheet_in_t in={.sheet=&sheet};
+        garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+        os64_html_node_t *box=(os64_html_node_t *)by_id(doc->document,"box");
+        os64_html_node_t *target=broad?box:box->first_child;
+        unsigned renewals=0;
+        for(int i=0;i<20;i++) {
+            os64_html_set_attr(doc,target,"title",i%2?"a":"b",1);
+            uint64_t was=garb_cascade_generation(c);
+            update_check(update_or_rebuild(&c,doc,&in),"retention-pressure update completes");
+            renewals+=garb_cascade_generation(c)!=was;
+        }
+        update_check(broad ? renewals>=4 : renewals==0,
+                     broad?"large restyles renew before 64 updates":"small restyles retain incremental reuse");
+        garb_cascade_free(c);garb_free(&sheet);os64_html_document_free(doc);
+        update_check(live==baseline,"retention-pressure ownership released");
     }
     size_t points=0;
     for(size_t failure=0;failure<=points;++failure) {

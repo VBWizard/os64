@@ -53,8 +53,9 @@ byte-for-byte from the 5a delivery. It includes a SHA-256 manifest and the
 unchanged measurement fixture. The local handoff records the exact source
 commit and delivery paths.
 
-P5 acceptance and Fable's review of the restyle rule remain pending. For
-comparison with [the 5a baseline](5a-validation.md), use the same settings:
+The first P5 run completed, but performance acceptance remains pending:
+it exposed the regression recorded below. Fable's restyle design review
+also remains pending. For comparison with [the 5a baseline](5a-validation.md), use the same settings:
 Scripts and Modern Web on, dark appearance, 100% zoom, a fixed 2,526 × 1,259
 CSS-pixel viewport, 2,000 rows and 20 samples. Reload before the run:
 
@@ -71,3 +72,62 @@ The fixture's `:nth-child(even)` rule makes the conservative restyle rule
 revisit the row group after a row edit. Consequently it is a useful unchanged
 comparison but not a best-case demonstration of isolated style reuse. No
 speedup is assumed. The dominant layout phase from 5a is addressed by 5c.
+
+## First P5 comparison: regression, not acceptance
+
+The run at 2026-10-30 01:17 UTC (October 29 local time), corpus 299, used
+the same 2,526 × 1,259 viewport, dark appearance, 100% zoom, 2,000 rows
+and 20 samples as 5a. It completed with no refused/partial layouts or clock
+errors. The counters show 50 cascade updates and 2,040 reused styles.
+
+| Experiment | 5a median | 5b median | 5b worst |
+|---|---:|---:|---:|
+| Read unchanged geometry | 0.100 ms | 0.100 ms | 0.200 ms |
+| Change one paragraph | 63.900 ms | 136.900 ms | 300.700 ms |
+| Replace one list item | 55.300 ms | 138.450 ms | 308.100 ms |
+
+Paragraph and list medians increased by 114.2% and 150.4%. The two runs
+each record 52 model rebuilds and 54 layout attempts. Cumulative layout
+time rose from 2,414.759 ms to 5,285.197 ms; cascade time rose from
+432.828 ms to 733.041 ms, and computed style time from 83.864 ms to
+139.946 ms. Low reuse on this selector-heavy fixture explains limited
+benefit, but does not excuse this slowdown.
+
+A read-only heap snapshot after the run records 112,718,384 live bytes,
+367 regions (325 dedicated), and an intact heap audit. The 5b policy of
+retaining old cascade allocations for up to 64 updates is a suspect: the
+Os64 allocator walks its region ledger during allocation/free. That is a
+hypothesis pending a controlled retention-limit experiment, not an
+established attribution. The screenshot and original corpus/heap reports
+are preserved with the local proof artifacts; raw individual sample values
+have not been retrieved.
+
+## Retention correction
+
+An isolated one-variable QEMU experiment shortened the 64-update limit to
+one update. On the same default workload, cumulative layout time fell from
+38.340 to 28.857 seconds (the earlier 5a QEMU run recorded 25.412 seconds).
+Paragraph/list medians fell from 960.550/922.200 ms to 774.900/787.900 ms.
+This supports retention as a contributor; these emulator runs do not prove
+the full cause or establish the corrected P5 performance.
+
+The correction uses retained bytes rather than a one-update limit: renew
+before the next update once added state payload and inline-attribute parse
+storage reach one initial state's payload, with a 4 KiB floor. A single
+update may cross that threshold; the existing hard allocation caps remain.
+The independent 64-update guard remains as well.
+
+New tests exercise 20 broad updates over 2,000 elements and require early
+renewals, while 20 small edits over the same-sized cascade retain incremental
+reuse. The full cascade suite passes (1,321 update checks); the focused
+style/layout oracle passes 25,463 checks including 164 allocation positions;
+the full browser suite passes 12,548 checks. Sanitizers and leak checks remain
+enabled. The replacement cohort reuses 21 of its 22 binaries from the first
+5b delivery; only libgarb changes. P5 remeasurement remains required.
+
+The corrected target then completed the same QEMU workload with 35 cascade
+updates, 1,402 reused styles and no refusals/partial layouts or clock errors.
+Its paragraph/list medians were 648.700/612.050 ms, with worst values
+1,199.900/879.600 ms. Cumulative layout time was 26.484 seconds, versus
+38.340 seconds for the original 5b target. These are encouraging functional
+and comparative emulator results; the replacement still needs P5 validation.

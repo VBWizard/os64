@@ -161,6 +161,7 @@ struct garb_cascade {
     garb_selector_dependencies_t dependencies;
     bool update_failed, updating;
     size_t update_attribute_bytes;
+    size_t initial_state_bytes, retained_budget;
     garb_parsed_t self;         // the cascade's own arena, in a parse's shape
     // What it read of the sheets it applied, all of them: one arena held to
     // the selected read limit, in a parse's shape, so a read that ran short —
@@ -2408,6 +2409,8 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
         short_read |= c->attrs[i].incomplete;
     if (short_read)
         c->incomplete = true;
+    c->initial_state_bytes = os64_arena_stats(c->self.arena).used_bytes;
+    c->retained_budget = c->initial_state_bytes > 4096 ? c->initial_state_bytes : 4096;
     c->reader = os64_html_reader_new((os64_html_document_t *)doc, c->version);
     return c;
 }
@@ -2432,9 +2435,15 @@ bool garb_cascade_update(garb_cascade_t *c)
     if (!c || c->incomplete || c->update_failed) return false;
     uint64_t version = os64_html_version(c->doc);
     if (version == c->version) return true;
-    // Old derived values stay alive for displayed trees. Renew periodically
-    // rather than accumulate retired values or attribute parses indefinitely.
-    if (!c->reader || c->dependencies.whole_tree || c->updates >= 64) return false;
+    // Old derived values stay alive for displayed trees. Renew once added
+    // storage reaches one initial state's worth (at least 4 KiB). Keeping
+    // many whole restyles bloats the allocator's region ledger and slows
+    // even unrelated layout allocations. An update may cross this soft
+    // threshold; the arena and attribute caps remain the hard bounds.
+    size_t added = os64_arena_stats(c->self.arena).used_bytes - c->initial_state_bytes;
+    if (!c->reader || c->dependencies.whole_tree || c->updates >= 64 ||
+        added >= c->retained_budget || c->update_attribute_bytes >= c->retained_budget - added)
+        return false;
     const os64_html_change_entry_t *changes = NULL;
     int64_t count = os64_html_changes(c->reader, &changes);
     c->update_failed = true;
