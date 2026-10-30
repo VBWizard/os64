@@ -67,7 +67,7 @@ Chris moves rows.
 | 3 | A menu bar, with Favorites and History on it | Opus | open |
 | 4 | ~~Persistent cookies, with a switch~~ | Opus | done (the login slice; § 4 has the as-built) |
 | 5 | The right-click menu | Opus; Quinn (the save dialog) | built (§ 5, as built; the Save verbs with § 6) |
-| 6 | Download | Opus | built (§ 6, as built); the live panel and drawn faces are the polish cut |
+| 6 | Download | Opus | built (§ 6, as built), its list live; the flash, a panel with a bar per row and drawn faces are the polish cut |
 | 7 | Selecting and copying text, and the I-beam | Fable design; Opus builds | open |
 | 8 | The mouse wheel through vncd | Fable reads; Opus fixes | open |
 
@@ -337,7 +337,17 @@ ends with it. `downloads = <dir>` is read by the same folder reader as
 `profile`. The meter is v1's: a bar along the button's foot in the
 button's ink (a band that steps with the bytes when no length was given),
 red across after a failure until the list is opened; no flash when one
-finishes, which waits for the polish cut with the live panel.
+finishes, which waits for the polish cut. The list is live while it is
+open: the menu session's `os64_ui_menu_list_relabel` swaps an open list's
+rows in place (same count, the width it opened at, a label grown past it
+cut), and yonder says the rows again on a state change, on the bell at
+most every 500 ms, and on the ticker every second while one runs, so a
+stall shows. A running row's speed is the average over its notes of the
+last five seconds (`yonder_download_pace_t`, notes kept a quarter second
+apart) and the time left is what remains over it, rounded up; a finished
+row gives its average from start to end, a failed one the size it
+stopped at, which is what tells a full disk from a file grown past the
+largest its file system holds.
 
 ### 7. Selecting and copying text, and the I-beam
 

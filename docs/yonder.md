@@ -110,10 +110,12 @@ fills as they arrive (a short band moves along it when a server does not
 say how big the file is), and turns red when one fails, until you open
 the list. Click
 **Downloads** for the list, newest first: each file's name and how far it
-got, or why it failed. Pick a row for **Cancel Download** or **Show in
+got, or why it failed and how far it had got. While it is open it keeps
+up: a running row says its speed over the last few seconds and the time
+that leaves (`stalled` when nothing has come for a while), and a finished
+one its average speed. Pick a row for **Cancel Download** or **Show in
 Roam**; **Clear finished** at the foot empties the list of the ones that
-are over. The list shows what was true when it opened; open it again to
-see it move.
+are over.
 
 **`p` shows a page with positioning off**: every box in document order,
 nothing fixed or stacked over anything else. With no scripts, a

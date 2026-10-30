@@ -8212,7 +8212,7 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
                      "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
-                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
+                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, downloads 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
@@ -10687,6 +10687,69 @@ static void clipped_control_cases(void) {
 /* The window's name: the page's title through fit_title. A control
  * character the page spells is a '?', never a byte the kernel would log
  * raw; past ASCII is one '?' a character; a long title is cut with "...". */
+/* The downloads list while it is open: said again as the bytes arrive, at
+ * most every DOWNLOADS_RELIST_MS, with the last few seconds' speed and the
+ * time that leaves; said again with no bytes arriving, so a stall reads as
+ * one; its average once done; and no longer said once it is shut. */
+static void downloads_list_cases(void) {
+    void *menus=g.menus;
+    g.menus=(os64_ui_menu_session_t *)&yonder_host_list;    /* the hosts' session */
+    yonder_host_list=(yonder_host_list_t){0};
+    static yonder_download_job_t job;
+    memset(&job,0,sizeof(job));
+    job.total=(uint64_t)6<<30;
+    now_ms=100000;
+    Download *d=&s_downloads[0];
+    memset(d,0,sizeof(*d));
+    s_ndownloads=1;
+    d->state=DL_RUNNING; d->job=&job; d->began=now_ms;
+    snprintf(d->path,sizeof(d->path),"/home/downloads/ubuntu.iso");
+    yonder_download_pace_note(&d->pace,now_ms,0);
+    click_downloads(&g.downloads,NULL);
+    check(yonder_host_list.opens==1 && yonder_host_list.count==2 &&
+          !strcmp(yonder_host_list.labels[0],"ubuntu.iso - 0 KB of 6.0 GB") && !yonder_host_list.enabled[1] &&
+          downloads_due()==now_ms+DOWNLOADS_STALL_MS,
+          "downloads: the list opens on the running download, with no speed to say yet");
+    for(uint64_t i=1;i<=8;i++) { now_ms+=250; job.got=i*2*1024*1024; downloads_heard(); }
+    check(yonder_host_list.relabels==4 &&
+          !strcmp(yonder_host_list.labels[0],"ubuntu.iso - 16.0 MB of 6.0 GB, 8.0 MB/s, 13 min left"),
+          "downloads: the open list says the bytes, the speed and the time left, twice a second");
+    for(int i=0;i<6;i++) { now_ms=downloads_due(); downloads_heard(); }
+    check(!strcmp(yonder_host_list.labels[0],"ubuntu.iso - 16.0 MB of 6.0 GB, stalled"),
+          "downloads: with no bytes arriving the list is said again, and a stall reads as one");
+    job.got=job.total; job.whole=true;
+    download_arrived(d->id,&job);
+    check(!strcmp(yonder_host_list.labels[0],"ubuntu.iso - 6.0 GB, done (768.0 MB/s average)") &&
+          yonder_host_list.enabled[1] && downloads_due()==YONDER_NEVER,
+          "downloads: a finished download is said at once, with its average");
+    unsigned relabels=yonder_host_list.relabels;
+    check(yonder_host_list_pick(1) && s_ndownloads==0 && !s_downloads_listed &&
+          yonder_host_list.relabels==relabels,
+          "downloads: Clear finished shuts the list, which is not said again");
+    /* Shut by the person, and a failure arrives before yonder has looked:
+     * the rows built for it are not shown, so the failure stays unseen. */
+    memset(&job,0,sizeof(job));
+    memset(d,0,sizeof(*d));
+    s_ndownloads=1;
+    d->state=DL_RUNNING; d->job=&job; d->began=now_ms;
+    snprintf(d->path,sizeof(d->path),"/home/downloads/gone.zip");
+    click_downloads(&g.downloads,NULL);
+    yonder_host_list.open=false;
+    snprintf(job.why,sizeof(job.why),"the server answered 404");
+    download_arrived(d->id,&job);
+    check(!s_downloads_listed && s_download_failed_unseen && d->state==DL_FAILED,
+          "downloads: a failure arriving after the list was shut stays unseen, and the button red");
+    click_downloads(&g.downloads,NULL);
+    check(s_downloads_listed && !s_download_failed_unseen &&
+          !strcmp(yonder_host_list.labels[0],"gone.zip - failed: the server answered 404"),
+          "downloads: the list opened again shows it, and it is seen");
+    yonder_host_list.open=false;
+    s_downloads_listed=false;
+    s_ndownloads=0;
+    g.menus=menus;
+    os64_ui_font_release(&g.ui);            /* what measuring a row's width laid out */
+}
+
 static void title_fit_cases(void)
 {
     char out[OS64_GUI_TITLE_MAX];
@@ -10738,6 +10801,7 @@ int main(void)
     covered_link_cases();
     clipped_control_cases();
     classic_downloaded_cases();
+    downloads_list_cases();
     hover_batch_cases();
     classic_hover_profile();
     geometry_cases();

@@ -1,4 +1,4 @@
-// download.c — what a download is called (download.h).
+// download.c — what a download is called, and how fast it goes (download.h).
 
 #include "download.h"
 
@@ -240,4 +240,53 @@ void yonder_download_size(uint64_t bytes, char *out, size_t cap)
         os64_snprintf(out, cap, "%lu.%lu %s", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10),
                       unit == mb ? "MB" : "GB");
     }
+}
+
+void yonder_download_pace_note(yonder_download_pace_t *pace, uint64_t now_ms, uint64_t got)
+{
+    if (pace->count > 0 && now_ms - pace->at[pace->newest] < YONDER_DOWNLOAD_SAMPLE_MS)
+        return;
+    pace->newest = pace->count == 0 ? 0 : (pace->newest + 1) % YONDER_DOWNLOAD_SAMPLES;
+    pace->at[pace->newest] = now_ms;
+    pace->got[pace->newest] = got;
+    if (pace->count < YONDER_DOWNLOAD_SAMPLES)
+        pace->count++;
+}
+
+bool yonder_download_pace_rate(const yonder_download_pace_t *pace, uint64_t now_ms, uint64_t got,
+                               uint64_t *rate)
+{
+    if (pace->count == 0)
+        return false;
+    // Oldest first, k = 0 the oldest kept: the first inside the window,
+    // else the newest; then one further back if that spans under a second.
+    uint32_t oldest = (pace->newest + YONDER_DOWNLOAD_SAMPLES - (pace->count - 1)) % YONDER_DOWNLOAD_SAMPLES;
+    uint32_t k = 0;
+    while (k + 1 < pace->count &&
+           now_ms - pace->at[(oldest + k) % YONDER_DOWNLOAD_SAMPLES] > YONDER_DOWNLOAD_WINDOW_MS)
+        k++;
+    if (k > 0 && now_ms - pace->at[(oldest + k) % YONDER_DOWNLOAD_SAMPLES] < 1000)
+        k--;
+    uint32_t base = (oldest + k) % YONDER_DOWNLOAD_SAMPLES;
+    if (now_ms < pace->at[base] || now_ms - pace->at[base] < 1000)
+        return false;
+    uint64_t moved = got > pace->got[base] ? got - pace->got[base] : 0;
+    *rate = moved * 1000 / (now_ms - pace->at[base]);
+    return true;
+}
+
+bool yonder_download_left(uint64_t left, uint64_t rate, char *out, size_t cap)
+{
+    if (rate == 0)
+        return false;
+    uint64_t s = left / rate + (left % rate != 0), m = (s + 59) / 60;
+    if (s < 60)
+        os64_snprintf(out, cap, "%lu s left", (unsigned long)s);
+    else if (m < 60)
+        os64_snprintf(out, cap, "%lu min left", (unsigned long)m);
+    else if (m % 60 == 0)
+        os64_snprintf(out, cap, "%lu h left", (unsigned long)(m / 60));
+    else
+        os64_snprintf(out, cap, "%lu h %lu min left", (unsigned long)(m / 60), (unsigned long)(m % 60));
+    return true;
 }
