@@ -76,6 +76,35 @@ the hardware improvement or explain the entire native cascade difference.
 
 The follow-up lets Yonder avoid speculative snapshots when the cascade does
 not track DOM changes. Existing cascade-generation and geometry safety checks
-remain in force. Hardware validation of this follow-up, including the
-original replacement case, remains outstanding. Frozen comparison bundles
-are preserved unchanged.
+remain in force. Frozen comparison bundles are preserved unchanged.
+
+One subsequent hardware confirmation used the same settings and article load
+sequence, replacing Yonder and libgarb in a separate frozen cohort. Both
+completed reports matched their heap captures and contained no partial
+layouts or clock errors. All 18 article checkpoint heights matched the
+initial comparison. Results for this single follow-up, alongside the prior
+three-run control and candidate aggregates:
+
+| Operation | Control aggregate ms | Initial candidate aggregate ms | Follow-up ms |
+| --- | ---: | ---: | ---: |
+| Original paragraph edit | 39.45 | 10.75 | 10.45 |
+| Original list replacement | 58.05 | 60.80 | 59.45 |
+| Article checkpoint | 20.90 | 21.35 | 21.10 |
+| Article total | 412.10 | 444.60 | 415.10 |
+
+Article snapshot metadata was zero in both the stream and displayed phases.
+Stream work counts were unchanged; native cascade/layout totals were 347,911
+and 51,390 microseconds. Process allocator peak live payload was 60,068,912
+bytes, compared with the control median of 59,999,216. Initial displayed
+article layout was 50 ms at 2526 by 1259.
+
+The original mutation run retained 52,262 reused boxes, a 54,706,896-byte
+allocator peak and a 10 ms initial displayed layout. Its replacement timing
+is 2.41% above the prior control median; this workload still records snapshots
+because its cascade can update locally for other mutations.
+
+This confirmation supports removal of the avoidable fallback bookkeeping:
+article total is within 0.73% of the prior control median. It is one run,
+not a new three-pair campaign or proof that every remaining performance gate
+has closed. The original replacement overhead and repeatability of the
+corrected article remain separate acceptance considerations.
