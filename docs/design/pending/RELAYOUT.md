@@ -5,9 +5,10 @@ then `requestAnimationFrame`. Original design by Fable, 2026-10-21;
 5a implementation and reconciliation by Quinn, 2026-10-29.
 5b adds incremental cascade and computed-style reuse and merged in #424 after
 P5 acceptance. Fable reviewed the restyle rule. The sequence with Canvas is
-recorded in [CANVAS.md](CANVAS.md). The proposed 5c implementation contract is
+recorded in [CANVAS.md](CANVAS.md). The implemented 5c contract is
 in [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md). Fable approved the revised
-contract on 2026-10-31, including all four implementation steps.*
+contract on 2026-10-31. Its four implementation steps are in the integration
+branch; P5 acceptance remains pending.*
 
 ## What this settles
 
@@ -16,8 +17,8 @@ contract on 2026-10-31, including all four implementation steps.*
    for restyle and relayout; loss requests a whole rebuild. The synchronous
    mutation listener independently serves libdom's exact mutation-time
    consumers through its shared dispatcher.
-2. **The layout stays DERIVED. The proposed incremental entry takes the
-   previous tree, and its output must equal a whole rebuild.** The proposed
+2. **The layout stays DERIVED. The incremental entry takes the
+   previous tree, and its output must equal a whole rebuild.** The
    5c contract preserves fresh box construction while copying eligible derived
    geometry. It keeps LAYOUT.md ruling 2's ownership principle: no author state
    lives in the layout tree, and a whole rebuild can recreate its answers.
@@ -236,7 +237,7 @@ path must prove its own narrower equivalence. These bits do not prove that
 text or child lists are unchanged; 5c still needs its separate untouched
 condition. Passes 2 and 3 remain whole builds in 5b.
 
-## The layout memo: proposed 5c contract
+## The layout memo: implemented 5c contract
 
 [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md) specifies the copy, invalidation,
 resource, cursor and ownership rules approved for implementation. It refines the
@@ -310,7 +311,7 @@ behind itself.
 |---|---|---|
 | 5a | Bounded native change log and readers; opt-in phase profiling; repeatable measurement page | Native mutations, parser entries, immutable lists, eviction/OOM and lifetime checks; fake clocks; page completion/cancel/resize tests; P5 baseline |
 | 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; controlled and alternating manual P5 comparisons cleared the performance gate; reviewed and merged in #424, with earlier timing outliers disclosed |
-| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Contract in RELAYOUT_GRAFT.md; revised architecture approved for all four implementation steps |
+| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Implemented in integration; contract in RELAYOUT_GRAFT.md; P5 acceptance pending |
 | 5d | `requestAnimationFrame` on the loop, after 5c | WPT animation-frame tests and scripted-page fake-clock cases |
 
 With one builder the cuts run in order. The Canvas integration branch
@@ -361,13 +362,13 @@ decided. It does not block the approved 5c implementation. 5d still follows
 
 ## What this does not do, and the risks named
 
-- A document whose sheets use `:has()` restyles whole. The proposed first
+- A document whose sheets use `:has()` restyles whole. The implemented
   graft keeps the cascade-generation gate, so that full cascade replacement
   also disables geometry reuse. The stream profiler records its full work.
 - Resize, zoom, a web font's arrival, a sheet added or removed, an
   appearance or motion setting change: whole, as today. Those are the
   inputs the memo compares, and they changed.
-- The proposed geometry graft excludes table, float, flex/grid-item and
+- The geometry graft excludes table, float, flex/grid-item and
   positioned placement, and inline pieces that escape their candidate root.
   The detailed contract states the intrinsic-width scope separately.
 - Memory: the graft copies, so a page that changes one element each turn
@@ -437,7 +438,9 @@ Validation and remaining hardware evidence are recorded in
 
 `styles reused` counts copied computed styles; `cascade updates` counts
 successful DOM-version advances within an existing cascade. The existing
-`reused` field continues to count layout reuse and remains zero until 5c.
+`reused` field counts copied layout boxes; 5c populates it independently of
+style reuse. Intrinsic hits, marker measurements, peak new metadata and the
+refusal histogram are reported on the separate `layout graft` line.
 Measured and displayed layouts both use the incremental door. Validation
 and the history of the P5/design gates are recorded in
 [5b-validation.md](../../relayout-evidence/5b-validation.md).

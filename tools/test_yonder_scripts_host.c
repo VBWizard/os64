@@ -742,10 +742,11 @@ flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_
     if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
     return tree;
 }
-flow_tree_t *__real_flow_layout_restyled(const os64_html_document_t *,const os64_page_t *,int32_t,
-    const flow_env_t *,const flow_tree_t *,flow_profile_t *,int64_t (*)(void *),void *);
-flow_tree_t *__wrap_flow_layout_restyled(const os64_html_document_t *doc,const os64_page_t *model,
-    int32_t width,const flow_env_t *env,const flow_tree_t *previous,flow_profile_t *profile,
+static flow_profile_t last_graft_profile;
+flow_tree_t *__real_flow_layout_incremental(const os64_html_document_t *,const os64_page_t *,int32_t,
+    const flow_env_t *,const flow_tree_t *,const flow_reuse_inputs_t *,flow_profile_t *,int64_t (*)(void *),void *);
+flow_tree_t *__wrap_flow_layout_incremental(const os64_html_document_t *doc,const os64_page_t *model,
+    int32_t width,const flow_env_t *env,const flow_tree_t *previous,const flow_reuse_inputs_t *inputs,flow_profile_t *profile,
     int64_t (*clock)(void *),void *clock_ctx) {
     // A refusal after reclaiming the old geometry exercises the retry's
     // teardown and recovery, rather than the usual preserve-old-tree path.
@@ -754,7 +755,8 @@ flow_tree_t *__wrap_flow_layout_restyled(const os64_html_document_t *doc,const o
         return NULL;
     }
     if(geometry_refuse_layout) return NULL;
-    flow_tree_t *tree=__real_flow_layout_restyled(doc,model,width,env,previous,profile,clock,clock_ctx);
+    flow_tree_t *tree=__real_flow_layout_incremental(doc,model,width,env,previous,inputs,profile,clock,clock_ctx);
+    if(profile) last_graft_profile=*profile;
     clock_us+=geometry_layout_delay;
     if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
     return tree;
@@ -6226,6 +6228,7 @@ static void classic_browser_cases(void)
  * of it, so the replay runner's every file goes through its own door. */
 #include "test_yonder_layout_profile.inc"
 #include "test_yonder_restyle.inc"
+#include "test_yonder_graft.inc"
 
 #ifndef YONDER_HOST_FAKES_ONLY
 /* Optional consumer proof reads locally downloaded primary scripts. Site
@@ -9754,6 +9757,35 @@ static void webfont_cases(void) {
     check(font_cancels==cancels+1 && s_web.nfiles==0 && s_web.waiting==0,"web fonts: leaving cancels and clears");
     web_drop();
     cascade_swap_case();
+    web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}p{font-family:Web}</style>"
+        "<p id=font-kept>kept text</p><p id=font-changed>changed text</p><p>padding</p><p>padding</p>"
+        "<p>padding</p><p>padding</p><p>padding</p><p>padding</p>");
+    check(font_land("web.ttf","A",NULL),"graft fonts: loaded face");
+    pictures_settle();
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page) && last_graft_profile.reused>0,
+          "graft fonts: unchanged text copies geometry with a loaded web face");
+    bool reported=false;
+    for(int32_t i=0;i<s_web.families.n;i++)
+        reported |= !strcmp(s_web.families.f[i].name,"Web") && s_web.families.f[i].served==WF_SERVED_PAGE;
+    check(reported && (s_web.face_use[0]&WF_USE_LISTED),
+          "graft fonts: copied text retains current family and face-use reporting");
+    uint64_t revision=s_layout_resources.fonts;
+    os64_html_set_text(g.page.way.doc,probe_id("font-changed")->first_child,"new characters",14);
+    check(script_rebuild() && s_layout_resources.fonts>revision && !last_graft_profile.reused,
+          "graft fonts: document character changes invalidate unicode-range-dependent answers");
+    web_drop();
+    web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}</style>"
+        "<p>text<span id=metric-only style='font-family:Web'></span></p><p>padding</p>");
+    check(font_land("web.ttf","A",NULL),"graft fonts: empty span's face loads");
+    pictures_settle();
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page) && last_graft_profile.reused>0,
+          "graft fonts: empty span's line copies geometry");
+    reported=false;
+    for(int32_t i=0;i<s_web.families.n;i++)
+        reported |= !strcmp(s_web.families.f[i].name,"Web") && s_web.families.f[i].served==WF_SERVED_PAGE;
+    check(reported && (s_web.face_use[0]&WF_USE_LISTED),
+          "graft fonts: metric-only span retains family and face-use reporting");
+    web_drop();
     os64_font_family_cache_destroy(s_faces.families);
     s_faces.families=NULL; s_faces.text=NULL;
 }
@@ -10787,7 +10819,16 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if(getenv("YONDER_GRAFT_FONTS_ONLY")) {
+        webfont_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"graft fonts: text released");
+        check(live==0,"graft fonts: heap empty");
+        printf("yonder graft fonts: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_RESTYLE_ONLY")) {
+        graft_browser_cases();graft_base_cases();
         restyle_browser_cases();
         restyle_fallback_cases();
         os64_text_font_release(probe_font);
@@ -10811,6 +10852,7 @@ int main(void)
     stand_in_paint_cases();
     canvas_window_cases();
     layout_profile_cases();
+    graft_browser_cases();graft_base_cases();
     restyle_browser_cases();
     restyle_fallback_cases();
     svg_gradient_window_cases();

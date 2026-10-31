@@ -749,6 +749,7 @@ typedef struct Page {
 
 static void webfonts_families_shown(const Page *p);
 static void webfonts_layout_begins(const Page *p);
+static int32_t picture_find(const Page *p, const char *url);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
 
@@ -842,8 +843,64 @@ static void page_session_free(Page *p)
     p->nback = p->nahead = p->nevents = 0;
 }
 
+// Resolver answers outlive temporary Page copies. Epochs are advanced by
+// resource producers, independently of the batching flags consumers clear.
+static struct {
+    uint64_t fonts, pictures;
+    bool exhausted;
+    const os64_html_document_t *font_doc;
+    uint64_t font_dom_version;
+} s_layout_resources;
+static void layout_revision(uint64_t *revision)
+{
+    if (*revision == UINT64_MAX) s_layout_resources.exhausted = true;
+    else ++*revision;
+}
+// Existing catalog entries can answer a relative URL differently after a
+// history move or a <base> mutation, without a file arriving. Compare model
+// bases on rebuilds for both displayed and hidden layouts.
+static void layout_model_rebased(const os64_page_t *old, const os64_page_t *model)
+{
+    if (model && !os64_streq(os64_page_base(old), os64_page_base(model))) {
+        layout_revision(&s_layout_resources.fonts);
+        layout_revision(&s_layout_resources.pictures);
+    }
+}
+static flow_reuse_inputs_t layout_inputs(const Page *p, const os64_page_state_t *state)
+{
+    if (!state) state = os64_page_shared_state(page_model(p));
+    return (flow_reuse_inputs_t){
+        .resource_owner = s_layout_resources.exhausted ? NULL : &s_layout_resources,
+        .fonts_revision = s_layout_resources.fonts,
+        .replaced_revision = s_layout_resources.pictures,
+        .state_owner = state, .state_version = os64_page_state_version(state)};
+}
+static bool layout_inputs_same(flow_reuse_inputs_t a, flow_reuse_inputs_t b)
+{
+    return a.resource_owner && a.resource_owner == b.resource_owner &&
+        a.fonts_revision == b.fonts_revision && a.replaced_revision == b.replaced_revision &&
+        a.state_owner == b.state_owner && a.state_version == b.state_version;
+}
+static void layout_font_dependencies(const Page *p)
+{
+    const garb_font_face_t *faces;
+    const os64_html_document_t *doc = page_doc(p);
+    // unicode-range selection examines the document's characters, including
+    // text outside a candidate subtree. A DOM change can therefore change
+    // a web-font answer even before any file arrives.
+    if (s_laying.cascade && garb_cascade_font_faces(s_laying.cascade, &faces, NULL) > 0 &&
+        (s_layout_resources.font_doc != doc ||
+         s_layout_resources.font_dom_version != os64_html_version(doc))) {
+        layout_revision(&s_layout_resources.fonts);
+        s_layout_resources.font_doc = doc;
+        s_layout_resources.font_dom_version = os64_html_version(doc);
+    }
+}
+static void webfonts_layout_copied(Page *p, const flow_tree_t *tree);
+
 static void page_clear(Page *p)
 {
+    if (p->npics) layout_revision(&s_layout_resources.pictures);
     measured_forget(page_doc(p));
     page_session_free(p);
     // The host borrows the record (its miss hook), so the record goes after
@@ -1101,6 +1158,7 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
     bool enabled = s_layout_profile && layout_profile_diag(p);
     int64_t began = enabled ? os64_micros() : -1;
     os64_page_t *model = os64_page_rebuild(old);
+    layout_model_rebased(old, model);
     if (enabled) {
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
@@ -1111,10 +1169,18 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
-    flow_profile_t profile;
-    flow_tree_t *tree = flow_layout_restyled(page_doc(p), page_model(p), width, &s_env,
-        p->restyle_from ? p->restyle_from : p->tree, enabled ? &profile : NULL,
+    flow_profile_t profile = {0};
+    layout_font_dependencies(p);
+    flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
+    flow_tree_t *tree = flow_layout_incremental(page_doc(p), page_model(p), width, &s_env,
+        p->restyle_from ? p->restyle_from : p->tree, &inputs, &profile,
         enabled ? layout_clock : NULL, NULL);
+    flow_reuse_stats_t reuse = flow_reuse_stats(tree);
+    if (profile.reused || reuse.intrinsic_hits) {
+        int64_t began = enabled ? os64_micros() : -1;
+        webfonts_layout_copied(p, tree);
+        if (enabled) profile.layout_us += layout_elapsed(began, &profile.clock_errors);
+    }
     if (enabled) {
         yonder_layout_stats_t sample = {
             .style_us = profile.style_us, .boxes_us = profile.boxes_us,
@@ -1122,8 +1188,12 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
             .elements = profile.elements, .boxes = profile.boxes,
             .measures = profile.measures, .reused = profile.reused,
             .styles_reused = flow_styles_reused(tree),
+            .intrinsic_hits = reuse.intrinsic_hits, .marker_measures = reuse.marker_measures,
+            .metadata_peak = reuse.metadata_peak,
             .clock_errors = profile.clock_errors, .layouts = 1,
             .refusals = tree == NULL || flow_incomplete(tree)};
+        _Static_assert(YONDER_LAYOUT_REUSE_REASONS == FLOW_REUSE_NREASONS, "layout refusal diagnostics");
+        os64_memcpy(sample.reuse_refused, reuse.refused, sizeof(sample.reuse_refused));
         layout_profile_add(p, &sample);
     }
     return tree;
@@ -1752,6 +1822,8 @@ static struct {
     flow_tree_t *tree;
     Sheet *sheets;
     int32_t nsheets, ready;
+    flow_reuse_inputs_t inputs;
+    bool dark, reduced_motion;
 } s_measured;
 static Page s_measuring;            // the copy a measured layout is made from
 static void sheets_start(Page *p);
@@ -1797,10 +1869,12 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
 {
     const os64_html_document_t *doc = page_doc(p);
     uint64_t version = os64_html_version(doc);
+    flow_reuse_inputs_t inputs = layout_inputs(p, state);
     bool mine = s_measured.doc == doc && s_measured.model != NULL;
     if (mine && s_measured.version == version && s_measured.width == width &&
         s_measured.height == height && s_measured.zoom == g.zoom && s_measured.serial == p->serial &&
-        s_measured.sheets_ready == p->sheets_ready)
+        s_measured.sheets_ready == p->sheets_ready && s_measured.dark == s_dark &&
+        s_measured.reduced_motion == s_reduce_motion && layout_inputs_same(s_measured.inputs, inputs))
         return true;
     os64_page_t *model = NULL;
     if (mine && s_measured.version == version)
@@ -1866,6 +1940,8 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     s_measured.sheets_ready = p->sheets_ready;
     s_measured.zoom = g.zoom;
     s_measured.model = model;
+    s_measured.inputs = layout_inputs(&s_measuring, state);
+    s_measured.dark = s_dark; s_measured.reduced_motion = s_reduce_motion;
     s_measured.cascade = s_measuring.cascade;
     s_measured.tree = s_measuring.tree;
     s_measured.sheets = s_measuring.sheets;
@@ -1972,11 +2048,14 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
         select_size(c, node, w, h);
         return true;
     }
-    int32_t i = p->pic_of != NULL ? os64_page_image_for(model, node) : -1;
-    if (i < 0 || i >= p->nimage_map || p->pic_of[i] < 0 || p->pics[p->pic_of[i]].state != PIC_SHOWN)
-        return false;
+    // A hidden model can have new image indices before the shown page's
+    // pic_of map is rebuilt. Resolve its current URL in the shared catalog.
+    int32_t i = model != NULL ? os64_page_image_for(model, node) : -1;
+    const os64_page_image_t *image = i >= 0 ? os64_page_image(model, i) : NULL;
+    int32_t picture = image ? picture_find(p, image->src.url) : -1;
+    if (picture < 0 || p->pics[picture].state != PIC_SHOWN) return false;
     uint32_t pw, ph;
-    (void)picture_pixels(&p->pics[p->pic_of[i]], &pw, &ph);
+    (void)picture_pixels(&p->pics[picture], &pw, &ph);
     *w = (int32_t)pw;
     *h = (int32_t)ph;
     return true;
@@ -4865,6 +4944,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         yonder_diag_fact(g.page.diag, key, "past the memory kept for the page's pictures");
         return;
     }
+    layout_revision(&s_layout_resources.pictures);
     pic->kind = product->kind;
     pic->origin_clean=product->origin_clean;
     pic->svg = product->svg;
@@ -5548,11 +5628,65 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     return OS64_FONT_OK;
 }
 
+// Reuse skips shaping-time resolver calls. Reconstruct the font report from
+// text, line/span metrics and atomic content in the resulting public tree. Counts
+// in this report describe font requests, rather than repeated shaping calls.
+// A small deduplication table keeps long runs of identical typography cheap;
+// excess distinct requests remain correct without extra allocations.
+typedef struct { const flow_style_t *seen[64]; size_t count; } FontReport;
+static bool font_request_equal(const flow_style_t *a, const flow_style_t *b)
+{
+    if (a->font_size != b->font_size || (a->font_weight >= 600) != (b->font_weight >= 600) ||
+        a->font_style != b->font_style || a->family.generic != b->family.generic ||
+        a->family.count != b->family.count) return false;
+    for (uint32_t i = 0; i < a->family.count; ++i)
+        if (a->family.names[i].len != b->family.names[i].len ||
+            os64_memcmp(a->family.names[i].name, b->family.names[i].name, a->family.names[i].len))
+            return false;
+    return true;
+}
+static void webfonts_public(Page *p, const flow_box_t *box, FontReport *report)
+{
+    for (; box; box = box->next) {
+        const flow_style_t *style = box->style;
+        if (style && (box->run || box->ellipsis || box->kind == FLOW_BOX_LINE ||
+                      box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_ATOMIC ||
+                      box->kind == FLOW_BOX_REPLACED)) {
+            bool seen = false;
+            for (size_t i = 0; i < report->count && !seen; ++i)
+                seen = font_request_equal(style, report->seen[i]);
+            if (!seen) {
+                if (report->count < 64) report->seen[report->count++] = style;
+                int64_t px = (style->font_size + 32) / 64;
+                if (px < 1) px = 1;
+                if (px > OS64_FONT_PIXEL_MAX) px = OS64_FONT_PIXEL_MAX;
+                os64_text_font_t *const *list; size_t count; os64_font_face_info_t primary;
+                if (page_fonts(p, &style->family, style->font_weight >= 600,
+                        style->font_style == FLOW_FONT_ITALIC, (uint32_t)px,
+                        &list, &count, &primary) != OS64_FONT_OK) {
+                    if (page_doc(p) == page_doc(&g.page)) s_web.laying.short_of_memory = true;
+                    else s_arriving.families.short_of_memory = true;
+                    layout_revision(&s_layout_resources.fonts);
+                }
+            }
+        }
+        webfonts_public(p, box->first, report);
+    }
+}
+static void webfonts_layout_copied(Page *p, const flow_tree_t *tree)
+{
+    if (!s_faces.families) return;
+    webfonts_layout_begins(p);
+    FontReport report = {0};
+    webfonts_public(p, flow_root(tree), &report);
+}
+
 // The page is to be laid out again (pictures_settle) — and now, so a move
 // made after a settle has run (by the feed, after its layout) is not left
 // waiting for an event: the ticker is armed for this moment.
 static void webfonts_move(void)
 {
+    layout_revision(&s_layout_resources.fonts);
     s_web.moved = true;
     g.settle_due = yonder_now_ms();
     pictures_schedule();
@@ -5697,6 +5831,7 @@ static void webfonts_feed(bool laid)
 // and until then the record says it is not asked for yet.
 static void webfonts_unhold(void)
 {
+    layout_revision(&s_layout_resources.fonts);
     for (int32_t i = 0; i < s_web.nfiles; i++) {
         WebFontFile *w = &s_web.files[i];
         if (w->state != WF_HELD)
@@ -5784,6 +5919,8 @@ static void webfonts_orphaned(void)
 // until the tree goes.
 static void webfonts_leave(void)
 {
+    layout_revision(&s_layout_resources.fonts);
+    s_layout_resources.font_doc = NULL;
     for (int32_t i = 0; i < s_web.nfiles; i++) {
         if (s_web.files[i].state == WF_WAITING && g.pool != NULL)
             os64_work_cancel(g.pool, s_web.files[i].id);
@@ -9219,6 +9356,12 @@ static void page_rebase(Page *p)
         os64_page_free(model);
         return;
     }
+    layout_model_rebased(old, model);
+    // The DOM version does not change with history. A hidden model still
+    // carries the old document URL, even when an absolute <base> happens to
+    // keep today's resolved base equal; a later base removal must use the
+    // new document URL too.
+    measured_forget(page_doc(p));
     p->way.model = model;
     os64_page_free(old);
     if (p == &g.page)

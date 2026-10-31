@@ -8,13 +8,15 @@ refines [RELAYOUT.md](RELAYOUT.md).*
 
 ## Implementation checkpoint
 
-Steps 1 through 3 are implemented: checked text-run retention, independent
+Steps 1 through 4 are implemented: checked text-run retention, independent
 snapshot history, bounded structural correspondence, refusal diagnostics,
 ordinary-block geometry copying and an intrinsic-width memo. The explicit
 `flow_layout_incremental` entry enables reuse; ordinary entries do not register
-snapshot readers. Yonder opt-in remains step 4. Validation is recorded in
+snapshot readers. Yonder opts in for displayed and hidden geometry; hardware
+acceptance remains pending. Validation is recorded in
 [5c-foundation.md](../../relayout-evidence/5c-foundation.md) and
-[5c-geometry.md](../../relayout-evidence/5c-geometry.md).
+[5c-geometry.md](../../relayout-evidence/5c-geometry.md) and
+[5c-browser.md](../../relayout-evidence/5c-browser.md).
 
 ## Decision and scope
 
@@ -71,8 +73,10 @@ wrap disables reuse until the owner identity is renewed.
 
 A resource revision changes when an answer that layout can observe changes:
 resolved font faces/metrics, intrinsic picture dimensions or availability,
-SVG/replaced sizing, or control state. Canvas pixel-only dirtiness does not
-change a size revision; canvas dimension changes do. Callback addresses alone
+SVG/replaced sizing, or control state. Yonder uses native DOM history for
+SVG and canvas dimension attributes; these are not asynchronous resource
+answers. Canvas pixel-only dirtiness changes neither a size revision nor
+geometry history. Callback addresses alone
 cannot certify these answers. Equal `env.ctx` addresses cannot either, and
 requiring pointer equality would wrongly reject Yonder's temporary `Page`
 copies. The stable owner/revisions certify the resolver contract across those

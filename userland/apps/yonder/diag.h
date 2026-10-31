@@ -76,11 +76,16 @@ typedef struct yonder_diag yonder_diag_t;
  * Microsecond totals include repeated attempts; calls/refusals and bad clock
  * reads keep incomplete evidence distinguishable from a fast successful run.
  * Model counts cover rebuilds, not the initial loader's model construction. */
+// flow_reuse_reason_t order; the layout wrapper checks the count at compile time.
+#define YONDER_LAYOUT_REUSE_REASONS 16
 typedef struct {
     uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused;
     uint64_t styles_reused, cascade_updates;
     uint64_t model_calls, layouts, refusals, clock_errors;
+    uint64_t intrinsic_hits, marker_measures;
+    uint64_t metadata_peak; // Maximum new snapshot/match/staging bytes, not a sum.
+    uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
 /* Geometry reads while the parser is active, kept separately from layouts
