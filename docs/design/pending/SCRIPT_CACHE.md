@@ -231,6 +231,10 @@ the blob carries it and one made under another name is a miss.
 - **A 304 lays its omitted names over the kept ones by name**, as its
   header lines are laid (rd3): a line it sends readable is no longer
   omitted.
+- **A 304 confirms a varied entry by the varied rules**
+  (`way_keep_confirm_varied`, rd4): one repeating `Vary: Origin` renews
+  the entry and keeps its compiled form, where the plain rules would have
+  let both go.
 - **7b's blob is read by the fetch job** (`module_bytecode`) for a module's
   request whose answer the entry holds — served kept, confirmed by a 304,
   or just stored — and rides to the module map with the answer

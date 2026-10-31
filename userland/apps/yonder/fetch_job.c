@@ -1009,7 +1009,7 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
     bool ok = serve_kept(c, r, current, &b, got, max_body, WAY_SERVED_CONFIRMED);
     if (!ok)
         network_error(got, "CORS: the answer does not allow this origin to read it");
-    else if (way_keep_confirm(&c->e.keep, fields, now_utc()))
+    else if (way_keep_confirm_varied(&c->e.keep, fields, now_utc()))
         c->held = way_cache_put(job->cache, &c->e, &b, c->body, c->len);
     else
         way_cache_drop(job->cache, &c->key);

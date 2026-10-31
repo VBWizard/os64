@@ -224,10 +224,22 @@ size_t way_keep_conditions(const way_keep_t *k, char *out, size_t cap)
     return (size_t)n;
 }
 
+static bool keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now, bool varied);
+
 bool way_keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now)
 {
+    return keep_confirm(k, fields, now, false);
+}
+
+bool way_keep_confirm_varied(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now)
+{
+    return keep_confirm(k, fields, now, true);
+}
+
+static bool keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now, bool varied)
+{
     way_keep_t fresh;
-    if (!way_keep_read(fields, now, &fresh))
+    if (!keep_read(fields, now, &fresh, varied))
         return false;
     // A validator the 304 did not repeat is still the one it confirmed.
     if (fresh.etag[0] == '\0')

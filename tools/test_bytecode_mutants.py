@@ -195,6 +195,10 @@ mutants = [
      "    if (said != WAY_SAID_NONE)\n        return false;\n    out[0] = '=';", WAY),
     ('a-304-keeps-the-old-omitted-names', FETCHJOB, '        if (!superseded && end > at) {', '        if (end > at) {',
      FETCHJOBS),
+    # Codex #425 rd4.
+    ('a-varied-entry-is-confirmed-as-a-plain-one', FETCHJOB,
+     '    else if (way_keep_confirm_varied(&c->e.keep, fields, now_utc()))',
+     '    else if (way_keep_confirm(&c->e.keep, fields, now_utc()))', FETCHJOBS),
     ('any-fetch-reads-a-module-blob', FETCHJOB, '    if (job->module && got->ok && cached != NULL',
      '    if (got->ok && cached != NULL', FETCHJOBS),
     ('a-body-not-held-has-its-module-blob-read', FETCHJOB, 'cached != NULL && cached->held &&', 'cached != NULL &&',

@@ -60,8 +60,11 @@ size_t way_keep_conditions(const way_keep_t *k, char *out, size_t cap);
 
 // A 304's fields laid over the stored ones at `now` (§ 4.3.4): what it
 // sent replaces what was kept, and the clock of its freshness restarts.
-// False when the 304 forbids keeping it any longer.
+// False when the 304 forbids keeping it any longer. way_keep_confirm_varied
+// is the same for an entry whose request's Vary'd values are recorded
+// (way_keep_read_varied): a 304 repeating that Vary still confirms it.
 bool way_keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now);
+bool way_keep_confirm_varied(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now);
 
 // Whether a stale reply may be used while the server cannot be reached at
 // all (§ 4.2.4): not when it asked to be checked every time.

@@ -166,6 +166,16 @@ static void keep_rules(void)
            way_keep_confirm(&k, &n, D + 300) && k.max_age == 60, NULL);
     n = fields("no-store", "", "");
     expect("keep: a 304 saying no-store ends it", !way_keep_confirm(&k, &n, D + 300), NULL);
+    // A 304 repeating a Vary other than Accept-Encoding: the varied
+    // confirmation keeps what the plain one would let go (Codex #425 rd4).
+    f = fields("max-age=60", kDate, "");
+    (void)way_keep_read(&f, D, &k);
+    n = fields("max-age=600", "", "");
+    snprintf(n.vary, sizeof(n.vary), "Origin");
+    way_keep_t plain = k;
+    expect("keep: a 304 varying on Origin does not confirm a plain entry", !way_keep_confirm(&plain, &n, D + 300),
+           NULL);
+    expect("keep: but does confirm a varied one", way_keep_confirm_varied(&k, &n, D + 300) && k.max_age == 600, NULL);
 
     // Stale while the server cannot be reached.
     f = fields("max-age=60", "", "");

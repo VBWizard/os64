@@ -1409,6 +1409,29 @@ static void http_cache_cases(void)
            g != NULL && g->served == WAY_SERVED_KEPT && has_line(g, "X-Token: secret\r\n"), g ? g->why : NULL);
     yonder_fetched_free(g);
 
+    // Codex #425 rd4. A 304 repeating the Vary an entry was kept under
+    // confirms it, its compiled form beside it kept.
+    fake_answer_t *vo = fake_answer(NULL, "https://cdn.test/origin.js", 200,
+                                    "Content-Type: text/javascript\r\nAccess-Control-Allow-Origin: https://a.test\r\n"
+                                    "Vary: Origin\r\nCache-Control: max-age=60\r\nETag: \"o1\"\r\n", kModule);
+    g = run(&(Ask){page, "https://cdn.test/origin.js", .module = true});
+    bool vo_kept = g != NULL && g->bytecode != NULL && keep_where(g->bytecode, "origin-blob");
+    yonder_fetched_free(g);
+    s_epoch += 120;
+    vo->status = 304;
+    vo->reason = "Not Modified";
+    vo->headers = "ETag: \"o1\"\r\nVary: Origin\r\nCache-Control: max-age=600\r\n";
+    vo->body = NULL;
+    g = run(&(Ask){page, "https://cdn.test/origin.js", .module = true});
+    expect("vary: a 304 repeating Vary: Origin confirms the entry, its blob with it",
+           vo_kept && g != NULL && g->served == WAY_SERVED_CONFIRMED && blob_is(g, "origin-blob"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/origin.js", .module = true});
+    expect("vary: and it is fresh again", g != NULL && g->served == WAY_SERVED_KEPT && nfake_requests == before &&
+           blob_is(g, "origin-blob"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+
     // only-if-cached with no cache: a network error, nothing asked.
     way_cache_t *saved = http_cache;
     http_cache = NULL;
