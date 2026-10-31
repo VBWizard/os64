@@ -22,6 +22,7 @@
  * address with neither is a DIAL_FAILED fetch. Each host uses the helpers it
  * needs, so they are marked unused. */
 
+#include <stddef.h>
 #include <strings.h>
 
 #include "fetch/fetch.h"
@@ -168,6 +169,18 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt) 
             snprintf(f->location,sizeof(f->location),"%.*s",(int)vlen,v);
             f->head.has_location=true;
         }
+        /* What the reply says about keeping it, as libfetch reports it
+         * (fetch.h's keep), and its type. */
+        static const struct { const char *name; size_t off; } kKeep[]={
+            {"cache-control",offsetof(os64_fetch_keep_t,cache_control)},{"pragma",offsetof(os64_fetch_keep_t,pragma)},
+            {"etag",offsetof(os64_fetch_keep_t,etag)},{"last-modified",offsetof(os64_fetch_keep_t,last_modified)},
+            {"expires",offsetof(os64_fetch_keep_t,expires)},{"date",offsetof(os64_fetch_keep_t,date)},
+            {"age",offsetof(os64_fetch_keep_t,age)},{"vary",offsetof(os64_fetch_keep_t,vary)}};
+        for(size_t k=0;k<sizeof(kKeep)/sizeof(kKeep[0]);k++)
+            if(nlen==strlen(kKeep[k].name) && !strncasecmp(p,kKeep[k].name,nlen))
+                snprintf((char *)&f->head.keep+kKeep[k].off,OS64_FETCH_KEEP_FIELD,"%.*s",(int)vlen,v);
+        if(nlen==12 && !strncasecmp(p,"content-type",12))
+            snprintf(f->head.content_type,sizeof(f->head.content_type),"%.*s",(int)vlen,v);
         p=end+2;
     }
     for(const char *p=f->a.omitted?f->a.omitted:"";*p;) {

@@ -469,6 +469,18 @@ bool way_preflight_lines(const way_request_t *r, char *out, size_t cap);
 // 5 when not said, at most WAY_PREFLIGHT_AGE_MAX, 0 when unreadable).
 bool way_preflight_judge(const way_request_t *r, const way_response_t *resp, uint32_t *max_age);
 
+// ── The partition ───────────────────────────────────────────────────────
+//
+// Fetch's network partition key: the top-level site of the page a request
+// is made for. yonder has no frames, so it is the page's own origin's
+// scheme and host (ORIGIN.md § 1's stand-in, finer than a site, which costs
+// only hits): "<scheme> <host>". An opaque origin's is "opaque <id>", which
+// names nothing outside this run. Both caches key by it — the preflight
+// cache below, and the HTTP cache (SCRIPT_CACHE.md § 3), so that one site's
+// page never learns what another's caused to be kept.
+#define WAY_PARTITION_MAX (WAY_ORIGIN_TEXT_MAX + 24)
+void way_partition_of(const way_origin_t *page, char *out, size_t cap);
+
 // ── The preflight cache (§ 4.9) ─────────────────────────────────────────
 //
 // One per browser, beside the jar, shared by the fetch jobs on every thread.

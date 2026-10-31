@@ -522,24 +522,11 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void 
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
 }
-/* As script_job.c frees a compiled form, and releases a script job and a
- * compiled form's write. */
-void yonder_bytecode_free(yonder_bytecode_t *bytecode) {
-    if(bytecode) { os64_free(bytecode->blob); os64_free(bytecode); }
-}
+/* As script_job.c releases a script job. */
 void yonder_script_release(void *job, void *product) {
     yonder_script_t *got=product;
     if(got) { os64_free(got->source); yonder_bytecode_free(got->bytecode); os64_free(got); }
     os64_free(job);
-}
-int64_t yonder_bytecode_keep_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
-    (void)job; (void)cancelled; (void)ctx; (void)out;
-    check(false,"unexpected worker execution"); return -1;
-}
-void yonder_bytecode_keep_release(void *job, void *product) {
-    (void)product; yonder_bytecode_job_t *j=job;
-    if(j) os64_free(j->blob);
-    os64_free(j);
 }
 /* The worker's answer to the script job whose address ends with `tail`:
  * its source, or NULL for a fetch that failed. False when no such job is
@@ -570,8 +557,9 @@ static bool script_land_from(const char *tail, const char *source, const char *f
             /* The cache holds the body: its compiled form, when the case
              * gave one, and where a compile's is kept. */
             got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
+            os64_strcopy(got->bytecode->partition,sizeof(got->bytecode->partition),"https page.test");
             os64_strcopy(got->bytecode->url,sizeof(got->bytecode->url),url);
-            os64_strcopy(got->bytecode->key,sizeof(got->bytecode->key),"classic test");
+            os64_strcopy(got->bytecode->tag,sizeof(got->bytecode->tag),"classic test");
             if(script_land_blob) {
                 got->bytecode->blob=os64_malloc(script_land_blob_length);
                 memcpy(got->bytecode->blob,script_land_blob,script_land_blob_length);
@@ -723,10 +711,6 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, con
     fake_cookie_encrypted=encrypted;
     snprintf(fake_cookie_set,sizeof(fake_cookie_set),"%.*s",(int)len,text);
 }
-void way_cache_enable(way_cache_t *cache, bool enabled) { (void)enabled; check(cache==NULL,"no test cache"); }
-void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cache==NULL,"no test cache"); }
-void way_cache_stats(way_cache_t *cache, way_cache_stats_t *out) { (void)out; check(cache==NULL,"no test cache"); }
-const char *way_cache_dir(way_cache_t *cache) { check(cache==NULL,"no test cache"); return ""; }
 
 static os64_text_context_t *probe_text;
 static os64_text_font_t *probe_font;
@@ -10943,9 +10927,10 @@ static void bytecode_cases(void) {
     check(javascript_record_has("/app.js: ran in ") && !javascript_record_has("from its bytecode"),
         "bytecode: and the record says it ran, not that it was read");
     check(nbytecode_jobs==1 && has(bytecode_jobs[0].job->url,"/app.js") &&
-        os64_streq(bytecode_jobs[0].job->key,"classic test") && bytecode_jobs[0].job->length>96 &&
+        os64_streq(bytecode_jobs[0].job->partition,"https page.test") &&
+        os64_streq(bytecode_jobs[0].job->tag,"classic test") && bytecode_jobs[0].job->length>96 &&
         bytecode_jobs[0].job->cache==g.cache && s_bytecode_queued==bytecode_jobs[0].job->length,
-        "bytecode: the compile's form goes to a job of its own, under the entry's address and key");
+        "bytecode: the compile's form goes to a job of its own, beside the entry's key, under its tag");
     if(nbytecode_jobs!=1) {
         script_land_kept=false; loop_drop(); g.cache=NULL; return;
     }
@@ -10999,6 +10984,47 @@ static void bytecode_cases(void) {
     got->bytecode->blob=os64_malloc(8);
     reaped(0,job,got);
     g.cache=NULL;
+}
+
+static bool never_cancelled(void *ctx) { (void)ctx; return false; }
+
+/* A module's compiled form (BYTECODE_CACHE.md § 9), end to end: its fetch
+ * through a real cache, its compile's form kept beside the entry, and the
+ * next visit's module read from it. */
+static void module_bytecode_cases(void) {
+    fake_reset();
+    way_cache_t *cache=way_cache_open("/tmp/cache",16<<20);
+    check(cache!=NULL,"module bytecode: a cache on the fake disk");
+    const char *page="<script type=module src=/m/k.js></script>";
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/k.js",200,MODULE_JS "Cache-Control: max-age=600\r\n","note('k');");
+    module_page(page);
+    g.cache=cache;                  /* the window is made afresh with each page */
+    check(loop_settle() && request_land("/m/k.js") && loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+        probe_text_is("out","k"),"module bytecode: a module whose answer the cache keeps runs");
+    check(nbytecode_jobs==1 && has(bytecode_jobs[0].job->url,"/m/k.js") &&
+        !strncmp(bytecode_jobs[0].job->tag,"module ",7) && bytecode_jobs[0].job->length>96,
+        "module bytecode: its compile's form goes to a job of its own, under the module's tag");
+    if(nbytecode_jobs==1) {
+        check(yonder_bytecode_keep_run(bytecode_jobs[0].job,never_cancelled,NULL,NULL)==1,
+            "module bytecode: and is written beside the entry");
+        reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
+        nbytecode_jobs=0;
+    }
+    request_drop();
+
+    int sent=nfake_requests;
+    module_page(page);
+    g.cache=cache;
+    check(loop_settle() && request_land("/m/k.js") && nfake_requests==sent && loop_settle() &&
+        g.page.tree!=NULL && script_rebuild() && probe_text_is("out","k"),
+        "module bytecode: the next visit's module comes from the cache and runs");
+    check(strstr(request_record_text(),", 1 from bytecode\n")!=NULL && nbytecode_jobs==0,
+        "module bytecode: read from its kept form, the record says so, and nothing new is kept");
+    request_drop();
+    way_cache_close(cache);
+    g.cache=NULL;
+    fake_reset();
 }
 
 /* `--exit-when-loaded`: yonder leaves once the shown page is settled and
@@ -11124,6 +11150,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) bytecode_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) module_bytecode_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) exit_when_loaded_cases();
     webfont_cases();
     paint_cost_cases();

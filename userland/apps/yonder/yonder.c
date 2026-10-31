@@ -56,6 +56,7 @@
 #include "diag.h"
 #include "script_job.h"
 #include "fetch_job.h"
+#include "modules.h"
 #include "geometry.h"
 #include "events.h"
 #include "ticker.h"
@@ -3017,7 +3018,7 @@ static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, co
 static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, bool (*stop)(void *stop_ctx),
                        void *stop_ctx, os64_dom_response_t *response);
 static void script_release(void *opaque, os64_dom_response_t *response);
-static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got);
+static void request_arrived(const yonder_fetch_job_t *job, yonder_fetched_t *got);
 static bool scripts_live(void);
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
                         int32_t x, int32_t y, uint8_t was);
@@ -8179,8 +8180,8 @@ static void script_arrived(const yonder_script_job_t *job, yonder_script_t *got)
 #define BYTECODE_QUEUED_MAX ((size_t)64 << 20)
 static size_t s_bytecode_queued;
 
-// A script compiled from a body the cache holds (scripts.h keep_bytecode):
-// its blob is written beside the entry on a job of its own.
+// A script or a module compiled from a body the cache holds (scripts.h
+// keep_bytecode): its blob is written beside the entry on a job of its own.
 static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length)
 {
     (void)opaque;
@@ -8196,8 +8197,10 @@ static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, u
     job->cache = g.cache;
     job->blob = blob;
     job->length = length;
+    os64_strcopy(job->partition, sizeof(job->partition), where->partition);
+    job->credentials = where->credentials;
     os64_strcopy(job->url, sizeof(job->url), where->url);
-    os64_strcopy(job->key, sizeof(job->key), where->key);
+    os64_strcopy(job->tag, sizeof(job->tag), where->tag);
     os64_work_t work = {yonder_bytecode_keep_run, yonder_bytecode_keep_release, job, BYTECODE_KEEP_RESERVE};
     if (os64_work_submit(g.pool, &work) == 0) {
         yonder_bytecode_keep_release(job, NULL);
@@ -8387,6 +8390,11 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
                  os64_strlen(referrer) < sizeof(job->referrer) ? referrer : "");
     job->jar = g.way.jar;
     job->preflight = s_preflight;
+    // The browser's cache, as the request's cache mode says to use it
+    // (SCRIPT_CACHE.md § 5); a mode past the list is a request's default.
+    job->cache = g.cache;
+    job->cache_mode = q->cache <= WAY_CACHE_ONLY_IF_CACHED ? (way_cache_mode_t)q->cache : WAY_CACHE_DEFAULT;
+    job->module = (token & YONDER_MODULE_TOKEN) != 0;
     return job;
 }
 
@@ -8396,7 +8404,8 @@ static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, co
     yonder_fetch_job_t *job = g.pool != NULL ? request_job(serial, token, q) : NULL;
     if (job == NULL)
         return 0;
-    os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job, YONDER_FETCH_RESERVE};
+    os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job,
+                        job->module ? YONDER_FETCH_MODULE_RESERVE : YONDER_FETCH_RESERVE};
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
         yonder_fetch_release(job, NULL);
@@ -8445,8 +8454,13 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
     if (got->elapsed_us >= 0)
         os64_snprintf(took, sizeof(took), " in %ld ms", (long)(got->elapsed_us / 1000));
     os64_snprintf(key, sizeof(key), "request %s %s", job->request.method, job->url);
-    os64_snprintf(value, sizeof(value), "%d %s, %u hops, %lu bytes%s%s", (int)got->status,
-                  way_type_name(got->type), (unsigned)got->hops, (unsigned long)got->body_len, took,
+    // An answer the cache gave says so (SCRIPT_CACHE.md § 9): kept, served
+    // without asking; confirmed, served after a 304.
+    const char *from = got->served == WAY_SERVED_KEPT        ? ", kept"
+                       : got->served == WAY_SERVED_CONFIRMED ? ", confirmed"
+                                                             : "";
+    os64_snprintf(value, sizeof(value), "%d %s, %u hops, %lu bytes%s%s%s", (int)got->status,
+                  way_type_name(got->type), (unsigned)got->hops, (unsigned long)got->body_len, took, from,
                   sync ? ", synchronous" : "");
     yonder_diag_fact(diag, key, value);
 }
@@ -8466,8 +8480,9 @@ static const os64_html_document_t *scripts_doc(const yonder_scripts_t *host)
 }
 
 // A request's job was reaped: its answer is the page's task, as a timer's
-// is, and what the task asked of the widgets is performed after it.
-static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got)
+// is, and what the task asked of the widgets is performed after it. A
+// module's compiled form is the page's module map's now.
+static void request_arrived(const yonder_fetch_job_t *job, yonder_fetched_t *got)
 {
     yonder_scripts_t *host = scripts_for(job->page);
     if (host == NULL)
@@ -8475,9 +8490,12 @@ static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_
     request_record(host, job, got, false);
     os64_dom_response_t response;
     request_response(got, &response);
+    yonder_bytecode_t *bytecode = got != NULL ? got->bytecode : NULL;
+    if (got != NULL)
+        got->bytecode = NULL;
     os64_js_outcome_t out;
     int64_t began = task_begin(host);
-    if (!yonder_scripts_answered(host, job->token, &response, &out))
+    if (!yonder_scripts_answered(host, job->token, &response, bytecode, &out))
         return;
     task_said(host, true, "request", &out, began);
     const os64_html_document_t *doc = scripts_doc(host);

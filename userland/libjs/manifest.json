@@ -154,6 +154,11 @@
       "path": "patches/0015-read-object-named.patch",
       "sha256": "a1f042d516d54ad1e9947f2dbfd1f7d3ad44402144f4581c88592311332d7239",
       "reason": "Read bytecode under a name the reader gives (JS_ReadObjectNamed): every function read takes it in place of the name written, because a browser runs one cached script under a different per-page name, which it reads back off a thrown error to know whose the error is and whether it is muted."
+    },
+    {
+      "path": "patches/0016-read-module-failure-unlisted.patch",
+      "sha256": "e8b16adb9e4eb886850ad5c8c9d2be8294e7f75e60ade69913ac3b6f6591262d",
+      "reason": "A module read that fails part way (an allocation refused) is unlisted and freed: upstream dropped one of its two references, leaving a half-read module on the context's list under its name, which the GC then walked through entry counts whose arrays were never allocated."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

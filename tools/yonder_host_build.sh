@@ -52,7 +52,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,custom,observer}.c \
-        userland/apps/yonder/{scripts,modules,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
+        userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
         "${svg_sources[@]}" userland/libdraw2d/paint.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
@@ -60,7 +60,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libpage/upstream/ryu/ryu/d2s.c \
         userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow,computed}.c \
         userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
-        userland/libway/session.c userland/libway/origin.c userland/libway/jar.c \
+        userland/libway/session.c userland/libway/origin.c userland/libway/jar.c userland/libway/cache.c \
         userland/apps/yonder/fetch_job.c tools/yonder_host_menus.c \
         userland/libos64/{str,fmt,bidi,url,arena,ui,ui_controls,ui_list,ui_dropdown,ui_icon,ui_text,ui_font,ui_theme,font_config,font_family,font_provider,font_adopt,text,text_cache,text_decode,text_bitmap,text_draw,draw}.c \
         shared/damage.c; do

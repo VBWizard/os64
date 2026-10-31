@@ -363,7 +363,8 @@ with its entry; one verb, `os64_js_run_bytecode`, not a pair; the
 script's per-page name given at the read (patch 0015), since libdom reads
 it back to mute another site's errors; and NOT compressed — libgzip
 inflates at 68 MB/s against the engine's 600 MB/s read, so the inflate
-would have cost more than it saved. 7b, modules, follows on its own path.
+would have cost more than it saved. 7b, modules, followed on its own path
+(SCRIPT_CACHE.md).
 
 **Slice 8: generated content and the rest of the census's CSS.**
 `::before`/`::after` with `content` (144 asks, the icon fonts' whole

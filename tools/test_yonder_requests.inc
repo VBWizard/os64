@@ -56,6 +56,33 @@ static void request_same_origin_case(void) {
     request_drop();
 }
 
+/* A request's cache mode (SCRIPT_CACHE.md § 5) reaches its job, and one
+ * that names none is the default; a module's fetch is said to be one. */
+static void request_cache_mode_case(void) {
+    fake_fetch_reset();
+    loop_page("<script>fetch('/a',{cache:'no-store'});fetch('/b',{cache:'force-cache'});fetch('/c');</script>");
+    check(loop_settle() && nrequest_jobs==3,"requests: three fetches are out");
+    way_cache_mode_t a=WAY_CACHE_DEFAULT, b=WAY_CACHE_DEFAULT, c=WAY_CACHE_NO_STORE;
+    bool module=false;
+    for(int i=0;i<nrequest_jobs;i++) {
+        const char *url=request_jobs[i].job->url;
+        size_t n=strlen(url);
+        if(url[n-1]=='a') a=request_jobs[i].job->cache_mode;
+        if(url[n-1]=='b') b=request_jobs[i].job->cache_mode;
+        if(url[n-1]=='c') c=request_jobs[i].job->cache_mode;
+        module|=request_jobs[i].job->module;
+    }
+    check(a==WAY_CACHE_NO_STORE && b==WAY_CACHE_FORCE_CACHE && c==WAY_CACHE_DEFAULT && !module,
+          "requests: each fetch's job carries its cache mode, and none is a module's");
+    request_drop();
+    fake_fetch_reset();
+    loop_page("<script type=module src=/m.js></script>");
+    check(loop_settle() && nrequest_jobs==1 && request_jobs[0].job->module &&
+          request_jobs[0].job->cache_mode==WAY_CACHE_DEFAULT,
+          "requests: a module's fetch is a module's, in the default mode");
+    request_drop();
+}
+
 /* Cross origin: a CORS answer the page may read, one it may not, and a
  * preflight before a PUT. */
 static void request_cors_case(void) {
@@ -366,6 +393,7 @@ static void request_cases(void) {
     navigation_cases();
     request_redirected_page_case();
     request_same_origin_case();
+    request_cache_mode_case();
     request_cors_case();
     request_xhr_case();
     request_cancel_case();

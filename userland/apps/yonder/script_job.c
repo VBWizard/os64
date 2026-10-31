@@ -2,7 +2,6 @@
 // (script_job.h).
 
 #include "script_job.h"
-#include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
@@ -51,21 +50,18 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *ctx), void *ctx, vo
     // A body the cache holds may have its compiled form beside it, and a
     // compile of it is kept there (BYTECODE_CACHE.md § 5); one it does not
     // hold has neither. Without memory for the record, it runs as source.
+    // Its entry is way_fetch_whole's: the page's partition, credentialed,
+    // the address asked for.
     if (s->ok && body.kept && !cancelled(ctx) && (s->bytecode = os64_calloc(1, sizeof(*s->bytecode))) != NULL) {
-        os64_strcopy(s->bytecode->url, sizeof(s->bytecode->url), j->url);
-        yonder_script_bytecode_key(s->source, s->length, s->bytecode->key, sizeof(s->bytecode->key));
-        (void)way_cache_companion_get(j->hooks.cache, j->url, s->bytecode->key, &s->bytecode->blob,
-                                      &s->bytecode->length, SCRIPT_BYTECODE_MAX);
+        yonder_bytecode_t *bc = s->bytecode;
+        way_partition_of(&j->hooks.metadata.origin, bc->partition, sizeof(bc->partition));
+        bc->credentials = true;
+        os64_strcopy(bc->url, sizeof(bc->url), j->url);
+        yonder_script_bytecode_tag(s->source, s->length, bc->tag, sizeof(bc->tag));
+        const way_cache_key_t key = {bc->partition, bc->credentials, bc->url};
+        (void)way_cache_companion_get(j->hooks.cache, &key, bc->tag, &bc->blob, &bc->length, SCRIPT_BYTECODE_MAX);
     }
     return s->ok ? 1 : 0;
-}
-
-void yonder_bytecode_free(yonder_bytecode_t *bytecode)
-{
-    if (bytecode != NULL) {
-        os64_free(bytecode->blob);
-        os64_free(bytecode);
-    }
 }
 
 void yonder_script_release(void *job, void *product)
@@ -77,32 +73,4 @@ void yonder_script_release(void *job, void *product)
         os64_free(s);
     }
     os64_free(job);
-}
-
-void yonder_script_bytecode_key(const char *source, size_t length, char *out, size_t cap)
-{
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (size_t i = 0; i < length; i++) {
-        h ^= (uint8_t)source[i];
-        h *= 0x100000001b3ull;
-    }
-    os64_snprintf(out, cap, "classic %016lx %lu", (unsigned long)h, (unsigned long)length);
-}
-
-int64_t yonder_bytecode_keep_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
-{
-    (void)out;
-    yonder_bytecode_job_t *j = job;
-    if (cancelled(ctx))
-        return 0;
-    return way_cache_companion_put(j->cache, j->url, j->key, j->blob, j->length) ? 1 : 0;
-}
-
-void yonder_bytecode_keep_release(void *job, void *product)
-{
-    (void)product;
-    yonder_bytecode_job_t *j = job;
-    if (j != NULL)
-        os64_free(j->blob);
-    os64_free(j);
 }

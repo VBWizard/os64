@@ -111,7 +111,20 @@ static int64_t http_date(const char *text)
     return n != 0 && way_cookie_date(text, n, &when) ? when : -1;
 }
 
+static bool keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out, bool varied);
+
 bool way_keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out)
+{
+    return keep_read(f, now, out, false);
+}
+
+bool way_keep_read_varied(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out)
+{
+    return keep_read(f, now, out, true);
+}
+
+// `varied`: a Vary on any header but `*` is the caller's to record.
+static bool keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out, bool varied)
 {
     os64_memset(out, 0, sizeof(*out));
     out->stored = now;
@@ -145,10 +158,11 @@ bool way_keep_read(const os64_fetch_keep_t *f, int64_t now, way_keep_t *out)
     }
     // A reply that varies by what the request said is kept only when what
     // it varies by is the encoding, which libfetch asks for the same way
-    // every time.
+    // every time — or, `varied`, by headers the caller records; never by
+    // `*`, which no request's lines can stand for.
     Members v = {f->vary, 0, os64_strlen(f->vary)};
     while (member(&v, &name, &nlen, &value, &vlen))
-        if (!same_nocase(name, nlen, "accept-encoding"))
+        if (varied ? same_nocase(name, nlen, "*") : !same_nocase(name, nlen, "accept-encoding"))
             return false;
     out->date = http_date(f->date);
     // An Expires that is not a date is a time already past (§ 5.3).
@@ -210,10 +224,22 @@ size_t way_keep_conditions(const way_keep_t *k, char *out, size_t cap)
     return (size_t)n;
 }
 
+static bool keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now, bool varied);
+
 bool way_keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now)
 {
+    return keep_confirm(k, fields, now, false);
+}
+
+bool way_keep_confirm_varied(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now)
+{
+    return keep_confirm(k, fields, now, true);
+}
+
+static bool keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now, bool varied)
+{
     way_keep_t fresh;
-    if (!way_keep_read(fields, now, &fresh))
+    if (!keep_read(fields, now, &fresh, varied))
         return false;
     // A validator the 304 did not repeat is still the one it confirmed.
     if (fresh.etag[0] == '\0')
@@ -281,31 +307,166 @@ bool way_chain_apply(const way_chain_t *chain, way_keep_t *k, int64_t now)
     return true;
 }
 
+// ── What a script's request reads of a kept reply ───────────────────────
+
+// Appends `n` bytes to `out` at `*at`, within `cap`. False when they do
+// not fit.
+static bool put_bytes(char *out, size_t cap, size_t *at, const char *s, size_t n)
+{
+    if (n > cap || *at > cap - n)
+        return false;
+    os64_memcpy(out + *at, s, n);
+    *at += n;
+    return true;
+}
+
+static bool put_line(char *out, size_t cap, size_t *at, const char *name, size_t nlen, const char *value,
+                     size_t vlen)
+{
+    return put_bytes(out, cap, at, name, nlen) && put_bytes(out, cap, at, ": ", 2) &&
+           put_bytes(out, cap, at, value, vlen) && put_bytes(out, cap, at, "\r\n", 2);
+}
+
+// What a request said of header `name`, as a recorded line's value holds
+// it: "=" and the value for one sent, "-" for none. False when the caller
+// cannot say or it does not fit.
+static bool said_as_recorded(way_request_value_t value_of, void *ctx, const char *name, size_t nlen, char *out,
+                             size_t cap)
+{
+    way_said_t said = value_of(ctx, name, nlen, out + 1, cap - 1);
+    if (said == WAY_SAID_VALUE) {
+        out[0] = '=';
+        return true;
+    }
+    if (said != WAY_SAID_NONE)
+        return false;
+    out[0] = '-';
+    out[1] = '\0';
+    return true;
+}
+
+size_t way_vary_lines(const char *vary, way_request_value_t value_of, void *ctx, char *out, size_t cap)
+{
+    Members m = {vary, 0, os64_strlen(vary)};
+    const char *name, *value;
+    size_t nlen, vlen, at = 0;
+    char said[WAY_VARY_VALUE_MAX + 1];
+    while (member(&m, &name, &nlen, &value, &vlen)) {
+        if (same_nocase(name, nlen, "accept-encoding"))
+            continue;
+        if (same_nocase(name, nlen, "*") || !said_as_recorded(value_of, ctx, name, nlen, said, sizeof(said)) ||
+            !put_line(out, cap, &at, name, nlen, said, os64_strlen(said)))
+            return SIZE_MAX;
+    }
+    return at;
+}
+
+bool way_vary_matches(const char *lines, size_t len, way_request_value_t value_of, void *ctx)
+{
+    size_t at = 0;
+    way_header_t h;
+    char now[WAY_VARY_VALUE_MAX + 1];
+    while (way_header_next(lines, len, &at, &h))
+        if (!said_as_recorded(value_of, ctx, h.name, h.name_len, now, sizeof(now)) || os64_strlen(now) != h.value_len ||
+            os64_memcmp(now, h.value, h.value_len) != 0)
+            return false;
+    return at == len;
+}
+
+static bool is_set_cookie(const way_header_t *h)
+{
+    return same_nocase(h->name, h->name_len, "set-cookie") || same_nocase(h->name, h->name_len, "set-cookie2");
+}
+
+size_t way_headers_storable(const char *block, size_t len, char *out, size_t cap)
+{
+    size_t at = 0, written = 0;
+    way_header_t h;
+    while (way_header_next(block, len, &at, &h))
+        if (!is_set_cookie(&h) && !put_line(out, cap, &written, h.name, h.name_len, h.value, h.value_len))
+            return SIZE_MAX;
+    return written;
+}
+
+// Whether `block` has a line named `name` (`nlen` bytes, any case).
+static bool block_names(const char *block, size_t len, const char *name, size_t nlen)
+{
+    size_t at = 0;
+    way_header_t h;
+    while (way_header_next(block, len, &at, &h))
+        if (h.name_len == nlen) {
+            size_t i = 0;
+            while (i < nlen && lower(h.name[i]) == lower(name[i]))
+                i++;
+            if (i == nlen)
+                return true;
+        }
+    return false;
+}
+
+static bool frames_the_body(const way_header_t *h)
+{
+    return same_nocase(h->name, h->name_len, "content-length") ||
+           same_nocase(h->name, h->name_len, "content-encoding") ||
+           same_nocase(h->name, h->name_len, "transfer-encoding");
+}
+
+size_t way_headers_update(const char *kept, size_t klen, const char *update, size_t ulen, char *out,
+                          size_t cap)
+{
+    size_t at = 0, written = 0;
+    way_header_t h;
+    // The kept lines the 304 does not replace...
+    while (way_header_next(kept, klen, &at, &h)) {
+        bool replaced = !frames_the_body(&h) && block_names(update, ulen, h.name, h.name_len);
+        if (!replaced && !is_set_cookie(&h) &&
+            !put_line(out, cap, &written, h.name, h.name_len, h.value, h.value_len))
+            return SIZE_MAX;
+    }
+    // ...then the 304's own, but those that frame its own (empty) body.
+    at = 0;
+    while (way_header_next(update, ulen, &at, &h))
+        if (!frames_the_body(&h) && !is_set_cookie(&h) &&
+            !put_line(out, cap, &written, h.name, h.name_len, h.value, h.value_len))
+            return SIZE_MAX;
+    return written;
+}
+
 // ── An entry on disk ────────────────────────────────────────────────────
 //
-// A text head, `key value` a line, then a blank line and the body. Every
-// value is one line: addresses and the fields are HTTP's, which carry no
-// line breaks, and a head that does not read whole is a miss.
+// A text head, `key value` a line, then a blank line, the body, and the
+// blocks (way_blocks_t) one after another, each of the length the head
+// says. Every head value is one line: addresses and the fields are HTTP's,
+// which carry no line breaks, and a head that does not read whole is a
+// miss. The body comes first so that one allocation is the body to free.
+// Version 1 had no key parts and no blocks, and reads as a miss.
 
-#define ENTRY_MAGIC "os64-cache 1"
-#define ENTRY_HEAD_MAX (4 * OS64_FETCH_URL_MAX + 8 * OS64_FETCH_KEEP_FIELD)
+#define ENTRY_MAGIC "os64-cache 2"
+#define ENTRY_HEAD_MAX (4 * OS64_FETCH_URL_MAX + WAY_PARTITION_MAX + 8 * OS64_FETCH_KEEP_FIELD)
+// The blocks together: a response's head, which libfetch holds to far less.
+#define ENTRY_BLOCKS_MAX ((uint64_t)256 << 10)
 // A temp file older than this was left by a writer that died: removed when
 // the directory is next swept.
 #define TEMP_ABANDONED (60 * 60)
 
-static size_t entry_head(const way_entry_t *e, size_t len, char *out, size_t cap)
+static const way_blocks_t kNoBlocks;
+
+static size_t entry_head(const way_entry_t *e, const way_blocks_t *b, size_t len, char *out, size_t cap)
 {
     const way_keep_t *k = &e->keep;
     int n = os64_snprintf(out, cap,
-                          ENTRY_MAGIC "\nurl %s\nfrom %s\nstatus %d\ntype %s\ncharset %s\n"
+                          ENTRY_MAGIC "\npartition %s\ncredentials %d\nurl %s\nfrom %s\nstatus %d\n"
+                          "type %s\ncharset %s\n"
                           "stored %ld\ndate %ld\nexpires %ld\nmodified %ld\nage %ld\n"
                           "max-age %ld\nno-cache %d\nmust-revalidate %d\netag %s\n"
-                          "last-modified %s\nlength %lu\n\n",
-                          e->url, e->final, (int)e->status, e->content_type, e->charset,
+                          "last-modified %s\nheaders %lu\nomitted %lu\nvary %lu\nlength %lu\n\n",
+                          e->partition, e->credentials ? 1 : 0, e->url, e->final, (int)e->status,
+                          e->content_type, e->charset,
                           (long)k->stored, (long)k->date, (long)k->expires,
                           (long)k->last_modified, (long)k->age, (long)k->max_age,
                           k->no_cache ? 1 : 0, k->must_revalidate ? 1 : 0, k->etag,
-                          k->last_modified_text, (unsigned long)len);
+                          k->last_modified_text, (unsigned long)b->headers_len,
+                          (unsigned long)b->omitted_len, (unsigned long)b->vary_len, (unsigned long)len);
     return n > 0 && (size_t)n < cap ? (size_t)n : 0;
 }
 
@@ -327,11 +488,18 @@ static bool number(const char *v, int64_t *out)
     return true;
 }
 
-// Reads a head (NUL-terminated, the blank line gone) into `e`. The body's
-// length in `*len`. False for anything that is not a whole head.
-static bool entry_parse(char *head, way_entry_t *e, uint64_t *len)
+// The lengths a head gives what follows it: the body, then the blocks.
+typedef struct {
+    uint64_t body, headers, omitted, vary;
+} Lengths;
+
+// Reads a head (NUL-terminated, the blank line gone) into `e`, and the
+// lengths of what follows it into `*len`. False for anything that is not a
+// whole head, or whose blocks pass what a response's head can be.
+static bool entry_parse(char *head, way_entry_t *e, Lengths *len)
 {
     os64_memset(e, 0, sizeof(*e));
+    os64_memset(len, 0, sizeof(*len));
     char *line = head;
     char *nl = find_char(line, '\n');
     if (nl == NULL)
@@ -352,7 +520,18 @@ static bool entry_parse(char *head, way_entry_t *e, uint64_t *len)
         way_keep_t *k = &e->keep;
         int64_t x = 0;
         bool is_num = number(v, &x);
-        if (os64_streq(line, "url")) {
+        if (os64_streq(line, "partition")) {
+            have |= os64_strcopy(e->partition, sizeof(e->partition), v) < sizeof(e->partition) ? 32 : 0;
+        } else if (os64_streq(line, "credentials") && is_num) {
+            e->credentials = x != 0;
+            have |= 64;
+        } else if (os64_streq(line, "headers") && is_num && x >= 0) {
+            len->headers = (uint64_t)x;
+        } else if (os64_streq(line, "omitted") && is_num && x >= 0) {
+            len->omitted = (uint64_t)x;
+        } else if (os64_streq(line, "vary") && is_num && x >= 0) {
+            len->vary = (uint64_t)x;
+        } else if (os64_streq(line, "url")) {
             have |= os64_strcopy(e->url, sizeof(e->url), v) < sizeof(e->url) ? 1 : 0;
         } else if (os64_streq(line, "from")) {
             have |= os64_strcopy(e->final, sizeof(e->final), v) < sizeof(e->final) ? 2 : 0;
@@ -385,11 +564,12 @@ static bool entry_parse(char *head, way_entry_t *e, uint64_t *len)
         } else if (os64_streq(line, "last-modified")) {
             os64_strcopy(k->last_modified_text, sizeof(k->last_modified_text), v);
         } else if (os64_streq(line, "length") && is_num && x >= 0) {
-            *len = (uint64_t)x;
+            len->body = (uint64_t)x;
             have |= 16;
         }
     }
-    return have == 31;
+    return have == 127 && len->headers <= ENTRY_BLOCKS_MAX && len->omitted <= ENTRY_BLOCKS_MAX &&
+           len->vary <= ENTRY_BLOCKS_MAX && len->headers + len->omitted + len->vary <= ENTRY_BLOCKS_MAX;
 }
 
 // ── The store ───────────────────────────────────────────────────────────
@@ -410,10 +590,9 @@ struct way_cache {
     uint32_t seq;               // this browser's temp names
 };
 
-// FNV-1a: a name for an address, checked against the address inside.
-static uint64_t hash(const char *s)
+// FNV-1a, continued over `s`.
+static uint64_t hash(uint64_t h, const char *s)
 {
-    uint64_t h = 0xcbf29ce484222325ull;
     for (; *s != '\0'; s++) {
         h ^= (uint8_t)*s;
         h *= 0x100000001b3ull;
@@ -421,19 +600,46 @@ static uint64_t hash(const char *s)
     return h;
 }
 
+// A name for a key: its parts hashed one after another, a line break
+// between, and checked against the parts inside, so a collision is a miss.
+static uint64_t key_hash(const way_cache_key_t *key)
+{
+    uint64_t h = hash(0xcbf29ce484222325ull, key->partition);
+    h = hash(h, key->credentials ? "\n1\n" : "\n0\n");
+    return hash(h, key->url);
+}
+
+// A key the store may name: a partition that names something outside this
+// run (an opaque origin's names nothing, and one not given is a caller that
+// did not say whose page it fetched for), and an address.
+static bool key_usable(const way_cache_key_t *key)
+{
+    static const char kOpaque[] = "opaque ";
+    return key != NULL && key->partition != NULL && key->partition[0] != '\0' && key->url != NULL &&
+           os64_memcmp(key->partition, kOpaque, sizeof(kOpaque) - 1) != 0;
+}
+
+// The key's parts as an entry holds them.
+static bool key_is(const way_cache_key_t *key, const char *partition, bool credentials, const char *url)
+{
+    return os64_streq(key->partition, partition) && key->credentials == credentials && os64_streq(key->url, url);
+}
+
 static uint64_t cap_of(way_cache_t *c)
 {
     return __atomic_load_n(&c->cap, __ATOMIC_RELAXED);
 }
 
-// A file the store keeps is named for its address and its kind: the
-// reply's ENTRY, or the COMPANION a face derived from its body.
+// A file the store keeps is named for its key and its kind: the reply's
+// ENTRY, or the COMPANION a face derived from its body.
 #define KIND_ENTRY 'e'
 #define KIND_COMPANION 'b'
 
-static bool path_of(const way_cache_t *c, const char *url, char kind, char *out, size_t cap)
+static bool path_of(const way_cache_t *c, const way_cache_key_t *key, char kind, char *out, size_t cap)
 {
-    int n = os64_snprintf(out, cap, "%s/%016lx.%c", c->dir, (unsigned long)hash(url), kind);
+    if (!key_usable(key))
+        return false;
+    int n = os64_snprintf(out, cap, "%s/%016lx.%c", c->dir, (unsigned long)key_hash(key), kind);
     return n > 0 && (size_t)n < cap;
 }
 
@@ -597,14 +803,14 @@ int32_t way_cache_clear(way_cache_t *c)
 
 // The entry goes, and its companion with it: what was derived from a body
 // the cache no longer holds is not the cache's to offer.
-void way_cache_drop(way_cache_t *c, const char *url)
+void way_cache_drop(way_cache_t *c, const way_cache_key_t *key)
 {
     char path[OS64_PATH_MAX];
     if (c == NULL || !c->usable)
         return;
-    if (path_of(c, url, KIND_ENTRY, path, sizeof(path)))
+    if (path_of(c, key, KIND_ENTRY, path, sizeof(path)))
         (void)os64_unlink(path);
-    if (path_of(c, url, KIND_COMPANION, path, sizeof(path)))
+    if (path_of(c, key, KIND_COMPANION, path, sizeof(path)))
         (void)os64_unlink(path);
 }
 
@@ -695,39 +901,64 @@ static bool read_headed(const char *path, size_t head_max,
 
 typedef struct {
     way_entry_t *e;
-    const char *url;
+    const way_cache_key_t *key;
+    Lengths len;
+    size_t cap;
 } FindEntry;
 
-// An entry's head, and the address in it the one asked for: the file's
-// name is a hash, so a collision is a miss.
+// An entry's head, and the key's parts in it the ones asked for: the file's
+// name is a hash, so a collision is a miss. What follows the head is the
+// body, of at most the caller's cap, and the blocks.
 static bool parse_entry(char *head, void *ctx, uint64_t *want)
 {
     FindEntry *f = ctx;
-    return entry_parse(head, f->e, want) && os64_streq(f->e->url, f->url);
+    if (!entry_parse(head, f->e, &f->len) || !key_is(f->key, f->e->partition, f->e->credentials, f->e->url) ||
+        f->len.body > f->cap)
+        return false;
+    *want = f->len.body + f->len.headers + f->len.omitted + f->len.vary;
+    return true;
 }
 
-bool way_cache_find(way_cache_t *c, const char *url, way_entry_t *e, uint8_t **body,
-                    size_t *len, size_t cap)
+bool way_cache_find(way_cache_t *c, const way_cache_key_t *key, way_entry_t *e, uint8_t **body,
+                    size_t *len, way_blocks_t *blocks, size_t cap)
 {
     *body = NULL;
     *len = 0;
+    if (blocks != NULL)
+        *blocks = kNoBlocks;
     char path[OS64_PATH_MAX];
-    if (!way_cache_enabled(c) || !path_of(c, url, KIND_ENTRY, path, sizeof(path)))
+    if (!way_cache_enabled(c) || !path_of(c, key, KIND_ENTRY, path, sizeof(path)))
         return false;
-    FindEntry f = {e, url};
-    return read_headed(path, ENTRY_HEAD_MAX, parse_entry, &f, body, len, cap);
+    FindEntry f = {e, key, {0, 0, 0, 0}, cap};
+    size_t whole = 0;
+    size_t limit = cap <= SIZE_MAX - ENTRY_BLOCKS_MAX ? cap + (size_t)ENTRY_BLOCKS_MAX : SIZE_MAX;
+    if (!read_headed(path, ENTRY_HEAD_MAX, parse_entry, &f, body, &whole, limit))
+        return false;
+    *len = (size_t)f.len.body;
+    if (blocks != NULL) {
+        const char *at = (const char *)*body + f.len.body;
+        blocks->headers = at;
+        blocks->headers_len = (size_t)f.len.headers;
+        blocks->omitted = at + f.len.headers;
+        blocks->omitted_len = (size_t)f.len.omitted;
+        blocks->vary = at + f.len.headers + f.len.omitted;
+        blocks->vary_len = (size_t)f.len.vary;
+    }
+    return true;
 }
 
 // ── Companions (BYTECODE_CACHE.md § 5) ──────────────────────────────────
 //
-// A head of its own — the magic, the address it belongs to, the face's
-// key, the length — a blank line, and the bytes as the face gave them.
+// A head of its own — the magic, the key of the entry it belongs to, the
+// face's tag, the length — a blank line, and the bytes as the face gave
+// them. Version 1 named its entry by address alone, and reads as a miss.
 
-#define COMPANION_MAGIC "os64-cache-companion 1"
-#define COMPANION_HEAD_MAX (OS64_FETCH_URL_MAX + WAY_COMPANION_KEY_MAX + 96)
+#define COMPANION_MAGIC "os64-cache-companion 2"
+#define COMPANION_HEAD_MAX (WAY_PARTITION_MAX + OS64_FETCH_URL_MAX + WAY_COMPANION_TAG_MAX + 128)
 
 typedef struct {
-    const char *url, *key;
+    const way_cache_key_t *key;
+    const char *tag;
 } FindCompanion;
 
 static bool parse_companion(char *head, void *ctx, uint64_t *want)
@@ -750,28 +981,32 @@ static bool parse_companion(char *head, void *ctx, uint64_t *want)
         *sp = '\0';
         const char *v = sp + 1;
         int64_t x = 0;
-        if (os64_streq(line, "url") && os64_streq(v, f->url))
+        if (os64_streq(line, "partition") && os64_streq(v, f->key->partition))
             have |= 1;
-        else if (os64_streq(line, "key") && os64_streq(v, f->key))
+        else if (os64_streq(line, "credentials") && os64_streq(v, f->key->credentials ? "1" : "0"))
             have |= 2;
+        else if (os64_streq(line, "url") && os64_streq(v, f->key->url))
+            have |= 4;
+        else if (os64_streq(line, "tag") && os64_streq(v, f->tag))
+            have |= 8;
         else if (os64_streq(line, "length") && number(v, &x) && x >= 0) {
             *want = (uint64_t)x;
-            have |= 4;
+            have |= 16;
         } else
             return false;
     }
-    return have == 7;
+    return have == 31;
 }
 
-bool way_cache_companion_get(way_cache_t *c, const char *url, const char *key, uint8_t **bytes,
-                             size_t *len, size_t cap)
+bool way_cache_companion_get(way_cache_t *c, const way_cache_key_t *key, const char *tag,
+                             uint8_t **bytes, size_t *len, size_t cap)
 {
     *bytes = NULL;
     *len = 0;
     char path[OS64_PATH_MAX];
-    if (!way_cache_enabled(c) || !path_of(c, url, KIND_COMPANION, path, sizeof(path)))
+    if (!way_cache_enabled(c) || !path_of(c, key, KIND_COMPANION, path, sizeof(path)))
         return false;
-    FindCompanion f = {url, key};
+    FindCompanion f = {key, tag};
     return read_headed(path, COMPANION_HEAD_MAX, parse_companion, &f, bytes, len, cap);
 }
 
@@ -884,19 +1119,30 @@ static void sweep_if_due(way_cache_t *c)
         evict(c);
 }
 
-// A head and a body published at `path`: written under a name no other
-// writer has and renamed over its place, so a reader sees the old file or
-// the new one whole. Counted against the cap. False when nothing was
-// published.
+// One piece of a file being published.
+typedef struct {
+    const void *bytes;
+    size_t len;
+} Piece;
+
+// A head and the pieces after it, published at `path`: written under a
+// name no other writer has and renamed over its place, so a reader sees the
+// old file or the new one whole. Counted against the cap. False when
+// nothing was published.
 static bool publish(way_cache_t *c, const char *path, const char *head, size_t hlen,
-                    const uint8_t *body, size_t len)
+                    const Piece *pieces, int32_t npieces)
 {
     char temp[OS64_PATH_MAX];
     uint32_t seq = __atomic_add_fetch(&c->seq, 1, __ATOMIC_RELAXED);
     int n = os64_snprintf(temp, sizeof(temp), "%s.%lu.%lu.new", path,
                           (unsigned long)os64_taskid(), (unsigned long)seq);
     int64_t h = hlen != 0 && n > 0 && (size_t)n < sizeof(temp) ? os64_open(temp, "x") : -1;
-    bool ok = h >= 0 && write_all((int32_t)h, head, hlen) && write_all((int32_t)h, body, len);
+    bool ok = h >= 0 && write_all((int32_t)h, head, hlen);
+    size_t written = hlen;
+    for (int32_t i = 0; ok && i < npieces; i++) {
+        ok = write_all((int32_t)h, pieces[i].bytes, pieces[i].len);
+        written += pieces[i].len;
+    }
     if (h >= 0)
         ok = os64_close((int32_t)h) == 0 && ok;
     ok = ok && os64_rename(temp, path) == 0;
@@ -905,24 +1151,30 @@ static bool publish(way_cache_t *c, const char *path, const char *head, size_t h
     if (!ok)
         return false;
     os64_lock_acquire(&c->lock);
-    c->total += hlen + len;
-    c->since += hlen + len;
+    c->total += written;
+    c->since += written;
     if (c->evicting)
-        c->during += hlen + len;
+        c->during += written;
     os64_lock_release(&c->lock);
     sweep_if_due(c);
     return true;
 }
 
-bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, size_t len)
+bool way_cache_put(way_cache_t *c, const way_entry_t *e, const way_blocks_t *blocks,
+                   const uint8_t *body, size_t len)
 {
     char path[OS64_PATH_MAX];
+    const way_blocks_t *b = blocks != NULL ? blocks : &kNoBlocks;
+    const way_cache_key_t key = {e->partition, e->credentials, e->url};
     if (!way_cache_enabled(c) || len > cap_of(c) / 8 ||
-        !path_of(c, e->url, KIND_ENTRY, path, sizeof(path)))
+        (uint64_t)b->headers_len + b->omitted_len + b->vary_len > ENTRY_BLOCKS_MAX ||
+        !path_of(c, &key, KIND_ENTRY, path, sizeof(path)))
         return false;
     char *head = os64_malloc(ENTRY_HEAD_MAX);
-    size_t hlen = head != NULL ? entry_head(e, len, head, ENTRY_HEAD_MAX) : 0;
-    bool ok = publish(c, path, head, hlen, body, len);
+    size_t hlen = head != NULL ? entry_head(e, b, len, head, ENTRY_HEAD_MAX) : 0;
+    const Piece pieces[] = {{body, len}, {b->headers, b->headers_len}, {b->omitted, b->omitted_len},
+                            {b->vary, b->vary_len}};
+    bool ok = publish(c, path, head, hlen, pieces, 4);
     os64_free(head);
     if (ok) {
         os64_lock_acquire(&c->lock);
@@ -932,8 +1184,8 @@ bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, si
     return ok;
 }
 
-// A key or an address is one line of the head: either holding a line
-// break would make a head that reads as something else.
+// A tag, a partition or an address is one line of the head: any of them
+// holding a line break would make a head that reads as something else.
 static bool one_line(const char *s, size_t max)
 {
     size_t n = 0;
@@ -943,21 +1195,25 @@ static bool one_line(const char *s, size_t max)
     return n > 0;
 }
 
-bool way_cache_companion_put(way_cache_t *c, const char *url, const char *key,
+bool way_cache_companion_put(way_cache_t *c, const way_cache_key_t *key, const char *tag,
                              const uint8_t *bytes, size_t len)
 {
     char path[OS64_PATH_MAX];
-    if (!way_cache_enabled(c) || len > cap_of(c) / 8 || !one_line(url, OS64_FETCH_URL_MAX - 1) ||
-        !one_line(key, WAY_COMPANION_KEY_MAX - 1) ||
-        !path_of(c, url, KIND_COMPANION, path, sizeof(path)))
+    if (!way_cache_enabled(c) || len > cap_of(c) / 8 || !key_usable(key) ||
+        !one_line(key->partition, WAY_PARTITION_MAX - 1) || !one_line(key->url, OS64_FETCH_URL_MAX - 1) ||
+        !one_line(tag, WAY_COMPANION_TAG_MAX - 1) ||
+        !path_of(c, key, KIND_COMPANION, path, sizeof(path)))
         return false;
     char *head = os64_malloc(COMPANION_HEAD_MAX);
     int n = head != NULL ? os64_snprintf(head, COMPANION_HEAD_MAX,
-                                         COMPANION_MAGIC "\nurl %s\nkey %s\nlength %lu\n\n", url, key,
+                                         COMPANION_MAGIC "\npartition %s\ncredentials %d\nurl %s\ntag %s\n"
+                                         "length %lu\n\n",
+                                         key->partition, key->credentials ? 1 : 0, key->url, tag,
                                          (unsigned long)len)
                          : 0;
     size_t hlen = n > 0 && (size_t)n < COMPANION_HEAD_MAX ? (size_t)n : 0;
-    bool ok = publish(c, path, head, hlen, bytes, len);
+    const Piece piece = {bytes, len};
+    bool ok = publish(c, path, head, hlen, &piece, 1);
     os64_free(head);
     return ok;
 }

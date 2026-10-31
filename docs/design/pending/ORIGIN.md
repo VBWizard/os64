@@ -52,7 +52,10 @@ and a network error carries nothing at all.
 5. **fetch and XHR bypass the HTTP cache.** The cache keeps no response
    headers and no credentials partition, so it cannot answer a CORS
    question. DEBTS.md row, trigger: the P5 shows a page re-fetching the
-   same API answer per navigation.
+   same API answer per navigation. **Superseded 2026-10-30
+   (SCRIPT_CACHE.md):** the cache keeps a reply's head, keys it by the
+   page's site and the credentials, and a hit goes through the live CORS
+   check; the trigger was a pull-request page fetching 207 modules a load.
 6. **An unreadable CORS header line is judged the restrictive way.**
 7. **A malformed `Access-Control-Expose-Headers` exposes nothing extra.**
 8. **One copy of the lists: libdom links libway**, and Slice 1a's
@@ -487,7 +490,8 @@ false otherwise, and always false for a preflight.
   cached response could not be CORS-checked, and an entry stored from an
   uncredentialed fetch could be served to a credentialed one. The cost is
   bandwidth only. The cache learns headers, `Vary` and a credentials flag
-  in a slice of its own (DEBTS.md).
+  in a slice of its own (DEBTS.md) — built 2026-10-30, SCRIPT_CACHE.md,
+  which supersedes this ruling.
 
 ## 9. The CORS check on a response
 
