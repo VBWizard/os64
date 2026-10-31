@@ -116,13 +116,14 @@ static yonder_cookies_mode_t s_cookies_asked;
 // thread's, DOM_D4.md), so what it declares is one connection's worth of
 // libfetch and libtls — a few hundred KiB — with room to spare; a picture
 // declares PICTURE_RESERVE and a sheet SHEET_RESERVE, each its worst case.
-// The budget admits twelve sheets at once beside a page's fetch: a page
-// with twenty-eight linked sheets, none cached, was spending five seconds
-// fetching them four at a time (Chris, 2026-10-05, on a twelve-core
-// machine that was asked to use its cores and its memory).
+// The budget counts those declarations, not memory held: what yonder uses
+// is what its jobs allocate. Twelve workers each running the largest job
+// (a picture, 512 MiB) declare 6 GiB, so 8 GiB admits any twelve at once
+// with room for answers not yet reaped, and a page waits on its workers,
+// never on worst cases that do not happen.
 #define POOL_WORKERS 12
 #define TRIP_RESERVE (4u << 20)
-#define POOL_BUDGET  ((size_t)2u << 30)
+#define POOL_BUDGET  ((size_t)8u << 30)
 
 // THE STREAM (DOM_D4.md): how much of an arriving page is fed to its parser
 // per turn of the loop before the window goes back to its events. A byte
@@ -133,7 +134,9 @@ static yonder_cookies_mode_t s_cookies_asked;
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
 // one's whole sequence, or an SVG's document/styles; past it a picture draws as its frame.
-#define PICTURES_KEPT_MAX ((size_t)256u << 20)
+// A picture is kept at its own size, not the size it is drawn (DEBTS.md),
+// so a page of 4K wallpapers costs 33 MiB a picture.
+#define PICTURES_KEPT_MAX ((size_t)1u << 30)
 
 // A page's pictures in the pool at once: half its workers. The pool admits
 // in the order it was given work, so a navigation submitted after a page's
