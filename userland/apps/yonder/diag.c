@@ -409,6 +409,11 @@ void yonder_diag_missing_seen(yonder_diag_t *d, const char *kind, const char *na
 
 // An address longer than this is cut on the console (console_short).
 #define CONSOLE_ADDRESS_MAX 96
+// The longest line os64_complain writes whole (its buffer in libos64's
+// io.c, the terminating NUL included).
+#define CONSOLE_LINE_MAX 1024
+// What a failure's `what` may take of it, the message the rest.
+#define CONSOLE_WHAT_MAX 256
 // And how much of its last part is kept.
 #define CONSOLE_LAST_MAX 40
 
@@ -469,12 +474,13 @@ static void console_short(const char *text, char *out, size_t cap)
             const char *host_end = at + (at[4] == 's' ? 8 : 7);
             while (host_end < core_end && *host_end != '/')
                 host_end++;
-            const char *last = core_end;
+            // The query first: a slash in it is no part of the path.
+            const char *last_end = host_end;
+            while (last_end < core_end && *last_end != '?' && *last_end != '#')
+                last_end++;
+            const char *last = last_end;
             while (last > host_end && last[-1] != '/')
                 last--;
-            const char *last_end = last;
-            while (last_end < core_end && *last_end != '?')
-                last_end++;
             size_t kept = (size_t)(last_end - last);
             bool cut = kept > CONSOLE_LAST_MAX;
             console_put(out, &o, cap, at, (size_t)(host_end - at));
@@ -499,10 +505,14 @@ static void said_on_console(const Line *l, const char *what, const char *message
 {
     if (l == NULL || l->count != 0)
         return;
-    char w[512], m[768];
+    // The whole line, its newline included, fits os64_complain's buffer, so
+    // a long failure is cut in its message and never loses its line's end.
+    static const char kHead[] = "yonder: FAILED ";
+    char w[CONSOLE_WHAT_MAX], m[CONSOLE_LINE_MAX];
     console_short(what, w, sizeof(w));
-    console_short(message, m, sizeof(m));
-    os64_complain("yonder: FAILED %s: %s\n", w, m);
+    size_t used = sizeof(kHead) - 1 + os64_strlen(w) + 2 + 1;       // ": " and the newline
+    console_short(message, m, CONSOLE_LINE_MAX - used);
+    os64_complain("%s%s: %s\n", kHead, w, m);
 }
 
 void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)

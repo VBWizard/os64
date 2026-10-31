@@ -301,6 +301,23 @@ static void window_overflow_case(void) {
     yonder_diag_failed(d,"script c","Error: a\nb\rc\x0c\xe2\x80\x9cq\\");
     check(strcmp(yonder_host_console,"yonder: FAILED script c: Error: a\\x0ab\\x0dc\\x0c\\xe2\\x80\\x9cq\\x5c\n")==0,
         "window: control bytes, bytes past ASCII and a backslash are escaped on the console");
+    // A query's slash is no part of the path: the file is the path's last
+    // part (Codex #437 rd2).
+    snprintf(message,sizeof(message),"TypeError: t, at https://cdn.test/%s/bundle.js?redirect=https://o.test/wrong.js:777:731",
+             long_path);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script q",message);
+    check(strcmp(yonder_host_console,"yonder: FAILED script q: TypeError: t, at https://cdn.test/.../bundle.js:777:731\n")==0,
+        "window: a slash in an address's query does not name its file");
+    // Long both ways, the line still fits os64_complain's buffer and ends.
+    char big_what[700], big_message[1500];
+    memset(big_what,'w',sizeof(big_what)-1); big_what[sizeof(big_what)-1]='\0';
+    memset(big_message,'m',sizeof(big_message)-1); big_message[sizeof(big_message)-1]='\0';
+    yonder_host_console_clear();
+    yonder_diag_failed(d,big_what,big_message);
+    size_t said=strlen(yonder_host_console);
+    check(said<1024 && said>900 && yonder_host_console[said-1]=='\n',
+        "window: a failure long in both parts is cut to fit the console's line, its end kept");
     yonder_diag_free(d);
 
     // A recursion across two scripts names the other script's address, not

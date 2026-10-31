@@ -223,7 +223,11 @@ and a comma or semicolon that ends it (the one before a stack overflow's
 callers) is not its own. The console is ASCII, as a terminal reads it: a
 control byte, a byte past ASCII and a backslash are written `\xNN`
 (`console_put`), so a page's error text can never end, bend or clear the
-line it is reported on.
+line it is reported on. The whole line, its newline included, fits the
+1,024 bytes `os64_complain` writes whole: `what` may take 256 of them and
+the message the rest, so a long failure is cut in its message and never
+loses the line's end. An address's file is the last part of its path, found
+before its query, so a slash in a query never names it.
 
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 

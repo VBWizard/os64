@@ -279,6 +279,8 @@ mutants = [
     ('the-console-is-not-escaped', DIAG, "        if (c < 0x20 || c >= 0x7f || c == '\\\\') {", '        if (false) {', WINDOW),
     ('a-caller-keeps-the-engines-name', SCRIPTS, '            break;\n        frame_file(s, own, &frame, &file, &file_length);',
      '            break;\n        file = frame.file;\n        file_length = frame.file_length;', WINDOW),
+    ('a-query-slash-names-the-file', DIAG, '            const char *last = last_end;', '            const char *last = core_end;', WINDOW),
+    ('the-line-outgrows-the-complaint', DIAG, '    console_short(message, m, CONSOLE_LINE_MAX - used);', '    console_short(message, m, sizeof(m) + 0 * used);', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

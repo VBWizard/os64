@@ -4,6 +4,7 @@
 #include "os64/fmt.h"
 #include "os64/io.h"
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 char yonder_host_console[16384];
@@ -17,10 +18,14 @@ void yonder_host_console_clear(void)
 
 void os64_complain(const char *fmt, ...)
 {
-    size_t at = strlen(yonder_host_console);
+    // Formatted into the buffer libos64's io.c formats into, so a line that
+    // would be cut there is cut here.
+    char line[1024];
     va_list ap;
     va_start(ap, fmt);
-    os64_vsnprintf(yonder_host_console + at, sizeof(yonder_host_console) - at, fmt, ap);
+    os64_vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
+    size_t at = strlen(yonder_host_console);
+    snprintf(yonder_host_console + at, sizeof(yonder_host_console) - at, "%s", line);
     yonder_host_console_lines++;
 }
