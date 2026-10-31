@@ -46,7 +46,11 @@ for(var i=0;i<r.samples.length;i++)total+=r.samples[i];
 var n=ordered.length,m=Math.floor(n/2),median=n%2?ordered[m]:(ordered[m-1]+ordered[m])/2;
 var state=r.invalid||n!==EXPECTED?'invalid':'complete';
 document.getElementById('layout-stream-status').textContent=state==='complete'?'Complete. Stream measurements saved on this page.':'Invalid: checkpoint count, viewport, or clock changed.';
-document.getElementById('layout-stream-report').textContent=JSON.stringify({format:'yonder-stream-layout-v1',state:state,checkpoints:n,total_ms:total,median_ms:median,worst_ms:ordered[n-1],viewport:{width:r.width,height:r.height,devicePixelRatio:r.ratio},samples_ms:r.samples,heights:r.heights},null,2);
+var result={format:'yonder-stream-layout-v1',page:location.href,state:state,checkpoints:n,total_ms:total,median_ms:median,worst_ms:ordered[n-1],viewport:{width:r.width,height:r.height,devicePixelRatio:r.ratio},samples_ms:r.samples,heights:r.heights};
+document.getElementById('layout-stream-report').textContent=JSON.stringify(result,null,2);
+// Export after the final checkpoint, outside the measured geometry reads.
+try{console.log('\\nYONDER_LAYOUT_RESULT '+JSON.stringify(result));}
+catch(error){document.getElementById('layout-stream-status').textContent+=' Results are shown here, but file output failed.';}
 })();
 </script>'''
 
@@ -129,7 +133,7 @@ def main():
 <main><h1>An Article in Stages</h1><p>A fixed Wikipedia capture, measured as the parser builds its document.</p>
 <p>Set your window size and zoom first. This test runs automatically after the article opens. Keep Scripts and Modern Web enabled.</p>
 <p><a href="layout-stream-article.html">Start streamed comparison</a></p>
-<p>Wait for Complete, then click ordinary text and press <b>d</b>. Save the report screenshot too. Restart Yonder before a comparison run.</p></main>''',encoding='utf-8')
+<p>Wait for Complete, then click ordinary text and press <b>d</b>. Redirect Yonder output to a file to keep every sample automatically. Restart Yonder before a comparison run.</p></main>''',encoding='utf-8')
     manifest={'source_url':address,'checkpoint_offsets_characters':article.checkpoints,'stylesheet_order':article.used,
         'inputs':{str(p.relative_to(record.parent)):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},
         'outputs':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.glob('layout-stream*.html'))},

@@ -10,3 +10,4 @@ ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1} "$work/layout-measure" "$work/repor
 python3 tools/layout_measure_local.py "$work/layout-measure-local.html"
 ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1} "$work/layout-measure" "$work/report-local.json" --quick "$work/layout-measure-local.html"
 ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1} "$work/layout-measure" "$work/report-local-full.json" --full "$work/layout-measure-local.html"
+python3 tools/test_layout_export.py "$work/report.json" "$work/report-full.json" "$work/report-local.json" "$work/report-local-full.json"

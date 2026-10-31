@@ -26,7 +26,7 @@ th{color:#316d91}td.number{text-align:right;font-family:monospace}.note{font-siz
 <p class="note">The read-only control should stay inexpensive. Paragraph and list changes currently rebuild broadly; these are the numbers future slices aim to reduce. No target speed is assumed.</p>
 <pre id="report" aria-label="Measurement report">The completed run will appear here as JSON, including its raw samples.</pre></section>
 <section class="card"><h2>The working page</h2><div id="viewport"><div id="rows"><p>Rows are created when you start a run.</p></div></div></section>
-<p class="note">For native phase totals, launch Yonder with <code>--layout-profile</code>. After completion, click ordinary page text and press <strong>d</strong> to save the corpus report. Use the same page size, sample count, window size and zoom for comparisons. A cancelled or failed run is not a baseline.</p>
+<p class="note">To save full results automatically, redirect Yonder output to a file (see the measurement handoff). For native phase totals, launch Yonder with <code>--layout-profile</code>. After completion, click ordinary page text and press <strong>d</strong> to save the corpus report. Use the same page size, sample count, window size and zoom for comparisons. A cancelled or failed run is not a baseline.</p>
 </main><script>
 (function(){
 'use strict';
@@ -39,9 +39,12 @@ var values=[],collected=[],sink=0,sequence=0,started='',width=0,height=0,ratio=1
 var names=['Read unchanged geometry','Change one paragraph','Replace one list item'];
 function row(i){var p=document.createElement('p');p.textContent='Row '+i+' — a small piece of a much longer page.';return p;}
 function controls(running){active=running;run.disabled=running;stop.disabled=!running;size.disabled=running;samples.disabled=running;}
-function payload(state){return {format:'yonder-layout-5a-v1',state:state,started:started,rows:rowCount,samples:wanted,warmup:warm,
+function payload(state){return {format:'yonder-layout-5a-v1',page:location.href,state:state,started:started,rows:rowCount,samples:wanted,warmup:warm,
  viewport:{width:width,height:height,devicePixelRatio:ratio},userAgent:navigator.userAgent,results:collected};}
-function finish(state,message){controls(false);status.textContent=message;report.textContent=JSON.stringify(payload(state),null,2);}
+function finish(state,message){controls(false);status.textContent=message;var result=payload(state);report.textContent=JSON.stringify(result,null,2);
+ // Export after timing ends. One tagged JSON line keeps repeated runs distinct.
+ try{console.log('\nYONDER_LAYOUT_RESULT '+JSON.stringify(result));}
+ catch(error){status.textContent=message+' Results are shown here, but file output failed.';}}
 function operation(){
  if(phase===1){anchor.textContent=(sequence++%2?'Changed':'Updated')+' paragraph — the same-sized text, a fresh layout request.';}
  if(phase===2){rows.removeChild(rows.firstChild);rows.appendChild(row(rowCount+sequence++));}

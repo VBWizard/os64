@@ -1,8 +1,10 @@
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
+#include "test_layout_export.inc"
 
 int main(int argc,char **argv)
 {
+    output_len=0;write_limit=7;
     if(argc!=3)return 2;
     FILE *input=fopen(argv[1],"rb");if(!input)return 2;
     fseek(input,0,SEEK_END);long size=ftell(input);rewind(input);
@@ -28,6 +30,7 @@ int main(int argc,char **argv)
     FILE *out=fopen(argv[2],"w");
     if(out){fprintf(out,"%s\nlayout stream: %s\n",report?report:"missing",stream?stream:"missing");fclose(out);}
     else check(false,"fixture report output written");
+    layout_export_save(argv[2]);
     s_layout_profile=false;loop_drop();os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"stream fixture text released");
     check(live==0,"stream fixture heap empty");

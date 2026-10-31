@@ -70,6 +70,39 @@ work counts. The isolated libflow append oracle proves one new IFC and one
 marker measurement for a single append. Metadata excludes the separately
 bounded source snapshot and other browser heap owners.
 
+## Saving measurement reports
+
+The mutation, localized mutation, graft and generated article fixtures emit
+one `YONDER_LAYOUT_RESULT ` JSON record through the existing console after a
+run ends. Each record contains the page URL, run state, viewport and raw
+samples displayed on the page. Repeated runs produce separate records;
+cancelled, invalid and failed runs retain those states. Export happens after
+the timed geometry reads. No browser or library changes are needed.
+
+Launch from Husk with stdout appended to a per-cohort/per-round file, for example:
+
+```
+yonder --layout-profile /tests/pages/layout-graft.html >> /home/layout-candidate-1.log
+```
+
+Use `control` instead of `candidate` for the other cohort and increment the
+round number. Close Yonder before switching cohorts. Appending preserves prior
+runs; avoid simultaneous writers to the same file. A normal launch without
+redirection sends console output to its inherited stdout, not to the corpus.
+Press `d` after completion for native work counts as before. The saved corpus
+HTML is the original input, not a snapshot of the generated report.
+
+Retrieve the output file and extract its records on the host:
+
+```
+python3 tools/layout_results.py layout-candidate-1.log > candidate-1.json
+```
+
+The extractor retains non-complete run states and source line numbers. Missing
+records, malformed/truncated JSON and non-JSON numeric constants are errors;
+it does not certify a run as a valid matched comparison. Use the same revised
+fixtures for both cohorts and keep their file hashes beside the results.
+
 ## Hardware handoff
 
 Use the frozen 5b control and 5c candidate with identical settings and a fixed
@@ -81,8 +114,8 @@ matching viewport. Alternate three runs per cohort. Workloads are:
 4. `layout-stream-article.html`: unchanged captured article, reached by the
    established starter/maximize/address-bar protocol from the 5b comparison.
 
-For each completed run save the report and native diagnostic (`d` while page
-text has focus). Preserve raw samples, work counts and the viewport/settings.
+For each completed run retain the redirected report file and save the native
+diagnostic (`d` while page text has focus). Preserve raw samples, work counts and the viewport/settings.
 Compare first opt-in layout cost and process memory as well as updates; native
 `layout graft` reports peak **new reuse metadata**, not total process memory.
 The new page's `initial_layout_ms` is its reset/setup geometry read, not browser
