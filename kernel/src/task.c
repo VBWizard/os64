@@ -299,7 +299,10 @@ uintptr_t task_reserve_task_virt(task_t* task, size_t size)
 /// @param stackSize Size of usable stack (guard pages are added automatically)
 /// @param isRing3 true for user stack (PAGE_USER set), false for kernel stack
 /// @return Virtual address of stack base (bottom), or NULL on failure
-void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+/// `optional`: a stack the caller can do without (a program's declared main
+/// stack, SCRIPT_STACK.md), asked of allocate_memory_try, which refuses with
+/// 0 where allocate_memory_aligned panics; nothing is reserved on a refusal.
+static void* guarded_stack(task_t* task, size_t stackSize, bool isRing3, bool optional)
 {
 	if (!task || stackSize == 0) {
 		return NULL;
@@ -310,7 +313,7 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 	size_t aligned_size = (total_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
 	// Allocate physical memory for entire region (including guards)
-	uintptr_t phys = allocate_memory_aligned(aligned_size);
+	uintptr_t phys = optional ? allocate_memory_try(aligned_size) : allocate_memory_aligned(aligned_size);
 	if (phys == 0) {
 		printd(DEBUG_TASK, "task_alloc_guarded_stack: Failed to allocate %lu bytes\n", aligned_size);
 		return NULL;
@@ -341,6 +344,16 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 		virt_stack_start + stackSize, virt_base + aligned_size);
 
 	return (void*)virt_stack_start;
+}
+
+void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+{
+	return guarded_stack(task, stackSize, isRing3, false);
+}
+
+void* task_try_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+{
+	return guarded_stack(task, stackSize, isRing3, true);
 }
 
 void task_idle_loop()

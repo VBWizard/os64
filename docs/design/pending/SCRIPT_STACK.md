@@ -70,11 +70,15 @@ the header with a MemSiz of 0 (`-z noexecstack`), so the rule is: absent or
   rows (`procfs.c`).
 - **A refused allocation degrades, never fails exec.** The stack is
   allocated inside `task_initialize`, after the task exists, and nothing
-  unwinds a half-built task. So `createThread` asks for the declared size,
-  and when the frame table says no, asks for the default and logs one line
-  naming the task and both sizes. yonder reads the size it really got, and
-  § 5's clamp gives it today's 128 KiB. A refused default, today's unchecked
-  case, is logged too.
+  unwinds a half-built task. So `createThread` asks for the declared size
+  of the allocator that may refuse (`task_try_guarded_stack`, over
+  `allocate_memory_try`; `allocate_memory_aligned` panics where no run of
+  frames is free, Codex #441 rd1), and when it is refused, asks for the
+  default and logs one line naming the thread and both sizes. yonder reads
+  the size it really got, and § 5's clamp gives it today's 128 KiB. The
+  default is asked as every stack always has been, and panics on exhaustion
+  as every kernel allocation that cannot do without does, so it has no NULL
+  to check.
 - **yonder reads its size from `/proc/self/maps`:** the `[stack:<tid>]` row
   whose bounds hold the address of one of its locals. One reader, no new
   ABI. The engine runs on yonder's MAIN thread (yonder spawns only the
@@ -123,7 +127,7 @@ gives today's 128 KiB, never more than fits.
 |---|---|---|
 | exec of a program with no `PT_GNU_STACK` size | 1 MiB, as today | (not yonder) |
 | exec of yonder (declares 4 MiB) | 4 MiB, allocated at exec | read once at start: 2 MiB |
-| the declared allocation is refused | the default 1 MiB, logged with both sizes | read at start: the clamp's 128 KiB |
+| the declared allocation is refused (`task_try_guarded_stack` answers NULL) | the default 1 MiB, logged with both sizes | read at start: the clamp's 128 KiB |
 | a thread yonder spawns (workers) | 1 MiB, as today | workers run no scripts |
 | a script recurses past 2 MiB | the engine's own check | `InternalError: stack overflow`, as today, said on the console |
 
@@ -158,7 +162,7 @@ gives today's 128 KiB, never more than fits.
 | 1. the 870 KB is the whole stack; layout's share is about 740 KB | § 2 |
 | 2. read the size in `elf_can_load`, carried into `task_initialize` | § 4 A, "Where it is read" |
 | 3. the size is a thread field; three readers follow it | § 4 A, "The size a thread got is recorded" |
-| 4. degrade to 1 MiB on a refused allocation; log the default's refusal | § 4 A and § 6 |
+| 4. degrade to 1 MiB on a refused allocation | § 4 A and § 6 (the declared size through the fallible allocator, Codex's round 1; the default's allocation panics, so it has no refusal to log) |
 | 5. yonder's door is `/proc/self/maps`; the engine is on the main thread | § 4 A, "yonder reads its size" |
 | 6. option B is nearer than it read | § 4 B |
 
@@ -170,9 +174,11 @@ gives today's 128 KiB, never more than fits.
   `ELF_STACK_PHDRS_MAX` headers. `task_create` carries it through
   `task_initialize` into `createThread(task, kernel, userStack)`, whose
   `user_stack` keeps a size from `THREAD_USER_STACK_SIZE` up to
-  `THREAD_USER_STACK_MAX`, falls back to the default when the frames are
-  not there, logs each of those and a refused default, and records what it
-  gave in `esp3Size`. The RSP seed, `stack_guard_side` with the forensics
+  `THREAD_USER_STACK_MAX`, asks it of `task_try_guarded_stack` (the
+  fallible twin of `task_alloc_guarded_stack`), falls back to the default
+  when the frames are not there, logs each, and records what it gave in
+  `esp3Size`. The pre-boot test `stack_try_refuses` proves a refusal is
+  clean: NULL, nothing reserved, the books unchanged, the refusal counted. The RSP seed, `stack_guard_side` with the forensics
   line, and `/proc/<pid>/maps` read `esp3Size`. Spawned threads
   (`thread_join.c`) ask 0, the default.
 - **Build.** `BIG_STACK_PROGRAMS` (`userland/GNUmakefile`, yonder and

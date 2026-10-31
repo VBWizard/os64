@@ -127,28 +127,32 @@ uint64_t get_thread_id()
 // THREAD_USER_STACK_MAX, rounded up to a page; otherwise the default. A
 // declared stack the frame table cannot give degrades to the default rather
 // than failing: the task already exists here, and nothing unwinds a
-// half-built one. Its esp3Size says what it got. 0 when even the default
-// was refused. The lines name the thread: its task has no ID yet, and a
-// main thread's ID becomes the task's.
+// half-built one. So the declared size is asked of the allocator that may
+// refuse (task_try_guarded_stack), and the default of the one every stack
+// has always been asked of, which panics on exhaustion as every kernel
+// allocation that cannot do without does. Its esp3Size says what it got.
+// The lines name the thread: its task has no ID yet, and a main thread's ID
+// becomes the task's.
 static uintptr_t user_stack(thread_t *thread, task_t *task, uint64_t asked)
 {
 	unsigned long tid = (unsigned long)thread->threadID;
-	uint64_t size = THREAD_USER_STACK_SIZE;
+	uint64_t declared = 0;
 	if (asked > THREAD_USER_STACK_SIZE && asked <= THREAD_USER_STACK_MAX)
-		size = (asked + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+		declared = (asked + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
 	else if (asked != 0 && asked != THREAD_USER_STACK_SIZE)
 		printd(DEBUG_TASK, "createThread: thread %lu asked for a %lu-byte stack, outside %u..%u; it gets %u\n",
 		       tid, asked, THREAD_USER_STACK_SIZE, THREAD_USER_STACK_MAX, THREAD_USER_STACK_SIZE);
-	uintptr_t base = (uintptr_t)task_alloc_guarded_stack(task, size, true);
-	if (base == 0 && size != THREAD_USER_STACK_SIZE) {
+	if (declared != 0) {
+		uintptr_t base = (uintptr_t)task_try_guarded_stack(task, declared, true);
+		if (base != 0) {
+			thread->esp3Size = declared;
+			return base;
+		}
 		printd(DEBUG_TASK, "createThread: thread %lu's %lu-byte stack could not be had; it gets %u\n",
-		       tid, size, THREAD_USER_STACK_SIZE);
-		size = THREAD_USER_STACK_SIZE;
-		base = (uintptr_t)task_alloc_guarded_stack(task, size, true);
+		       tid, declared, THREAD_USER_STACK_SIZE);
 	}
-	if (base == 0)
-		printd(DEBUG_TASK, "createThread: thread %lu: no %lu-byte user stack could be had\n", tid, size);
-	thread->esp3Size = base != 0 ? size : 0;
+	uintptr_t base = (uintptr_t)task_alloc_guarded_stack(task, THREAD_USER_STACK_SIZE, true);
+	thread->esp3Size = base != 0 ? THREAD_USER_STACK_SIZE : 0;
 	return base;
 }
 
