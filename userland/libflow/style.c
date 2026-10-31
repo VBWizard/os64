@@ -4844,29 +4844,35 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     return true;
 }
 
-// Whether `el` has pseudo-elements: not when it is replaced (its children
-// are not drawn), and not outside HTML.
-static bool generates(const Ctx *c, const os64_html_node_t *el)
+// Whether `el`, whose display is `display`, has pseudo-elements: only when
+// pass 2 draws what is inside it (f_draws_inside), and not outside HTML.
+static bool generates(const Ctx *c, const os64_html_node_t *el, flow_display_t display)
 {
-    return el->ns == OS64_HTML_NS_HTML && !f_replaced(c->env, el);
+    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, display);
 }
 
 // Steps 1 and 2 of GENERATED_CONTENT.md § 8.2, once `el` is styled: its
 // counters, then its ::before (a `q`'s open mark too). An element whose
 // display is none counts for nothing and generates nothing, and nor does
-// anything a replaced element holds. False when memory ran out.
+// an element that makes no box (f_boxless), or anything inside an element
+// pass 2 draws nothing inside (f_draws_inside: a replaced element's
+// fallback). False when memory ran out.
 static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
 {
     if (of->style.display == FLOW_DISPLAY_NONE || c->inert != NULL)
         return true;
+    if (f_boxless(el)) {
+        c->inert = el;
+        return true;
+    }
     if (c->env->cascade != NULL) {
         const os64_html_node_t *up = el->parent != NULL && el->parent->kind == OS64_HTML_ELEMENT
                                          ? el->parent : NULL;
         count_on(c, garb_style_for(c->env->cascade, el), up, el->parent);
     }
-    if (f_replaced(c->env, el))
+    if (!f_draws_inside(c->env, el, of->style.display))
         c->inert = el;
-    else if (generates(c, el) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
+    else if (generates(c, el, of->style.display) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
         return false;
     return !c->counters_failed;
 }
@@ -4878,7 +4884,7 @@ static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     if (c->inert != NULL && c->inert != el)
         return true;
     c->inert = NULL;
-    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el) &&
+    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, of->style.display) &&
         !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
         return false;
     while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)

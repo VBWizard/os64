@@ -352,6 +352,15 @@ static void counter_cases(void)
     texts_case("quotes: initial is auto",
         "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: initial }</style><p><q>x</q>",
         "\xe2\x80\x9c|\xe2\x80\x9d|");
+    texts_case("counters: an audio, and its fallback, count and quote for nothing",
+        "<!doctype html><style>body { counter-reset: n } span, audio { counter-increment: n }"
+        " span::before { content: open-quote } p::before { content: counter(n) }</style>"
+        "<audio><span>f</span></audio><p><q>x</q></p>",
+        "0|\xe2\x80\x9c|\xe2\x80\x9d|");
+    texts_case("counters: a button laid out through display: contents generates inside",
+        "<!doctype html><style>button { display: contents } span::before { content: \"B\" }</style>"
+        "<p><button><span>x</span><q>y</q></button>",
+        "B|\xe2\x80\x9c|\xe2\x80\x9d|");
     texts_case_in("counters: a canvas's fallback counts and quotes for nothing",
         "<!doctype html><style>body { counter-reset: n } span { counter-increment: n }"
         " span::before { content: open-quote } p::before { content: counter(n) }</style>"

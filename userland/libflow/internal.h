@@ -179,6 +179,15 @@ bool f_parse_nonnegative(const char *s, int32_t *out);
 // Whether `n` is laid out as a replaced element (boxes.c): a canvas only
 // where `env` says scripting is on.
 bool f_replaced(const flow_env_t *env, const os64_html_node_t *n);
+// Elements that make no box in this browser, nor anything inside them
+// (boxes.c): `embed`, `audio`, `source`, `track`, `keygen`.
+bool f_boxless(const os64_html_node_t *n);
+// Whether pass 2 draws anything inside element `n`, whose display is
+// `display`: nothing inside a boxless element, nor inside a replaced one
+// unless it is laid out through `display: contents` (a button's, whose
+// content then flows where it is). Pass 1's tree-order state follows it
+// (GENERATED_CONTENT.md § 8.2).
+bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, flow_display_t display);
 // "Rules for parsing a legacy colour value", `chucknorris` and all: a
 // page's colour attribute means the colour every browser draws.
 bool f_parse_legacy_color(const char *s, uint32_t *out);

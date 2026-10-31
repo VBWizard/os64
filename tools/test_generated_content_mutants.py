@@ -64,8 +64,8 @@ mutants = [
     ('content-none-makes-a-pseudo-element', STYLE,
      '    if (content == NULL || content->kind == GARB_V_WIDE || content->kind == GARB_V_KEYWORD)\n        return true;',
      '    if (content == NULL)\n        return true;', LIBFLOW),
-    ('a-replaced-element-has-pseudo-elements', STYLE, '    return el->ns == OS64_HTML_NS_HTML && !f_replaced(c->env, el);',
-     '    return el->ns == OS64_HTML_NS_HTML && (c != NULL || !f_replaced(c->env, el));', LIBFLOW),
+    ('a-replaced-element-has-pseudo-elements', STYLE, '    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, display);',
+     '    return el->ns == OS64_HTML_NS_HTML && (display != FLOW_DISPLAY_NONE || f_draws_inside(c->env, el, display));', LIBFLOW),
     ('attr-is-case-sensitive', STYLE, "name[i] = ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;",
      'name[i] = ch;', LIBFLOW),
     # libflow pass 2.
@@ -119,12 +119,16 @@ mutants = [
      '    if (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit") && from != NULL) {', LIBFLOW),
     ('quotes-revert-is-auto', STYLE, 'return os64_streq(v->keyword, "initial") ? NULL : inherited;',
      'return os64_streq(v->keyword, "inherit") ? inherited : NULL;', LIBFLOW),
-    ('a-fallback-counts', STYLE, '    if (f_replaced(c->env, el))\n        c->inert = el;', '    if (f_replaced(c->env, el))\n        (void)0;', LIBFLOW),
+    ('a-fallback-counts', STYLE, '    if (!f_draws_inside(c->env, el, of->style.display))\n        c->inert = el;',
+     '    if (!f_draws_inside(c->env, el, of->style.display))\n        (void)0;', LIBFLOW),
     ('counters-spelled-past-the-budget', STYLE, '    if (need > room) {', '    if (need > room && false) {', LIBFLOW),
     ('a-pseudo-element-takes-its-elements-quotes', STYLE,
      'const garb_val_t *quotes = own_quotes(winner(st, GARB_QUOTES), of->quotes);',
      'const garb_val_t *quotes = own_quotes(NULL, of->quotes);', LIBFLOW),
     ('a-q-has-no-marks-of-its-own', STYLE, '        content = &kQuoted[bit];', '        content = bit < 0 ? &kQuoted[bit] : NULL;', LIBFLOW),
+    ('a-boxless-element-counts', STYLE, '    if (f_boxless(el)) {\n        c->inert = el;\n        return true;\n    }\n', '', LIBFLOW),
+    ('a-contents-button-is-inert', BOXES, '!f_boxless(n) && (display == FLOW_DISPLAY_CONTENTS || !f_replaced(env, n))',
+     '!f_boxless(n) && (display == FLOW_DISPLAY_NONE || !f_replaced(env, n))', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

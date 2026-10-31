@@ -178,11 +178,21 @@ static bool replaced(const B *b, const os64_html_node_t *n)
 // Elements that make no box in this browser. An `embed` and an `audio`
 // play nothing here and have no fallback content; `source` and `track`
 // are data for a player; `keygen` is a control nothing implements.
-static bool boxless(const os64_html_node_t *n)
+bool f_boxless(const os64_html_node_t *n)
 {
     return is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_AUDIO) ||
            is(n, OS64_HTML_TAG_SOURCE) || is(n, OS64_HTML_TAG_TRACK) ||
            is(n, OS64_HTML_TAG_KEYGEN);
+}
+
+static bool boxless(const os64_html_node_t *n)
+{
+    return f_boxless(n);
+}
+
+bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, flow_display_t display)
+{
+    return !f_boxless(n) && (display == FLOW_DISPLAY_CONTENTS || !f_replaced(env, n));
 }
 
 static bool block_level(flow_display_t d)
