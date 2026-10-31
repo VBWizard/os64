@@ -130,6 +130,42 @@ static void shared_runs(void)
     CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
 }
 
+static void warm_run_allocations(void)
+{
+    /* Cached glyphs leave only the run's own storage to allocate. The copied
+     * bytes and caret data must survive both the input and the warming run. */
+    char long_line[4097];memset(long_line,'i',sizeof(long_line)-1);long_line[sizeof(long_line)-1]=0;
+    const char *cases[]={"AVeWi", "\t\t", "", long_line};
+    for (size_t n=0;n<sizeof(cases)/sizeof(cases[0]);n++) {
+        current="one allocation for a warm run, including empty and tabs";
+        c=create(0,1);os64_text_font_t *f=open_font(c,'P');
+        uint8_t input[sizeof(long_line)];size_t length=strlen(cases[n]);memcpy(input,cases[n],length);
+        os64_text_run_t *warm=layout(c,f,input,length,0,0);
+        os64_text_run_view_t expected,actual;
+        CHECK(os64_text_run_view(warm,&expected)==OS64_FONT_OK);
+        size_t before=allocations;deny=before+2;
+        os64_text_run_t *r=layout(c,f,input,length,0,0);
+        CHECK(allocations==before+1);deny=0;
+        CHECK(os64_text_run_view(r,&actual)==OS64_FONT_OK);
+        CHECK(actual.advance_x==expected.advance_x && actual.glyph_count==expected.glyph_count &&
+              actual.caret_count==expected.caret_count && rect_eq(actual.ink,expected.ink));
+        for (size_t i=0;i<actual.glyph_count;i++) {
+            CHECK(actual.glyphs[i].glyph_index==expected.glyphs[i].glyph_index &&
+                  actual.glyphs[i].x==expected.glyphs[i].x);
+        }
+        for (size_t i=0;i<actual.caret_count;i++) {
+            CHECK(actual.carets[i].byte_offset==expected.carets[i].byte_offset &&
+                  actual.carets[i].x==expected.carets[i].x);
+        }
+        memset(input,0,sizeof(input));os64_text_run_release(warm);os64_text_font_release(f);
+        CHECK(actual.byte_count==length && (!length || !memcmp(actual.bytes,cases[n],length)));
+        os64_text_caret_t end;
+        CHECK(os64_text_caret(r,length,OS64_TEXT_AFTER,&end)==OS64_FONT_OK && end.x==actual.advance_x);
+        os64_text_run_release(r);
+        CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+    }
+}
+
 static void failures(void)
 {
     current="allocation-denial cleanup";
@@ -535,7 +571,7 @@ int main(int argc,char **argv)
 {
     (void)argc;(void)argv;
     c=create(0,0);frozen_vectors();CHECK(os64_text_destroy(c)==OS64_FONT_OK);CHECK(live==0);
-    lifetimes();shared_runs();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();outline_compatibility();
+    lifetimes();shared_runs();warm_run_allocations();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();outline_compatibility();
 #ifdef TEXT_REAL
     CHECK(argc==2);real_fonts(argv[1]);
 #endif

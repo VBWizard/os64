@@ -153,28 +153,39 @@ os64_font_status_t os64_text_layout(os64_text_context_t *c, const uint8_t *bytes
         clusters>=SIZE_MAX/sizeof(os64_text_caret_t)) return OS64_FONT_LIMIT;
     if (o->cell_advance && count>(size_t)INT32_MAX/(uint32_t)o->cell_advance)
         return OS64_FONT_LIMIT;
-    os64_text_run_t *r=text_alloc(c,sizeof(*r));
+    // The run and these buffers share one lifetime, including retained runs.
+    // One allocation avoids repeated heap searches on large page rebuilds.
+    _Static_assert(sizeof(os64_text_run_t)%_Alignof(os64_text_placement_t)==0 &&
+        sizeof(os64_text_placement_t)%_Alignof(text_image *)==0 &&
+        sizeof(text_image *)%_Alignof(os64_text_caret_t)==0,
+        "run buffer boundaries must preserve alignment");
+    size_t glyph_bytes=count*sizeof(os64_text_placement_t);
+    size_t image_bytes=count*sizeof(text_image *);
+    size_t caret_bytes=(clusters+1)*sizeof(os64_text_caret_t);
+    size_t total=sizeof(os64_text_run_t);
+    if (glyph_bytes>SIZE_MAX-total) return OS64_FONT_LIMIT;
+    total+=glyph_bytes;
+    if (image_bytes>SIZE_MAX-total) return OS64_FONT_LIMIT;
+    total+=image_bytes;
+    if (caret_bytes>SIZE_MAX-total) return OS64_FONT_LIMIT;
+    total+=caret_bytes;
+    if (length>SIZE_MAX-total) return OS64_FONT_LIMIT;
+    total+=length;
+    os64_text_run_t *r=text_alloc(c,total);
     if (!r) return c->refusal;
     *r=(os64_text_run_t){.context=c,.refs=1,.encoding=o->encoding,.cell_advance=o->cell_advance,
         .cell_ascent=o->fonts[0]->info.ascent,.cell_height=o->fonts[0]->info.line_height};
+    uint8_t *storage=(uint8_t *)(r+1);
+    r->view.glyphs=count?(const void *)storage:NULL;storage+=glyph_bytes;
+    r->images=count?(void *)storage:NULL;storage+=image_bytes;
+    r->view.carets=(const void *)storage;storage+=caret_bytes;
+    r->view.bytes=length?storage:NULL;
     c->runs++;
     os64_font_status_t status=OS64_FONT_OK;
     for (size_t n=0;n<o->font_count;n++) {r->fonts[n]=o->fonts[n];r->fonts[n]->refs++;r->font_count++;}
     include_metrics(r,&r->fonts[0]->info);
-    if (length) {
-        r->view.bytes=text_alloc(c,length);
-        if (!r->view.bytes) goto allocation_failed;
-        os64_memcpy((void *)r->view.bytes,bytes,length);
-    }
+    if (length) os64_memcpy((void *)r->view.bytes,bytes,length);
     r->view.byte_count=length;
-    if (count) {
-        r->view.glyphs=text_alloc(c,count*sizeof(os64_text_placement_t));
-        if (!r->view.glyphs) goto allocation_failed;
-        r->images=text_alloc(c,count*sizeof(text_image *));
-        if (!r->images) goto allocation_failed;
-    }
-    r->view.carets=text_alloc(c,(clusters+1)*sizeof(os64_text_caret_t));
-    if (!r->view.carets) goto allocation_failed;
     os64_text_caret_t *carets=(os64_text_caret_t *)r->view.carets;
     carets[0]=(os64_text_caret_t){0,0};r->view.caret_count=1;
     int64_t pen=0;os64_text_font_t *previous=NULL;uint32_t previous_index=0;
@@ -205,8 +216,6 @@ os64_font_status_t os64_text_layout(os64_text_context_t *c, const uint8_t *bytes
     if (r->view.line_height<r->view.ascent+r->view.descent)
         r->view.line_height=r->view.ascent+r->view.descent;
     r->view.advance_x=(int32_t)pen;*out=r;text_trim(c);return OS64_FONT_OK;
-allocation_failed:
-    status=c->refusal;
 fail:
     os64_text_run_release(r);return status;
 }
@@ -228,8 +237,6 @@ void os64_text_run_release(os64_text_run_t *r)
     os64_text_context_t *c=r->context;
     for (size_t n=0;n<r->view.glyph_count;n++) text_image_unpin(r->images[n]);
     for (size_t n=0;n<r->font_count;n++) os64_text_font_release(r->fonts[n]);
-    text_free(c,(void *)r->view.bytes);text_free(c,(void *)r->view.glyphs);
-    text_free(c,(void *)r->view.carets);text_free(c,r->images);
     c->runs--;text_free(c,r);text_trim(c);
 }
 static size_t boundary(const os64_text_run_t *r, size_t byte)
