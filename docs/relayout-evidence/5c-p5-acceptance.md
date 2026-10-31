@@ -139,6 +139,24 @@ second allocation after warming the glyph cache and checks bytes, glyphs,
 carets and lifetime for ordinary, empty, tab-only and long runs. The original
 implementation fails that test.
 
-Native performance confirmation for this change is pending. The setup/reset,
-fallback repeatability and replacement acceptance considerations above remain
-open; reduced allocation count alone does not close them.
+One subsequent hardware confirmation used the same 2,000 rows, 20 samples,
+five warm-ups, 2526 by 1259 viewport, 100% zoom and dark-page setting. The
+frozen cohort changed only libos64. The complete report exactly matched its
+post-report heap capture; the native record contained the manual diagnostic,
+104,287 reused boxes and no refused/partial layouts or clock errors.
+
+| Graft measurement | Prior control | Prior candidate | Text-run follow-up |
+| --- | ---: | ---: | ---: |
+| Setup/rebuild ms | 123.30 | 159.90 | 91.20 |
+| Paragraph around float, median ms | 56.90 | 10.10 | 10.65 |
+| Append row, median ms | 53.35 | 10.35 | 10.20 |
+| Peak live allocator payload, bytes | 56,042,592 | 57,002,640 | 55,883,040 |
+
+Prior timing columns are medians of three runs; prior memory columns are the
+supplemental memory pair. The follow-up is one run, not a new repeated matched
+campaign. Its setup time is 42.96% below the prior candidate median and 26.03%
+below the control median. The two incremental operations remain near 10 ms,
+and peak live heap payload is slightly below both prior memory observations.
+These results support the allocation change without establishing repeatability
+or closing the fallback and replacement acceptance considerations. Reduced
+allocation count alone is not a performance gate.
