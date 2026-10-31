@@ -414,21 +414,43 @@ void yonder_diag_missing_seen(yonder_diag_t *d, const char *kind, const char *na
 
 static bool starts(const char *s, const char *word);
 
-// `text` for the console, into `out`: each address in it longer than
-// CONSOLE_ADDRESS_MAX cut to its scheme and host, "/.../", and the start of
-// its last part, the line and column after it kept. ASCII only, as a
-// terminal reads it.
+// `n` bytes of `text` onto the console line `out` at `*o`, escaped as a
+// terminal must be given them: a control byte, a byte past ASCII and a
+// backslash as `\xNN` (a control byte would end, bend or clear the line).
+static void console_put(char *out, size_t *o, size_t cap, const char *text, size_t n)
+{
+    for (size_t i = 0; i < n && *o + 1 < cap; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c < 0x20 || c >= 0x7f || c == '\\') {
+            if (*o + 5 >= cap)
+                break;
+            os64_snprintf(out + *o, cap - *o, "\\x%02x", c);
+            *o += 4;
+        } else {
+            out[(*o)++] = (char)c;
+        }
+    }
+}
+
+// `text` for the console, into `out`, escaped (console_put): each address
+// in it longer than CONSOLE_ADDRESS_MAX cut to its scheme and host,
+// "/.../", and the start of its last part, its query dropped and the line
+// and column after it kept. An address runs to a space; punctuation that
+// ends it (the comma before a stack overflow's callers) is not its own.
 static void console_short(const char *text, char *out, size_t cap)
 {
     size_t o = 0;
     for (const char *at = text; *at != '\0' && o + 1 < cap;) {
         if (!starts(at, "http://") && !starts(at, "https://")) {
-            out[o++] = *at++;
+            console_put(out, &o, cap, at, 1);
+            at++;
             continue;
         }
         const char *end = at;
         while (*end != '\0' && *end != ' ')
             end++;
+        while (end > at && (end[-1] == ',' || end[-1] == ';'))
+            end--;
         // A place after it, ":line:col", is kept whole.
         const char *core_end = end, *p = end;
         for (int part = 0; part < 2; part++) {
@@ -441,9 +463,8 @@ static void console_short(const char *text, char *out, size_t cap)
             if (part == 1)
                 core_end = p;
         }
-        size_t length = (size_t)(core_end - at);
-        if (length <= CONSOLE_ADDRESS_MAX) {
-            os64_snprintf(out + o, cap - o, "%.*s", (int)(end - at), at);
+        if ((size_t)(core_end - at) <= CONSOLE_ADDRESS_MAX) {
+            console_put(out, &o, cap, at, (size_t)(end - at));
         } else {
             const char *host_end = at + (at[4] == 's' ? 8 : 7);
             while (host_end < core_end && *host_end != '/')
@@ -456,11 +477,13 @@ static void console_short(const char *text, char *out, size_t cap)
                 last_end++;
             size_t kept = (size_t)(last_end - last);
             bool cut = kept > CONSOLE_LAST_MAX;
-            os64_snprintf(out + o, cap - o, "%.*s/.../%.*s%s%.*s", (int)(host_end - at), at,
-                          (int)(cut ? CONSOLE_LAST_MAX : kept), last, cut ? "..." : "", (int)(end - core_end),
-                          core_end);
+            console_put(out, &o, cap, at, (size_t)(host_end - at));
+            console_put(out, &o, cap, "/.../", 5);
+            console_put(out, &o, cap, last, cut ? CONSOLE_LAST_MAX : kept);
+            if (cut)
+                console_put(out, &o, cap, "...", 3);
+            console_put(out, &o, cap, core_end, (size_t)(end - core_end));
         }
-        o += os64_strlen(out + o);
         at = end;
     }
     out[o < cap ? o : cap - 1] = '\0';

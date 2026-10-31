@@ -13,6 +13,10 @@ static const char *window_record_text(void) {
 }
 
 /* Whether the page's record holds `line`; the record is shown when not. */
+static bool window_record_has_quietly(const char *line) {
+    return strstr(window_record_text(),line)!=NULL;
+}
+
 static bool window_record_has(const char *line) {
     const char *text=window_record_text();
     if(strstr(text,line)!=NULL) return true;
@@ -282,7 +286,32 @@ static void window_overflow_case(void) {
     check(strcmp(yonder_host_console,"yonder: FAILED script https://cdn.test/.../bundle.js: TypeError: t, at "
                                      "https://cdn.test/.../bundle.js:777:731\n")==0,
         "window: a long address is cut on the console to its host and last part, its place kept");
+    // A comma after the address (a stack overflow's callers) is not the
+    // address's: the first frame's place survives the cut (Codex #437 rd1).
+    snprintf(message,sizeof(message),"InternalError: stack overflow, at https://cdn.test/%s/bundle.js?v=1:777:731, "
+             "called from deep 1:29",long_path);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script z",message);
+    check(strcmp(yonder_host_console,"yonder: FAILED script z: InternalError: stack overflow, at "
+                                     "https://cdn.test/.../bundle.js:777:731, called from deep 1:29\n")==0,
+        "window: a place before a stack overflow's callers survives the cut");
+    // A control byte or one past ASCII in a page's error text is escaped
+    // on the console: it cannot end, bend or clear the line.
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script c","Error: a\nb\rc\x0c\xe2\x80\x9cq\\");
+    check(strcmp(yonder_host_console,"yonder: FAILED script c: Error: a\\x0ab\\x0dc\\x0c\\xe2\\x80\\x9cq\\x5c\n")==0,
+        "window: control bytes, bytes past ASCII and a backslash are escaped on the console");
     yonder_diag_free(d);
+
+    // A recursion across two scripts names the other script's address, not
+    // the engine's private name for it (Codex #437 rd1).
+    loop_page("<script src=/a.js></script><script>\nfunction b(n){return a(n+1)+1}\na(0)</script>");
+    check(loop_settle() && nscript_jobs==1,"window: the parse waits for a.js");
+    check(script_land("/a.js","function a(n){return b(n)+1}"),"window: a.js comes back");
+    check(loop_settle(),"window: the page whose scripts recurse into each other settles");
+    check(window_record_has("http://fixture.test/a.js:1:") && !window_record_has_quietly("os64-script"),
+        "window: a caller in another script is named by its address");
+    loop_drop();
 }
 
 static void window_cases(void) {

@@ -275,6 +275,10 @@ mutants = [
      '    said_on_console(l, what, message);\n    if (l != NULL)\n        l->count = saturating(l->count, 1);',
      '    if (l != NULL)\n        l->count = saturating(l->count, 1);', WINDOW),
     ('a-long-address-is-not-cut', DIAG, '        if (length <= CONSOLE_ADDRESS_MAX) {', '        if (length > 0) {', WINDOW),
+    ('a-trailing-comma-is-the-address', DIAG, "        while (end > at && (end[-1] == ',' || end[-1] == ';'))\n            end--;\n", '', WINDOW),
+    ('the-console-is-not-escaped', DIAG, "        if (c < 0x20 || c >= 0x7f || c == '\\\\') {", '        if (false) {', WINDOW),
+    ('a-caller-keeps-the-engines-name', SCRIPTS, '            break;\n        frame_file(s, own, &frame, &file, &file_length);',
+     '            break;\n        file = frame.file;\n        file_length = frame.file_length;', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []
