@@ -445,6 +445,47 @@ typedef struct {
     bool current;
 } flow_shadow_t;
 
+// One function of a `filter` or `backdrop-filter` list (Filter Effects 1
+// § 13; FILTER.md), applied in the list's order. A list holding a URL, an
+// SVG filter reference, draws unfiltered (FILTER.md § 2), and is still a
+// value other than none.
+typedef enum {
+    FLOW_FILTER_URL,
+    FLOW_FILTER_BLUR,           // a Gaussian whose standard deviation is `amount` px
+    // From here to SATURATE, `amount` is the number, a percentage over 100;
+    // GRAYSCALE to SEPIA hold it at most 1.
+    FLOW_FILTER_BRIGHTNESS,
+    FLOW_FILTER_CONTRAST,
+    FLOW_FILTER_GRAYSCALE,
+    FLOW_FILTER_INVERT,
+    FLOW_FILTER_OPACITY,
+    FLOW_FILTER_SEPIA,
+    FLOW_FILTER_SATURATE,
+    FLOW_FILTER_HUE_ROTATE,     // `amount` in degrees
+    FLOW_FILTER_DROP_SHADOW,    // `shadow`: its offsets, its blur radius, its colour
+} flow_filter_fn_t;
+
+typedef struct {
+    flow_filter_fn_t fn;
+    // As computed, an omitted argument's default in its place: 0 for blur
+    // and hue-rotate, 1 for the others.
+    double amount;
+    // DROP_SHADOW's, read as a box shadow's is (no spread, never inset), so
+    // the painter blurs it as it blurs one (flow_shadow_blur_reach); and
+    // BLUR's, as that shadow blur: `blur` twice the standard deviation, to
+    // the nearest pixel.
+    flow_shadow_t shadow;
+    // URL's reference as written, kept where libgarb keeps the value, as a
+    // background image's URL is.
+    const char *url;
+    size_t url_len;
+} flow_filter_t;
+
+// The largest standard deviation a filter's blur is drawn with, in px: a
+// larger one is drawn at this one (FILTER.md § 6), and its reach
+// (flow_filter_reach) is this one's.
+#define FLOW_FILTER_BLUR_MAX 100
+
 // One function of a transform (CSS Transforms 1 § 9, 2 § 12). What drawing
 // reads: a translation by `x` and `y` — PX, or PERCENT of the border box,
 // which waits for the box — then `m`, a 4x4 matrix in column-major order
@@ -671,6 +712,17 @@ typedef struct {
     // styles', and live as long as they do.
     const flow_shadow_t *box_shadows, *text_shadows;
     int32_t nbox_shadows, ntext_shadows;
+    // `filter` and `backdrop-filter` (FILTER.md): each a list, NULL and 0
+    // for none, the style's and living as long as it does. Either other
+    // than none makes a box a stacking context and the containing block of
+    // its absolute and fixed descendants, as a transform does; a `filter`
+    // makes it a group (flow_visit_groups), its bounds grown by what the
+    // filter spreads (flow_filter_reach). A plain inline's is neither drawn
+    // nor makes anything; an inline-block's makes a containing block and is
+    // not drawn, its content painted where its atom is — both booked as
+    // their opacity is (FILTER.md § 10).
+    const flow_filter_t *filter, *backdrop_filter;
+    int32_t nfilter, nbackdrop_filter;
     // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
     // stretched to it, scaled to fit inside or to cover it, at its own
     // size, or the smaller of those two, placed by `object_position` — x
@@ -1281,6 +1333,13 @@ bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
 // 3 (blur / 2) and no further — nothing at all when blur / 2 is 0 — so a
 // group's bounds and the painter agree on what a shadow covers.
 int32_t flow_shadow_blur_reach(int32_t blur);
+// How far past what it paints a box's `filter` draws, on each side in
+// CSS's side order, into `out`: each blur's reach, and each drop shadow's
+// beyond what came before it, cast by its offsets — what the painter
+// spreads, its blurs held at FLOW_FILTER_BLUR_MAX, so a group's bounds and
+// the painter agree. All 0 for none, for a list holding a URL, which
+// draws unfiltered, and where a filter is not drawn (a plain inline).
+void flow_filter_reach(const flow_style_t *s, int32_t out[4]);
 // Whether an outer box shadow of `box` casts anything: its shape, the
 // border box grown by its spread, is not empty. One a negative spread
 // collapses is drawn nowhere, however far its blur or offset would reach.
@@ -1483,20 +1542,24 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
 // The same walk, told where each GROUP is: a stacking context painted below
-// full opacity (flow_style_t.opacity), or drawn through its matrix
-// (flow_box_through), the root's included — one group when it is both.
+// full opacity (flow_style_t.opacity), drawn through its matrix
+// (flow_box_through), or filtered (flow_style_t.filter), the root's
+// included — one group when it is more than one.
 // `open` comes before the group's first box and `close` after its last,
 // groups nesting; `bounds` holds at least everything the group paints
 // (the bounds contract, PILE3.md § Transforms, the painter, Booked), in the coordinates it is painted in at
 // this scroll — its own boxes' overflow rects and its members', each
 // where its frame puts it, grown by its `ink` and cut to its clip, a
 // drawn-through group inside counted through its matrix and cut to its
-// clip — so a face
+// clip, and all of it grown by what the group's filter spreads
+// (flow_filter_reach) — so a face
 // can composite it whole: everything inside painted as usual, then the
 // group laid over what was under it at its opacity (CSS Color 4 § 3.2),
 // through its matrix. Inside a drawn-through group the walk culls against
 // the viewport taken back through the matrices, and where the face would
-// draw it upright instead, so a face that refuses to lay it loses nothing.
+// draw it upright instead, so a face that refuses to lay it loses nothing;
+// inside a filtered one, against the view grown by what its filter
+// spreads, so a box its blur reaches in from outside the view is painted.
 // A face that blends nothing
 // may leave `open` and `close` NULL, which is flow_visit.
 // `outline`, when not NULL, is handed each box that draws an outline

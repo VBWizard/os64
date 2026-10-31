@@ -101,14 +101,30 @@ static inline bool f_transformed(const flow_style_t *s)
     return f_transforms(s) && s->display != FLOW_DISPLAY_INLINE;
 }
 
+// Whether a `filter` or a `backdrop-filter` other than none is granted
+// (FILTER.md § 2): a plain inline's is not drawn and makes nothing, as its
+// opacity is painted opaque (flow_style_t.filter).
+static inline bool f_filtered(const flow_style_t *s)
+{
+    return (s->nfilter > 0 || s->nbackdrop_filter > 0) && s->display != FLOW_DISPLAY_INLINE;
+}
+
+// Whether its `filter` makes a box a group (flow_visit_groups): granted,
+// and not only a `backdrop-filter`, which is drawn without one.
+static inline bool f_group_filter(const flow_style_t *s)
+{
+    return s->nfilter > 0 && f_filtered(s);
+}
+
 // A containing block for the absolute boxes inside it: an element whose
-// position is not static, or that is transformed (f_transformed), and
-// that makes a box of its own. A table's rows, row groups and columns are
-// not (`position: relative` and a transform on them are booked), and
-// neither is anything `display: contents` or `none` makes no box for.
+// position is not static, or that is transformed (f_transformed) or
+// filtered (f_filtered), and that makes a box of its own. A table's rows,
+// row groups and columns are not (`position: relative`, a transform and a
+// filter on them are booked), and neither is anything `display: contents`
+// or `none` makes no box for.
 static inline bool f_contains_absolute(const flow_style_t *s)
 {
-    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s))
+    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s) && !f_filtered(s))
         return false;
     switch (s->display) {
     case FLOW_DISPLAY_CONTENTS: case FLOW_DISPLAY_NONE:
@@ -119,6 +135,14 @@ static inline bool f_contains_absolute(const flow_style_t *s)
     default:
         return true;
     }
+}
+
+// A containing block for the fixed boxes inside it too, in place of the
+// viewport (Transforms 1 § 3, Filter Effects 1 § 2): one that is
+// transformed or filtered.
+static inline bool f_contains_fixed(const flow_style_t *s)
+{
+    return f_contains_absolute(s) && (f_transformed(s) || f_filtered(s));
 }
 
 // ── Storage ─────────────────────────────────────────────────────────────
@@ -479,8 +503,8 @@ typedef struct {
     // (f_contains_absolute), else its parent's answer; NULL for the initial
     // containing block. An absolute element's own containing block is its
     // PARENT's anchor. `fixed_anchor` is the same for a FIXED box: the
-    // nearest transformed one, whose box is its containing block in place
-    // of the viewport (Transforms 1 § 3).
+    // nearest transformed or filtered one (f_contains_fixed), whose box is
+    // its containing block in place of the viewport.
     const os64_html_node_t *anchor, *fixed_anchor;
     // `opacity: 0` on this element or an ancestor whose opacity is not
     // animated: nothing of it is painted (flow_box_t.unpainted).
@@ -724,9 +748,10 @@ struct FBox {
     // layers and skipped by every walk of its tree ancestors. `out_of_flow`: an absolute or fixed one, which no
     // formatting context holds — laid out once its containing block is
     // finished.
-    // `pos`: its entry, which every box that is a containing block has: the
-    // positioned and transformed ones, and a positioned or transformed
-    // inline-block's content or root, which are not `positioned`.
+    // `pos`: its entry, which every box that is a containing block has
+    // (f_contains_absolute): the positioned, transformed and filtered ones,
+    // and such an inline-block's content or root, which are not
+    // `positioned`.
     bool positioned, out_of_flow;
     FPos *pos;
     // Its element is transformed and the box can be (PILE3.md §

@@ -35,6 +35,8 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_COUNTER_INCREMENT] = {"counter-increment", false, true},
     [GARB_COUNTER_SET] = {"counter-set", false, true},
     [GARB_QUOTES] = {"quotes", true, true},
+    [GARB_FILTER] = {"filter", false, true},
+    [GARB_BACKDROP_FILTER] = {"backdrop-filter", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -373,6 +375,15 @@ static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
     if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
         prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
+    // A filter list's SVG references, which draw it unfiltered; and a
+    // backdrop-filter, which yonder does not draw (FILTER.md § 7 is its
+    // design), named by its first function.
+    if ((prop == GARB_FILTER || prop == GARB_BACKDROP_FILTER) && v->kind == GARB_V_FUNCTIONS) {
+        for (int32_t i = 0; i < v->nitems; i++)
+            if (v->items[i].kind == GARB_V_URL)
+                return "url";
+        return prop == GARB_BACKDROP_FILTER && v->nitems > 0 ? v->items[0].keyword : NULL;
+    }
     // `content`'s items read and drawn as nothing (GENERATED_CONTENT.md §
     // 2): pictures.
     if (prop == GARB_CONTENT) {
@@ -2038,6 +2049,7 @@ typedef enum {
     G_CONTENT,              // normal | none | <content-list> [/ <string>+]?
     G_COUNTERS,             // none | [<custom-ident> <integer>?]+
     G_QUOTES,               // auto | none | [<string> <string>]+
+    G_FILTER,               // none | <filter-value-list>
 } Grammar;
 
 typedef struct {
@@ -2068,6 +2080,7 @@ static const Longhand kLonghands[] = {
     {GARB_COUNTER_INCREMENT, G_COUNTERS, NULL},
     {GARB_COUNTER_SET, G_COUNTERS, NULL},
     {GARB_QUOTES, G_QUOTES, NULL},
+    {GARB_FILTER, G_FILTER, NULL}, {GARB_BACKDROP_FILTER, G_FILTER, NULL},
     {GARB_FILL, G_SVG_PAINT, NULL},
     {GARB_STROKE, G_SVG_PAINT, NULL},
     {GARB_FILL_OPACITY, G_ALPHA, NULL},
@@ -2551,6 +2564,106 @@ static bool transform_fn(Sets *s, VCur *c, garb_val_t *out)
         return out->nitems == n;
     }
     return false;
+}
+
+// Filter Effects 1 § 13's functions by their lowercase names, and what
+// each takes: 'b' blur's length, 's' a number or percentage, 'a'
+// hue-rotate's angle (a unitless 0 too), 'd' drop-shadow's colour and
+// lengths. Negatives are refused but for hue-rotate's angle and
+// drop-shadow's offsets.
+static const struct {
+    const char *name;
+    char kind;
+} kFilterFns[] = {
+    {"blur", 'b'}, {"brightness", 's'}, {"contrast", 's'}, {"grayscale", 's'},
+    {"hue-rotate", 'a'}, {"invert", 's'}, {"opacity", 's'}, {"saturate", 's'},
+    {"sepia", 's'}, {"drop-shadow", 'd'},
+};
+
+// drop-shadow(<color>? && [<length>{2} <length [0,∞]>?]): the colour, or
+// currentcolor, then the lengths, into `vals`; `*n` their count.
+static bool drop_shadow_args(Sets *s, VCur *a, garb_val_t *vals, int32_t *n)
+{
+    // vc_color clears what it is handed when no colour is there, so each
+    // look is into `got`, and the default stands until one is found.
+    garb_val_t colour = initial_color(), got, len[3];
+    bool have = vc_color(a, &got);
+    if (have)
+        colour = got;
+    int32_t lens = 0;
+    while (lens < 3 && !vc_done(a) && vc_dim(a, ACCEPT_LENGTH, lens < 2, false, &s->a, &len[lens]))
+        lens++;
+    if (lens < 2)
+        return false;
+    if (!have && !vc_done(a) && vc_color(a, &got))
+        colour = got;
+    vals[0] = colour;
+    for (int32_t i = 0; i < lens; i++)
+        vals[1 + i] = len[i];
+    *n = 1 + lens;
+    return true;
+}
+
+static bool filter_fn(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *f = vc_peek(c);
+    if (f != NULL && (f->kind == GARB_URL || is_fn(f, "url")))
+        return vc_url(c, out);
+    if (f == NULL || f->kind != GARB_FUNCTION)
+        return false;
+    for (size_t k = 0; k < sizeof(kFilterFns) / sizeof(kFilterFns[0]); k++) {
+        if (!ieq(f->text, f->len, kFilterFns[k].name))
+            continue;
+        VCur args[1];
+        garb_val_t vals[4];
+        int32_t n = 0;
+        if (fn_args(f, args, 1) != 1)
+            return false;
+        char kind = kFilterFns[k].kind;
+        VCur *a = &args[0];
+        bool ok = true;
+        if (vc_done(a))
+            ok = kind != 'd';               // omitted: the default, but drop-shadow's lengths
+        else if (kind == 'b')
+            ok = vc_dim(a, ACCEPT_LENGTH, false, false, &s->a, &vals[n++]);
+        else if (kind == 's')
+            ok = vc_dim(a, ACCEPT_NUMBER | ACCEPT_PERCENT, false, false, &s->a, &vals[n++]);
+        else if (kind == 'a')
+            ok = vc_angle(a, true, &vals[n++]);
+        else
+            ok = drop_shadow_args(s, a, vals, &n);
+        if (!ok || !vc_done(a))
+            return false;
+        *out = fn_val(s, kFilterFns[k].name, vals, n);
+        out->comma = false;
+        c->i++;
+        return out->nitems == n;
+    }
+    return false;
+}
+
+// filter and backdrop-filter (Filter Effects 1 § 5, Filter Effects 2 § 3):
+// none, or functions and url() references, applied in order.
+static bool filter_list(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return vc_done(c);
+    }
+    garb_val_t fns[GARB_FILTERS_MAX];
+    int32_t n = 0;
+    while (!vc_done(c)) {
+        if (n == GARB_FILTERS_MAX || !filter_fn(s, c, &fns[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_FUNCTIONS;
+    out->items = keep(s, fns, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
 }
 
 static bool transform_list(Sets *s, VCur *c, garb_val_t *out)
@@ -3545,6 +3658,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_CONTENT: return content(s, c, out);
     case G_COUNTERS: return counters(s, c, l->prop == GARB_COUNTER_INCREMENT ? 1 : 0, out);
     case G_QUOTES: return quotes(s, c, out);
+    case G_FILTER: return filter_list(s, c, out);
     case G_CURSOR: return cursor(s, c, l->words, out);
     case G_SPACING_TEXT:
         return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH, true, true, out);
@@ -4498,9 +4612,11 @@ static void val(Out *o, const garb_val_t *v)
     if (v->kind == GARB_V_FUNCTION) {
         put(o, v->keyword);
         put(o, "(");
+        // drop-shadow's colour and lengths are written apart, not listed.
+        const char *between = os64_streq(v->keyword, "drop-shadow") ? " " : ", ";
         for (int32_t k = 0; k < v->nitems; k++) {
             if (k > 0)
-                put(o, ", ");
+                put(o, between);
             val(o, &v->items[k]);
         }
         put(o, ")");

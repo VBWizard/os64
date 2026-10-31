@@ -407,8 +407,8 @@ static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block
     if (!box->out_of_flow)
         return;
     // A fixed box's containing block is the viewport unless a transformed
-    // element is round it (FStyled.fixed_anchor): it is filed with the
-    // initial containing block's, whose rect is the viewport's too.
+    // or filtered element is round it (FStyled.fixed_anchor): it is filed
+    // with the initial containing block's, whose rect is the viewport's too.
     const FStyled *up = styled(b, el->parent);
     bool fixed = box->style->position == FLOW_POSITION_FIXED;
     const os64_html_node_t *anchor = up == NULL ? NULL : fixed ? up->fixed_anchor : up->anchor;

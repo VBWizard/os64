@@ -7454,16 +7454,19 @@ static const FBox *clip_parent(const FBox *b)
 // is drawn where it reaches the glass and cannot be scrolled to
 // (POSITION.md, ruling 2). Found by walking the boxes, an inline-block's
 // content included, and not the entries: a build that stopped can leave a
-// positioned box without one. A fixed box and everything in it are left
-// out: it is where it is on the glass, not on the page, and the page is
-// never scrolled to reach it (one a transformed box contains is inside
-// that box, which this walk does not enter). So is a transformed box and
-// everything in it, fixed boxes it contains included: they reach where
-// they are drawn, which flow.c works out from their frames — all but the
-// root's, which moves the whole page.
+// positioned box without one. A fixed box the viewport contains and
+// everything in it are left out: it is where it is on the glass, not on
+// the page, and the page is never scrolled to reach it (one a filtered box
+// contains scrolls with that box, and is counted as an absolute one is;
+// one a transformed box contains is inside that box, which this walk does
+// not enter). So is a transformed box and everything in it, fixed boxes
+// it contains included: they reach where they are drawn, which flow.c
+// works out from their frames — all but the root's, which moves the whole
+// page.
 static void page_extent(const FBox *b, int64_t *width, int64_t *height)
 {
-    if (!b->placed || (b->out_of_flow && b->style->position == FLOW_POSITION_FIXED) ||
+    if (!b->placed ||
+        (b->out_of_flow && b->style->position == FLOW_POSITION_FIXED && (b->pos == NULL || b->pos->cb == NULL)) ||
         (b->transformed && b->parent != NULL))
         return;
     if (b->positioned) {

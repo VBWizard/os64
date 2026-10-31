@@ -35,8 +35,12 @@ recoloured for dark mode (`invert()`, `brightness(0)`), greyed-out logos
   element paints.
 - **Layout effects of a filter other than `none`** (Filter Effects 1 § 2):
   the element makes a stacking context and is the containing block of its
-  absolute and fixed descendants, as a transform is (`f_contains_absolute`).
-  A `backdrop-filter` makes a stacking context too.
+  absolute and fixed descendants, as a transform is (`f_contains_absolute`,
+  `f_contains_fixed`). A `backdrop-filter` does both too (Filter Effects 2
+  § 3). A fixed box a filter contains scrolls with it.
+- **A plain inline's filter is not drawn** and makes nothing
+  (`f_filtered`), and **an inline-block's is not drawn** though it is a
+  containing block, as their opacity is painted opaque (§ 10).
 
 ## 3. The problem: a group has no coverage
 
@@ -94,19 +98,28 @@ half-covered pixel.
   premultiplied layer, so edges fade into transparency rather than into
   black. The layer is grown by `3r` on every side, because a blur spreads
   ink that far.
-- **`drop-shadow(c x y r)`**: the layer's alpha, blurred by `r`, offset by
-  `(x, y)`, tinted `c`, under the layer. The layer grows by the offset and
-  `3r`.
+- **`drop-shadow(c x y r)`**: the layer's alpha, blurred, offset by
+  `(x, y)`, tinted `c`, under the layer. `r` is a blur RADIUS read as a box
+  shadow's (Filter Effects 1 § 13: a deviation of `r/2`), so it is blurred
+  as yonder blurs a box shadow, three box blurs of radius `r/2`. Each side
+  grows by that blur's reach less the offset toward the other side, never
+  below 0, and functions after the first spread what the ones before made
+  (`flow_filter_reach`).
 
 ## 6. Bounds and budget
 
-- **Ink**: libflow grows a filtered box's ink by what its filter spreads
-  (`blur` 3r, `drop-shadow` its offset plus 3r), so damage and repaint cover
-  the spread, as a box shadow's ink already does.
+- **Bounds, not ink**: a filtered group's bounds are grown by what its
+  filter spreads (`filter_grown`), once, after its members are gathered and
+  before its matrix; the box's own ink is left as it is, or its own layer
+  would be counted twice. The view a filtered group's members are culled
+  against is grown the same way, so a box the blur reaches in from outside
+  the view is painted. A change to any box inside a filtered group marks
+  the group's bounds (`mark_filtered`), since the filter spreads it.
 - **A budget per paint**: filtered area (layer pixels, the grown bounds cut
   to the view) up to `FILTER_AREA_MAX` (2 × the view, both layers in the
-  painter's scratch), and blur radius up to `FILTER_BLUR_MAX` (100 px; a
-  larger one is clamped). Past the area budget a group paints unfiltered
+  painter's scratch), and a blur's standard deviation up to
+  `FLOW_FILTER_BLUR_MAX` (100 px, libflow's, so its bounds and the painter
+  agree; a larger one is drawn at it). Past the area budget a group paints unfiltered
   and the record names it (`approximated filter: past the budget`), so a
   page of a hundred blurred cards degrades, never stalls the window.
 
@@ -127,7 +140,7 @@ since it shares the filters and the budget.
 | a paint reaching a filtered group's `PART_OPEN` | read | two scratch layers made, the range painted into each | — |
 | its `PART_CLOSE` | — | coverage recovered, filtered, composited, scratch returned | — |
 | past the budget | — | none: painted unfiltered, recorded | as grown |
-| an animation of `filter` | booked (§ 10) | — | — |
+| an animation of `filter` | discrete: the first value until halfway (§ 10) | as at a paint | as the value drawn |
 
 ## 9. Proof
 
@@ -152,6 +165,10 @@ since it shares the filters and the budget.
 ## 10. Not in 8c (DEBTS rows)
 
 - SVG filter references (`url(#f)`) and the SVG filter primitives.
-- Animating `filter` (interpolation of filter lists): an animated filter
-  draws its current value at each layout.
+- `filter` on an inline box or an inline-block: not drawn, as their
+  `opacity` is not (PILE3.md § Booked: neither is one layer to group).
+- `filter` and `backdrop-filter` on a table's rows, row groups and columns:
+  no containing blocks, as a transform on them is not (PILE3.md § Booked).
+- Interpolating `filter` lists (Filter Effects 1): an animated filter
+  is discrete, its first value until halfway and its second from there.
 - `mix-blend-mode` (8d) and `clip-path` on HTML.

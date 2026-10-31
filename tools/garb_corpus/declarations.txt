@@ -888,7 +888,7 @@ IN: scale: 1 2 3 4
 OUT: invalid
 
 # ── What libgarb does not read here ──
-IN: filter: none
+IN: mix-blend-mode: normal
 OUT: unknown
 IN: --panel: 10px
 OUT: unknown
@@ -1453,3 +1453,44 @@ IN: quotes: none "<" ">"
 OUT: invalid
 IN: quotes: a b
 OUT: invalid
+
+# ── Filters (Filter Effects 1 § 5, 13; FILTER.md) ──
+IN: filter: none
+OUT: filter: none
+IN: filter: blur(4px)
+OUT: filter: blur(4px)
+IN: filter: grayscale(100%) brightness(0.5) invert()
+OUT: filter: grayscale(100%) brightness(0.5) invert()
+IN: filter: hue-rotate(90deg) hue-rotate(0)
+OUT: filter: hue-rotate(90deg) hue-rotate(0deg)
+IN: filter: hue-rotate(-0.25turn)
+OUT: filter: hue-rotate(-0.25turn)
+IN: filter: drop-shadow(2px 3px 4px red)
+OUT: filter: drop-shadow(rgb(255, 0, 0) 2px 3px 4px)
+IN: filter: drop-shadow(blue -1px 2px)
+OUT: filter: drop-shadow(rgb(0, 0, 255) -1px 2px)
+IN: filter: drop-shadow(1px 1px)
+OUT: filter: drop-shadow(currentcolor 1px 1px)
+IN: filter: url(#f) blur(1px)
+OUT: filter: url(#f) blur(1px)
+IN: backdrop-filter: blur(10px) saturate(180%)
+OUT: backdrop-filter: blur(10px) saturate(180%)
+IN: filter: blur(-1px)
+OUT: invalid
+IN: filter: brightness(-1)
+OUT: invalid
+IN: filter: drop-shadow(red)
+OUT: invalid
+IN: filter: drop-shadow()
+OUT: invalid
+IN: filter: drop-shadow(1px 1px -2px)
+OUT: invalid
+IN: filter: blur(1px, 2px)
+OUT: invalid
+IN: filter: none blur(1px)
+OUT: invalid
+IN: filter: frobnicate(1)
+OUT: invalid
+IN: filter: blur(1px) 3px
+OUT: invalid
+

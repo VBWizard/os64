@@ -161,6 +161,15 @@ typedef enum {
     // STRINGs, an open and a close for each depth; the value's own kind a
     // STRING.
     GARB_QUOTES,
+    // Filter Effects 1 § 5 (FILTER.md): the KEYWORD none, or a FUNCTIONS
+    // list applied in order, each a FUNCTION whose `keyword` is its name in
+    // lowercase: blur (a LENGTH), brightness, contrast, grayscale, invert,
+    // opacity, saturate, sepia (a NUMBER or PERCENTAGE), hue-rotate (an
+    // ANGLE), with no item when its argument was omitted (the function's
+    // default); drop-shadow (a COLOR, currentcolor when none was written,
+    // then two or three LENGTHs: x, y, blur); or a URL, an SVG filter
+    // reference.
+    GARB_FILTER, GARB_BACKDROP_FILTER,
     GARB_NPROPS
 } garb_prop_t;
 
@@ -303,6 +312,8 @@ typedef struct {
 // The most functions one transform list is read with; a value with more is
 // invalid.
 #define GARB_TRANSFORMS_MAX 64
+// The same for one filter list (FILTER.md).
+#define GARB_FILTERS_MAX 32
 
 // The domain a page means (PILE3.md § Animations, both slices, Contracts).
 // A number past its limit is held at the limit where it is first read,

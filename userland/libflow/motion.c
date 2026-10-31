@@ -1595,6 +1595,14 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
         d->text_shadows = s->text_shadows;
         d->ntext_shadows = s->ntext_shadows;
         break;
+    case GARB_FILTER:
+        d->filter = s->filter;
+        d->nfilter = s->nfilter;
+        break;
+    case GARB_BACKDROP_FILTER:
+        d->backdrop_filter = s->backdrop_filter;
+        d->nbackdrop_filter = s->nbackdrop_filter;
+        break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     case GARB_TRANSFORM:
         d->transform = s->transform;
@@ -1680,6 +1688,18 @@ static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t
     return true;
 }
 
+// Two filter lists by what they say (flow_filter_t), not where each is kept.
+static bool filters_same(const flow_filter_t *a, int32_t na, const flow_filter_t *b, int32_t nb)
+{
+    if (na != nb)
+        return false;
+    for (int32_t i = 0; i < na; i++)
+        if (a[i].fn != b[i].fn || a[i].amount != b[i].amount ||
+            !shadows_same(&a[i].shadow, 1, &b[i].shadow, 1))
+            return false;
+    return true;
+}
+
 // Two family lists by what they say, not where it is kept: two keyframes'
 // declarations of one list are two slices of the sheet.
 static bool families_same(const flow_family_list_t *a, const flow_family_list_t *b)
@@ -1721,6 +1741,10 @@ static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t 
         return shadows_same(a->box_shadows, a->nbox_shadows, b->box_shadows, b->nbox_shadows);
     case GARB_TEXT_SHADOW:
         return shadows_same(a->text_shadows, a->ntext_shadows, b->text_shadows, b->ntext_shadows);
+    case GARB_FILTER: return filters_same(a->filter, a->nfilter, b->filter, b->nfilter);
+    case GARB_BACKDROP_FILTER:
+        return filters_same(a->backdrop_filter, a->nbackdrop_filter, b->backdrop_filter,
+                            b->nbackdrop_filter);
     case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
         bool x = p == GARB_BACKGROUND_POSITION_X;
         int32_t na = x ? a->backgrounds.nx : a->backgrounds.ny;

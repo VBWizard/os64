@@ -658,6 +658,59 @@ static void shadows(const flow_computed_t *c, Out *o, const flow_shadow_t *sh, i
     }
 }
 
+// A filter list (FILTER.md): each function with its argument as computed
+// — a number for a percentage, lengths in px, an angle in degrees — and a
+// URL as written, quoted.
+static void filters(const flow_computed_t *c, Out *o, const flow_filter_t *f, int32_t n)
+{
+    static const char *const kNames[] = {
+        [FLOW_FILTER_URL] = "url", [FLOW_FILTER_BLUR] = "blur",
+        [FLOW_FILTER_BRIGHTNESS] = "brightness", [FLOW_FILTER_CONTRAST] = "contrast",
+        [FLOW_FILTER_GRAYSCALE] = "grayscale", [FLOW_FILTER_INVERT] = "invert",
+        [FLOW_FILTER_OPACITY] = "opacity", [FLOW_FILTER_SEPIA] = "sepia",
+        [FLOW_FILTER_SATURATE] = "saturate", [FLOW_FILTER_HUE_ROTATE] = "hue-rotate",
+        [FLOW_FILTER_DROP_SHADOW] = "drop-shadow",
+    };
+    if (n <= 0 || f == NULL) {
+        puts_(o, "none");
+        return;
+    }
+    for (int32_t i = 0; i < n; i++) {
+        if (i > 0)
+            puts_(o, " ");
+        puts_(o, kNames[f[i].fn]);
+        puts_(o, "(");
+        switch (f[i].fn) {
+        case FLOW_FILTER_URL:
+            puts_(o, "\"");
+            for (size_t k = 0; k < f[i].url_len; k++) {
+                if (f[i].url[k] == '"' || f[i].url[k] == '\\')
+                    puts_(o, "\\");
+                put(o, &f[i].url[k], 1);
+            }
+            puts_(o, "\"");
+            break;
+        case FLOW_FILTER_BLUR: px(c, o, f[i].amount); break;
+        case FLOW_FILTER_HUE_ROTATE:
+            number(o, f[i].amount);
+            puts_(o, "deg");
+            break;
+        case FLOW_FILTER_DROP_SHADOW: {
+            const flow_shadow_t *sh = &f[i].shadow;
+            colour(o, sh->current ? c->style->color : sh->colour);
+            int32_t v[3] = {sh->x, sh->y, sh->blur};
+            for (int k = 0; k < 3; k++) {
+                puts_(o, " ");
+                px(c, o, v[k]);
+            }
+            break;
+        }
+        default: number(o, f[i].amount); break;
+        }
+        puts_(o, ")");
+    }
+}
+
 static void gradient(const flow_computed_t *c, Out *o, const flow_gradient_t *g)
 {
     if (g->repeating)
@@ -1357,6 +1410,8 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
     }
     case GARB_BOX_SHADOW: shadows(c, &o, s->box_shadows, s->nbox_shadows, true); break;
     case GARB_TEXT_SHADOW: shadows(c, &o, s->text_shadows, s->ntext_shadows, false); break;
+    case GARB_FILTER: filters(c, &o, s->filter, s->nfilter); break;
+    case GARB_BACKDROP_FILTER: filters(c, &o, s->backdrop_filter, s->nbackdrop_filter); break;
     case GARB_IMAGE_RENDERING: puts_(&o, s->pixelated ? "pixelated" : "auto"); break;
     case GARB_CLIP:
         if (!s->legacy_clip_set) {
