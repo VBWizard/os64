@@ -88,6 +88,9 @@ mutants = [
     ('a-pseudo-takes-from-a-ticking-parent', STYLE, '    taken_from(of, &sp.taken);\n', '', LIBFLOW),
     ('content-is-not-charged', STYLE, 'out = list_alloc(c, at + 1, &spent);', 'out = f_arena_alloc(&c->out->arena, at + 1);', LIBFLOW),
     ('a-pseudo-clip-takes-its-elements-text', FLOW, '(box->pseudo != 0 && c->pseudo != box->pseudo) ||', '', LIBFLOW),
+    ('a-pseudo-box-skips-its-element-for-motion', FLOW, '        up = b->node;\n', '', LIBFLOW),
+    ('a-pseudo-box-takes-by-its-elements-record', FLOW, 'own = gen != NULL ? f_style_of(tree->styles, gen) : NULL;',
+     'own = gen != NULL ? own : NULL;', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

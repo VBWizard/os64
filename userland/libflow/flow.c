@@ -2161,11 +2161,20 @@ static void stacked_from(const flow_tree_t *tree, const flow_box_t *b,
         if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
             f_props_add(&handed, (garb_prop_t)p);
     const FStyled *own = f_style_of(tree->styles, b->node);
+    const os64_html_node_t *up = b->node->parent;
+    // A pseudo-element's box names its originating element
+    // (flow_box_t.pseudo): what it takes is its own record's, and the
+    // first element it takes from is that one.
+    if (b->pseudo != GARB_PSEUDO_NONE) {
+        const os64_html_node_t *gen = own != NULL ? own->pseudo[b->pseudo == GARB_PSEUDO_BEFORE ? 0 : 1] : NULL;
+        own = gen != NULL ? f_style_of(tree->styles, gen) : NULL;
+        up = b->node;
+    }
     FProps took;
     for (int w = 0; w < F_PROP_WORDS; w++)
         took.w[w] = own != NULL ? own->taken.w[w] : ~(uint64_t)0;
     bool in_clip = !leaves_text_clip(b);
-    for (const os64_html_node_t *a = b->node->parent; a != NULL; a = a->parent) {
+    for (const os64_html_node_t *a = up; a != NULL; a = a->parent) {
         const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
         if (st != NULL) {
             FProps ask;
