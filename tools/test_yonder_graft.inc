@@ -75,6 +75,30 @@ static void graft_browser_cases(void)
     check(!layout_inputs(&g.page,state).resource_owner,"graft browser: epoch overflow disables reuse");
     s_layout_resources.pictures=revision;s_layout_resources.exhausted=false;
     probe_drop();
+
+    probe_page("<!doctype html><style>div{width:40px}div:has(.on){width:90px}</style>"
+               "<div id=box><p id=child>text</p></div>",true);
+    doc=g.page.way.doc;
+    state=os64_page_shared_state(page_model(&g.page));
+    check(!flow_reuse_stats(g.page.tree).metadata_peak,
+          "graft fallback: broad displayed cascade allocates no geometry snapshot");
+    check(measured_layout(&g.page,state,g.page.way.url,800,600) &&
+          !flow_reuse_stats(s_measured.tree).metadata_peak,
+          "graft fallback: broad hidden cascade allocates no geometry snapshot");
+    layouts=geometry_layout_total;
+    check(measured_layout(&g.page,state,g.page.way.url,800,600) && geometry_layout_total==layouts,
+          "graft fallback: unchanged hidden answer remains cached without a snapshot");
+    check(!os64_html_set_attr(doc,probe_id("child"),"class","on",2) &&
+          measured_layout(&g.page,state,g.page.way.url,800,600),
+          "graft fallback: broad selector mutation still rebuilds hidden layout");
+    const flow_box_t *broad=flow_box_for(s_measured.tree,probe_id("box"));
+    check(broad && broad->rect.w==90 && !flow_reuse_stats(s_measured.tree).metadata_peak,
+          "graft fallback: fresh hidden geometry reflects changed descendant");
+    check(script_rebuild(),"graft fallback: broad selector mutation publishes");
+    broad=flow_box_for(g.page.tree,probe_id("box"));
+    check(broad && broad->rect.w==90 && !flow_reuse_stats(g.page.tree).metadata_peak,
+          "graft fallback: fresh displayed geometry reflects changed descendant");
+    probe_drop();
 }
 
 // Both catalog entries are already loaded: changing the resolution base must

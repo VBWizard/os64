@@ -2581,6 +2581,11 @@ bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *n
     return !s || s->changed > update;
 }
 
+bool garb_cascade_tracks_changes(const garb_cascade_t *c)
+{
+    return c && c->reader && !c->incomplete && !c->update_failed;
+}
+
 bool garb_cascade_update(garb_cascade_t *c)
 {
     if (!c || c->incomplete || c->update_failed) return false;

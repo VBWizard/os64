@@ -154,6 +154,11 @@ bool garb_cascade_retain(garb_cascade_t *cascade);
  * Reader storage is optional: its absence disables updates, not full builds.
  * The caller serializes updates with queries on its window thread. */
 bool garb_cascade_update(garb_cascade_t *c);
+// Whether this cascade keeps a change reader for incremental updates. False
+// lets hosts skip speculative geometry snapshots whose generation cannot
+// survive a DOM change. True is not a promise that an update will succeed:
+// history loss, dirty breadth and storage budgets still require fallback.
+bool garb_cascade_tracks_changes(const garb_cascade_t *c);
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
 uint64_t garb_cascade_version(const garb_cascade_t *c);

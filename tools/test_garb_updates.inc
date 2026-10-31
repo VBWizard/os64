@@ -169,6 +169,7 @@ static int cascade_updates(void)
         os64_html_node_t *a=(os64_html_node_t *)by_id(doc->document,"a"),*b=(os64_html_node_t *)by_id(doc->document,"b"),
             *box=(os64_html_node_t *)by_id(doc->document,"box"),*aside=(os64_html_node_t *)by_id(doc->document,"aside");
         uint64_t generation=garb_cascade_generation(c);
+        update_check(garb_cascade_tracks_changes(c),"local cascade advertises change tracking");
         update_check(!os64_html_set_attr(doc,a,"class","on",2) && garb_cascade_update(c),"class update succeeds");
         update_check(garb_cascade_generation(c)==generation && garb_cascade_updates(c)==1 &&
                      garb_style_updated_since(c,a,0) && !garb_style_updated_since(c,aside,0),"generation stable, unrelated branch untouched");
@@ -198,6 +199,7 @@ static int cascade_updates(void)
         os64_html_document_t *doc=update_doc("<!doctype html><div id=a><p>text</p></div>");
         garb_parsed_t sheet;garb_parse_sheet_text(broad[i],strlen(broad[i]),&sheet);garb_sheet_in_t in={.sheet=&sheet};
         garb_cascade_t *c=garb_cascade(&in,1,doc,(garb_env_t){.width=800,.height=600});
+        update_check(!garb_cascade_tracks_changes(c),"broad cascade advertises no change tracking");
         os64_html_set_attr(doc,(os64_html_node_t *)by_id(doc->document,"a"),"class","x",1);
         update_check(!os64_html_changes_bytes(doc),"broad dependency does not retain an unusable mutation log");
         update_check(!garb_cascade_update(c),"nested broad dependency requests full cascade");

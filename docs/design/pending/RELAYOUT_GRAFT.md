@@ -137,6 +137,17 @@ The first opt-in layout has real snapshot/index overhead even without a
 previous tree. The original "one NULL check" prediction does not describe
 that path. Measure first-layout time and memory instead of assuming them free.
 
+Yonder opts into geometry snapshots only when
+`garb_cascade_tracks_changes()` reports a usable cascade change reader.
+Broad selector dependencies such as `:has()` and `:dir()` omit that reader:
+the next DOM change forces a new cascade generation, so recording geometry
+for that change would be wasted work. This capability is a cost hint, not
+permission to reuse; history, generation, resource and geometry guards still
+apply when tracking is enabled. Unchanged hidden measurements remain cached
+even when speculative snapshots are disabled. The initial three-pair
+[hardware comparison](../../relayout-evidence/5c-p5-acceptance.md) exposed the
+fallback cost that motivated this gate.
+
 ## Match fresh structure before trusting geometry
 
 Build a bounded old-to-new correspondence once, after fresh pass 2. Node
