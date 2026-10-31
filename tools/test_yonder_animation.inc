@@ -74,5 +74,42 @@ static void animation_window_cases(void)
     probe_page("<p>replacement</p>",true);
     check(animation_next()==YONDER_NEVER,"frame window: navigation drops old callbacks");
     probe_drop();
+    // Wake for CSS alone: idle must get a turn between frames even when
+    // no ordinary task or animation-frame callback made script_turn succeed.
+    for (int kind=0;kind<2;kind++) {
+        now_ms=1000;s_animations=true;s_reduce_motion=false;
+        char html[640];
+        os64_snprintf(html,sizeof(html),
+            "<!doctype html><style>@keyframes move{to{%s}}"
+            "#box{width:20px;height:20px;background:red;animation:move 1s linear infinite}</style>"
+            "<div id=box></div><p id=result>waiting</p><script>"
+            "requestIdleCallback(()=>document.getElementById('result').textContent='idle ran')</script>",
+            kind ? "background-color:blue" : "margin-left:100px");
+        probe_page(html,true);relayout(true);script_turn();
+        check(yonder_scripts_idle_next(g.page.scripts)==0,
+              "frame idle: callback is runnable");
+        bool ready=script_turn();
+        check(!ready && probe_text_is("result","waiting"),
+              "frame idle: due CSS frame defers idle without running a script task");
+        check(!script_followup(ready,false),
+              "frame idle: no retry without task or rendering progress");
+        motion_tick();
+        bool painted=frame_unpainted() || g.raf_painting;
+        motion_painted();
+        check(painted && script_followup(ready,painted),
+              "frame idle: completed CSS frame schedules a follow-up without another event");
+        g.scripts_on=false;
+        check(!script_followup(false,painted),"frame idle: disabled scripts do not poll");
+        g.scripts_on=true;
+        os64_html_set_attr(g.page.way.doc,probe_id("box"),"title","changed",7);
+        check(!script_followup(false,painted),"frame idle: owed rebuild blocks follow-up");
+        check(script_rebuild(),"frame idle: native rebuild completes");
+        motion_painted();
+        check(script_turn() && probe_text_is("result","idle ran"),
+              "frame idle: follow-up delivers idle callback before next CSS frame");
+        motion_painted();
+        check(!script_followup(false,false),"frame idle: drained work does not poll");
+        probe_drop();
+    }
     s_animations=was_animations;s_reduce_motion=was_reduce;
 }

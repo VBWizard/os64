@@ -315,7 +315,10 @@ also use for state delivery. Scripts and Modern Web remain its feature gates.
 Navigation drains retained callbacks with the document.
 
 An idle grant stops at the nearest host rendering deadline, including CSS
-motion. A new animation request made inside an idle callback shortens
+motion. After a frame paints, runnable idle work receives a follow-up turn even
+when the pre-frame script turn ran no task. This lets idle work use the gap
+between CSS frames; a turn with neither task nor frame progress does not poll.
+A new animation request made inside an idle callback shortens
 `timeRemaining()` immediately. An overdue frame belonging to a covered window
 does not prevent new idle periods. The Window profile bounds pending callbacks
 to 1024 and uses increasing nonzero 32-bit handles without reuse; exhaustion

@@ -10090,6 +10090,18 @@ static bool script_turn(void)
     return rendered;
 }
 
+// A due CSS frame can refuse an idle grant without running a script task.
+// Once that frame paints, give runnable idle work another turn. Requiring
+// task or frame progress avoids polling when neither can make progress.
+static bool script_followup(bool scripts_ready, bool painted_frame)
+{
+    if (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran))
+        return true;
+    bool idle_ready = scripts_ready || (painted_frame && g.scripts_on &&
+                      g.page.tree != NULL && !page_rebuild_owed(&g.page));
+    return idle_ready && yonder_scripts_idle_next(g.page.scripts) <= yonder_now_ms();
+}
+
 // PAGE STORAGE'S TURN: each page's storage commits what is due when no task
 // has (a task's own end commits what is due then), and a store that could
 // not be kept is said on the status line, once.
@@ -14668,13 +14680,13 @@ int main(int argc, char **argv)
         title_follow();
         before_paint();
         glass_paint();
+        bool painted_frame = frame_unpainted() || g.raf_painting;
         motion_painted();
         if (motion_pause_said())
             glass_paint();
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
-        if (coming_more || (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran ||
-                                              yonder_scripts_idle_next(g.page.scripts) <= yonder_now_ms())))
+        if (coming_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         // A task may have set or cleared a timer, and a frame for an
         // animation has its whole cost now: the ticker hears of both.

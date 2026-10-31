@@ -58,7 +58,7 @@ while waiting, which made elapsed performance timestamps disagree with timers.
   allocation refusal, teardown, runtime limits, and the idle rendering grant.
   Two callbacks individually below the task limit exhaust the combined limit,
   proving that a batch does not renew its budget between callbacks.
-- The browser suite passes 12,485 checks and covers pixel damage without layout, one presentation for
+- The browser suite passes 12,507 checks and covers pixel damage without layout, one presentation for
   multiple callbacks, DOM/microtask edits in one cascade update, CSS/script
   layout sharing, covered-window suspension, resume without backlog, cost
   pacing, timer progress and navigation teardown.
@@ -92,3 +92,19 @@ and zoom. P5 visual acceptance passed: the gallery's controls worked correctly
 and the animations displayed successfully. A slight stutter was observed in
 the orbiting square. Frame pacing and rendering performance remain follow-up
 work; this cut makes no new hardware performance acceptance claim.
+
+
+## Review correction: idle work after CSS frames
+
+A due CSS frame can refuse an idle grant while no ordinary task or rAF batch
+runs. The window now schedules a follow-up after that frame paints if idle
+work is runnable. Without that wake, successive CSS ticker events could keep
+deferring the callback despite spare time between frames.
+
+The regression reproduces the missed wake for both layout-driven and paint-only
+CSS animation. Both cases failed before the fix. The corrected focused browser
+suite passes 48 checks, including delivery before the next frame, disabled
+scripts, a pending native rebuild, and no polling without task/frame progress.
+The full browser suite passes 12,507 checks under ASan/UBSan/LeakSanitizer, and
+the native Yonder build passes. This correction changes host scheduling; the
+P5 gallery acceptance above covers the preceding runtime build.
