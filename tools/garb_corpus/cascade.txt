@@ -227,8 +227,9 @@ p: color: rgb(0, 128, 0)
 (end)
 END
 
-# Combinators; a pseudo-element's rule and a :hover rule reach nothing here;
-# a CSS-wide keyword wins like any value.
+# Combinators; a pseudo-element's rule styles the pseudo-element, not the
+# element, and a :hover rule reaches nothing here; a CSS-wide keyword wins
+# like any value.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -238,7 +239,9 @@ li::before { color: blue } li:hover { color: green } li { display: inherit }
 <ul><li>a<li>b</ul>
 WANT
 li: display: inherit; color: rgb(255, 0, 0); margin-top: 1px
+li::before: color: rgb(0, 0, 255)
 li: display: inherit; color: rgb(255, 0, 0); margin-top: 1px; margin-left: 2px
+li::before: color: rgb(0, 0, 255)
 (end)
 END
 
@@ -433,5 +436,32 @@ p { --u: unset; color: var(--u, red); margin-top: var(--on) 3px; margin-bottom: 
 <div><p>x</div>
 WANT
 p: color: rgb(0, 0, 255); margin-top: 3px; margin-bottom: 4px
+(end)
+END
+
+# ::before and ::after (GENERATED_CONTENT.md § 3): a pseudo-element's rules
+# are its own, matched against its originating element, by specificity and
+# order as an element's are; the element's style attribute is not theirs;
+# a rule for another pseudo-element is read and not filed; and one selector
+# list can file a rule for an element and its pseudo-element both.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p::before { content: "a"; color: red }
+p.x::before { color: green }
+#y:before { content: attr(title) }
+p::after { content: "z" }
+p::first-line { color: blue }
+q, q::after { margin-top: 1px }
+</style>
+<p>one<p class=x id=y style="color: purple">two<q>three</q>
+WANT
+p::before: color: rgb(255, 0, 0); content: "a"
+p::after: content: "z"
+p#y: color: rgb(128, 0, 128)
+p#y::before: color: rgb(0, 128, 0); content: attr("title")
+p#y::after: content: "z"
+q: margin-top: 1px
+q::after: margin-top: 1px
 (end)
 END
