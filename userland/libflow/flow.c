@@ -1935,7 +1935,10 @@ static bool ticking_build(flow_tree_t *t)
     }
     for (int32_t k = 0; ok && k < t->nlayers; k++) {
         const Layer *l = &t->layers[k];
-        FTick *e = l->part == PART_OPEN && l->box->node != NULL ? f_map_get(&of, l->box->node) : NULL;
+        // A group a pseudo-element's box opens names its originating element
+        // (flow_box_t.pseudo) and is not that element's.
+        FTick *e = l->part == PART_OPEN && l->box->node != NULL && l->box->pseudo == GARB_PSEUDO_NONE
+                       ? f_map_get(&of, l->box->node) : NULL;
         if (e != NULL && e->open < 0)
             e->open = k;
     }
@@ -3954,12 +3957,12 @@ static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow
     bool groups = false;
     for (int32_t k = 0; !groups && k < t->nlayers; k++)
         groups = t->layers[k].part == PART_OPEN && t->layers[k].box->node != NULL &&
-                 f_map_get(changed, t->layers[k].box->node) != NULL;
+                 t->layers[k].box->pseudo == GARB_PSEUDO_NONE && f_map_get(changed, t->layers[k].box->node) != NULL;
     os64_gui_rect_t *bounds = groups ? all_group_bounds(t, scroll) : NULL;
     for (int32_t k = 0; ok && k < t->nlayers; k++) {
         const Layer *l = &t->layers[k];
-        if (l->part != PART_OPEN || l->box->node == NULL || f_map_get(changed, l->box->node) == NULL ||
-            f_map_get(&grouped, l->box->node) != NULL)
+        if (l->part != PART_OPEN || l->box->node == NULL || l->box->pseudo != GARB_PSEUDO_NONE ||
+            f_map_get(changed, l->box->node) == NULL || f_map_get(&grouped, l->box->node) != NULL)
             continue;
         int32_t end;
         os64_gui_rect_t in = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);

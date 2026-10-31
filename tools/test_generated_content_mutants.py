@@ -92,6 +92,8 @@ mutants = [
     ('a-pseudo-box-takes-by-its-elements-record', FLOW, 'own = gen != NULL ? f_style_of(tree->styles, gen) : NULL;',
      'own = gen != NULL ? own : NULL;', LIBFLOW),
     ('a-pseudo-box-is-styled-by-its-element', FLOW, '    const os64_html_node_t *e = styled_by;', '    const os64_html_node_t *e = styled_by != NULL ? node : NULL;', LIBFLOW),
+    ('a-pseudo-group-ticks-for-its-element', FLOW, 'l->box->node != NULL && l->box->pseudo == GARB_PSEUDO_NONE\n', 'l->box->node != NULL\n', LIBFLOW),
+    ('a-pseudo-group-is-its-elements-part', FLOW, 'l->box->pseudo != GARB_PSEUDO_NONE ||\n', '\n', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

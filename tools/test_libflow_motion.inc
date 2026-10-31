@@ -3776,6 +3776,35 @@ static flow_tree_t *moving_beside(Moving *m, uint64_t now)
     return flow_layout(m->p.doc, m->p.page, 800, &m->p.env);
 }
 
+// A group a pseudo-element opens (its opacity) is not its element's: a
+// tick, and a layout's parts, mark the element's whole box, not the
+// pseudo-element's group alone.
+static void motion_pseudo_group_cases(void)
+{
+    static const char kPage[] = MOTION_STYLE "@keyframes bg{to{background-color:blue}}"
+        "#p{width:300px;height:200px;animation:bg 1s linear infinite}"
+        "#p::before{content:'';display:block;width:10px;height:10px;opacity:.5}</style><div id=p></div>";
+    const flow_point_t o = {0, 0};
+    Moving m;
+    moving_open_for(&m, kPage, 0, true);
+    const flow_box_t *p = moving_box(&m, "p");
+    TickMarks k = {.n = 0};
+    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &k, NULL);
+    expect("tick marks: an element whose ::before opens a group, its whole box",
+           p != NULL && marked(&k, p, flow_box_doc_rect(p, o)), NULL);
+    moving_close(&m);
+
+    moving_open(&m, kPage, 0);
+    p = moving_box(&m, "p");
+    flow_tree_t *now = moving_beside(&m, 500);
+    k.n = 0;
+    bool bounded = now != NULL && flow_layout_parts(m.tree, now, o, tick_mark, &k, NULL);
+    expect("layout parts: an element whose ::before opens a group, its whole box",
+           p != NULL && bounded && marked(&k, p, flow_box_doc_rect(p, o)), NULL);
+    flow_free(now);
+    moving_close(&m);
+}
+
 // Whether a mark was handed for a box of `node`, in either tree, and the
 // marks for its boxes joined.
 static bool marks_node(const TickMarks *k, const os64_html_node_t *node, os64_gui_rect_t *joined)
@@ -4360,6 +4389,7 @@ static void motion_tick_cases(void)
     motion_tick_condition_cases();
     motion_tick_edge_cases();
     motion_tick_mark_cases();
+    motion_pseudo_group_cases();
     motion_tick_sweep_cases();
     motion_tick_room_cases();
 }
