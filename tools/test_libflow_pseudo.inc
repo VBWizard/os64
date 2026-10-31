@@ -96,8 +96,138 @@ static void pseudo_replaced_cases(void)
     sheeted_close(&p);
 }
 
+static void pseudo_count_text(void *ctx, const flow_box_t *text)
+{
+    (void)text;
+    (*(int *)ctx)++;
+}
+
+static const os64_html_node_t *pseudo_find(const os64_html_node_t *n, const char *id)
+{
+    for (; n != NULL; n = n->next) {
+        const os64_html_attr_t *a = n->kind == OS64_HTML_ELEMENT ? os64_html_attr(n, "id") : NULL;
+        if (a != NULL && a->value != NULL && strcmp(a->value, id) == 0)
+            return n;
+        const os64_html_node_t *in = pseudo_find(n->first_child, id);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+// The FStyled of `id`'s ::before (`which` 0) or ::after (1), or NULL.
+static const FStyled *pseudo_styled(const FStyles *styles, const os64_html_document_t *doc, const char *id,
+                                    int which)
+{
+    const FStyled *s = styles != NULL ? f_style_of(styles, pseudo_find(doc->document, id)) : NULL;
+    return s != NULL && s->pseudo[which] != NULL ? f_style_of(styles, s->pseudo[which]) : NULL;
+}
+
+// What an element's child is given of it, a pseudo-element is given too:
+// an atomic inline's edge to the decorations, a border style's medium
+// width, and the parent's animation moving by layouts when it takes from it.
+static void pseudo_style_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>a { text-decoration: underline }"
+                     " a::before { content: \"I\"; display: inline-block } a::after { content: \"!\" }"
+                     " #b::before { content: \"\"; border-style: solid; outline-style: solid }</style>"
+                     "<p><a href=x id=a>link</a><div id=b></div>", 800, 600);
+    FStyles *styles = f_style_build(p.doc, p.page, &p.env);
+    const FStyled *icon = pseudo_styled(styles, p.doc, "a", 0), *mark = pseudo_styled(styles, p.doc, "a", 1);
+    const FStyled *box = pseudo_styled(styles, p.doc, "b", 0);
+    expect("pseudo: an inline-block pseudo-element stops its link's underline", icon != NULL && icon->decoration == 0,
+           NULL);
+    expect("pseudo: an inline one takes it", mark != NULL && mark->decoration != 0, NULL);
+    expect("pseudo: a border style with no width is medium",
+           box != NULL && box->style.border_width[0] == 3 * FLOW_UNITS_PER_PX, NULL);
+    expect("pseudo: an outline style with no width is medium",
+           box != NULL && box->style.outline_width == 3 * FLOW_UNITS_PER_PX, NULL);
+    f_style_free(styles);
+    sheeted_close(&p);
+
+    static const char *const kTakes[] = {
+        "<!doctype html><style>@keyframes k { to { background-color: red } } #m { animation: k 1s }"
+        " #m::before { content: \"x\" }</style><div id=m>m</div>",
+        "<!doctype html><style>@keyframes k { to { background-color: red } } #m { animation: k 1s }"
+        " #m::before { content: \"x\"; background-color: inherit }</style><div id=m>m</div>",
+    };
+    bool ticks[2] = {false, false};
+    for (int i = 0; i < 2; i++) {
+        sheeted_open(&p, kTakes[i], 800, 600);
+        flow_timeline_t *tl = flow_timeline_new(p.doc);
+        p.env.timeline = tl;
+        p.env.now_ms = 100;
+        p.env.ticks = true;
+        FStyles *fs = f_style_build(p.doc, p.page, &p.env);
+        const FStyled *m = fs != NULL ? f_style_of(fs, pseudo_find(p.doc->document, "m")) : NULL;
+        ticks[i] = m != NULL && m->motion != NULL && m->motion->ticks;
+        f_style_free(fs);
+        flow_timeline_free(tl);
+        sheeted_close(&p);
+    }
+    expect("pseudo: an element's animation ticks beside a pseudo-element that takes nothing of it", ticks[0], NULL);
+    expect("pseudo: and moves by layouts when its pseudo-element inherits what it animates", !ticks[1], NULL);
+}
+
+// A pseudo-element's content is charged to the lists' budget, as a list
+// one rule copies into every element it reaches is, and only when it
+// exists: four bytes more in the rule cost four bytes for the one
+// pseudo-element drawn, none for the one whose display is none.
+static void pseudo_budget_cases(void)
+{
+    static const char *const kPages[] = {
+        "<!doctype html><style>div::before { content: \"abcd\" } #n::before { display: none }</style>"
+        "<div>1</div><div id=n>2</div>",
+        "<!doctype html><style>div::before { content: \"abcdefgh\" } #n::before { display: none }</style>"
+        "<div>1</div><div id=n>2</div>",
+    };
+    size_t left[2] = {0, 0};
+    for (int i = 0; i < 2; i++) {
+        Sheeted p;
+        sheeted_open(&p, kPages[i], 800, 600);
+        FStyles *styles = f_style_build(p.doc, p.page, &p.env);
+        left[i] = styles != NULL ? styles->lists_left : 0;
+        f_style_free(styles);
+        sheeted_close(&p);
+    }
+    expect("pseudo: content is charged to the lists' budget, once per pseudo-element drawn",
+           left[0] != 0 && left[0] - left[1] == 4, NULL);
+}
+
+// The root element's ::before is laid out, as its ::after is; and a
+// pseudo-element's text clip holds its own text, not its element's.
+static void pseudo_layout_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>html::before { content: \"X\"; display: block }"
+                     " #s::before { content: \"B\" }</style><p><span id=s>host<b>child</b></span>", 800, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    int leaked = 0, made = 0;
+    if (tree != NULL)
+        pseudo_walk(flow_root(tree), p.doc->html, &leaked, &made);
+    expect("pseudo: the root element's ::before is laid out", tree != NULL && made >= 1, NULL);
+    const os64_html_node_t *span = pseudo_find(p.doc->document, "s");
+    const flow_box_t *own = tree != NULL ? flow_box_for(tree, span) : NULL;
+    const flow_box_t *gen = NULL;
+    if (own != NULL && own->parent != NULL)
+        for (const flow_box_t *k = own->parent->first; k != NULL && gen == NULL; k = k->next)
+            if (k->kind == FLOW_BOX_SPAN && k->node == span && k->pseudo == GARB_PSEUDO_BEFORE)
+                gen = k;
+    int seen[2] = {0, 0};
+    flow_visit_text_clip(gen, pseudo_count_text, &seen[0]);
+    flow_visit_text_clip(own, pseudo_count_text, &seen[1]);
+    expect("pseudo: a pseudo-element's text clip is its own text", gen != NULL && seen[0] == 1, NULL);
+    expect("pseudo: its element's holds its own and the pseudo-element's", own != NULL && seen[1] == 3, NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+}
+
 static void pseudo_cases(void)
 {
+    pseudo_style_cases();
+    pseudo_budget_cases();
+    pseudo_layout_cases();
     pseudo_boundary_cases();
     pseudo_replaced_cases();
     pseudo_case("pseudo: inline ::before and ::after, strings and attr()",
