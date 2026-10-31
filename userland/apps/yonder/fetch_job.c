@@ -771,15 +771,23 @@ static bool request_value(void *ctx, const char *name, size_t nlen, char *out, s
 
 // Whether this request may use the cache at all: a GET with no body, and
 // no Range, whose answer is a part of a reply the cache would keep whole.
+// A default-mode request carrying a precondition of the page's own is
+// no-store (Fetch's HTTP-network-or-cache fetch): its condition is the
+// server's to judge, and a kept reply would answer without asking it.
 static bool cache_wanted(const yonder_fetch_job_t *job, const way_request_t *r)
 {
-    bool range = false;
+    static const char *const kConditions[] = {"if-match", "if-none-match", "if-modified-since",
+                                              "if-unmodified-since", "if-range"};
+    bool range = false, conditional = false;
     size_t at = 0, len = job->headers != NULL ? os64_strlen(job->headers) : 0;
     way_header_t h;
-    while (!range && way_header_next(job->headers, len, &at, &h))
+    while (!range && way_header_next(job->headers, len, &at, &h)) {
         range = is_named(h.name, h.name_len, "range");
-    return !range && way_cache_enabled(job->cache) && job->cache_mode != WAY_CACHE_NO_STORE &&
-           os64_streq(r->method, "GET") && !r->body;
+        for (size_t i = 0; i < sizeof(kConditions) / sizeof(kConditions[0]); i++)
+            conditional |= is_named(h.name, h.name_len, kConditions[i]);
+    }
+    return !range && !(conditional && job->cache_mode == WAY_CACHE_DEFAULT) && way_cache_enabled(job->cache) &&
+           job->cache_mode != WAY_CACHE_NO_STORE && os64_streq(r->method, "GET") && !r->body;
 }
 
 // The request's key, what it sends, and what the cache holds under the key
@@ -798,9 +806,12 @@ static Cached *cache_open(const yonder_fetch_job_t *job, const way_request_t *r,
     os64_strcopy(c->accept, sizeof(c->accept), accept != NULL ? accept : "");
     os64_strcopy(c->extra, sizeof(c->extra), fields->extra);
     os64_strcopy(c->representation, sizeof(c->representation), fields->body);
+    // An entry way_fetch_whole kept (a picture's, a sheet's, a classic
+    // script's) has no head, which a script's request reads: it is a miss,
+    // and the answer kept now replaces it.
     if (job->cache_mode != WAY_CACHE_RELOAD &&
         way_cache_find(job->cache, &c->key, &c->e, &c->body, &c->len, &c->blocks, (size_t)max_body)) {
-        c->have = way_vary_matches(c->blocks.vary, c->blocks.vary_len, request_value, c);
+        c->have = c->blocks.headers_len > 0 && way_vary_matches(c->blocks.vary, c->blocks.vary_len, request_value, c);
         if (!c->have) {
             os64_free(c->body);
             c->body = NULL;
@@ -1077,12 +1088,17 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         const char *preset = way_identity_accept(job->identity, WAY_DEST_EMPTY);
         if (fields->accepts == 0 && preset != NULL)
             opt.accept = preset;
-        // The cache, on the request's first hop (SCRIPT_CACHE.md § 5-6):
-        // what it keeps fresh is the answer; a stale reply is asked about.
+        // The cache, on the request's first hop alone (SCRIPT_CACHE.md §
+        // 5-6): what it keeps fresh is the answer; a stale reply is asked
+        // about. A later hop is another address, which the kept reply's
+        // validator must not reach. only-if-cached with no cache to ask
+        // has nothing it may give.
         if (r->urls == 1 && cached == NULL && cache_wanted(job, r))
             cached = cache_open(job, r, current, fields, opt.accept, max_body);
-        CacheAnswer answer = cached != NULL ? cache_answer(job, r, current, cached, fields, got, max_body)
-                                            : CACHE_MISS;
+        CacheAnswer answer = r->urls != 1 ? CACHE_MISS
+                             : cached != NULL ? cache_answer(job, r, current, cached, fields, got, max_body)
+                             : job->cache_mode == WAY_CACHE_ONLY_IF_CACHED ? CACHE_REFUSED
+                                                                           : CACHE_MISS;
         if (answer == CACHE_ANSWERED || answer == CACHE_REFUSED) {
             os64_free(fields);
             if (answer == CACHE_REFUSED)

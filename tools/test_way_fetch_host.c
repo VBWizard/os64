@@ -547,6 +547,38 @@ static void partitioned(void)
     free(w.bytes);
 }
 
+// An entry a script's request kept, varying on what that request sent,
+// is not this path's to serve: these requests do not say what they sent
+// (Codex #425 rd1).
+static void varied_entries(void)
+{
+    const char *year = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nPIC";
+    fresh();
+    script("u.test", year);
+    script("u.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nNEW");
+    way_whole_t w;
+    expect("varied: a picture is kept", whole_picture("https://one.test/", "http://u.test/v.png", &w) && w.kept,
+           NULL);
+    free(w.bytes);
+    // Kept again as a script's request would keep it: with its head and
+    // the Accept it varied on.
+    const way_cache_key_t key = {"https one.test", true, "http://u.test/v.png"};
+    way_entry_t e;
+    uint8_t *body = NULL;
+    size_t len = 0;
+    bool found = way_cache_find(s_cache, &key, &e, &body, &len, NULL, 1 << 20);
+    const char head[] = "Content-Type: application/json\r\n", vary[] = "accept: application/json\r\n";
+    const way_blocks_t blocks = {head, sizeof(head) - 1, "", 0, vary, sizeof(vary) - 1};
+    expect("varied: kept again with the Accept a script's request varied on",
+           found && way_cache_put(s_cache, &e, &blocks, body, len), NULL);
+    free(body);
+    int before = s_dials;
+    expect("varied: a picture's request is not served it, and asks the network",
+           whole_picture("https://one.test/", "http://u.test/v.png", &w) && w.served == WAY_SERVED_NETWORK &&
+               s_dials > before && w.len == 3 && memcmp(w.bytes, "NEW", 3) == 0, NULL);
+    free(w.bytes);
+}
+
 static void redirect_restrictions(void)
 {
     fresh();
@@ -1317,6 +1349,7 @@ int main(void)
     restrictive_304();
     kept_bodies();
     partitioned();
+    varied_entries();
     redirect_restrictions();
     field_too_long();
     who_is_asking();

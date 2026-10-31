@@ -204,6 +204,19 @@ the blob carries it and one made under another name is a miss.
   Settings shows, are still `way_fetch_whole`'s alone (DEBTS.md).
 - **`way_served_t` moved to `way/cache.h`**, since the fetch job, which
   does not include all of `way/way.h`, says it too.
+- **The two paths share one key space, and each takes only what it can
+  answer** (Codex #425 rd1). An entry `way_fetch_whole` kept (a
+  picture's, a sheet's, a classic script's) has no head, so a script's
+  request reads it as a miss and the reply it keeps replaces it; an entry
+  a script's request kept with recorded `Vary` values is a miss for
+  `way_fetch_whole`, whose requests do not say what they sent.
+- **The cache answers a request's first hop alone**: a later hop is
+  another address, which a kept reply's validator must not reach.
+- **A default-mode request carrying a precondition of the page's own**
+  (`If-Match`, `If-None-Match`, `If-Modified-Since`,
+  `If-Unmodified-Since`, `If-Range`) is no-store, as Fetch's
+  HTTP-network-or-cache fetch makes it; **`only-if-cached` with no cache to
+  ask** is a network error, nothing sent.
 - **7b's blob is read by the fetch job** (`module_bytecode`) for a module's
   request whose answer the entry holds — served kept, confirmed by a 304,
   or just stored — and rides to the module map with the answer
