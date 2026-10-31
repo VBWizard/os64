@@ -235,7 +235,8 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
         return NULL;
     }
     // A pseudo-element's synthetic node never leaves libflow: its box names
-    // the element it is made for.
+    // the element it is made for, and its style is still its own.
+    const os64_html_node_t *styled_by = node;
     garb_pseudo_t pseudo = f_pseudo_of(node);
     if (pseudo != GARB_PSEUDO_NONE)
         node = f_pseudo_origin(node);
@@ -247,7 +248,7 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
     b->parent = parent;
     // Transparent: its element's opacity, or an ancestor's, is 0; a box
     // with no element of its own is as its parent is.
-    const os64_html_node_t *e = node;
+    const os64_html_node_t *e = styled_by;
     while (e != NULL && e->kind != OS64_HTML_ELEMENT)
         e = e->parent;
     const FStyled *st = e != NULL ? f_style_of(bd->t->styles, e) : NULL;

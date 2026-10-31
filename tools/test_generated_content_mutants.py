@@ -91,6 +91,7 @@ mutants = [
     ('a-pseudo-box-skips-its-element-for-motion', FLOW, '        up = b->node;\n', '', LIBFLOW),
     ('a-pseudo-box-takes-by-its-elements-record', FLOW, 'own = gen != NULL ? f_style_of(tree->styles, gen) : NULL;',
      'own = gen != NULL ? own : NULL;', LIBFLOW),
+    ('a-pseudo-box-is-styled-by-its-element', FLOW, '    const os64_html_node_t *e = styled_by;', '    const os64_html_node_t *e = styled_by != NULL ? node : NULL;', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

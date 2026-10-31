@@ -201,4 +201,5 @@ and it is said here so 5b and 8a meet on it rather than discover it.
 - **What waits** is in DEBTS.md § Browser layout: counters and `quotes`
   (8b), pictures in `content`, `getComputedStyle(el, '::before')`,
   `::marker` and the line pseudo-elements, a pseudo-element's animations,
-  and tables' own.
+  tables' own, and an animation a `display: contents` element draws only
+  through its pseudo-elements.
