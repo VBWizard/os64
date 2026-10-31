@@ -1680,6 +1680,36 @@ const char *yonder_scripts_task_address(const yonder_scripts_t *s)
     return s != NULL ? s->task_address : NULL;
 }
 
+// How many of a stack overflow's callers its FAILED line names.
+#define FAILURE_CALLERS 3
+
+// The file a FAILED line names for `frame`, into `*file` and `*length`: the
+// script's address; nothing (length 0) in the task's own script, whose line
+// and column alone are its place; `inline` in the page's classic inline
+// scripts; and anywhere else, the engine's own name for it.
+static void frame_file(const yonder_scripts_t *s, const char *own, const os64_dom_frame_t *frame,
+                       const char **file, size_t *length)
+{
+    bool page = false;
+    const char *address = s != NULL ? os64_dom_frame_script(s->dom, frame, &page) : NULL;
+    // A classic script's file is the binding's name for it, a module's its
+    // own address (modules.c compiles it under its URL).
+    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame->file_length &&
+        os64_memcmp(own, frame->file, frame->file_length) == 0)
+        address = own;
+    *file = frame->file;
+    *length = frame->file_length;
+    if (address != NULL && own != NULL && os64_streq(address, own)) {
+        *length = 0;
+    } else if (address != NULL) {
+        *file = address;
+        *length = os64_strlen(address);
+    } else if (page) {
+        *file = "inline";
+        *length = os64_strlen(*file);
+    }
+}
+
 void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const char *message, const char *stack,
                             char *out, size_t cap)
 {
@@ -1688,28 +1718,45 @@ void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const ch
         os64_strcopy(out, cap, message);
         return;
     }
-    bool page = false;
-    const char *address = s != NULL ? os64_dom_frame_script(s->dom, &frame, &page) : NULL;
-    // A classic script's file is the binding's name for it, a module's its
-    // own address (modules.c compiles it under its URL).
-    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&
-        os64_memcmp(own, frame.file, frame.file_length) == 0)
-        address = own;
-    // The place: the line and column alone in the task's own script.
-    const char *file = frame.file;
-    size_t file_length = frame.file_length;
-    if (address != NULL && own != NULL && os64_streq(address, own)) {
-        file_length = 0;
-    } else if (address != NULL) {
-        file = address;
-        file_length = os64_strlen(address);
-    } else if (page) {
-        file = "inline";
-        file_length = os64_strlen(file);
-    }
+    const char *file;
+    size_t file_length;
+    frame_file(s, own, &frame, &file, &file_length);
     os64_snprintf(out, cap, "%s, at %.*s%s%.*s%s%u:%u", message, (int)frame.function_length,
                   frame.function != NULL ? frame.function : "", frame.function != NULL ? " " : "", (int)file_length,
                   file, file_length != 0 ? ":" : "", frame.line, frame.column);
+    // A stack overflow's place is a recursion, which one frame does not
+    // show: the frames that called it, a cycle of the same places, do
+    // (YONDER_DIAGNOSTICS.md § As built). Each caller is its function and
+    // line:col, with its file (frame_file's) when it is not the first
+    // frame's.
+    static const char kOverflow[] = "stack overflow";  // InternalError's, and the parser's SyntaxError's
+    size_t ml = os64_strlen(message), ol = sizeof(kOverflow) - 1;
+    if (ml < ol || !os64_streq(message + ml - ol, kOverflow))
+        return;
+    const char *first_file = file;
+    size_t first_length = file_length;
+    const char *next = frame.file + frame.file_length;
+    for (int k = 0; k < FAILURE_CALLERS; k++) {
+        while (*next != '\0' && *next != '\n')
+            next++;
+        if (*next == '\0' || !os64_dom_stack_frame(next + 1, &frame))
+            break;
+        frame_file(s, own, &frame, &file, &file_length);
+        bool elsewhere = file_length != first_length || os64_memcmp(file, first_file, file_length) != 0;
+        // The task's own script, named by nothing beside a first frame in
+        // another file, is named by its own name, or it would read as that
+        // file's.
+        if (elsewhere && file_length == 0 && own != NULL) {
+            file = own;
+            file_length = os64_strlen(own);
+        }
+        size_t at = os64_strlen(out);
+        os64_snprintf(out + at, cap - at, "%s%.*s%s%.*s%s%u:%u", k == 0 ? ", called from " : ", ",
+                      (int)frame.function_length, frame.function != NULL ? frame.function : "",
+                      frame.function != NULL ? " " : "", elsewhere ? (int)file_length : 0, file,
+                      elsewhere ? ":" : "", frame.line, frame.column);
+        next = frame.file + frame.file_length;
+    }
 }
 
 int64_t yonder_scripts_task_us(const yonder_scripts_t *s)

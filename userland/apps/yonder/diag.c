@@ -407,9 +407,118 @@ void yonder_diag_missing_seen(yonder_diag_t *d, const char *kind, const char *na
         l->count = count;
 }
 
+// An address longer than this is cut on the console (console_short).
+#define CONSOLE_ADDRESS_MAX 96
+// The longest line os64_complain writes whole (its buffer in libos64's
+// io.c, the terminating NUL included).
+#define CONSOLE_LINE_MAX 1024
+// What a failure's `what` may take of it, the message the rest.
+#define CONSOLE_WHAT_MAX 256
+// And how much of its last part is kept.
+#define CONSOLE_LAST_MAX 40
+
+static bool starts(const char *s, const char *word);
+
+// `n` bytes of `text` onto the console line `out` at `*o`, escaped as a
+// terminal must be given them: a control byte, a byte past ASCII and a
+// backslash as `\xNN` (a control byte would end, bend or clear the line).
+static void console_put(char *out, size_t *o, size_t cap, const char *text, size_t n)
+{
+    for (size_t i = 0; i < n && *o + 1 < cap; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c < 0x20 || c >= 0x7f || c == '\\') {
+            if (*o + 5 >= cap)
+                break;
+            os64_snprintf(out + *o, cap - *o, "\\x%02x", c);
+            *o += 4;
+        } else {
+            out[(*o)++] = (char)c;
+        }
+    }
+}
+
+// `text` for the console, into `out`, escaped (console_put): each address
+// in it longer than CONSOLE_ADDRESS_MAX cut to its scheme and host,
+// "/.../", and the start of its last part, its query dropped and the line
+// and column after it kept. An address runs to a space; punctuation that
+// ends it (the comma before a stack overflow's callers) is not its own.
+static void console_short(const char *text, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (const char *at = text; *at != '\0' && o + 1 < cap;) {
+        if (!starts(at, "http://") && !starts(at, "https://")) {
+            console_put(out, &o, cap, at, 1);
+            at++;
+            continue;
+        }
+        const char *end = at;
+        while (*end != '\0' && *end != ' ')
+            end++;
+        while (end > at && (end[-1] == ',' || end[-1] == ';'))
+            end--;
+        // A place after it, ":line:col", is kept whole.
+        const char *core_end = end, *p = end;
+        for (int part = 0; part < 2; part++) {
+            const char *digits = p;
+            while (digits > at && digits[-1] >= '0' && digits[-1] <= '9')
+                digits--;
+            if (digits == p || digits == at || digits[-1] != ':')
+                break;
+            p = digits - 1;
+            if (part == 1)
+                core_end = p;
+        }
+        if ((size_t)(core_end - at) <= CONSOLE_ADDRESS_MAX) {
+            console_put(out, &o, cap, at, (size_t)(end - at));
+        } else {
+            const char *host_end = at + (at[4] == 's' ? 8 : 7);
+            while (host_end < core_end && *host_end != '/')
+                host_end++;
+            // The query first: a slash in it is no part of the path.
+            const char *last_end = host_end;
+            while (last_end < core_end && *last_end != '?' && *last_end != '#')
+                last_end++;
+            const char *last = last_end;
+            while (last > host_end && last[-1] != '/')
+                last--;
+            size_t kept = (size_t)(last_end - last);
+            bool cut = kept > CONSOLE_LAST_MAX;
+            console_put(out, &o, cap, at, (size_t)(host_end - at));
+            console_put(out, &o, cap, "/.../", 5);
+            console_put(out, &o, cap, last, cut ? CONSOLE_LAST_MAX : kept);
+            if (cut)
+                console_put(out, &o, cap, "...", 3);
+            console_put(out, &o, cap, core_end, (size_t)(end - core_end));
+        }
+        at = end;
+    }
+    out[o < cap ? o : cap - 1] = '\0';
+}
+
+// A failure the page's record has not held before is said on the console
+// as well (os64_complain: the terminal yonder was started from, and the
+// kernel log), once a page, as "yonder: FAILED <what>: <message>". The
+// prefix says it is the browser talking, not the page's own console.log,
+// which goes to standard output as the page wrote it. The record keeps the
+// line whole; the console's is cut to be read (console_short).
+static void said_on_console(const Line *l, const char *what, const char *message)
+{
+    if (l == NULL || l->count != 0)
+        return;
+    // The whole line, its newline included, fits os64_complain's buffer, so
+    // a long failure is cut in its message and never loses its line's end.
+    static const char kHead[] = "yonder: FAILED ";
+    char w[CONSOLE_WHAT_MAX], m[CONSOLE_LINE_MAX];
+    console_short(what, w, sizeof(w));
+    size_t used = sizeof(kHead) - 1 + os64_strlen(w) + 2 + 1;       // ": " and the newline
+    console_short(message, m, CONSOLE_LINE_MAX - used);
+    os64_complain("%s%s: %s\n", kHead, w, m);
+}
+
 void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
+    said_on_console(l, what, message);
     if (l != NULL)
         l->count = saturating(l->count, 1);
 }
@@ -517,6 +626,7 @@ const char *yonder_diag_fact_value(const yonder_diag_t *d, const char *key)
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
+    said_on_console(l, what, message);
     if (l != NULL && l->count == 0)
         l->count = 1;
 }
@@ -524,6 +634,8 @@ void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *mes
 void yonder_diag_failed_most(yonder_diag_t *d, const char *what, const char *message, uint32_t count)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
+    if (count > 0)
+        said_on_console(l, what, message);
     if (l != NULL && count > l->count)
         l->count = count;
 }
