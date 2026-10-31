@@ -108,10 +108,17 @@ typedef struct {
 /* One logical line; literal LF is BAD_ARGUMENT. NUL is input data, not an end
  * marker. Successful layout owns a byte copy and retains fonts/glyph images.
  * Failed layout returns no partial run and preserves existing runs/fonts.
- * View pointers remain valid until run_release. Runs are immutable. */
+ * Successful layout returns one owned reference. Runs are immutable; view
+ * pointers remain valid while an owned reference keeps the run alive. */
 os64_font_status_t os64_text_layout(os64_text_context_t *, const uint8_t *,
     size_t length, const os64_text_layout_t *, os64_text_run_t **out);
 os64_font_status_t os64_text_run_view(const os64_text_run_t *, os64_text_run_view_t *out);
+/* Retain an additional owner without allocating. NULL is BAD_ARGUMENT;
+ * reference-count overflow is LIMIT. Failure leaves ownership unchanged.
+ * Release drops one owner (NULL is harmless); the last release frees the
+ * run and its font/glyph-image holds. Like other context operations, these
+ * calls require caller serialization and a live owned reference. */
+os64_font_status_t os64_text_run_retain(os64_text_run_t *);
 void os64_text_run_release(os64_text_run_t *);
 /* Positioned run contours for vector consumers. Uses unhinted font curves;
  * builtin/missing glyphs become contours of their binary bitmap cells. The

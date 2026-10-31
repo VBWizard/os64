@@ -80,6 +80,56 @@ static void lifetimes(void)
     os64_text_run_release(a);os64_text_font_release(g);
     CHECK(c->files==NULL && os64_text_destroy(c)==OS64_FONT_OK && live==0);
 }
+static void shared_runs(void)
+{
+    current="shared run survives original owner and cache pressure";
+    CHECK(os64_text_run_retain(NULL)==OS64_FONT_BAD_ARGUMENT);
+    os64_text_run_release(NULL);
+    c=create(0,1);os64_text_font_t *f=open_font(c,'P');
+    os64_text_run_t *source=layout(c,f,(const uint8_t *)"iW",2,0,0);
+    os64_text_run_t *copy=source;
+    os64_text_run_view_t before,after;
+    CHECK(os64_text_run_view(source,&before)==OS64_FONT_OK);
+    size_t allocated=allocations,bytes=c->live;
+    c->cap=c->live;deny=allocations+1;
+    CHECK(os64_text_run_retain(copy)==OS64_FONT_OK);
+    CHECK(allocations==allocated && c->live==bytes && c->runs==1);
+    deny=0;c->cap=OS64_TEXT_MEMORY_DEFAULT;
+    text_image *image=source->images[0];uint8_t coverage=image->view.coverage[0];
+    os64_text_run_release(source);
+    for (unsigned i=0;i<8;i++) {
+        os64_text_run_t *pressure=layout(c,f,(const uint8_t *)"AVej",4,0,0);
+        os64_text_run_release(pressure);
+        CHECK(image->view.coverage[0]==coverage);
+    }
+    os64_text_font_release(f);
+    CHECK(os64_text_destroy(c)==OS64_FONT_BUSY && c->runs==1);
+    CHECK(text_evict(c)==0 && image->view.coverage[0]==coverage);
+    CHECK(os64_text_run_view(copy,&after)==OS64_FONT_OK);
+    CHECK(after.bytes==before.bytes && after.glyphs==before.glyphs && after.carets==before.carets);
+    CHECK(after.byte_count==2 && !memcmp(after.bytes,"iW",2) && after.advance_x==before.advance_x);
+    os64_text_caret_t caret;
+    CHECK(os64_text_caret(copy,2,OS64_TEXT_AFTER,&caret)==OS64_FONT_OK && caret.x==before.advance_x);
+    CHECK(os64_text_hit(copy,0,&caret)==OS64_FONT_OK && caret.byte_offset==0);
+    os64_text_run_release(copy);
+    CHECK(c->runs==0 && c->fonts==NULL && c->cache_bytes==0);
+    CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+
+    current="shared empty run, overflow and reverse release order";
+    c=create(0,1);f=open_font(c,'P');source=layout(c,f,NULL,0,0,0);copy=source;
+    CHECK(os64_text_run_retain(copy)==OS64_FONT_OK && c->runs==1);
+    copy->refs=SIZE_MAX;allocated=allocations;bytes=c->live;
+    CHECK(os64_text_run_retain(copy)==OS64_FONT_LIMIT && copy->refs==SIZE_MAX);
+    CHECK(allocations==allocated && c->live==bytes && c->runs==1);
+    copy->refs=2; // Restore the two real owners after the overflow probe.
+    os64_text_run_release(copy);
+    os64_text_font_release(f);
+    CHECK(os64_text_destroy(c)==OS64_FONT_BUSY);
+    CHECK(os64_text_run_view(source,&after)==OS64_FONT_OK && after.byte_count==0 && after.caret_count==1);
+    os64_text_run_release(source);
+    CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+}
+
 static void failures(void)
 {
     current="allocation-denial cleanup";
@@ -334,6 +384,8 @@ static void real_fonts(const char *dir)
         a=layout(c,f,(uint8_t *)"AV",2,0,0);
         CHECK(a->view.caret_count==3 && a->view.carets[1].x==a->view.glyphs[1].x);
         printf("real %s: AV advance %d/64, V origin %d/64, ink pixels %zu\n",names[n],a->view.advance_x,a->view.glyphs[1].x,ink);
+        CHECK(os64_text_run_retain(a)==OS64_FONT_OK);
+        os64_text_run_release(a); // The second owner keeps the real face and glyphs alive.
         os64_text_font_release(f);CHECK(os64_text_destroy(c)==OS64_FONT_BUSY);
         os64_geometry_bounds_t bounds,measured;OutlineProbe probe={0};
         CHECK(os64_text_run_outline(a,4096,outline_probe,&probe,&bounds)==OS64_FONT_OK);
@@ -483,7 +535,7 @@ int main(int argc,char **argv)
 {
     (void)argc;(void)argv;
     c=create(0,0);frozen_vectors();CHECK(os64_text_destroy(c)==OS64_FONT_OK);CHECK(live==0);
-    lifetimes();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();outline_compatibility();
+    lifetimes();shared_runs();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();outline_compatibility();
 #ifdef TEXT_REAL
     CHECK(argc==2);real_fonts(argv[1]);
 #endif
