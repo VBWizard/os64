@@ -1963,8 +1963,8 @@ Opus after the build, and the findings fixed one commit each.
   templates, and answers a fetch job's request as wptserve answers a
   static file, its `.headers` sidecars included; a `.py` handler is a
   network error. The page record has a line per request
-  (`request GET <address>: 200 cors, 0 hops`, or a FAILED line with the
-  reason).
+  (`request GET <address>: 200 cors, 0 hops`, with its bytes and time
+  since 2026-10-30, or a FAILED line with the reason).
 
 **The seams, as they ended.**
 

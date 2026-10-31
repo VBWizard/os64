@@ -86,6 +86,15 @@ uint64_t yonder_now_ms(void)
     return clock_ms;
 }
 
+// The microsecond clock the job times itself by: each read a step on, so
+// a fetch that read it at its start and its end took exactly one step.
+static int64_t clock_us = 5000000;
+#define CLOCK_US_STEP 1500
+int64_t os64_micros(void)
+{
+    return clock_us += CLOCK_US_STEP;
+}
+
 #include "test_fetch_fake.inc"
 
 static int checks, failures;
@@ -244,6 +253,7 @@ static void same_origin(void)
     expect("basic: the body", g->has_body && g->body_len == 5 && !memcmp(g->body, "hello", 5), NULL);
     expect_text("basic: the URL without its fragment", g->url, "https://a.test/api");
     expect("basic: not redirected", !g->redirected && g->hops == 0, NULL);
+    expect("basic: timed from the job's start to its answer", g->elapsed_us == CLOCK_US_STEP, NULL);
     yonder_fetched_free(g);
 
     fresh();

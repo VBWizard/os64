@@ -77,6 +77,10 @@ typedef struct {
     uint8_t *body;                  // os64_malloc'd
     size_t body_len;
     way_cookies_short_t cookies_short;  // what its hops left out for want of room (way/jar.h)
+    // How long the fetch took, from the job's start to its answer, in
+    // microseconds; -1 when the clock could not say. The page record's
+    // number for what a request cost.
+    int64_t elapsed_us;
 } yonder_fetched_t;
 
 int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);

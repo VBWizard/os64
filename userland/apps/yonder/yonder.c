@@ -524,6 +524,19 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len, bool s
 // arriving page cost to parse.
 static bool s_script_audit;
 
+// `--exit-when-loaded`: a measuring run, started from a shell (an ssh
+// session, a script) that wants the page's record and then yonder gone.
+// yonder leaves once the shown page has been settled — streamed, its
+// pictures and fonts in, its record not owed, no script waiting — and no
+// job has come back for EXIT_QUIET_MS; or, for a page that never goes
+// quiet (one that polls), after EXIT_GIVE_UP_MS whatever it is doing.
+// Leaving is the ordinary way out, so the page's departure record is
+// written as it always is.
+#define EXIT_QUIET_MS 3000
+#define EXIT_GIVE_UP_MS 120000
+static bool s_exit_when_loaded;
+static uint64_t s_exit_started, s_exit_quiet_from;
+
 // THE PAGE FILES (YONDER_DIAGNOSTICS.md): the directory yonder.conf's
 // `diagnostics` names, empty when it names none or the directory could not
 // be made (said once, at the start); the sequence the next load's claim
@@ -6500,6 +6513,49 @@ typedef struct {
 // sheets (stream_turn) itself, after the events; the bell meets the rest (pictures_tick,
 // motion_tick, coming_show, downloads_heard). Two at one moment are common — the clock
 // steps by the tick — and the moment is the bell's if either is.
+static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
+
+// The shown page has nothing more coming of its own accord: it has
+// streamed and arrived, its pictures and fonts are in and its record is
+// not owed, and no script of its is waiting to run or still being fetched
+// (a `src` script, or a module script's graph: one slower than the quiet
+// would otherwise be cut off). What a running script fetches for itself
+// is not waited for, since a page that polls would never settle; its
+// answer comes back as a job, which restarts the quiet.
+static bool exit_settled(void)
+{
+    return g.page.tree != NULL && !g.stream.active && !g.coming.active && g.page.waiting == 0 &&
+           !g.page.record_owed && s_web.waiting == 0 && !yonder_scripts_pending(g.page.scripts) &&
+           !yonder_scripts_fetching(g.page.scripts);
+}
+
+// When an `--exit-when-loaded` run next looks at whether to leave.
+static uint64_t exit_due(void)
+{
+    if (!s_exit_when_loaded)
+        return YONDER_NEVER;
+    uint64_t quiet = s_exit_quiet_from + EXIT_QUIET_MS, give_up = s_exit_started + EXIT_GIVE_UP_MS;
+    return quiet < give_up ? quiet : give_up;
+}
+
+// An `--exit-when-loaded` run leaves once its page is settled and quiet,
+// or once it has waited as long as it will; it says which on its way out.
+// A page not settled now starts the quiet again.
+static void exit_follow(void)
+{
+    if (!s_exit_when_loaded || !g.running)
+        return;
+    uint64_t now = yonder_now_ms();
+    if (!exit_settled())
+        s_exit_quiet_from = now;
+    bool quiet = exit_settled() && now >= s_exit_quiet_from + EXIT_QUIET_MS;
+    if (!quiet && now < s_exit_started + EXIT_GIVE_UP_MS)
+        return;
+    os64_printf("yonder: %s, leaving\n",
+                quiet ? "the page is loaded and quiet" : "the page never went quiet in two minutes");
+    g.running = false;
+}
+
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
 {
     bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM;
@@ -6535,6 +6591,9 @@ static void pictures_schedule(void)
     }
     // The cookie file's next write, which the loop makes (cookies_turn).
     deadline_offer(&d, yonder_cookies_due(s_cookies), PAST_TIMERS);
+    // An `--exit-when-loaded` run's next look at whether to leave, which the
+    // loop makes (exit_follow).
+    deadline_offer(&d, exit_due(), PAST_TIMERS);
     // The shown page's next idle period, when only an idle callback that
     // asked for another waits for it (script_turn runs it).
     uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
@@ -8361,9 +8420,10 @@ static void request_response(const yonder_fetched_t *got, os64_dom_response_t *o
     };
 }
 
-// The page's record of a request: a line per address with what came back
-// and how many redirects it took (each was a dial), and a failure said as
-// one. A synchronous one says so: it stopped the page while it ran.
+// The page's record of a request: a line per address with what came back,
+// how many redirects it took (each was a dial), and what it cost — the
+// body's bytes and the fetch's time — and a failure said as one. A
+// synchronous one says so: it stopped the page while it ran.
 static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job, const yonder_fetched_t *got,
                            bool sync)
 {
@@ -8380,10 +8440,14 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
         return;
     }
     char key[OS64_FETCH_URL_MAX + 48];
-    char value[96];
+    char value[160];
+    char took[32] = "";
+    if (got->elapsed_us >= 0)
+        os64_snprintf(took, sizeof(took), " in %ld ms", (long)(got->elapsed_us / 1000));
     os64_snprintf(key, sizeof(key), "request %s %s", job->request.method, job->url);
-    os64_snprintf(value, sizeof(value), "%d %s, %u hops%s", (int)got->status, way_type_name(got->type),
-                  (unsigned)got->hops, sync ? ", synchronous" : "");
+    os64_snprintf(value, sizeof(value), "%d %s, %u hops, %lu bytes%s%s", (int)got->status,
+                  way_type_name(got->type), (unsigned)got->hops, (unsigned long)got->body_len, took,
+                  sync ? ", synchronous" : "");
     yonder_diag_fact(diag, key, value);
 }
 
@@ -10364,6 +10428,8 @@ static bool coming_turn(void)
 // finished before its cancel was noticed is let go the same way.
 static void reaped(os64_work_id_t id, void *job, void *product)
 {
+    // Work came back: an `--exit-when-loaded` run's quiet starts again.
+    s_exit_quiet_from = yonder_now_ms();
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
         int32_t waiting = g.page.waiting;
         picture_arrived(job, product);
@@ -14320,7 +14386,17 @@ int main(int argc, char **argv)
     // The window is named after the page (title_follow). A FILE given on
     // the command line is read before the window exists, so the window is
     // born with that page's name rather than taking it a moment later.
-    s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
+    // The switches come before the address, in any order.
+    int address_arg = 1;
+    for (; address_arg < argc && argv[address_arg][0] == '-' && argv[address_arg][1] == '-'; address_arg++) {
+        if (os64_streq(argv[address_arg], "--script-audit"))
+            s_script_audit = true;
+        else if (os64_streq(argv[address_arg], "--exit-when-loaded"))
+            s_exit_when_loaded = true;
+        else
+            break;
+    }
+    s_exit_started = s_exit_quiet_from = yonder_now_ms();
     g.scripts_on = yonder_settings_saved_scripts();
     s_dark = yonder_settings_saved_dark();
     s_animations = yonder_settings_saved_animations();
@@ -14334,7 +14410,6 @@ int main(int argc, char **argv)
     s_storage = yonder_storage_new(profile);    // NULL keeps each page's storage for its own life
     s_preflight = way_preflight_new();          // NULL sends every preflight
     yonder_settings_on_clear_storage(storage_clear);
-    int address_arg = s_script_audit ? 2 : 1;
     const char *first = argc > address_arg ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
     if (first != NULL && first[0] == '/') {
@@ -14560,6 +14635,7 @@ int main(int argc, char **argv)
         if (coming_more || (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran ||
                                               yonder_scripts_idle_next(g.page.scripts) <= yonder_now_ms())))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        exit_follow();
         // A task may have set or cleared a timer, and a frame for an
         // animation has its whole cost now: the ticker hears of both.
         pictures_schedule();

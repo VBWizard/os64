@@ -28,6 +28,7 @@
 #include "os64/date.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
+#include "os64/proc.h"
 #include "os64/str.h"
 #include "ticker.h"
 
@@ -643,7 +644,22 @@ static bool preflight(Hop *h, yonder_fetch_job_t *job, way_request_t *r, const c
     return ok;
 }
 
+static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out);
+
+// The fetch, timed whole, whichever way it ended: what a request cost is
+// the page record's to say (yonder.c request_record).
 int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out)
+{
+    int64_t began = os64_micros();
+    int64_t verdict = fetch_run(job_ptr, cancelled, ctx, out);
+    int64_t ended = os64_micros();
+    yonder_fetched_t *got = *out;
+    if (got != NULL)
+        got->elapsed_us = began >= 0 && ended >= began ? ended - began : -1;
+    return verdict;
+}
+
+static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
     yonder_fetch_job_t *job = job_ptr;
     yonder_fetched_t *got = os64_calloc(1, sizeof(*got));

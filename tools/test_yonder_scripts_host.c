@@ -11001,6 +11001,60 @@ static void bytecode_cases(void) {
     g.cache=NULL;
 }
 
+/* `--exit-when-loaded`: yonder leaves once the shown page is settled and
+ * nothing has come back for the quiet, or once it has waited as long as it
+ * will, and not before. */
+static void exit_when_loaded_cases(void) {
+    loop_page("<p id=out>here</p>");
+    s_exit_when_loaded=true; s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
+    now_ms+=EXIT_QUIET_MS;
+    exit_follow();
+    check(g.running,"exit: not while the page is still arriving, however long the quiet");
+    check(loop_settle() && g.page.tree!=NULL,"exit: the page arrives");
+    exit_follow();
+    check(g.running,"exit: the quiet starts once the page has settled");
+    now_ms+=EXIT_QUIET_MS-1;
+    exit_follow();
+    check(g.running,"exit: not before the quiet is whole");
+    s_exit_quiet_from=now_ms;      /* as a job reaped now would set it */
+    now_ms+=EXIT_QUIET_MS-1;
+    exit_follow();
+    check(g.running,"exit: work that came back starts the quiet again");
+    now_ms+=1;
+    exit_follow();
+    check(!g.running,"exit: a settled page, quiet for its while, is left");
+    loop_drop();
+    /* An async script still being fetched holds the run, however long the
+     * quiet; once it lands and runs, the quiet starts. */
+    loop_page("<p id=out>here</p><script async src=slow.js></script>");
+    s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
+    check(loop_settle() && g.page.tree!=NULL && nscript_jobs==1,"exit: the page arrives, its async script still out");
+    now_ms+=EXIT_QUIET_MS*2;
+    exit_follow();
+    check(g.running,"exit: not while a script of the page is still being fetched");
+    bool landed=script_land("/slow.js","document.getElementById('out').textContent='late'");
+    script_turn();
+    check(landed && script_rebuild() && probe_text_is("out","late"),"exit: the script lands and runs");
+    exit_follow();
+    now_ms+=EXIT_QUIET_MS;
+    exit_follow();
+    check(!g.running,"exit: and the page is left once quiet after it");
+    loop_drop();
+    /* A page that never settles is left when the wait runs out. */
+    loop_page("<p id=out>here</p>");
+    s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
+    now_ms+=EXIT_GIVE_UP_MS-1;
+    exit_follow();
+    check(g.running,"exit: an unsettled page is waited for");
+    now_ms+=1;
+    check(exit_due()==s_exit_started+EXIT_GIVE_UP_MS,"exit: the window wakes for the wait's end");
+    exit_follow();
+    check(!g.running,"exit: and left when the wait runs out");
+    loop_drop();
+    s_exit_when_loaded=false; g.running=true;
+    check(exit_due()==YONDER_NEVER,"exit: without the switch, never");
+}
+
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
  * its own main. */
@@ -11070,6 +11124,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) bytecode_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) exit_when_loaded_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();
