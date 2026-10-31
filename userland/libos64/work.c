@@ -9,7 +9,10 @@
 // until claim; cancellation does not recycle a byte's backing slot.
 _Static_assert(OS64_WORK_MAX_JOBS <= 65536, "job table must fit the kernel pipe");
 _Static_assert(OS64_WORK_MAX_WORKERS <= 65536, "space credits must fit the kernel pipe");
-_Static_assert(OS64_WORK_MAX_JOBS == 256, "ids reserve eight bits for slot index");
+// An id is the submit's serial over the slot's index, so a stale id never
+// names a reused slot.
+#define SLOT_BITS 10
+_Static_assert(OS64_WORK_MAX_JOBS == 1u << SLOT_BITS, "ids reserve SLOT_BITS bits for slot index");
 
 enum job_state { FREE, QUEUED, WAITING, RUNNING, DONE, RELEASING };
 typedef struct {
@@ -246,12 +249,12 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *p, const os64_work_t *work)
     if (!p || !work || !work->run || !work->release || work->reserve > p->cap) return 0;
     os64_lock_acquire(&p->lock);
     work_slot_t *s = NULL;
-    if (!p->stopping && !p->error && p->serial < (UINT64_MAX >> 8)) {
+    if (!p->stopping && !p->error && p->serial < (UINT64_MAX >> SLOT_BITS)) {
         for (unsigned i = 0; i < OS64_WORK_MAX_JOBS; ++i) {
             if (p->slots[i].state != FREE) continue;
             s = &p->slots[i];
             *s = (work_slot_t){.work = *work, .state = QUEUED,
-                .id = (++p->serial << 8) | i};
+                .id = (++p->serial << SLOT_BITS) | i};
             break;
         }
     }
@@ -275,7 +278,7 @@ void os64_work_cancel(os64_work_pool_t *p, os64_work_id_t id)
 {
     if (!p || !id) return;
     os64_lock_acquire(&p->lock);
-    work_slot_t *s = &p->slots[id & 255u];
+    work_slot_t *s = &p->slots[id & (OS64_WORK_MAX_JOBS - 1)];
     if (s->state == FREE || s->id != id || is_cancelled(s)) {
         os64_lock_release(&p->lock);
         return;
