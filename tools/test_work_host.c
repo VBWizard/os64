@@ -190,25 +190,66 @@ static void *admit_younger(void *arg)
     assert(admit(p,&p->slots[1]));
     return NULL;
 }
+// Two workers immediately after claim, the older paused before entering
+// admission, through the production admission routine: a younger job that
+// leaves room for the older one is admitted at once; one that would take
+// what the older needs waits, until the older leaves the order.
 static void claimed_order(void)
 {
-    // Model two workers immediately after claim, with the older paused
-    // before entering admission. Execute the production admission routine.
-    os64_work_pool_t *p=pool(1,10); job jobs[2]={0};
+    os64_work_pool_t *p=pool(1,10); job jobs[4]={0};
     os64_lock_acquire(&p->lock);
     p->slots[0]=(work_slot_t){.work={run,release,&jobs[0],8},.id=256,.state=WAITING};
     p->slots[1]=(work_slot_t){.work={run,release,&jobs[1],1},.id=513,.state=WAITING};
+    os64_lock_release(&p->lock);
+    pthread_t y; assert(!pthread_create(&y,NULL,admit_younger,p));
+    bool ran=false;
+    for (int i=0;!ran && i<1000;++i) {
+        os64_lock_acquire(&p->lock);
+        ran=p->slots[1].state==RUNNING;
+        os64_lock_release(&p->lock);
+        if (!ran) usleep(1000);
+    }
+    os64_lock_acquire(&p->lock);
+    assert(ran && p->charged==1 && p->slots[0].state==WAITING);
+    os64_lock_release(&p->lock);
+    assert(admit(p,&p->slots[0])); pthread_join(y,NULL);
+    assert(p->charged==9);
+    os64_work_pool_destroy(p); clean();
+    assert(jobs[0].released==1 && jobs[1].released==1);
+    puts("work: a younger job that leaves the older room is admitted at once PASS");
+
+    p=pool(1,10);
+    os64_lock_acquire(&p->lock);
+    p->slots[0]=(work_slot_t){.work={run,release,&jobs[2],8},.id=256,.state=WAITING};
+    p->slots[1]=(work_slot_t){.work={run,release,&jobs[3],3},.id=513,.state=WAITING};
     os64_lock_release(&p->lock);
     pthread_t t; assert(!pthread_create(&t,NULL,admit_younger,p));
     usleep(150000);
     os64_lock_acquire(&p->lock);
     assert(p->charged==0 && p->slots[1].state==WAITING);
+    // The older leaves the order (as a cancel takes it out): the younger
+    // has the room now.
+    p->slots[0].state=FREE;
     os64_lock_release(&p->lock);
-    assert(admit(p,&p->slots[0])); pthread_join(t,NULL);
-    assert(p->charged==9);
+    notify_space(p);
+    pthread_join(t,NULL);
+    assert(p->charged==3);
     os64_work_pool_destroy(p); clean();
-    assert(jobs[0].released==1 && jobs[1].released==1);
-    puts("work: claimed older job holds younger admission PASS");
+    assert(jobs[3].released==1);
+    puts("work: a younger job that would take an older one's room waits for it PASS");
+
+    // Older reserves near SIZE_MAX saturate rather than wrap: two of them
+    // in a pool of SIZE_MAX leave a younger job of 2 no room (Codex #428 rd1).
+    p=pool(1,SIZE_MAX);
+    os64_lock_acquire(&p->lock);
+    p->slots[0]=(work_slot_t){.work={run,release,&jobs[0],SIZE_MAX-1},.id=256,.state=WAITING};
+    p->slots[2]=(work_slot_t){.work={run,release,&jobs[2],SIZE_MAX-1},.id=258,.state=WAITING};
+    p->slots[1]=(work_slot_t){.work={run,release,&jobs[1],2},.id=513,.state=WAITING};
+    assert(older_reserves_locked(p,&p->slots[1])==SIZE_MAX);
+    p->slots[0].state=p->slots[1].state=p->slots[2].state=FREE;
+    os64_lock_release(&p->lock);
+    os64_work_pool_destroy(p); clean();
+    puts("work: older reserves saturate at the cap instead of wrapping PASS");
 }
 
 static void full_and_destroy(void)

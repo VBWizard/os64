@@ -104,14 +104,23 @@ static work_slot_t *oldest_locked(os64_work_pool_t *p, enum job_state state)
     return oldest;
 }
 
-static bool first_locked(os64_work_pool_t *p, work_slot_t *s)
+// What the jobs older than `s` and not yet admitted declare: the budget
+// `s` must leave them, so that admitting it can never delay one of them.
+// Saturates at the cap, which nothing larger can fit beside.
+static size_t older_reserves_locked(os64_work_pool_t *p, work_slot_t *s)
 {
+    size_t sum = 0;
     for (unsigned i = 0; i < OS64_WORK_MAX_JOBS; ++i) {
         work_slot_t *other = &p->slots[i];
         if ((other->state == QUEUED || other->state == WAITING) &&
-            other->id < s->id && !is_cancelled(other)) return false;
+            other->id < s->id && !is_cancelled(other)) {
+            // Checked before the add, which a reserve near SIZE_MAX would
+            // otherwise wrap.
+            if (other->work.reserve >= p->cap - sum) return p->cap;
+            sum += other->work.reserve;
+        }
     }
-    return true;
+    return sum;
 }
 
 // The caller owns a RELEASING slot. Keep its charge until cleanup actually
@@ -139,7 +148,13 @@ static bool admit(os64_work_pool_t *p, work_slot_t *s)
             notify_space(p);
             return false;
         }
-        if (first_locked(p, s) && s->work.reserve <= p->cap - p->charged) {
+        // A job is admitted when its reserve fits AND what is left still
+        // holds every older job waiting: younger jobs go ahead only with
+        // budget nobody older needs, so none waits on order alone (a burst
+        // would otherwise be admitted one worker's wake at a time), and a
+        // stream of small jobs still cannot starve a large one.
+        size_t room = p->cap - p->charged;
+        if (s->work.reserve <= room && older_reserves_locked(p, s) <= room - s->work.reserve) {
             p->charged += s->work.reserve;
             s->charged = true;
             s->state = RUNNING;
