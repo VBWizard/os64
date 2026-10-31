@@ -79,6 +79,15 @@ mutants = [
      '    if (pseudo != GARB_PSEUDO_NONE)\n        node = f_pseudo_origin(node);\n', '', LIBFLOW),
     ('an-element-measures-its-pseudo-boxes', GEOMETRY, '(box->node != node && !caption) || box->pseudo != 0 || box->kind',
      '(box->node != node && !caption) || box->kind', WINDOW),
+    ('the-roots-before-is-not-walked', BOXES, 'build_container(&b, out->root, kids(&b, html),',
+     'build_container(&b, out->root, html->first_child,', LIBFLOW),
+    ('an-atomic-pseudo-takes-the-underline', STYLE, '    if (!decoration_edge(node, &sp.s, c->quirks))\n        f_decoration_inherit(&out->decoration',
+     '    if (true)\n        f_decoration_inherit(&out->decoration', LIBFLOW),
+    ('a-pseudo-border-has-no-medium', STYLE, '    medium_widths(c, &sp, st);\n    if (sp.s.display == FLOW_DISPLAY_NONE)',
+     '    if (sp.s.display == FLOW_DISPLAY_NONE)', LIBFLOW),
+    ('a-pseudo-takes-from-a-ticking-parent', STYLE, '    taken_from(of, &sp.taken);\n', '', LIBFLOW),
+    ('content-is-not-charged', STYLE, 'out = list_alloc(c, at + 1, &spent);', 'out = f_arena_alloc(&c->out->arena, at + 1);', LIBFLOW),
+    ('a-pseudo-clip-takes-its-elements-text', FLOW, '(box->pseudo != 0 && c->pseudo != box->pseudo) ||', '', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

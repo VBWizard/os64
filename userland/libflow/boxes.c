@@ -1324,7 +1324,7 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
         position_box(&b, out->root, html, false);
         Scope scope = {1, false};
         if (out->root != NULL)
-            build_container(&b, out->root, html->first_child, NULL, &scope, NULL, 0);
+            build_container(&b, out->root, kids(&b, html), NULL, &scope, NULL, 0);
     }
     f_map_free(&b.pos_of);
     out->incomplete = b.stopped;

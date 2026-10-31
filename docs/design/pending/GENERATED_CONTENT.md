@@ -164,20 +164,31 @@ and it is said here so 5b and 8a meet on it rather than discover it.
   after their element (`p#y::before: ...`). `content`'s counters and
   pictures are named as approximated, so the record still says what 8a
   does not draw.
-- **libflow pass 1** (`style_pseudos`, `style_pseudo`): the winners laid
-  through the element's own `lay_sets`; the content resolved once
-  (`content_text`); a synthetic node in pass 1's arena, its name one of
-  two static strings so `f_pseudo_of` knows it by address. An author's
+- **libflow pass 1** (`style_pseudos`, `style_pseudo`):
+  - The winners go through the element's own `lay_sets`, then whatever
+    else an element's child is given of it: the medium border and outline
+    widths (`medium_widths`), an atomic inline's edge to the decorations,
+    and the parent's animation moving by layouts when the pseudo-element
+    inherits what it animates (`taken_from`).
+  - The content is resolved once (`content_text`), and only for a
+    pseudo-element whose display is not `none`. It is charged to the lists'
+    budget, since one rule copies it into every element it reaches; past
+    the budget the content is lost, and the pseudo-element with it.
+  - A synthetic node is made in pass 1's arena. Its name is one of two
+    static strings, so `f_pseudo_of` knows it by address. An author's
   `content` on a `q`'s pseudo-element, `none` included, replaces the mark
   `q` draws of its own (`FStyled.pseudo_declared`): a reset sheet's
   `q:before, q:after { content: none }` takes the marks away.
 - **libflow pass 2**: `kids` and `sib` walk an element's children with its
-  `::before` first and `::after` last, in `scan`, `flow_range`, and the
-  element, inline, inline-block, cell and caption containers.
+  `::before` first and `::after` last. They do so in `scan`, in
+  `flow_range`, in the root's container, and in the element, inline,
+  inline-block, cell and caption containers.
 - **The boundary** is `add()` in flow.c, the one constructor of public
   boxes: a synthetic node becomes its originating element, `pseudo` says
   which, and the box is never the element's first box (`flow_box_for`,
-  `flow_image`). `flow_scroller_for` skips them too.
+  `flow_image`). `flow_scroller_for` skips them too, and a
+  pseudo-element's span holds only its own text for a text clip
+  (`flow_visit_text_clip`).
 - **The audit of `->node` readers outside libflow** (§ 4's table, as
   found): `geometry.c` (an element's fragments skip pseudo boxes),
   `attribute_picture` and `glass_backdrop` (a `background` attribute is

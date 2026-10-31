@@ -1012,11 +1012,14 @@ void flow_visit_text_clip(const flow_box_t *box, void (*visit)(void *ctx, const 
         return;
     }
     // A piece is its text's sibling on the line: what is the span's on
-    // this line is what its element holds.
+    // this line is what its element holds. A pseudo-element's span names
+    // its originating element (flow_box_t.pseudo), and holds only what it
+    // generated.
     if (box->parent == NULL || box->node == NULL)
         return;
     for (const flow_box_t *c = box->parent->first; c != NULL; c = c->next) {
-        if (!node_within(c->node, box->node) || leaves_text_clip(c))
+        if (!node_within(c->node, box->node) || (box->pseudo != 0 && c->pseudo != box->pseudo) ||
+            leaves_text_clip(c))
             continue;
         if (c->kind == FLOW_BOX_TEXT)
             visit(ctx, c);
