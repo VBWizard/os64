@@ -725,24 +725,33 @@ static void cached_free(Cached *c)
     }
 }
 
-// A header line `name` in `block`, its value into `out`. False when none.
-static bool block_value(const char *block, const char *name, size_t nlen, char *out, size_t cap)
+// Every line `name` in `block`, appended to `out` at `*at`, joined by ", "
+// to what is there: repeated lines are one list (RFC 9110 § 5.3), and a
+// request that differs in any of them is another request. `*found` says
+// whether one was; false when they do not fit.
+static bool block_values(const char *block, const char *name, size_t nlen, char *out, size_t cap, size_t *at,
+                         bool *found)
 {
-    size_t at = 0, len = os64_strlen(block);
+    size_t from = 0, len = os64_strlen(block);
     way_header_t h;
-    while (way_header_next(block, len, &at, &h))
+    while (way_header_next(block, len, &from, &h))
         if (h.name_len == nlen) {
             size_t i = 0;
             while (i < nlen && (h.name[i] | 0x20) == (name[i] | 0x20))
                 i++;
-            if (i == nlen) {
-                size_t n = h.value_len < cap - 1 ? h.value_len : cap - 1;
-                os64_memcpy(out, h.value, n);
-                out[n] = '\0';
-                return h.value_len < cap;
-            }
+            if (i != nlen)
+                continue;
+            size_t sep = *found ? 2 : 0;
+            if (*at + sep + h.value_len >= cap)
+                return false;
+            if (sep != 0)
+                os64_memcpy(out + *at, ", ", 2);
+            os64_memcpy(out + *at + sep, h.value, h.value_len);
+            *at += sep + h.value_len;
+            out[*at] = '\0';
+            *found = true;
         }
-    return false;
+    return true;
 }
 
 // What the request sends for header `name` (way_request_value_t): its own
@@ -758,7 +767,13 @@ static bool request_value(void *ctx, const char *name, size_t nlen, char *out, s
         size_t n = os64_strcopy(out, cap, c->accept);
         return n < cap;
     }
-    if (block_value(c->extra, name, nlen, out, cap) || block_value(c->representation, name, nlen, out, cap))
+    size_t at = 0;
+    bool found = false;
+    out[0] = '\0';
+    if (!block_values(c->extra, name, nlen, out, cap, &at, &found) ||
+        !block_values(c->representation, name, nlen, out, cap, &at, &found))
+        return false;
+    if (found)
         return true;
     for (size_t i = 0; i < sizeof(kAdded) / sizeof(kAdded[0]); i++)
         if (is_named(name, nlen, kAdded[i]))
@@ -769,25 +784,71 @@ static bool request_value(void *ctx, const char *name, size_t nlen, char *out, s
     return true;
 }
 
-// Whether this request may use the cache at all: a GET with no body, and
-// no Range, whose answer is a part of a reply the cache would keep whole.
-// A default-mode request carrying a precondition of the page's own is
-// no-store (Fetch's HTTP-network-or-cache fetch): its condition is the
-// server's to judge, and a kept reply would answer without asking it.
-static bool cache_wanted(const yonder_fetch_job_t *job, const way_request_t *r)
+// Whether a Cache-Control or Pragma value holds `directive` (a token, or
+// "max-age=0" spelled with any spacing the list allows), ignoring case.
+static bool has_directive(const char *v, size_t len, const char *directive)
+{
+    size_t dlen = os64_strlen(directive);
+    for (size_t at = 0; at < len;) {
+        while (at < len && (v[at] == ' ' || v[at] == '\t' || v[at] == ','))
+            at++;
+        size_t end = at;
+        while (end < len && v[end] != ',')
+            end++;
+        size_t last = end;
+        while (last > at && (v[last - 1] == ' ' || v[last - 1] == '\t'))
+            last--;
+        if (last - at == dlen && is_named(v + at, dlen, directive))
+            return true;
+        at = end;
+    }
+    return false;
+}
+
+// The cache mode the request's own lines make of the page's (Fetch's
+// HTTP-network-or-cache fetch; RFC 9111 § 5.2.1 for a request's own
+// directives): a default-mode request carrying a precondition, or asking
+// no-store, is no-store, since its condition is the server's to judge and
+// a kept reply would answer without asking it; one asking no-cache or
+// max-age=0 (or Pragma no-cache with no Cache-Control) is asked about
+// every time, as no-cache mode is.
+static way_cache_mode_t cache_mode_of(const yonder_fetch_job_t *job)
 {
     static const char *const kConditions[] = {"if-match", "if-none-match", "if-modified-since",
                                               "if-unmodified-since", "if-range"};
-    bool range = false, conditional = false;
+    if (job->cache_mode != WAY_CACHE_DEFAULT)
+        return job->cache_mode;
+    bool conditional = false, no_store = false, no_cache = false, control = false, pragma = false;
     size_t at = 0, len = job->headers != NULL ? os64_strlen(job->headers) : 0;
     way_header_t h;
-    while (!range && way_header_next(job->headers, len, &at, &h)) {
-        range = is_named(h.name, h.name_len, "range");
+    while (way_header_next(job->headers, len, &at, &h)) {
         for (size_t i = 0; i < sizeof(kConditions) / sizeof(kConditions[0]); i++)
             conditional |= is_named(h.name, h.name_len, kConditions[i]);
+        if (is_named(h.name, h.name_len, "cache-control")) {
+            control = true;
+            no_store |= has_directive(h.value, h.value_len, "no-store");
+            no_cache |= has_directive(h.value, h.value_len, "no-cache") ||
+                        has_directive(h.value, h.value_len, "max-age=0");
+        } else if (is_named(h.name, h.name_len, "pragma")) {
+            pragma |= has_directive(h.value, h.value_len, "no-cache");
+        }
     }
-    return !range && !(conditional && job->cache_mode == WAY_CACHE_DEFAULT) && way_cache_enabled(job->cache) &&
-           job->cache_mode != WAY_CACHE_NO_STORE && os64_streq(r->method, "GET") && !r->body;
+    if (conditional || no_store)
+        return WAY_CACHE_NO_STORE;
+    return no_cache || (pragma && !control) ? WAY_CACHE_NO_CACHE : WAY_CACHE_DEFAULT;
+}
+
+// Whether this request may use the cache at all: a GET with no body, and
+// no Range, whose answer is a part of a reply the cache would keep whole.
+static bool cache_wanted(const yonder_fetch_job_t *job, const way_request_t *r)
+{
+    bool range = false;
+    size_t at = 0, len = job->headers != NULL ? os64_strlen(job->headers) : 0;
+    way_header_t h;
+    while (!range && way_header_next(job->headers, len, &at, &h))
+        range = is_named(h.name, h.name_len, "range");
+    return !range && way_cache_enabled(job->cache) && job->cache_mode != WAY_CACHE_NO_STORE &&
+           os64_streq(r->method, "GET") && !r->body;
 }
 
 // The request's key, what it sends, and what the cache holds under the key
@@ -906,8 +967,9 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
 // A new answer from the network, at the key's address with no redirect on
 // the way: kept, when it is a whole 200 that is not opaque and says it may
 // be — its head without its cookies, and what the request said of each
-// header it varies on. One the cache may not keep is still newer than what
-// the cache held, which must not be served again.
+// header it varies on. One the cache may not keep is still newer than
+// whatever the cache holds under the key, read or not (a reload does not
+// read), which must not be served again.
 static void cache_store(const yonder_fetch_job_t *job, Cached *c, const way_request_t *r, const Hop *h,
                         const os64_fetch_head_t *head, const yonder_fetched_t *got)
 {
@@ -932,7 +994,7 @@ static void cache_store(const yonder_fetch_job_t *job, Cached *c, const way_requ
         keep = way_cache_put(job->cache, e, &b, got->body, got->body_len);
         c->held = keep;
     }
-    if (!keep && c->have)
+    if (!keep)
         way_cache_drop(job->cache, &c->key);
     os64_free(vary);
     os64_free(headers);
@@ -960,6 +1022,28 @@ static void module_bytecode(const yonder_fetch_job_t *job, const Cached *c, yond
     got->bytecode = bc;
 }
 
+// A successful unsafe request invalidates what the cache keeps for its
+// address (RFC 9111 § 4.4): a POST, PUT, PATCH or DELETE that worked has
+// changed it. Under both credentials, since the page's GETs of it may be
+// kept under either.
+static void cache_invalidate(const yonder_fetch_job_t *job, const way_request_t *r, const yonder_fetched_t *got)
+{
+    static const char *const kSafe[] = {"GET", "HEAD", "OPTIONS", "TRACE"};
+    for (size_t i = 0; i < sizeof(kSafe) / sizeof(kSafe[0]); i++)
+        if (os64_streq(r->method, kSafe[i]))
+            return;
+    if (!got->ok || got->status < 200 || got->status >= 400 || !way_cache_enabled(job->cache))
+        return;
+    char *target = without_fragment(job->url);
+    if (target == NULL)
+        return;
+    char partition[WAY_PARTITION_MAX];
+    way_partition_of(&r->origin, partition, sizeof(partition));
+    for (int credentials = 0; credentials < 2; credentials++)
+        way_cache_drop(job->cache, &(way_cache_key_t){partition, credentials == 1, target});
+    os64_free(target);
+}
+
 static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx, void **out);
 
 // The fetch, timed whole, whichever way it ended: what a request cost is
@@ -982,6 +1066,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     if (got == NULL)
         return -1;
     *out = got;
+    job->cache_mode = cache_mode_of(job);
     uint64_t max_body = job->max_body != 0 ? job->max_body : YONDER_FETCH_BODY_MAX;
     way_request_t *r = &job->request;
     r->headers = job->headers;
@@ -1199,6 +1284,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     }
     got->hops = r->urls > 0 ? r->urls - 1 : 0;
     branches_clear(&branches, job, r, !got->ok);
+    cache_invalidate(job, r, got);
     if (job->module && got->ok && cached != NULL && cached->held && !(cancelled != NULL && cancelled(ctx)))
         module_bytecode(job, cached, got);
     cached_free(cached);

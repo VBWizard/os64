@@ -212,11 +212,20 @@ the blob carries it and one made under another name is a miss.
   `way_fetch_whole`, whose requests do not say what they sent.
 - **The cache answers a request's first hop alone**: a later hop is
   another address, which a kept reply's validator must not reach.
-- **A default-mode request carrying a precondition of the page's own**
-  (`If-Match`, `If-None-Match`, `If-Modified-Since`,
-  `If-Unmodified-Since`, `If-Range`) is no-store, as Fetch's
-  HTTP-network-or-cache fetch makes it; **`only-if-cached` with no cache to
-  ask** is a network error, nothing sent.
+- **A request's own lines make its mode** (`cache_mode_of`, once, as the
+  fetch starts): a default-mode request carrying a precondition of the
+  page's own (`If-Match`, `If-None-Match`, `If-Modified-Since`,
+  `If-Unmodified-Since`, `If-Range`), as Fetch's HTTP-network-or-cache
+  fetch says, or asking `Cache-Control: no-store`, is no-store; one asking
+  `no-cache` or `max-age=0`, or `Pragma: no-cache` with no Cache-Control
+  (RFC 9111 § 5.2.1), is no-cache, asked about every time. **`only-if-cached`
+  with no cache to ask** is a network error, nothing sent.
+- **An answer the cache may not keep drops the key**, whether the request
+  read it or not (a reload does not read); **a POST, PUT, PATCH or DELETE
+  that worked drops its address's entries**, under either credentials
+  (RFC 9111 § 4.4).
+- **Repeated request lines a reply varies on are one list**, compared
+  whole, in order (Codex #425 rd2).
 - **7b's blob is read by the fetch job** (`module_bytecode`) for a module's
   request whose answer the entry holds — served kept, confirmed by a 304,
   or just stored — and rides to the module map with the answer

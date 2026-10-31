@@ -1313,6 +1313,66 @@ static void http_cache_cases(void)
     expect("preconditions: one without is", g != NULL && g->served == WAY_SERVED_KEPT, NULL);
     yonder_fetched_free(g);
 
+    // Codex #425 rd2. A reload whose answer may not be kept drops what was
+    // kept, though a reload does not read it.
+    fake_answer_t *rl = fake_answer(NULL, "https://a.test/reloaded.json", 200,
+                                    "Content-Type: application/json\r\nCache-Control: max-age=600\r\n", "old");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/reloaded.json"}));
+    rl->headers = "Content-Type: application/json\r\nCache-Control: no-store\r\n";
+    rl->body = "new";
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/reloaded.json", .cache_mode = WAY_CACHE_RELOAD}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/reloaded.json"});
+    expect("reload: an answer it may not keep drops the one kept before",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1 && g->body_len == 3 &&
+               memcmp(g->body, "new", 3) == 0, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // Repeated lines a reply varies on are one list: a request differing in
+    // the second is another request.
+    fake_answer(NULL, "https://a.test/listed.json", 200,
+                "Content-Type: application/json\r\nVary: X-Test\r\nCache-Control: max-age=600\r\n", "{}");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/listed.json", .headers = "X-Test: same\r\nX-Test: one\r\n"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/listed.json", .headers = "X-Test: same\r\nX-Test: two\r\n"});
+    expect("vary: a request differing in a repeated line is not served the kept reply",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://a.test/listed.json", .headers = "X-Test: same\r\nX-Test: two\r\n"});
+    expect("vary: one sending the same lines is", g != NULL && g->served == WAY_SERVED_KEPT, NULL);
+    yonder_fetched_free(g);
+
+    // A successful unsafe request invalidates what was kept for its address.
+    fake_answer_t *posted = fake_answer(NULL, "https://a.test/item.json", 200,
+                                        "Content-Type: application/json\r\nCache-Control: max-age=600\r\n", "v1");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/item.json"}));
+    posted->body = "v2";
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/item.json", "POST", "Content-Type: text/plain\r\n", "x"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/item.json"});
+    expect("unsafe: after a POST that worked, the address's kept reply is gone",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1 && g->body_len == 2 &&
+               memcmp(g->body, "v2", 2) == 0, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // A request asking no-cache is asked about, however fresh the kept reply.
+    fake_answer_t *nc = fake_answer(NULL, "https://a.test/live.json", 200,
+                                    "Content-Type: application/json\r\nCache-Control: max-age=600\r\nETag: \"l1\"\r\n",
+                                    "old");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/live.json"}));
+    nc->headers = "Content-Type: application/json\r\nCache-Control: max-age=600\r\nETag: \"l2\"\r\n";
+    nc->body = "new";
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/live.json", .headers = "Cache-Control: no-cache\r\n"});
+    expect("no-cache: a request asking it reaches the server over a fresh kept reply",
+           g != NULL && g->ok && nfake_requests == before + 1 && g->body_len == 3 && memcmp(g->body, "new", 3) == 0 &&
+               !strcmp(field(before, "If-None-Match"), "\"l1\""), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/live.json", .headers = "Pragma: no-cache\r\n"});
+    expect("no-cache: and so does one sending Pragma no-cache alone", g != NULL && nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+
     // only-if-cached with no cache: a network error, nothing asked.
     way_cache_t *saved = http_cache;
     http_cache = NULL;
