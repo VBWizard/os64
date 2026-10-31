@@ -58,6 +58,7 @@ typedef struct DRequest DRequest;
 typedef struct DClone DClone;
 typedef struct DMessage DMessage;
 typedef struct DIdle DIdle;
+typedef struct DAnimation DAnimation;
 typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
@@ -562,11 +563,17 @@ struct os64_dom {
     DMessage *messages, *messages_last;
     size_t messages_held;
     DValue *message_prototype;
+    DAnimation *animations, *animation_last;
+    size_t animation_count;
+    uint32_t animation_handle;
+    uint64_t animation_due;
+    bool animation_running;
     DIdle *idle;
     size_t idle_count, idle_cap, idle_head, idle_split, idle_live, idle_runnable;
     uint32_t idle_handle;
     bool idle_open, idle_fresh, idle_running;
     uint64_t idle_start_ms, idle_start_us, idle_rested_ms;
+    uint64_t idle_render_due; /* host rendering deadline, UINT64_MAX when unbounded */
     /* 0f's P8: each UI event interface's prototype (event.c), indexed by
      * D_UI_*; all NULL with the switch off. */
     DValue *ui_prototypes[D_UI_KINDS];
@@ -1358,6 +1365,9 @@ int d_clone_transfer(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *ar
 int d_clone_objects(JSContext *ctx, const JSValue *list, size_t count);
 int d_clone_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_message_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+double d_performance_now(const os64_dom_t *dom);
+int d_animation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_animation_drain(os64_dom_t *dom);
 int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */

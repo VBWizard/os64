@@ -56,6 +56,7 @@ WPT_DIRS=(
     html/dom
     html/canvas/element
     html/canvas/resources
+    html/webappapis/animation-frames
     html/webappapis/microtask-queuing
     html/webappapis/scripting
     secure-contexts

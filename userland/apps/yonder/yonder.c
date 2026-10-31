@@ -1739,6 +1739,11 @@ static struct {
     bool ticked, tick_painting;
     uint64_t tick_began, tick_ended, tick_us;
     int64_t tick_began_us;
+    // A script frame includes callbacks, their rebuild and the final paint.
+    // Its successor rests for that cost, without accumulating missed frames.
+    bool raf_painting, script_painting;
+    int64_t raf_began_us;
+    uint64_t raf_rested;
     // Widgets have stable addresses and node keys; rebuilding replaces the
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
@@ -2506,11 +2511,11 @@ static const char *const kPaintStage[PS_COUNT] = {
 // clock's next tick when the loop meets it itself (pictures_schedule), so a
 // source counted often here is rings that may do no work.
 typedef enum {
-    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_COUNT
+    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_FRAMES, PAST_COUNT
 } PastDeadline;
 
 static const char *const kPastDeadline[PAST_COUNT] = {
-    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures",
+    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures", "frames",
 };
 
 static const char *const kWholeBy[WHOLE_COUNT] = {
@@ -3404,6 +3409,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.laid_at = t1;
     g.motion_laid = false;             // a new page's own layout stands for its cost
     g.ticked = false;
+    g.raf_painting = false;
+    g.script_painting = false;
+    g.raf_rested = 0;
     g.motion_pause[0] = '\0';
     pictures_start(&g.page);
     css_pictures(&g.page);
@@ -6709,14 +6717,12 @@ static bool motion_paused_why(char *out, size_t cap, bool *some)
     return true;
 }
 
-// Whether a frame for an animation — a layout's or a tick's — waits for its
-// paint (motion_painted): it is then the only frame, of either half. A
-// next one is due only once it is painted, when its cost is whole, and so
-// no event batch makes frames nobody sees, each costing what only the last
-// is charged for.
+// A CSS animation frame or a script's fresh layout awaits presentation.
+// A script layout already sampled the CSS timeline; sampling it again before
+// that paint would spend a second layout on a frame nobody sees.
 static bool frame_unpainted(void)
 {
-    return g.motion_painting || g.tick_painting;
+    return g.motion_painting || g.tick_painting || g.script_painting;
 }
 
 // When the shown page is next laid out for an animation: when libflow says
@@ -6783,10 +6789,23 @@ static uint64_t tick_next(void)
     return due;
 }
 
+// Script frames use the rendering loop even when CSS animations are disabled:
+// pages also use them to deliver state. Covered windows retain requests but
+// spend no frames. Rebuild retries and unfinished paints precede another batch.
+static uint64_t animation_next(void)
+{
+    if (!g.scripts_on || g.covered || g.page.tree == NULL ||
+        page_rebuild_owed(&g.page) || g.raf_painting)
+        return YONDER_NEVER;
+    uint64_t due = yonder_scripts_animation_next(g.page.scripts);
+    return due < g.raf_rested ? g.raf_rested : due;
+}
+
 // Hands the ticker the earliest of its deadlines: the next frame among the
 // pictures on screen, the moment a slow page's layout goes stale
 // (pictures_settle), the next layout for an animation (motion_next) and
-// its next tick (tick_next) — none of them for a covered window — the
+// its next tick (tick_next), and script frames (animation_next) — none for
+// a covered window — the
 // moment a page waiting for its
 // sheets is shown whatever is still coming, the moment a script the stream
 // is stopped at stops waiting for its sheets, the next timer and the
@@ -6805,12 +6824,13 @@ typedef struct {
 // and the stream's and the arriving page's turns), a storage commit
 // (storage_turn), a cookie file's write (cookies_turn, offered as a timer
 // is), the settle (pictures_settle) and the stream's wait for its
-// sheets (stream_turn) itself, after the events; the bell meets the rest (pictures_tick,
-// motion_tick, coming_show). Two at one moment are common — the clock
-// steps by the tick — and the moment is the bell's if either is.
+// sheets (stream_turn) itself, after the events; the bell meets pictures_tick and
+// coming_show. Motion and script frames run after tasks. Two at one moment
+// are common — the clock steps by the tick — and the moment is the bell's if either is.
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
 {
-    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM;
+    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM &&
+                from != PAST_FRAMES && from != PAST_LAYOUTS && from != PAST_TICKS;
     if (due < d->next) {
         d->next = due;
         d->from = from;
@@ -6828,6 +6848,7 @@ static void pictures_schedule(void)
         deadline_offer(&d, g.settle_due, PAST_SETTLE);
     deadline_offer(&d, motion_next(), PAST_LAYOUTS);
     deadline_offer(&d, tick_next(), PAST_TICKS);
+    deadline_offer(&d, animation_next(), PAST_FRAMES);
     if (g.coming.active)
         deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
     if (g.stream.active && g.stream.sheets_due != 0)
@@ -7016,10 +7037,9 @@ static void ticks_before_paint(void)
         tick_page(now, false);
 }
 
-// The ticker rang: when an animation's layout is due, the page is laid out
-// again at this moment, quietly (lay_out_shown); when only its tick is,
-// the ticking animations move (tick_page). A ring for another deadline
-// does neither.
+// After script callbacks, meet a due CSS layout (lay_out_shown) or tick
+// (tick_page). A fresh script layout waits for its paint before another
+// CSS frame can begin (frame_unpainted).
 static void motion_tick(void)
 {
     uint64_t now = yonder_now_ms();
@@ -7035,6 +7055,13 @@ static void motion_tick(void)
 // so).
 static void motion_painted(void)
 {
+    g.script_painting = false;
+    if (g.raf_painting) {
+        g.raf_painting = false;
+        int64_t elapsed = os64_micros() - g.raf_began_us;
+        uint64_t rest = elapsed > 0 ? ((uint64_t)elapsed + 999) / 1000 : 0;
+        g.raf_rested = yonder_now_ms() + rest;
+    }
     if (g.motion_painting) {
         g.motion_painting = false;
         g.motion_ended = yonder_now_ms();
@@ -8150,6 +8177,7 @@ static bool script_rebuild(void)
         }
         sheets_leave(p);
         page_show(p, next.tree);
+        g.script_painting = true;
         garb_cascade_free(p->cascade);
         sheets_free(p);
         p->laid_width = next.laid_width;
@@ -9974,7 +10002,8 @@ static bool script_computed(void *opaque, const os64_html_node_t *element, os64_
     return kept;
 }
 
-// THE SHOWN PAGE'S TURN: at most one task, then the rendering step.
+// THE SHOWN PAGE'S TURN: at most one ordinary task, then due animation callbacks
+// and one rendering step. Each callback has its own microtask checkpoint.
 // Whether the turn just ran one of the view's events: more may be owed.
 static bool s_view_ran;
 
@@ -10027,13 +10056,32 @@ static bool script_turn(void)
     // is due (main's bell), and the ticker wakes it for one that waits
     // (pictures_schedule). Tasks that keep coming leave none idle, which
     // HTML allows: an idle period starts only when the loop is idle.
-    if (!ran) {
+    if (!ran && animation_next() > yonder_now_ms()) {
         what = "idle";
-        ran = yonder_scripts_idle_run(g.page.scripts, &out);
+        uint64_t due = animation_next(), motion = motion_next(), tick = tick_next();
+        if (motion < due) due = motion;
+        if (tick < due) due = tick;
+        ran = yonder_scripts_idle_before(g.page.scripts, due, &out);
+    }
+    if (ran)
+        task_said(g.page.scripts, true, what, &out, began);
+    // The task may have changed the DOM; those changes and this batch share
+    // the rebuild below. Only a failed rebuild from an earlier turn blocks
+    // callbacks (the entry guard), not the task's fresh mutations.
+    uint64_t now = yonder_now_ms();
+    if (!g.covered && !g.raf_painting && now >= g.raf_rested &&
+        yonder_scripts_animation_next(g.page.scripts) <= now) {
+        int64_t frame_clock = os64_micros();
+        int64_t frame_began = task_begin(g.page.scripts);
+        if (yonder_scripts_animation_fire(g.page.scripts, now, &out)) {
+            g.raf_painting = true;
+            g.raf_began_us = frame_clock;
+            ran = true;
+            task_said(g.page.scripts, true, "animation-frame", &out, frame_began);
+        }
     }
     if (!ran)
         return false;
-    task_said(g.page.scripts, true, what, &out, began);
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree.
     bool rendered = script_rebuild();
@@ -11482,7 +11530,6 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
             coming_show();
         pictures_tick();
-        motion_tick();
     }
     if ((mask & BELL_WORK) && g.pool != NULL) {
         os64_work_id_t id;
@@ -14612,6 +14659,7 @@ int main(int argc, char **argv)
         bool stream_more = stream_turn();
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
+        motion_tick();
         storage_turn();
         cookies_turn();
         children_turn();

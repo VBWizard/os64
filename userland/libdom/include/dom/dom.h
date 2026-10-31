@@ -763,6 +763,15 @@ uint64_t os64_dom_custom_visits(const os64_dom_t *dom);
 uint64_t os64_dom_message_next(const os64_dom_t *dom);
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 
+/* Animation callbacks: next is a monotonic millisecond deadline (UINT64_MAX
+ * when empty). fire runs one due snapshot in request order, with one shared
+ * performance-clock timestamp and runtime budget, checkpointing after each
+ * callback. Requests made during it wait for another frame; cancellations
+ * apply immediately. The host calls between tasks on its rendering step,
+ * suppresses frames while covered, and presents once after the batch. */
+uint64_t os64_dom_animation_next(const os64_dom_t *dom);
+bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+
 /* IDLE CALLBACKS (W3C requestIdleCallback; MODERN_WEB.md § P2b): the host
  * says when its loop is idle, and the binding runs the page's idle
  * callbacks then. next answers when one may run on the host's clock: 0
@@ -777,6 +786,10 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * os64_dom_timer_fire. Owner thread, between tasks. */
 uint64_t os64_dom_idle_next(const os64_dom_t *dom);
 bool os64_dom_idle_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
+/* As idle_run, with a host rendering deadline in monotonic milliseconds.
+ * The grant and IdleDeadline.timeRemaining stop at that deadline. UINT64_MAX
+ * leaves the grant bounded by timers, pending frames and its 50 ms period. */
+bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_t *outcome);
 
 /* The navigation a script asked for since the last take, if any: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add

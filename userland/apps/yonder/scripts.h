@@ -214,6 +214,10 @@ void yonder_scripts_set_note(yonder_scripts_t *scripts, const char *line);
 const char *yonder_scripts_note(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// One rendering opportunity's ordered callback batch; the host owns visibility,
+// pacing and the rendering step after it (os64_dom_animation_fire).
+uint64_t yonder_scripts_animation_next(const yonder_scripts_t *scripts);
+bool yonder_scripts_animation_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
 // Custom element reactions the parser's insertions left owed
 // (os64_dom_reactions_run): whether any are, and running them as one task,
 // true when it ran. The first failure of the constructor `name` defines,
@@ -232,6 +236,7 @@ bool yonder_scripts_message_fire(yonder_scripts_t *scripts, os64_js_outcome_t *o
 // due. False when nothing ran.
 uint64_t yonder_scripts_idle_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_idle_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, os64_js_outcome_t *outcome);
 // The answer to the page's request `token` (os64_dom_fetched), as one
 // task. False when nothing ran: the runtime is gone, or never was, or the
 // answer was a module's (YONDER_MODULE_TOKEN), which the page's module map

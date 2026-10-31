@@ -1,0 +1,78 @@
+/* Rendering opportunities through the real script host and window painter. */
+static void animation_window_cases(void)
+{
+    bool was_animations=s_animations,was_reduce=s_reduce_motion;
+    now_ms=1000;clock_step=0;
+    probe_page("<!doctype html><style>body{margin:0;background:white}canvas{display:block}</style>"
+        "<canvas id=c width=40 height=40></canvas><script>var c=document.getElementById('c'),ctx=c.getContext('2d');"
+        "ctx.fillStyle='red';ctx.fillRect(0,0,40,40);"
+        "requestAnimationFrame(()=>{ctx.fillStyle='blue';ctx.fillRect(0,0,40,40)});"
+        "requestAnimationFrame(()=>{ctx.fillStyle='lime';ctx.fillRect(0,0,20,40);"
+        "requestAnimationFrame(()=>{ctx.fillStyle='yellow';ctx.fillRect(0,0,40,40)})});</script>",true);
+    script_turn();
+    flow_tree_t *tree=g.page.tree;
+    uint64_t version=os64_html_version(page_doc(&g.page));
+    check(animation_next()==1020,"frame window: ticker deadline for pending callbacks");
+    now_ms=1020;g.ui.dirty=(os64_gui_rect_t){0};
+    script_turn();
+    check(g.raf_painting && animation_next()==YONDER_NEVER,
+          "frame window: another batch waits for this paint");
+    check(tree==g.page.tree && version==os64_html_version(page_doc(&g.page)) && g.ui.dirty.w>0,
+          "frame window: two pixel callbacks reuse layout and mark paint damage");
+    uint32_t *px=stand_in_shot();
+    check((px[10*800+10]&0xffffff)==0x00ff00 && (px[10*800+30]&0xffffff)==0x0000ff,
+          "frame window: one paint contains both ordered callbacks");
+    os64_free(px);
+    clock_us+=70000;motion_painted();
+    check(animation_next()==1090,"frame window: callback through paint cost paces next batch");
+    g.covered=true;now_ms=6000;
+    script_turn();
+    check(animation_next()==YONDER_NEVER && !g.raf_painting,
+          "frame window: covered page retains callback without running it");
+    g.covered=false;s_animations=false;
+    script_turn();px=stand_in_shot();
+    check((px[10*800+10]&0xffffff)==0xffff00 &&
+          yonder_scripts_animation_next(g.page.scripts)==YONDER_NEVER,
+          "frame window: uncover runs one retained batch, independent of CSS animation preference");
+    os64_free(px);motion_painted();probe_drop();
+
+    now_ms=1000;
+    probe_page("<div id=box style='width:20px;height:20px'>old</div><script>"
+        "var b=document.getElementById('box');"
+        "requestAnimationFrame(()=>{b.style.width='60px';Promise.resolve().then(()=>b.textContent='microtask')});"
+        "requestAnimationFrame(()=>{b.style.height='30px'});</script>",true);
+    script_turn();
+    uint64_t updates=garb_cascade_updates(g.page.cascade);
+    now_ms=1020;script_turn();
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("box"));
+    check(box && box->rect.w==60 && box->rect.h==30 && probe_text_is("box","microtask"),
+          "frame window: callback and microtask DOM edits publish together");
+    check(garb_cascade_updates(g.page.cascade)==updates+1,
+          "frame window: multiple callback mutations consume one cascade update");
+    motion_painted();probe_drop();
+
+    now_ms=1000;s_animations=true;s_reduce_motion=false;
+    probe_page("<!doctype html><style>@keyframes travel{to{margin-left:100px}}"
+        "#box{width:20px;height:20px;animation:travel 1s linear infinite}</style>"
+        "<div id=box></div><script>requestAnimationFrame(()=>{document.getElementById('box').style.height='30px'})</script>",true);
+    relayout(true);script_turn();
+    now_ms=1100;
+    uint64_t layouts=s_cost.layouts;
+    script_turn();motion_tick();
+    check(s_cost.layouts==layouts+1,
+          "frame window: callback mutation and CSS animation share the rendering layout");
+    motion_painted();probe_drop();
+
+    now_ms=1000;
+    probe_page("<p id=timer>waiting</p><canvas id=c></canvas><script>"
+        "function again(){requestAnimationFrame(again)}requestAnimationFrame(again);"
+        "setTimeout(()=>document.getElementById('timer').textContent='fired',20);</script>",true);
+    script_turn();now_ms=1020;script_turn();
+    check(probe_text_is("timer","fired") && g.raf_painting,
+          "frame window: ordinary due timer and frame both make progress");
+    motion_painted();probe_drop();
+    probe_page("<p>replacement</p>",true);
+    check(animation_next()==YONDER_NEVER,"frame window: navigation drops old callbacks");
+    probe_drop();
+    s_animations=was_animations;s_reduce_motion=was_reduce;
+}
