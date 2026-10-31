@@ -1,5 +1,6 @@
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
+#include "test_layout_export.inc"
 static void pump(void)
 {
     for(unsigned i=0;i<300;++i) {
@@ -19,6 +20,7 @@ static void click(const char *id)
 }
 int main(int argc,char **argv)
 {
+    output_len=0;write_limit=7;
     if(argc!=2)return 2;
     FILE *f=fopen("tools/pages/layout-graft.html","rb");if(!f)return 2;
     fseek(f,0,SEEK_END);size_t size=ftell(f);rewind(f);char *html=malloc(size+1);
@@ -44,6 +46,7 @@ int main(int argc,char **argv)
     check(strstr(probe_text_of("report"),"\"state\": \"cancelled\"")!=NULL,"graft fixture: cancellation");
     click("run");g.view.bounds.w-=20;pump();
     check(strstr(probe_text_of("report"),"\"state\": \"invalid\"")!=NULL,"graft fixture: changed viewport");
+    layout_export_save(argv[1]);
     s_layout_profile=false;probe_drop();os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK && live==0,"graft fixture: ownership released");
     printf("Layout graft fixture: %u checks, %u failed\n",checks,failures);return failures?1:0;

@@ -1,5 +1,6 @@
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
+#include "test_layout_export.inc"
 
 static void measure_click(const char *id)
 {
@@ -28,6 +29,7 @@ static void measure_pump(void)
 }
 int main(int argc,char **argv)
 {
+    output_len=0;write_limit=7;
     if(argc<2 || argc>4)return 2;
     bool full=argc>=3 && !strcmp(argv[2],"--full");
     FILE *f=fopen(argc==4?argv[3]:"tools/pages/layout-measure.html","rb");if(!f)return 2;
@@ -56,6 +58,7 @@ int main(int argc,char **argv)
     check(strstr(measure_report(),"\"state\": \"cancelled\"")!=NULL,"measurement cancellation invalidates old timer");
     measure_click("run");g.view.bounds.w-=40;measure_pump();
     check(strstr(measure_report(),"\"state\": \"invalid\"")!=NULL,"measurement rejects changed viewport");
+    layout_export_save(argv[1]);
     s_layout_profile=false;probe_drop();os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"measurement text released");
     printf("Layout measurement fixture: %u checks, %u failed\n",checks,failures);

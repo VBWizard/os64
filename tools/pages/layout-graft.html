@@ -25,7 +25,7 @@ button{background:#2c6a48;color:white;cursor:pointer}button:disabled{background:
 <pre id="report">Measurements will appear here, including every sample and the viewport.</pre></section>
 <section class="card"><h2>A column with an infobox</h2><div class="grid"><article id="article" class="article"><aside class="float">An infobox<br>Paragraphs must flow around me.</aside><p id="first">A short beginning leaves the paragraphs below room to move.</p><div id="paragraphs"></div></article></div></section>
 <section class="card"><h2>One more among many</h2><p id="count">2,000 rows</p><div id="viewport"><ol id="rows"></ol></div></section>
-<p class="note">Launch with <code>--layout-profile</code>. After Complete, click ordinary page text and press <strong>d</strong> to save the native work counts. This synthetic page is separate from the unchanged Wikipedia article used as a fallback control.</p>
+<p class="note">Redirect Yonder output to a file to save full results automatically (see the measurement handoff). Launch with <code>--layout-profile</code>. After Complete, click ordinary page text and press <strong>d</strong> to save the native work counts. This synthetic page is separate from the unchanged Wikipedia article used as a fallback control.</p>
 </main><script>
 (function(){'use strict';
 var byId=function(id){return document.getElementById(id);};
@@ -41,7 +41,10 @@ function rebuild(){next=0;rows.textContent='';var fragment=document.createDocume
 function grow(){grown=!grown;first.textContent=grown?longText+longText:shortText;}
 function add(){rows.appendChild(row());count.textContent=next+' rows';}
 function controls(on){active=on;run.disabled=on;change.disabled=on;append.disabled=on;size.disabled=on;samples.disabled=on;stop.disabled=!on;}
-function finish(state,message){controls(false);status.textContent=message;report.textContent=JSON.stringify({format:'yonder-layout-graft-v1',state:state,started:started,rows:rowCount,samples:wanted,warmup:warm,initial_layout_ms:initial,viewport:{width:width,height:height,devicePixelRatio:ratio},results:results},null,2);}
+function finish(state,message){controls(false);status.textContent=message;var result={format:'yonder-layout-graft-v1',page:location.href,state:state,started:started,rows:rowCount,samples:wanted,warmup:warm,initial_layout_ms:initial,viewport:{width:width,height:height,devicePixelRatio:ratio},results:results};report.textContent=JSON.stringify(result,null,2);
+ // Export after timing ends. One tagged JSON line keeps repeated runs distinct.
+ try{console.log('\nYONDER_LAYOUT_RESULT '+JSON.stringify(result));}
+ catch(error){status.textContent=message+' Results are shown here, but file output failed.';}}
 function step(id){if(id!==token||!active)return;try{
  if(innerWidth!==width||innerHeight!==height||(devicePixelRatio||1)!==ratio){finish('invalid','Window size or zoom changed. Run again.');return;}
  var before=performance.now();if(phase===0){grow();sink=article.offsetHeight;}else{add();sink=rows.offsetHeight;}var elapsed=performance.now()-before;
