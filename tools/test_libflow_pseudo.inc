@@ -376,8 +376,24 @@ static void counter_cases(void)
     expect("counters: and one that met a q", ordered[2], NULL);
 }
 
+// An author's content on an `rt`'s ::before or ::after takes the place of
+// the parentheses yonder draws round it, as it does `q`'s marks.
+static void pseudo_rt_cases(void)
+{
+    char *plain = pseudo_boxes_of("<!doctype html><p><ruby>a<rt>b</rt></ruby>");
+    char *taken = pseudo_boxes_of("<!doctype html><style>rt::before, rt::after { content: \"\" }</style>"
+                                  "<p><ruby>a<rt>b</rt></ruby>");
+    expect("pseudo: an rt is drawn with its parentheses",
+           plain != NULL && strstr(plain, "text \"(\" generated-by rt") != NULL, NULL);
+    expect("pseudo: an author's ::before and ::after take their place",
+           taken != NULL && strstr(taken, "text \"(\"") == NULL && strstr(taken, "text \")\"") == NULL, NULL);
+    free(plain);
+    free(taken);
+}
+
 static void pseudo_cases(void)
 {
+    pseudo_rt_cases();
     counter_cases();
     pseudo_style_cases();
     pseudo_budget_cases();

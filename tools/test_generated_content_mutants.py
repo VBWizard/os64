@@ -65,14 +65,14 @@ mutants = [
      '    if (content == NULL || content->kind == GARB_V_WIDE || content->kind == GARB_V_KEYWORD)\n        return true;',
      '    if (content == NULL)\n        return true;', LIBFLOW),
     ('a-replaced-element-has-pseudo-elements', STYLE, '    return el->ns == OS64_HTML_NS_HTML && !f_replaced(c->env, el);',
-     '    return el->ns == OS64_HTML_NS_HTML;', LIBFLOW),
+     '    return el->ns == OS64_HTML_NS_HTML && (c != NULL || !f_replaced(c->env, el));', LIBFLOW),
     ('attr-is-case-sensitive', STYLE, "name[i] = ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;",
      'name[i] = ch;', LIBFLOW),
     # libflow pass 2.
     ('before-is-not-first', BOXES, '    if (s != NULL && s->pseudo[0] != NULL)\n        return s->pseudo[0];',
      '    if (s != NULL && s->pseudo[0] != NULL && false)\n        return s->pseudo[0];', LIBFLOW),
     ('after-is-not-last', BOXES, '    return c->next != NULL ? c->next : after_of(b, c->parent);', '    return c->next;', LIBFLOW),
-    ('q-draws-its-mark-over-the-authors', BOXES, '    if (before != NULL && !(s->pseudo_declared & 1))',
+    ('a-mark-drawn-over-the-authors', BOXES, '    if (before != NULL && !(s->pseudo_declared & 1))',
      '    if (before != NULL)', LIBFLOW),
     # The boundary.
     ('a-synthetic-node-leaves-libflow', FLOW,

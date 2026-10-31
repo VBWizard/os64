@@ -164,7 +164,7 @@ and it is said here so 5b and 8a meet on it rather than discover it.
   after their element (`p#y::before: ...`). `content`'s counters and
   pictures are named as approximated, so the record still says what 8a
   does not draw.
-- **libflow pass 1** (`style_pseudos`, `style_pseudo`):
+- **libflow pass 1** (`style_pseudo`, called from the walk by `open_element` and `close_element` since 8b):
   - The winners go through the element's own `lay_sets`, then whatever
     else an element's child is given of it: the medium border and outline
     widths (`medium_widths`), an atomic inline's edge to the decorations,
@@ -342,3 +342,29 @@ reuses, an ordered pass is restyled whole.
 - **WPT**: no expectation lost. `css/cssom`'s `counter()` values already
   pass in 8a, since a specified value is serialized from its source.
 - **Mutants**: one per row of § 8.2's table and one per rule beneath it.
+
+### 8.7 As built
+
+- **libgarb**: `counters` reads the three counter properties, with its
+  fallback integer (0, or 1 for an increment). `counter_name` keeps a name
+  as a KEYWORD copy, refusing `none` and the CSS-wide words. `quotes`
+  reads pairs of strings. `vc_comma` steps over the commas inside
+  `counter()` and `counters()`, and the style is read as
+  `list-style-type`'s is (`list_type`).
+- **libflow pass 1**: `count_on` applies a counter list in Lists 3's
+  order through `instantiate` (with the sibling rule) and `innermost`.
+  `counter_list` takes `inherit` from the parent, or from the originating
+  element for a pseudo-element. `quote_mark` moves the depth and picks
+  the pair. `content_text` resolves each item once into a `Piece`, then
+  copies them out, charged to the lists' budget. `open_element` and
+  `close_element` are § 8.2's steps 1–2 and 4–5 in the walk, and
+  `close_element` styles the `::after`. `q_mark` resolves a `q`'s own
+  marks into `FStyled.q_open`/`q_close`, charged as content is.
+- **Shared**: `f_counter_spell` (boxes.c) spells a number in a counter
+  style without a suffix. `marker_text` adds the suffix, and
+  `counter_text` joins `counters()`' spellings. `list_type_named`
+  (style.c) is `list-style-type`'s table, which `counter()`'s style reads
+  as well.
+- **What waits** is in DEBTS.md § Browser layout: the `list-item`
+  counter, `reversed()`, `@counter-style` and the styles not spelled, and
+  `quotes: auto` by language.
