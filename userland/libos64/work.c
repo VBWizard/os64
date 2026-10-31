@@ -114,8 +114,10 @@ static size_t older_reserves_locked(os64_work_pool_t *p, work_slot_t *s)
         work_slot_t *other = &p->slots[i];
         if ((other->state == QUEUED || other->state == WAITING) &&
             other->id < s->id && !is_cancelled(other)) {
+            // Checked before the add, which a reserve near SIZE_MAX would
+            // otherwise wrap.
+            if (other->work.reserve >= p->cap - sum) return p->cap;
             sum += other->work.reserve;
-            if (sum >= p->cap) return p->cap;
         }
     }
     return sum;
