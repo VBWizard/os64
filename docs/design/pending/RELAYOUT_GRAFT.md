@@ -12,8 +12,9 @@ Steps 1 through 4 are implemented: checked text-run retention, independent
 snapshot history, bounded structural correspondence, refusal diagnostics,
 ordinary-block geometry copying and an intrinsic-width memo. The explicit
 `flow_layout_incremental` entry enables reuse; ordinary entries do not register
-snapshot readers. Yonder opts in for displayed and hidden geometry; hardware
-acceptance remains pending. Validation is recorded in
+snapshot readers. Yonder opts in for displayed and hidden geometry.
+[Hardware acceptance](../../relayout-evidence/5c-p5-acceptance.md) passed on
+2026-10-31 after the final three-pair comparison. Validation is recorded in
 [5c-foundation.md](../../relayout-evidence/5c-foundation.md) and
 [5c-geometry.md](../../relayout-evidence/5c-geometry.md) and
 [5c-browser.md](../../relayout-evidence/5c-browser.md).

@@ -8,7 +8,8 @@ P5 acceptance. Fable reviewed the restyle rule. The sequence with Canvas is
 recorded in [CANVAS.md](CANVAS.md). The implemented 5c contract is
 in [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md). Fable approved the revised
 contract on 2026-10-31. Its four implementation steps are in the integration
-branch; P5 acceptance remains pending.*
+branch; [P5 acceptance](../../relayout-evidence/5c-p5-acceptance.md) passed
+on 2026-10-31 after the fallback and text-allocation follow-ups.*
 
 ## What this settles
 
@@ -311,7 +312,7 @@ behind itself.
 |---|---|---|
 | 5a | Bounded native change log and readers; opt-in phase profiling; repeatable measurement page | Native mutations, parser entries, immutable lists, eviction/OOM and lifetime checks; fake clocks; page completion/cancel/resize tests; P5 baseline |
 | 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; controlled and alternating manual P5 comparisons cleared the performance gate; reviewed and merged in #424, with earlier timing outliers disclosed |
-| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Implemented in integration; contract in RELAYOUT_GRAFT.md; P5 acceptance pending |
+| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Implemented in integration; contract in RELAYOUT_GRAFT.md; P5 acceptance passed after the final three-pair comparison (5c-p5-acceptance.md) |
 | 5d | `requestAnimationFrame` on the loop, after 5c | WPT animation-frame tests and scripted-page fake-clock cases |
 
 With one builder the cuts run in order. The Canvas integration branch
