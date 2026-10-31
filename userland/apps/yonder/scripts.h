@@ -146,6 +146,9 @@ bool yonder_scripts_deferring(const yonder_scripts_t *scripts);
 // False when nothing is ready (a fetch may still be out).
 bool yonder_scripts_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 bool yonder_scripts_pending(const yonder_scripts_t *scripts);
+// Whether a script of the page is still being fetched: a `src` script, or
+// a module script whose graph is not all in.
+bool yonder_scripts_fetching(const yonder_scripts_t *scripts);
 // A script a verb connected with no `src`, which a browser runs inside the
 // verb: so it runs before the parse goes on, ahead of any async script that
 // landed first. False when none waits.
