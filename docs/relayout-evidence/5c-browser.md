@@ -13,6 +13,10 @@ belong to a stable process-lifetime owner, not a temporary Page address. Picture
 arrival/release and font arrival, fallback retry, failure and release advance
 the corresponding epoch before another layout can consume its answers. Clearing
 the batching flags does not reset these values; overflow disables reuse.
+Model rebuilds also advance both epochs when the resolution base changes:
+relative URLs can select different already-loaded resources without an arrival.
+History rebases discard hidden measurements even under an unchanged absolute
+base, so a later base removal uses the new document URL.
 
 Web-font unicode-range selection depends on the whole document's characters.
 A DOM-version change with font-face rules therefore conservatively advances the
@@ -28,20 +32,22 @@ in the existing catalog. It neither starts I/O nor borrows an old model index.
 A regression inserts an earlier image and verifies the kept image's dimensions.
 
 Copied runs bypass the shaping pass's font resolver calls. For copied layouts,
-the font report is reconstructed from the resulting public text, line metrics
+the font report is reconstructed from the resulting public text, line/span metrics
 and atomic content. A bounded deduplication table avoids repeated identical
 requests. Those reports count font requests rather than repeated shaping
 lookups. Removed text cannot leave a stale family record; kept text retains its
-face-use record. The reporting work is charged to the layout phase.
+face-use record, including an empty inline span whose font contributes metrics
+without a text run. The reporting work is charged to the layout phase.
 
 ## Automated checks
 
-- Complete Yonder scripted-page suite: **12,592 checks, zero failures**, including
+- Complete Yonder scripted-page suite: **12,639 checks, zero failures**, including
   displayed/hidden geometry reuse, shared state, image arrival and canvas size.
-- Extended font suite: **2,970 checks, zero failures**, including loaded-face
+- Extended font suite: **2,976 checks, zero failures**, including loaded-face
   copying, family/face reporting and document-wide font dependency invalidation.
-- Final focused browser suite: **49 checks, zero failures**, including epoch
-  overflow and appearance/reduced-motion changes in the hidden cache.
+- Final focused browser suite: **90 checks, zero failures**, including epoch
+  overflow and appearance/reduced-motion changes in the hidden cache, plus
+  history URL changes, base attribute changes, and absolute base removal.
 - Existing mutation fixtures: quick and full (2,000 rows / 20 samples), original
   and localized-selector variants: **16 checks each, zero failures**.
 - New float/append fixture: **16 checks, zero failures**, including both manual

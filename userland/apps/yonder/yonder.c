@@ -856,6 +856,16 @@ static void layout_revision(uint64_t *revision)
     if (*revision == UINT64_MAX) s_layout_resources.exhausted = true;
     else ++*revision;
 }
+// Existing catalog entries can answer a relative URL differently after a
+// history move or a <base> mutation, without a file arriving. Compare model
+// bases on rebuilds for both displayed and hidden layouts.
+static void layout_model_rebased(const os64_page_t *old, const os64_page_t *model)
+{
+    if (model && !os64_streq(os64_page_base(old), os64_page_base(model))) {
+        layout_revision(&s_layout_resources.fonts);
+        layout_revision(&s_layout_resources.pictures);
+    }
+}
 static flow_reuse_inputs_t layout_inputs(const Page *p, const os64_page_state_t *state)
 {
     if (!state) state = os64_page_shared_state(page_model(p));
@@ -1148,6 +1158,7 @@ static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
     bool enabled = s_layout_profile && layout_profile_diag(p);
     int64_t began = enabled ? os64_micros() : -1;
     os64_page_t *model = os64_page_rebuild(old);
+    layout_model_rebased(old, model);
     if (enabled) {
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
@@ -5618,7 +5629,7 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
 }
 
 // Reuse skips shaping-time resolver calls. Reconstruct the font report from
-// text, line metrics and atomic content in the resulting public tree. Counts
+// text, line/span metrics and atomic content in the resulting public tree. Counts
 // in this report describe font requests, rather than repeated shaping calls.
 // A small deduplication table keeps long runs of identical typography cheap;
 // excess distinct requests remain correct without extra allocations.
@@ -5639,7 +5650,8 @@ static void webfonts_public(Page *p, const flow_box_t *box, FontReport *report)
     for (; box; box = box->next) {
         const flow_style_t *style = box->style;
         if (style && (box->run || box->ellipsis || box->kind == FLOW_BOX_LINE ||
-                      box->kind == FLOW_BOX_ATOMIC || box->kind == FLOW_BOX_REPLACED)) {
+                      box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_ATOMIC ||
+                      box->kind == FLOW_BOX_REPLACED)) {
             bool seen = false;
             for (size_t i = 0; i < report->count && !seen; ++i)
                 seen = font_request_equal(style, report->seen[i]);
@@ -9344,6 +9356,12 @@ static void page_rebase(Page *p)
         os64_page_free(model);
         return;
     }
+    layout_model_rebased(old, model);
+    // The DOM version does not change with history. A hidden model still
+    // carries the old document URL, even when an absolute <base> happens to
+    // keep today's resolved base equal; a later base removal must use the
+    // new document URL too.
+    measured_forget(page_doc(p));
     p->way.model = model;
     os64_page_free(old);
     if (p == &g.page)

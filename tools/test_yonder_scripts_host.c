@@ -9774,6 +9774,18 @@ static void webfont_cases(void) {
     check(script_rebuild() && s_layout_resources.fonts>revision && !last_graft_profile.reused,
           "graft fonts: document character changes invalidate unicode-range-dependent answers");
     web_drop();
+    web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}</style>"
+        "<p>text<span id=metric-only style='font-family:Web'></span></p><p>padding</p>");
+    check(font_land("web.ttf","A",NULL),"graft fonts: empty span's face loads");
+    pictures_settle();
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page) && last_graft_profile.reused>0,
+          "graft fonts: empty span's line copies geometry");
+    reported=false;
+    for(int32_t i=0;i<s_web.families.n;i++)
+        reported |= !strcmp(s_web.families.f[i].name,"Web") && s_web.families.f[i].served==WF_SERVED_PAGE;
+    check(reported && (s_web.face_use[0]&WF_USE_LISTED),
+          "graft fonts: metric-only span retains family and face-use reporting");
+    web_drop();
     os64_font_family_cache_destroy(s_faces.families);
     s_faces.families=NULL; s_faces.text=NULL;
 }
@@ -10816,7 +10828,7 @@ int main(void)
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_RESTYLE_ONLY")) {
-        graft_browser_cases();
+        graft_browser_cases();graft_base_cases();
         restyle_browser_cases();
         restyle_fallback_cases();
         os64_text_font_release(probe_font);
@@ -10840,7 +10852,7 @@ int main(void)
     stand_in_paint_cases();
     canvas_window_cases();
     layout_profile_cases();
-    graft_browser_cases();
+    graft_browser_cases();graft_base_cases();
     restyle_browser_cases();
     restyle_fallback_cases();
     svg_gradient_window_cases();
