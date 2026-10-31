@@ -1232,6 +1232,16 @@ bool yonder_scripts_pending(const yonder_scripts_t *s)
     return d != NULL && d->state != STATE_FETCHING;
 }
 
+bool yonder_scripts_fetching(const yonder_scripts_t *s)
+{
+    if (s == NULL || s->dead)
+        return false;
+    for (uint32_t i = 0; i < s->count; i++)
+        if (s->items[i].state == STATE_FETCHING)
+            return true;
+    return false;
+}
+
 bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));

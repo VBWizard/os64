@@ -64,6 +64,8 @@ typedef struct {
     // The browser's HTTP cache (SCRIPT_CACHE.md), NULL to keep and read
     // nothing, and how this request uses it.
     way_cache_t *cache;
+    // The page's mode, which the run makes what the request's own lines
+    // say (a precondition, or Cache-Control no-store/no-cache).
     way_cache_mode_t cache_mode;
     // A module script's fetch: its compiled form is read beside the entry
     // that holds its body (BYTECODE_CACHE.md § 9).

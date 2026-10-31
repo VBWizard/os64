@@ -204,6 +204,37 @@ the blob carries it and one made under another name is a miss.
   Settings shows, are still `way_fetch_whole`'s alone (DEBTS.md).
 - **`way_served_t` moved to `way/cache.h`**, since the fetch job, which
   does not include all of `way/way.h`, says it too.
+- **The two paths share one key space, and each takes only what it can
+  answer** (Codex #425 rd1). An entry `way_fetch_whole` kept (a
+  picture's, a sheet's, a classic script's) has no head, so a script's
+  request reads it as a miss and the reply it keeps replaces it; an entry
+  a script's request kept with recorded `Vary` values is a miss for
+  `way_fetch_whole`, whose requests do not say what they sent.
+- **The cache answers a request's first hop alone**: a later hop is
+  another address, which a kept reply's validator must not reach.
+- **A request's own lines make its mode** (`cache_mode_of`, once, as the
+  fetch starts): a default-mode request carrying a precondition of the
+  page's own (`If-Match`, `If-None-Match`, `If-Modified-Since`,
+  `If-Unmodified-Since`, `If-Range`), as Fetch's HTTP-network-or-cache
+  fetch says, or asking `Cache-Control: no-store`, is no-store; one asking
+  `no-cache` or `max-age=0`, or `Pragma: no-cache` with no Cache-Control
+  (RFC 9111 § 5.2.1), is no-cache, asked about every time. **`only-if-cached`
+  with no cache to ask** is a network error, nothing sent.
+- **An answer the cache may not keep drops the key**, whether the request
+  read it or not (a reload does not read); **a POST, PUT, PATCH or DELETE
+  that worked drops its address's entries**, under either credentials
+  (RFC 9111 § 4.4).
+- **Repeated request lines a reply varies on are one list**, compared
+  whole, in order (Codex #425 rd2), **and a line not sent is not a line
+  sent empty** (rd3): a recorded value is `=value` for one sent, `-` for
+  none (`way_said_t`). An entry recorded before that read as a miss.
+- **A 304 lays its omitted names over the kept ones by name**, as its
+  header lines are laid (rd3): a line it sends readable is no longer
+  omitted.
+- **A 304 confirms a varied entry by the varied rules**
+  (`way_keep_confirm_varied`, rd4): one repeating `Vary: Origin` renews
+  the entry and keeps its compiled form, where the plain rules would have
+  let both go.
 - **7b's blob is read by the fetch job** (`module_bytecode`) for a module's
   request whose answer the entry holds — served kept, confirmed by a 304,
   or just stored — and rides to the module map with the answer

@@ -11052,6 +11052,22 @@ static void exit_when_loaded_cases(void) {
     exit_follow();
     check(!g.running,"exit: a settled page, quiet for its while, is left");
     loop_drop();
+    /* An async script still being fetched holds the run, however long the
+     * quiet; once it lands and runs, the quiet starts. */
+    loop_page("<p id=out>here</p><script async src=slow.js></script>");
+    s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
+    check(loop_settle() && g.page.tree!=NULL && nscript_jobs==1,"exit: the page arrives, its async script still out");
+    now_ms+=EXIT_QUIET_MS*2;
+    exit_follow();
+    check(g.running,"exit: not while a script of the page is still being fetched");
+    bool landed=script_land("/slow.js","document.getElementById('out').textContent='late'");
+    script_turn();
+    check(landed && script_rebuild() && probe_text_is("out","late"),"exit: the script lands and runs");
+    exit_follow();
+    now_ms+=EXIT_QUIET_MS;
+    exit_follow();
+    check(!g.running,"exit: and the page is left once quiet after it");
+    loop_drop();
     /* A page that never settles is left when the wait runs out. */
     loop_page("<p id=out>here</p>");
     s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
