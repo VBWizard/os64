@@ -62,6 +62,15 @@ granularity limits these comparisons; zero readings do not mean free work.
 These headers do not measure application launch or replace raw first opt-in
 layout timing for a large populated fixture.
 
+The graft report also records `initial_layout_ms`: the forced geometry read
+after replacing all 2,000 rows in an already loaded gallery, excluding the
+DOM creation itself. This is a setup/rebuild measurement, not a cold process
+start. Its three control values were 123.80, 123.30 and 122.50 ms; candidate
+values were 171.00, 159.90 and 158.80 ms. The medians are 123.30 and 159.90 ms,
+a 29.68% increase. The supplemental memory pair recorded 125.60/171.60 ms.
+This distinct regression remains an open acceptance issue alongside the
+fallback cases; the coarse initial displayed-layout headers cannot clear it.
+
 ## Fallback follow-up
 
 The initial candidate recorded a new geometry snapshot even after releasing
@@ -108,3 +117,28 @@ article total is within 0.73% of the prior control median. It is one run,
 not a new three-pair campaign or proof that every remaining performance gate
 has closed. The original replacement overhead and repeatability of the
 corrected article remain separate acceptance considerations.
+
+
+## Text-run allocation follow-up
+
+A private native probe timed Yonder's text allocator callbacks during the
+large gallery setup. In one diagnostic run, that layout made 41,148 allocation
+calls and 20,624 frees. Time inside allocation callbacks was 102,253 of the
+layout's 186,081 microseconds. The per-call clock reads add overhead, so these
+figures locate work; they are not acceptance timings or a measured explanation
+of the entire control/candidate difference. Starting at the final window size
+also produced substantially different timings from starting small and resizing.
+
+Text runs owned up to five allocations with the same lifetime: the run record,
+copied bytes, glyph placements, image pointers and caret positions. The
+follow-up stores them in one checked-size allocation. Glyph cache ownership,
+retained-run lifetime, the public API and allocator policy stay the same.
+Frozen vectors, allocation-denial cleanup, retained runs, real-font rendering,
+UI text and browser tests cover compatibility. A regression test denies the
+second allocation after warming the glyph cache and checks bytes, glyphs,
+carets and lifetime for ordinary, empty, tab-only and long runs. The original
+implementation fails that test.
+
+Native performance confirmation for this change is pending. The setup/reset,
+fallback repeatability and replacement acceptance considerations above remain
+open; reduced allocation count alone does not close them.
