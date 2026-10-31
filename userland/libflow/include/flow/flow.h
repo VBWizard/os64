@@ -963,7 +963,13 @@ typedef struct {
 // siblings answer, given the scroll: the one place that rule is written.
 struct flow_box {
     flow_box_kind_t kind;
-    const os64_html_node_t *node;   // NULL for an anonymous box
+    // NULL for an anonymous box. A box a ::before or ::after made, its
+    // text's included, names its ORIGINATING element and says which in
+    // `pseudo`, a garb_pseudo_t, 0 (none) for every other box
+    // (GENERATED_CONTENT.md § 4): a click on it is the element's, and it is
+    // never the element's own box (flow_box_for).
+    const os64_html_node_t *node;
+    uint8_t pseudo;
     const flow_style_t *style;
     // The border box; a TEXT's or MARKER's content area (its baseline less
     // its ascent, ascent plus descent tall); a SPAN's piece of its line.

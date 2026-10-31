@@ -2,6 +2,7 @@
 #define FLOW_INTERNAL_H
 
 #include "flow/flow.h"
+#include "garb/select.h"
 #include "garb/values.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -482,7 +483,22 @@ typedef struct {
     // declaration or any keyframe of its animations: a value an ancestor
     // hands down to a box it does not hold (flow_motion_due).
     FProps taken;
+    // Its ::before and ::after (GENERATED_CONTENT.md § 4): each a synthetic
+    // element node of pass 1's arena, its parent this element and its one
+    // child the content's text, styled in the map as any element is; NULL
+    // when the pseudo-element does not exist. `pseudo_declared` says, per
+    // pseudo-element (bit 0 ::before, bit 1 ::after), whether the author
+    // declared its content at all, `none` included: what takes the place of
+    // the marks a `q` draws of its own.
+    const os64_html_node_t *pseudo[2];
+    uint8_t pseudo_declared;
 } FStyled;
+
+// The pseudo-element a node of libflow's own is, or belongs to (its text),
+// GARB_PSEUDO_NONE for any node of a document; and the element it is made
+// for. A synthetic node never leaves libflow (GENERATED_CONTENT.md § 4).
+garb_pseudo_t f_pseudo_of(const os64_html_node_t *n);
+const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n);
 
 // What is left of the budget for the lists a declaration hands each element
 // it reaches (style.c, list_alloc): the one part of styling a page can

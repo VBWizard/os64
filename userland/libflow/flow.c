@@ -234,8 +234,14 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
         bd->failed = true;
         return NULL;
     }
+    // A pseudo-element's synthetic node never leaves libflow: its box names
+    // the element it is made for.
+    garb_pseudo_t pseudo = f_pseudo_of(node);
+    if (pseudo != GARB_PSEUDO_NONE)
+        node = f_pseudo_origin(node);
     b->kind = kind;
     b->node = node;
+    b->pseudo = (uint8_t)pseudo;
     b->style = style;
     b->link = b->control = b->scroller = -1;
     b->parent = parent;
@@ -258,7 +264,7 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
             parent->first = b;
         *last = b;
     }
-    if (node != NULL && f_map_get(&bd->t->first, node) == NULL) {
+    if (node != NULL && pseudo == GARB_PSEUDO_NONE && f_map_get(&bd->t->first, node) == NULL) {
         if (!f_map_put(&bd->t->first, node, b)) {
             bd->failed = true;
             return b;
