@@ -31,6 +31,10 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_STOP_COLOR] = {"stop-color", false, true},
     [GARB_STOP_OPACITY] = {"stop-opacity", false, true},
     [GARB_CONTENT] = {"content", false, true},
+    [GARB_COUNTER_RESET] = {"counter-reset", false, true},
+    [GARB_COUNTER_INCREMENT] = {"counter-increment", false, true},
+    [GARB_COUNTER_SET] = {"counter-set", false, true},
+    [GARB_QUOTES] = {"quotes", true, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -369,13 +373,11 @@ static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
     if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
         prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
-    // `content`'s items 8a reads and draws as nothing (GENERATED_CONTENT.md
-    // § 2): counters, and pictures.
+    // `content`'s items read and drawn as nothing (GENERATED_CONTENT.md §
+    // 2): pictures.
     if (prop == GARB_CONTENT) {
         for (int32_t i = 0; i < v->nitems; i++) {
             const garb_val_t *it = &v->items[i];
-            if (it->kind == GARB_V_FUNCTION && !os64_streq(it->keyword, "attr"))
-                return it->keyword;
             if (it->kind == GARB_V_URL)
                 return "url";
             if (it->kind == GARB_V_IMAGE)
@@ -2034,6 +2036,8 @@ typedef enum {
     G_POSITION,             // <position>, as x and y
     G_RATIO,                // auto || <ratio>
     G_CONTENT,              // normal | none | <content-list> [/ <string>+]?
+    G_COUNTERS,             // none | [<custom-ident> <integer>?]+
+    G_QUOTES,               // auto | none | [<string> <string>]+
 } Grammar;
 
 typedef struct {
@@ -2060,6 +2064,10 @@ static const Longhand kLonghands[] = {
     {GARB_STOP_COLOR, G_COLOR, NULL},
     {GARB_STOP_OPACITY, G_ALPHA, NULL},
     {GARB_CONTENT, G_CONTENT, NULL},
+    {GARB_COUNTER_RESET, G_COUNTERS, NULL},
+    {GARB_COUNTER_INCREMENT, G_COUNTERS, NULL},
+    {GARB_COUNTER_SET, G_COUNTERS, NULL},
+    {GARB_QUOTES, G_QUOTES, NULL},
     {GARB_FILL, G_SVG_PAINT, NULL},
     {GARB_STROKE, G_SVG_PAINT, NULL},
     {GARB_FILL_OPACITY, G_ALPHA, NULL},
@@ -2855,6 +2863,39 @@ static bool will_change(Sets *s, VCur *c, garb_val_t *out)
 // One item of a content list: a string, attr(<name>), counter() or
 // counters() (read, their arguments not kept: 8b's), a quote word, or a
 // picture. False when the next value is none of them.
+// A comma, taken: whether there was one.
+static bool vc_comma(VCur *c)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_COMMA)
+        return false;
+    c->i++;
+    return true;
+}
+
+// A counter's name (Lists 3 § 4.1): a <custom-ident> other than `none`, a
+// KEYWORD kept as written, since names match case for case, and written
+// as an identifier is.
+static bool counter_name(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_IDENT || ieq(t->text, t->len, "none") ||
+        vc_keyword(&(VCur){c->v, c->n, c->i}, kNotCustom) != NULL)
+        return false;
+    char *name = os64_arena_alloc(s->a.arena, t->len + 1);
+    if (name == NULL) {
+        s->a.short_of_memory = true;
+        return false;
+    }
+    os64_memcpy(name, t->text, t->len);
+    name[t->len] = '\0';
+    *out = kw(name);
+    out->text = name;
+    out->len = t->len;
+    c->i++;
+    return true;
+}
+
 static bool content_item(Sets *s, VCur *c, garb_val_t *out)
 {
     static const char *const kQuotes[] = {"open-quote", "close-quote", "no-open-quote", "no-close-quote", NULL};
@@ -2891,18 +2932,111 @@ static bool content_item(Sets *s, VCur *c, garb_val_t *out)
         return out->items != NULL;
     }
     if (is_fn(t, "counter") || is_fn(t, "counters")) {
+        // Lists 3 § 4.7: counter(<counter-name>, <counter-style>?) and
+        // counters(<counter-name>, <string>, <counter-style>?).
+        bool all = is_fn(t, "counters");
         VCur args = {t->children, t->nchildren, 0};
-        const garb_value_t *name = vc_peek(&args);
-        if (name == NULL || name->kind != GARB_IDENT)
+        garb_val_t parts[3];
+        int32_t n = 0;
+        if (!counter_name(s, &args, &parts[n++]))
+            return false;
+        if (all) {
+            const garb_value_t *joiner = vc_comma(&args) ? vc_peek(&args) : NULL;
+            if (joiner == NULL || joiner->kind != GARB_STRING)
+                return false;
+            os64_memset(&parts[n], 0, sizeof(parts[n]));
+            parts[n].kind = GARB_V_STRING;
+            parts[n].text = joiner->text;
+            parts[n].len = joiner->len;
+            n++;
+            args.i++;
+        }
+        if (vc_peek(&args) != NULL) {
+            const garb_value_t *style = vc_comma(&args) ? vc_peek(&args) : NULL;
+            if (style == NULL || style->kind != GARB_IDENT ||
+                vc_keyword(&(VCur){args.v, args.n, args.i}, kNotCustom) != NULL)
+                return false;
+            if (!list_type(s, &args, &parts[n]))
+                return false;
+            // decimal is the style unwritten, and is kept as it.
+            if (!os64_streq(parts[n].keyword, "decimal"))
+                n++;
+        }
+        if (!vc_done(&args))
             return false;
         out->kind = GARB_V_FUNCTION;
-        out->keyword = is_fn(t, "counter") ? "counter" : "counters";
+        out->keyword = all ? "counters" : "counter";
+        out->items = keep(s, parts, n);
+        out->nitems = n;
         c->i++;
-        return true;
+        return out->items != NULL;
     }
     if (t->kind == GARB_URL || is_fn(t, "url"))
         return vc_url(c, out);
     return vc_image(c, out);
+}
+
+// counter-reset, counter-increment, counter-set (Lists 3 § 4.1-4.3): none,
+// or names each with an integer, `fallback` when one is not written.
+// `reversed()` is not read (GENERATED_CONTENT.md § 8.5).
+static bool counters(Sets *s, VCur *c, int32_t fallback, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return vc_done(c);
+    }
+    garb_val_t items[2 * CONTENT_ITEMS_MAX];
+    int32_t n = 0;
+    while (vc_peek(c) != NULL) {
+        if (n == 2 * CONTENT_ITEMS_MAX || !counter_name(s, c, &items[n]))
+            return false;
+        const garb_value_t *t = vc_peek(c);
+        os64_memset(&items[n + 1], 0, sizeof(items[n + 1]));
+        items[n + 1].kind = GARB_V_NUMBER;
+        items[n + 1].number = fallback;
+        if (t != NULL && t->kind == GARB_NUMBER && t->integer) {
+            items[n + 1].number = t->number;
+            c->i++;
+        }
+        n += 2;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, items, n);
+    out->nitems = n;
+    return out->items != NULL;
+}
+
+// quotes (Content 3 § 4.1): auto, none, or pairs of strings.
+static bool quotes(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kAlone[] = {"auto", "none", NULL};
+    const char *k = vc_keyword(c, kAlone);
+    if (k != NULL) {
+        *out = kw(k);
+        return vc_done(c);
+    }
+    garb_val_t items[2 * CONTENT_ITEMS_MAX];
+    int32_t n = 0;
+    for (const garb_value_t *t = vc_peek(c); t != NULL; t = vc_peek(c)) {
+        if (n == 2 * CONTENT_ITEMS_MAX || t->kind != GARB_STRING)
+            return false;
+        os64_memset(&items[n], 0, sizeof(items[n]));
+        items[n].kind = GARB_V_STRING;
+        items[n].text = t->text;
+        items[n].len = t->len;
+        n++;
+        c->i++;
+    }
+    if (n == 0 || n % 2 != 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, items, n);
+    out->nitems = n;
+    return out->items != NULL;
 }
 
 // Generated Content 3 § 1.1: normal | none | [<content-item>]+ [/ [<string>
@@ -3409,6 +3543,8 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_ITERATIONS: return iterations(s, c, out);
     case G_WILL_CHANGE: return will_change(s, c, out);
     case G_CONTENT: return content(s, c, out);
+    case G_COUNTERS: return counters(s, c, l->prop == GARB_COUNTER_INCREMENT ? 1 : 0, out);
+    case G_QUOTES: return quotes(s, c, out);
     case G_CURSOR: return cursor(s, c, l->words, out);
     case G_SPACING_TEXT:
         return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH, true, true, out);

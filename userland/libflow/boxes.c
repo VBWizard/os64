@@ -705,37 +705,54 @@ static uint32_t alpha(int32_t v, bool upper, char *out)
     return n;
 }
 
-// The marker's text, suffix included: CSS Counter Styles' symbols and
-// suffixes. A number a style cannot spell — zero or less in letters, past
-// 3999 in Roman numerals — falls back to decimal, as the styles define.
+// A number a style cannot spell — zero or less in letters, past 3999 in
+// Roman numerals — falls back to decimal, as the styles define.
+uint32_t f_counter_spell(flow_list_style_type_t type, int32_t value, char out[F_COUNTER_SPELL_MAX])
+{
+    const char *fixed = NULL;
+    switch (type) {
+    case FLOW_LIST_NONE: return 0;
+    case FLOW_LIST_DISC: fixed = "\xe2\x80\xa2"; break;               // U+2022
+    case FLOW_LIST_CIRCLE: fixed = "\xe2\x97\xa6"; break;             // U+25E6
+    case FLOW_LIST_SQUARE: fixed = "\xe2\x96\xaa"; break;             // U+25AA
+    case FLOW_LIST_DISCLOSURE_CLOSED: fixed = "\xe2\x96\xb8"; break;  // U+25B8
+    case FLOW_LIST_DISCLOSURE_OPEN: fixed = "\xe2\x96\xbe"; break;    // U+25BE
+    default: break;
+    }
+    if (fixed != NULL) {
+        os64_memcpy(out, fixed, 3);
+        return 3;
+    }
+    bool upper = type == FLOW_LIST_UPPER_ALPHA || type == FLOW_LIST_UPPER_ROMAN;
+    if ((type == FLOW_LIST_LOWER_ALPHA || type == FLOW_LIST_UPPER_ALPHA) && value > 0)
+        return alpha(value, upper, out);
+    if ((type == FLOW_LIST_LOWER_ROMAN || type == FLOW_LIST_UPPER_ROMAN) && value > 0 && value < 4000)
+        return roman(value, upper, out);
+    return (uint32_t)os64_snprintf(out, 16, "%d", (int)value);
+}
+
+// The marker's text, suffix included: a bullet and a space, or a number
+// and ". " (CSS Counter Styles 3).
 static const char *marker_text(B *b, flow_list_style_type_t type, int32_t value, uint32_t *len)
 {
     const char *fixed = NULL;
     switch (type) {
     case FLOW_LIST_NONE: return NULL;
-    case FLOW_LIST_DISC: fixed = "\xe2\x80\xa2 "; break;               // U+2022
-    case FLOW_LIST_CIRCLE: fixed = "\xe2\x97\xa6 "; break;             // U+25E6
-    case FLOW_LIST_SQUARE: fixed = "\xe2\x96\xaa "; break;             // U+25AA
-    case FLOW_LIST_DISCLOSURE_CLOSED: fixed = "\xe2\x96\xb8 "; break;  // U+25B8
-    case FLOW_LIST_DISCLOSURE_OPEN: fixed = "\xe2\x96\xbe "; break;    // U+25BE
+    case FLOW_LIST_DISC: fixed = "\xe2\x80\xa2 "; break;
+    case FLOW_LIST_CIRCLE: fixed = "\xe2\x97\xa6 "; break;
+    case FLOW_LIST_SQUARE: fixed = "\xe2\x96\xaa "; break;
+    case FLOW_LIST_DISCLOSURE_CLOSED: fixed = "\xe2\x96\xb8 "; break;
+    case FLOW_LIST_DISCLOSURE_OPEN: fixed = "\xe2\x96\xbe "; break;
     default: break;
     }
     if (fixed != NULL) {
         *len = (uint32_t)os64_strlen(fixed);
         return fixed;
     }
-    char *out = alloc(b, 24);
+    char *out = alloc(b, F_COUNTER_SPELL_MAX + 2);
     if (out == NULL)
         return NULL;
-    uint32_t n = 0;
-    bool upper = type == FLOW_LIST_UPPER_ALPHA || type == FLOW_LIST_UPPER_ROMAN;
-    if ((type == FLOW_LIST_LOWER_ALPHA || type == FLOW_LIST_UPPER_ALPHA) && value > 0)
-        n = alpha(value, upper, out);
-    else if ((type == FLOW_LIST_LOWER_ROMAN || type == FLOW_LIST_UPPER_ROMAN) && value > 0 &&
-             value < 4000)
-        n = roman(value, upper, out);
-    else
-        n = (uint32_t)os64_snprintf(out, 16, "%d", (int)value);
+    uint32_t n = f_counter_spell(type, value, out);
     out[n++] = '.';
     out[n++] = ' ';
     *len = n;
@@ -1044,28 +1061,22 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         }
     }
 
-    // Generated content the sheet asks for: `q`'s quotation marks, nested
-    // levels alternating double and single; and the parentheses a browser
-    // that lays out no ruby puts round an `rt` whose ruby has no `rp`.
-    // Both answers are pass 1's (FStyled.quotes, .has_rp): asked here per
-    // element, a walk up the ancestors or across the siblings would be
-    // quadratic on a page of nested quotes or a ruby of many annotations.
+    // Generated content the sheet asks for: the parentheses a browser that
+    // lays out no ruby puts round an `rt` whose ruby has no `rp`, pass 1's
+    // answer (FStyled.has_rp): asked here across the siblings, it would be
+    // quadratic on a ruby of many annotations. (A `q`'s marks are its
+    // pseudo-elements, GENERATED_CONTENT.md § 8.)
     const char *before = NULL, *after = NULL;
     const FStyled *holder = styled(b, el->parent);
-    if (is(el, OS64_HTML_TAG_Q)) {
-        int32_t level = holder != NULL ? holder->quotes : 0;
-        before = level % 2 == 0 ? "\xe2\x80\x9c" : "\xe2\x80\x98";   // U+201C, U+2018
-        after = level % 2 == 0 ? "\xe2\x80\x9d" : "\xe2\x80\x99";    // U+201D, U+2019
-    } else if (is(el, OS64_HTML_TAG_RT) && el->parent != NULL) {
+    if (is(el, OS64_HTML_TAG_RT) && el->parent != NULL) {
         if (holder == NULL || !holder->has_rp) {
             before = "(";
             after = ")";
         }
     }
     // An author's `content` on the element's ::before or ::after, `none`
-    // included, takes the place of the mark it would have drawn
-    // (GENERATED_CONTENT.md § 2): a reset sheet's `q:before { content:
-    // none }` takes `q`'s marks away, as in every browser.
+    // included, takes the place of the marks it would have drawn
+    // (GENERATED_CONTENT.md § 2).
     if (before != NULL && !(s->pseudo_declared & 1))
         generated(f, el, &s->style, before);
     flow_range(f, kids(b, el), NULL, scope);
