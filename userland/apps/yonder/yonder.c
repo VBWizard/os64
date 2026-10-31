@@ -1172,8 +1172,11 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
     flow_profile_t profile = {0};
     layout_font_dependencies(p);
     flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
+    // A cascade without change tracking will replace its generation after a
+    // DOM mutation. Avoid recording speculative geometry for that path.
+    bool track_geometry = garb_cascade_tracks_changes(s_env.cascade);
     flow_tree_t *tree = flow_layout_incremental(page_doc(p), page_model(p), width, &s_env,
-        p->restyle_from ? p->restyle_from : p->tree, &inputs, &profile,
+        p->restyle_from ? p->restyle_from : p->tree, track_geometry ? &inputs : NULL, &profile,
         enabled ? layout_clock : NULL, NULL);
     flow_reuse_stats_t reuse = flow_reuse_stats(tree);
     if (profile.reused || reuse.intrinsic_hits) {
