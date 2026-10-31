@@ -3537,8 +3537,9 @@ int32_t flow_box_scroller(const flow_box_t *box)
 
 int32_t flow_scroller_for(const flow_tree_t *tree, const os64_html_node_t *node)
 {
+    // The element's own scroller, never one its ::before or ::after made.
     for (int32_t i = 0; node != NULL && i < flow_nscrollers(tree); i++)
-        if (tree->scrollers[i]->box->node == node)
+        if (tree->scrollers[i]->box->node == node && tree->scrollers[i]->box->pseudo == 0)
             return i;
     return -1;
 }

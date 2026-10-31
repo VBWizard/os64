@@ -1427,7 +1427,7 @@ flow_point_t flow_scroll_set(flow_tree_t *tree, int32_t i, flow_point_t at);
 // The scroll container `node` makes, or -1: what a face that keeps a
 // position by element finds again in a new layout. Not flow_box_for's
 // answer, which for an inline-block is the atom on the line and not the
-// container under it.
+// container under it. Never a scroller its ::before or ::after made.
 int32_t flow_scroller_for(const flow_tree_t *tree, const os64_html_node_t *node);
 // Scrolls every scroll container `box` is in so that `box` shows, innermost
 // first, each asked to show `box` itself where the containers inside have
@@ -1552,8 +1552,9 @@ int32_t flow_npositioned(const flow_tree_t *tree);
 const flow_box_t *flow_positioned(const flow_tree_t *tree, int32_t i);
 
 // A node's first box — where a fragment link scrolls to, where a control's
-// widget goes. NULL for a node with none (hidden, display none, or past
-// where an incomplete layout stopped).
+// widget goes; its own, never one its ::before or ::after made. NULL for a
+// node with none (hidden, display none, or past where an incomplete layout
+// stopped).
 const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *node);
 
 // The pictures and the controls that have a box, in tree order, each once:

@@ -80,11 +80,13 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     os64_gui_rect_t first_visual = {0};
     for (const flow_box_t *box = flow_root(tree); box != NULL; box = next_box(box)) {
         // Text and marker boxes may name an element (generated text/alt).
-        // They are content, not another border-box fragment of that element.
+        // They are content, not another border-box fragment of that element,
+        // and neither is a box its ::before or ::after made, which names it
+        // too (GENERATED_CONTENT.md § 4).
         bool caption = principal != NULL && principal->kind == FLOW_BOX_TABLE &&
                        box->kind == FLOW_BOX_CAPTION && box->parent == principal;
-        if ((box->node != node && !caption) || box->kind == FLOW_BOX_TEXT || box->kind == FLOW_BOX_MARKER ||
-            box->kind == FLOW_BOX_LINE) continue;
+        if ((box->node != node && !caption) || box->pseudo != 0 || box->kind == FLOW_BOX_TEXT ||
+            box->kind == FLOW_BOX_MARKER || box->kind == FLOW_BOX_LINE) continue;
         os64_gui_rect_t rect = flow_box_doc_rect(box, scroll);
         if (first == NULL) { first = box; first_visual = rect; }
         include(&raw, box->rect);
