@@ -455,10 +455,15 @@ typedef struct {
     // How many of this element and its ancestors are lists (`ul ol menu
     // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
     // for its children, by the same bargain. And whether one of them is a
-    // `nobr`, which is what `nobr wbr` asks, and how many are `q`s, which
-    // is how deep a quotation's marks nest.
-    int32_t lists, lists_or_dls, items, quotes;
+    // `nobr`, which is what `nobr wbr` asks.
+    int32_t lists, lists_or_dls, items;
     bool in_nobr;
+    // Its `quotes` (inherited): the winner's value, its marks' pairs, or
+    // NULL for auto (GENERATED_CONTENT.md § 8). And a `q`'s own marks, as
+    // pass 1 resolved them at its place in the document, NULL for none:
+    // what pass 2 draws round it.
+    const garb_val_t *quotes;
+    const char *q_open, *q_close;
     // An `rp` among this element's children: whether an `rt` in it gets
     // the parentheses a browser that lays out no ruby adds. Set by the
     // child, and read by pass 2 once every child has been styled.
@@ -494,6 +499,12 @@ typedef struct {
     uint8_t pseudo_declared;
 } FStyled;
 
+// `value` spelled in counter style `type`, its symbols without a suffix
+// (CSS Counter Styles 3), into `out`: what a list's marker and `counter()`
+// share. Returns the length; `none` spells nothing.
+#define F_COUNTER_SPELL_MAX 24
+uint32_t f_counter_spell(flow_list_style_type_t type, int32_t value, char out[F_COUNTER_SPELL_MAX]);
+
 // The pseudo-element a node of libflow's own is, or belongs to (its text),
 // GARB_PSEUDO_NONE for any node of a document; and the element it is made
 // for. A synthetic node never leaves libflow (GENERATED_CONTENT.md § 4).
@@ -523,6 +534,10 @@ typedef struct {
     // (f_timeline_begin), which its FMotions point into; freed with the
     // styles unless the face takes it (flow_timeline_commit).
     flow_timeline_t *timeline;
+    // The pass met tree-order state, a counter or a quote mark
+    // (GENERATED_CONTENT.md § 8.4): an element's generated content then
+    // depends on every element before it, so the pass is restyled whole.
+    bool ordered;
 } FStyles;
 
 // ALL OR NOTHING: NULL when memory runs out anywhere. A style is a few

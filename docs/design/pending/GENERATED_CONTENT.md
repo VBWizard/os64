@@ -338,6 +338,6 @@ reuses, an ordered pass is restyled whole.
   - every spelled style;
   - quotes by pair, past the last pair, `none`, a close at depth 0, the
     `no-` words, and a `q` nested in an author's `open-quote`.
-- **WPT**: no expectation lost; `css/cssom` gains what it serializes of
-  the four longhands.
+- **WPT**: no expectation lost. `css/cssom`'s `counter()` values already
+  pass in 8a, since a specified value is serialized from its source.
 - **Mutants**: one per row of § 8.2's table and one per rule beneath it.
