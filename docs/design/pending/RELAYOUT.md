@@ -6,9 +6,8 @@ then `requestAnimationFrame`. Original design by Fable, 2026-10-21;
 5b adds incremental cascade and computed-style reuse and merged in #424 after
 P5 acceptance. Fable reviewed the restyle rule. The sequence with Canvas is
 recorded in [CANVAS.md](CANVAS.md). The proposed 5c implementation contract is
-in [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md). Fable approved its architecture
-with amendments; the detailed contract records two focused follow-ups before
-the geometry graft is implemented.*
+in [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md). Fable approved the revised
+contract on 2026-10-31, including all four implementation steps.*
 
 ## What this settles
 
@@ -240,7 +239,7 @@ condition. Passes 2 and 3 remain whole builds in 5b.
 ## The layout memo: proposed 5c contract
 
 [RELAYOUT_GRAFT.md](RELAYOUT_GRAFT.md) specifies the copy, invalidation,
-resource, cursor and ownership rules for architecture review. It refines the
+resource, cursor and ownership rules approved for implementation. It refines the
 original sketch in several material ways:
 
 - Pass 2 builds fresh boxes and inline items. Pass 3 copies eligible geometry
@@ -266,9 +265,9 @@ The additive entry leaves the existing layout/environment/profile ABIs
 unchanged. An opt-in first layout does incur bounded snapshot bookkeeping;
 its cost must be measured. The detailed contract defines the allocation
 failure behavior, run-retention ownership, public-observation oracle,
-adversarial fixtures and the P5 performance gates. Fable accepted the scope;
-the detailed contract records the amended float qualification and the
-positive-reuse fixture that need focused follow-up.
+adversarial fixtures and the P5 performance gates. Fable accepted the scope,
+amended float qualification and synthetic positive-reuse fixture; the
+unchanged captured article remains a no-regression control.
 
 ## The instrument, and what it decides
 
@@ -311,12 +310,39 @@ behind itself.
 |---|---|---|
 | 5a | Bounded native change log and readers; opt-in phase profiling; repeatable measurement page | Native mutations, parser entries, immutable lists, eviction/OOM and lifetime checks; fake clocks; page completion/cancel/resize tests; P5 baseline |
 | 5b | `garb_cascade_update`; pass 1 copying and steady style inputs | Updated and rebuilt cascade dumps agree; libflow dumps agree with pass 1 reuse alone; Restyle design reviewed; controlled and alternating manual P5 comparisons cleared the performance gate; reviewed and merged in #424, with earlier timing outliers disclosed |
-| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Contract in RELAYOUT_GRAFT.md; architecture approved, two focused amendments before graft implementation |
+| 5c | Layout eligibility, graft and intrinsic memo | Whole/incremental dumps, bounds, clause fixtures and allocation sweeps; Contract in RELAYOUT_GRAFT.md; revised architecture approved for all four implementation steps |
 | 5d | `requestAnimationFrame` on the loop, after 5c | WPT animation-frame tests and scripted-page fake-clock cases |
 
 With one builder the cuts run in order. The Canvas integration branch
 carries this sequence before C6; PRs state their actual base. Hardware
 baseline measurements precede optimization claims.
+
+## Booked selector invalidation follow-up
+
+Fable proposes a separate slice to avoid full cascade replacement after every
+mutation on sheets with `:has()` or `:dir()`. These dependencies are currently
+classified as `whole_tree`; replacement also defeats the generation gate for
+style and geometry reuse. This is a limitation of the mutation optimization,
+not a reason to weaken 5c's correctness or lifetime guards.
+
+The proposed approach recomputes affected ancestor/sibling matches separately
+and expands invalidation into descendants when changed winners require it.
+Its detailed dependency, inheritance and failure rules need their own design
+and oracle. Fable has offered to design it; the implementation is not assigned
+by that offer. The real captured article is its intended positive-reuse gate.
+
+**Before scheduling that separate slice**, perform a host-side corpus census:
+count captured pages whose available CSS contains `:has(` or `:dir(`. Report
+the denominator and missing stylesheet coverage, and distinguish repeated
+captures from distinct pages/sites so one heavily captured site cannot silently
+determine the priority. A text-occurrence census estimates prevalence; it does
+not establish that a selector was parsed, active or expensive on each page.
+
+If these dependencies dominate the captured workloads, Fable recommends
+placing that slice before 5d, because more pages would then benefit from
+mutation-driven reuse. The census has not been run and no reordering has been
+decided. It does not block the approved 5c implementation. 5d still follows
+5c; inserting additional work ahead of it is a separate scheduling decision.
 
 ## Acceptance
 

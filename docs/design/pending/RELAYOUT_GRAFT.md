@@ -2,8 +2,9 @@
 
 *Implementation contract based on `canvas-integration` at `4184f91f`, after
 5b merged in #424. Fable approved the architecture with amendments on
-2026-10-30. The dispositions below incorporate that read and identify two
-corrections for focused follow-up. This refines [RELAYOUT.md](RELAYOUT.md).*
+2026-10-30 and accepted the revised float bound and workload gate on
+2026-10-31. All four implementation steps are approved to build. This
+refines [RELAYOUT.md](RELAYOUT.md).*
 
 ## Decision and scope
 
@@ -418,7 +419,7 @@ the old hidden tree. Requiring `reused > 0` from this exact workload would
 require changing those architectural decisions, not merely refining the float
 predicate. Do not remove broad rules from the existing control silently.
 
-Proposed positive float-reuse gate: add a separately named article-shaped
+Approved positive float-reuse gate: add a separately named article-shaped
 fixture with a grid content column, infobox/thumbnail floats and ordinary
 paragraphs, using localized selector dependencies. Change a paragraph and
 require fresh layout beside the float and `reused > 0` below it. Compare its
@@ -435,22 +436,24 @@ translated origins, `laid` semantics and early refusal diagnostics are now
 explicit above. His smaller cursor result record replaces the unnecessary
 collapse-through variant.
 
-Two follow-ups remain for the graft/performance contract:
+Fable accepted both follow-ups on 2026-10-31, reading `bdadbad1`:
 
-1. Amendment A's below-float intent is adopted, but the root-top comparison
-   is insufficient. The recorded lower bound on float-sensitive queries must
+1. Amendment A's root-top comparison is superseded by the recorded query
+   bound. The recorded lower bound on float-sensitive queries must
    cover collapsed negative margins and the Space coordinate frame. The
    [existing-engine probe](../../relayout-evidence/5c-review-probes.md)
    demonstrates the counterexample; no speculative production fix was made
    to produce it.
-2. Amendment D's three-workload/append protocol is adopted. Its positive-reuse
-   requirement conflicts with keeping the generation gate and 5b's hidden-tree
-   release on the unchanged article. The proposed synthetic float fixture
+2. Amendment D's three-workload/append protocol is adopted. Fable withdrew
+   its positive-reuse requirement on the unchanged article: the generation
+   gate and hidden-tree release remain intact. The synthetic float fixture
    proves that safety predicate separately while preserving the real article
    as a fallback/no-regression gate. Removing the generation gate and retaining
    old hidden geometry across rebuilds would be a separate design change with
    memory and first-layout consequences.
 
-Steps 1 and 2 remain approved to build. Confirm these two focused amendments
-with Fable before implementing the graft in step 3; this is not a request to
-repeat the architecture read of the accepted ownership and history design.
+Steps 1 through 4 are approved to build on this revised contract. The
+separate ancestor/sibling selector optimization booked in
+[RELAYOUT.md](RELAYOUT.md#booked-selector-invalidation-follow-up) is not a
+prerequisite for 5c. Its corpus census informs a future scheduling decision;
+it does not reopen this architecture approval.
