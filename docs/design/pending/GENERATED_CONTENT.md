@@ -30,9 +30,10 @@ marks appear. The rest of slice 8, by the same count:
 ## 2. What 8a does
 
 - **`::before` and `::after` (and the legacy `:before`, `:after`)** on any
-  element that has children boxes: not on replaced elements (`img`,
+  HTML element whose children make boxes: not on replaced elements (`img`,
   `input`, `video`, `iframe`, `canvas`), not on an element whose display
-  is `none`. On an element whose display is `contents` the pseudo-element
+  is `none`, and in 8a not on a table, a row group or a row (a cell and a
+  caption have theirs; DEBTS.md). On an element whose display is `contents` the pseudo-element
   boxes are made where its children are, as CSS Display § 2.5 says.
 - **`content`**: `normal` and `none` (no box: a pseudo-element without
   content does not exist), and a list of `<string>`, `attr(<name>)`,
@@ -108,11 +109,11 @@ What that asks of the readers of `box->node`:
 |---|---|
 | `flow_box_for(tree, element)` and every walk that finds an element's box by its node | skip boxes whose `pseudo` is set: the element's box is its own (`getBoundingClientRect`, `offsetWidth`, scrollIntoView, a focused control) |
 | hit testing (the topmost box under a point) | nothing: the pseudo box answers its originating element, which is the target |
-| text extraction and selection | skip generated text, as `<q>`'s marks are skipped |
+| text extraction and selection | nothing outside libflow reads a box's text for either; were one to, it would skip generated text, as `<q>`'s marks would be |
 | paint | nothing: a pseudo box is painted as any box of its kind |
 
 Each site is named in § 7 as built, by audit of the readers of `->node`
-outside libflow (about fifty-six today).
+outside libflow.
 
 ## 5. Lifecycle
 
@@ -144,11 +145,49 @@ and it is said here so 5b and 8a meet on it rather than discover it.
 - **yonder**: a page whose link's `::before` is clicked navigates; an
   element's `getBoundingClientRect` is its own box's; the record stops
   naming `content`.
-- **WPT**: `css/css-content/` and `css/css-pseudo/` testharness pages
-  where the runner can judge them (most of both are reftests, which it
-  cannot).
+- **WPT**: no expectation lost in any `css/` directory or `cssom`;
+  `css/cssom`'s `serialize-values.html` passes its twelve `content` values
+  (and `serialize-all-longhands.html` holds with `content` among the
+  longhands). `css/css-content/` and `css/css-pseudo/` are not in the
+  pinned checkout, and are mostly reftests the runner cannot judge.
 - **The P5**: the census's top `content` sites before and after.
 
 ## 7. As built
 
-*(Filled in as 8a is built.)*
+- **libgarb**: `GARB_CONTENT` and its reader (`content`, `content_item`),
+  modern-marked, 32 items at most; a rule's `::before`/`::after`
+  selectors filed in an index of their own per pseudo-element (`Index`,
+  `TARGET_*`), so an element's own lookup never steps over them and a
+  pseudo-element's lookup runs only when its index holds a rule
+  (`targeted`); its winners kept in the element's `Slot`
+  (`pseudo[]`), answered by `garb_style_for_pseudo`. The dump prints them
+  after their element (`p#y::before: ...`). `content`'s counters and
+  pictures are named as approximated, so the record still says what 8a
+  does not draw.
+- **libflow pass 1** (`style_pseudos`, `style_pseudo`): the winners laid
+  through the element's own `lay_sets`; the content resolved once
+  (`content_text`); a synthetic node in pass 1's arena, its name one of
+  two static strings so `f_pseudo_of` knows it by address. An author's
+  `content` on a `q`'s pseudo-element, `none` included, replaces the mark
+  `q` draws of its own (`FStyled.pseudo_declared`): a reset sheet's
+  `q:before, q:after { content: none }` takes the marks away.
+- **libflow pass 2**: `kids` and `sib` walk an element's children with its
+  `::before` first and `::after` last, in `scan`, `flow_range`, and the
+  element, inline, inline-block, cell and caption containers.
+- **The boundary** is `add()` in flow.c, the one constructor of public
+  boxes: a synthetic node becomes its originating element, `pseudo` says
+  which, and the box is never the element's first box (`flow_box_for`,
+  `flow_image`). `flow_scroller_for` skips them too.
+- **The audit of `->node` readers outside libflow** (§ 4's table, as
+  found): `geometry.c` (an element's fragments skip pseudo boxes),
+  `attribute_picture` and `glass_backdrop` (a `background` attribute is
+  the element's own box's), the two scroll-keeping sites (a pseudo
+  scroller is not kept), and `anchor_of` (climbs past pseudo boxes and
+  generated text); `paint.c`'s inline-block frame test and canvas owner
+  hardened. Every other reader — hit testing, links, cursors, pictures,
+  controls, painting — is right with the originating element. Nothing
+  outside libflow reads a box's text for selection or copy.
+- **What waits** is in DEBTS.md § Browser layout: counters and `quotes`
+  (8b), pictures in `content`, `getComputedStyle(el, '::before')`,
+  `::marker` and the line pseudo-elements, a pseudo-element's animations,
+  and tables' own.
