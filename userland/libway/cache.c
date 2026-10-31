@@ -315,16 +315,34 @@ static bool put_line(char *out, size_t cap, size_t *at, const char *name, size_t
            put_bytes(out, cap, at, value, vlen) && put_bytes(out, cap, at, "\r\n", 2);
 }
 
+// What a request said of header `name`, as a recorded line's value holds
+// it: "=" and the value for one sent, "-" for none. False when the caller
+// cannot say or it does not fit.
+static bool said_as_recorded(way_request_value_t value_of, void *ctx, const char *name, size_t nlen, char *out,
+                             size_t cap)
+{
+    way_said_t said = value_of(ctx, name, nlen, out + 1, cap - 1);
+    if (said == WAY_SAID_VALUE) {
+        out[0] = '=';
+        return true;
+    }
+    if (said != WAY_SAID_NONE)
+        return false;
+    out[0] = '-';
+    out[1] = '\0';
+    return true;
+}
+
 size_t way_vary_lines(const char *vary, way_request_value_t value_of, void *ctx, char *out, size_t cap)
 {
     Members m = {vary, 0, os64_strlen(vary)};
     const char *name, *value;
     size_t nlen, vlen, at = 0;
-    char said[WAY_VARY_VALUE_MAX];
+    char said[WAY_VARY_VALUE_MAX + 1];
     while (member(&m, &name, &nlen, &value, &vlen)) {
         if (same_nocase(name, nlen, "accept-encoding"))
             continue;
-        if (same_nocase(name, nlen, "*") || !value_of(ctx, name, nlen, said, sizeof(said)) ||
+        if (same_nocase(name, nlen, "*") || !said_as_recorded(value_of, ctx, name, nlen, said, sizeof(said)) ||
             !put_line(out, cap, &at, name, nlen, said, os64_strlen(said)))
             return SIZE_MAX;
     }
@@ -335,9 +353,9 @@ bool way_vary_matches(const char *lines, size_t len, way_request_value_t value_o
 {
     size_t at = 0;
     way_header_t h;
-    char now[WAY_VARY_VALUE_MAX];
+    char now[WAY_VARY_VALUE_MAX + 1];
     while (way_header_next(lines, len, &at, &h))
-        if (!value_of(ctx, h.name, h.name_len, now, sizeof(now)) || os64_strlen(now) != h.value_len ||
+        if (!said_as_recorded(value_of, ctx, h.name, h.name_len, now, sizeof(now)) || os64_strlen(now) != h.value_len ||
             os64_memcmp(now, h.value, h.value_len) != 0)
             return false;
     return at == len;

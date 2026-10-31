@@ -755,33 +755,30 @@ static bool block_values(const char *block, const char *name, size_t nlen, char 
 }
 
 // What the request sends for header `name` (way_request_value_t): its own
-// lines', or "" for one it does not send. The lines libfetch and the agent's
-// preset add are not in the request's own, so for those it cannot say, and
-// nothing that varies on them is kept.
-static bool request_value(void *ctx, const char *name, size_t nlen, char *out, size_t cap)
+// lines', or NONE for one it does not send. The lines libfetch and the
+// agent's preset add are not in the request's own, so for those it cannot
+// say, and nothing that varies on them is kept.
+static way_said_t request_value(void *ctx, const char *name, size_t nlen, char *out, size_t cap)
 {
     const Cached *c = ctx;
     static const char *const kAdded[] = {"user-agent", "accept-language", "cookie", "referer", "priority",
                                          "host", "connection", "authorization"};
-    if (is_named(name, nlen, "accept")) {
-        size_t n = os64_strcopy(out, cap, c->accept);
-        return n < cap;
-    }
+    if (is_named(name, nlen, "accept"))
+        return os64_strcopy(out, cap, c->accept) < cap ? WAY_SAID_VALUE : WAY_SAID_UNKNOWN;
     size_t at = 0;
     bool found = false;
     out[0] = '\0';
     if (!block_values(c->extra, name, nlen, out, cap, &at, &found) ||
         !block_values(c->representation, name, nlen, out, cap, &at, &found))
-        return false;
+        return WAY_SAID_UNKNOWN;
     if (found)
-        return true;
+        return WAY_SAID_VALUE;
     for (size_t i = 0; i < sizeof(kAdded) / sizeof(kAdded[0]); i++)
         if (is_named(name, nlen, kAdded[i]))
-            return false;
+            return WAY_SAID_UNKNOWN;
     if (nlen >= 4 && is_named(name, 4, "sec-"))
-        return false;
-    out[0] = '\0';
-    return true;
+        return WAY_SAID_UNKNOWN;
+    return WAY_SAID_NONE;
 }
 
 // Whether a Cache-Control or Pragma value holds `directive` (a token, or
@@ -928,6 +925,65 @@ static CacheAnswer cache_answer(const yonder_fetch_job_t *job, way_request_t *r,
     return CACHE_ASKED;
 }
 
+// Whether two header names are one, any case.
+static bool same_name(const char *a, size_t alen, const char *b, size_t blen)
+{
+    if (alen != blen)
+        return false;
+    for (size_t i = 0; i < alen; i++)
+        if ((a[i] | 0x20) != (b[i] | 0x20))
+            return false;
+    return true;
+}
+
+// Whether the name list `names` ("name\r\n" lines) holds `name`, any case.
+static bool names_hold(const char *names, size_t len, const char *name, size_t nlen)
+{
+    for (size_t at = 0; at < len;) {
+        size_t end = at;
+        while (end < len && names[end] != '\r' && names[end] != '\n')
+            end++;
+        if (same_name(names + at, end - at, name, nlen))
+            return true;
+        at = end;
+        while (at < len && (names[at] == '\r' || names[at] == '\n'))
+            at++;
+    }
+    return false;
+}
+
+// The kept reply's omitted names with a 304's laid over them, by name as
+// its header lines are (way_headers_update): a kept name the 304 sends a
+// line of, readable or omitted, is the 304's now, and the 304's own omitted
+// names follow. Into `out`, which holds both lists and a line end more;
+// its length.
+static size_t omitted_update(const char *kept, size_t klen, const char *block, size_t blen, const char *update,
+                             size_t ulen, char *out)
+{
+    size_t n = 0;
+    for (size_t at = 0; at < klen;) {
+        size_t end = at;
+        while (end < klen && kept[end] != '\r' && kept[end] != '\n')
+            end++;
+        bool superseded = names_hold(update, ulen, kept + at, end - at);
+        size_t from = 0;
+        way_header_t h;
+        while (!superseded && way_header_next(block, blen, &from, &h))
+            superseded = same_name(h.name, h.name_len, kept + at, end - at);
+        if (!superseded && end > at) {
+            os64_memcpy(out + n, kept + at, end - at);
+            n += end - at;
+            os64_memcpy(out + n, "\r\n", 2);
+            n += 2;
+        }
+        at = end;
+        while (at < klen && (kept[at] == '\r' || kept[at] == '\n'))
+            at++;
+    }
+    os64_memcpy(out + n, update, ulen);
+    return n + ulen;
+}
+
 // A 304 to the question the cache asked: the kept reply with the 304's
 // headers laid over its own (way_headers_update), judged by the live CORS
 // check, served, and kept again with its freshness restarted — or let go,
@@ -937,7 +993,7 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
                             const Hop *h, const os64_fetch_keep_t *fields, yonder_fetched_t *got,
                             uint64_t max_body)
 {
-    size_t cap = c->blocks.headers_len + h->len + 1, ocap = c->blocks.omitted_len + h->olen + 1;
+    size_t cap = c->blocks.headers_len + h->len + 1, ocap = c->blocks.omitted_len + h->olen + 3;
     char *merged = os64_malloc(cap), *omitted = os64_malloc(ocap);
     size_t mlen = merged != NULL ? way_headers_update(c->blocks.headers, c->blocks.headers_len,
                                                        h->block != NULL ? h->block : "", h->len, merged, cap)
@@ -947,11 +1003,9 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
         os64_free(omitted);
         return network_error(got, "out of memory"), false;
     }
-    os64_memcpy(omitted, c->blocks.omitted, c->blocks.omitted_len);
-    if (h->olen > 0)
-        os64_memcpy(omitted + c->blocks.omitted_len, h->omitted, h->olen);
-    way_blocks_t b = {merged, mlen, omitted, c->blocks.omitted_len + h->olen, c->blocks.vary,
-                      c->blocks.vary_len};
+    size_t olen = omitted_update(c->blocks.omitted, c->blocks.omitted_len, h->block != NULL ? h->block : "", h->len,
+                                 h->omitted != NULL ? h->omitted : "", h->olen, omitted);
+    way_blocks_t b = {merged, mlen, omitted, olen, c->blocks.vary, c->blocks.vary_len};
     bool ok = serve_kept(c, r, current, &b, got, max_body, WAY_SERVED_CONFIRMED);
     if (!ok)
         network_error(got, "CORS: the answer does not allow this origin to read it");

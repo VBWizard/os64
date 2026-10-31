@@ -1373,6 +1373,42 @@ static void http_cache_cases(void)
     expect("no-cache: and so does one sending Pragma no-cache alone", g != NULL && nfake_requests == before + 1, NULL);
     yonder_fetched_free(g);
 
+    // Codex #425 rd3. A header not sent and one sent empty are two requests
+    // to a reply that varies on it.
+    fake_answer(NULL, "https://a.test/empty.json", 200,
+                "Content-Type: application/json\r\nVary: X-Test\r\nCache-Control: max-age=600\r\n", "{}");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/empty.json"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/empty.json", .headers = "X-Test: \r\n"});
+    expect("vary: a request sending empty what the kept one did not send is not served it",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // A 304 that sends a readable line a kept reply had omitted: the line is
+    // the 304's now, and what it exposes is exposed.
+    fake_answer_t *ex = fake_answer(NULL, "https://cdn.test/exposed.json", 200,
+                                    MODULE_HEAD "Cache-Control: max-age=60\r\nETag: \"x1\"\r\nX-Token: secret\r\n",
+                                    "{}");
+    ex->omitted = "Access-Control-Expose-Headers\r\n";
+    g = run(&(Ask){page, "https://cdn.test/exposed.json"});
+    expect("omitted: an expose list too long to read exposes nothing",
+           g != NULL && g->ok && !has_line(g, "X-Token: secret\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    s_epoch += 120;
+    ex->status = 304;
+    ex->reason = "Not Modified";
+    ex->headers = "ETag: \"x1\"\r\nCache-Control: max-age=60\r\nAccess-Control-Expose-Headers: X-Token\r\n";
+    ex->omitted = NULL;
+    ex->body = NULL;
+    g = run(&(Ask){page, "https://cdn.test/exposed.json"});
+    expect("omitted: a 304 sending it readable exposes what it names",
+           g != NULL && g->served == WAY_SERVED_CONFIRMED && has_line(g, "X-Token: secret\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/exposed.json"});
+    expect("omitted: and so does the kept reply after it",
+           g != NULL && g->served == WAY_SERVED_KEPT && has_line(g, "X-Token: secret\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+
     // only-if-cached with no cache: a network error, nothing asked.
     way_cache_t *saved = http_cache;
     http_cache = NULL;

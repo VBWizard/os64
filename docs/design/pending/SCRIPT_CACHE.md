@@ -225,7 +225,12 @@ the blob carries it and one made under another name is a miss.
   that worked drops its address's entries**, under either credentials
   (RFC 9111 § 4.4).
 - **Repeated request lines a reply varies on are one list**, compared
-  whole, in order (Codex #425 rd2).
+  whole, in order (Codex #425 rd2), **and a line not sent is not a line
+  sent empty** (rd3): a recorded value is `=value` for one sent, `-` for
+  none (`way_said_t`). An entry recorded before that read as a miss.
+- **A 304 lays its omitted names over the kept ones by name**, as its
+  header lines are laid (rd3): a line it sends readable is no longer
+  omitted.
 - **7b's blob is read by the fetch job** (`module_bytecode`) for a module's
   request whose answer the entry holds — served kept, confirmed by a 304,
   or just stored — and rides to the module map with the answer

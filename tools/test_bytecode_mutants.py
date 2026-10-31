@@ -190,6 +190,11 @@ mutants = [
      '    return (no_cache || (pragma && !control)) && false ? WAY_CACHE_NO_CACHE : WAY_CACHE_DEFAULT;', FETCHJOBS),
     ('whole-serves-another-requests-variant', LOAD, '&blocks, cap) && blocks.vary_len == 0;', '&blocks, cap);',
      FETCH),
+    # Codex #425 rd3.
+    ('a-header-not-sent-reads-as-empty', CACHE, "    if (said != WAY_SAID_NONE)\n        return false;\n    out[0] = '-';",
+     "    if (said != WAY_SAID_NONE)\n        return false;\n    out[0] = '=';", WAY),
+    ('a-304-keeps-the-old-omitted-names', FETCHJOB, '        if (!superseded && end > at) {', '        if (end > at) {',
+     FETCHJOBS),
     ('any-fetch-reads-a-module-blob', FETCHJOB, '    if (job->module && got->ok && cached != NULL',
      '    if (got->ok && cached != NULL', FETCHJOBS),
     ('a-body-not-held-has-its-module-blob-read', FETCHJOB, 'cached != NULL && cached->held &&', 'cached != NULL &&',
