@@ -5746,6 +5746,7 @@ static uint32_t *stand_in_shot(void) {
     return screen.surf.pixels;
 }
 #include "test_yonder_svg_images.inc"
+#include "test_yonder_data_pictures.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -6797,22 +6798,22 @@ static void diag_picture_workerless_case(void) {
  * those still coming when the page is left are counted; a layout that
  * stopped partway is one standing failure however often it is written. */
 static void diag_picture_unasked_case(void) {
-    probe_page("<img src='data:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
+    probe_page("<img src='blob:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
         "<img src=file:///slow.png><img src='x:asset'>",true);
     g.page.diag=diag_new_claimed("http://u.test/",1);
     pictures_start(&g.page);        /* no workers: slow.png is refused too */
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"MISSING picture-scheme data (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
+    check(has(text,"MISSING picture-scheme blob (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
           has(text,"MISSING picture-scheme x (1)") && has(text,"not asked for") && g.page.unasked==3,
         "diag: a picture refused before the table is on the record, by its scheme (one letter is one) or its refusal");
     /* Met with nothing out, the record is written then; met again (a
      * script's rebuild), it is the same picture and records nothing more. */
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
-    check(has(diag_file("/tmp/diag",name),"MISSING picture-scheme data (1)"),
+    check(has(diag_file("/tmp/diag",name),"MISSING picture-scheme blob (1)"),
         "diag: a refusal met with no picture out writes the record");
     pictures_start(&g.page);
     yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(g.page.unasked==3 && has(text,"MISSING picture-scheme data (1)") &&
+    check(g.page.unasked==3 && has(text,"MISSING picture-scheme blob (1)") &&
           has(text,"FAILED picture: http://[bad: the address was refused (the address it names is not one that resolves) (1)"),
         "diag: a refused picture met again is the same picture");
     /* Left with one still out: counted, not failed. */
@@ -6964,20 +6965,20 @@ static void diag_fact_short_case(void) {
 static void diag_css_unasked_case(void) {
     /* A page whose only picture is refused before the table: nothing will
      * ever come in to write the record, so meeting it writes it. */
-    probe_page("<img src='data:image/png;base64,iVBORw0KGgo='>",true);
+    probe_page("<img src='blob:image/png;base64,iVBORw0KGgo='>",true);
     g.page.diag=diag_new_claimed("http://only.test/",1);
     pictures_start(&g.page);
     char only[64]; yonder_diag_file_name(g.page.diag,only,sizeof(only));
-    check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme data (1)"),
+    check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme blob (1)"),
         "diag: a page whose only picture is refused writes the record when it meets it");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
-    probe_page("<style>p{background-image:url('data:image/png;base64,AAAA')}</style><p>x</p>",true);
+    probe_page("<style>p{background-image:url('blob:image/png;base64,AAAA')}</style><p>x</p>",true);
     g.page.diag=diag_new_claimed("http://c.test/",1);
     css_pictures(&g.page);
     css_pictures(&g.page);          /* every layout meets it again */
     char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"MISSING picture-scheme data (1)") && g.page.unasked==1,
+    check(has(text,"MISSING picture-scheme blob (1)") && g.page.unasked==1,
         "diag: a sheet's picture refused before the table is on the record, once");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
@@ -11129,6 +11130,7 @@ int main(void)
     svg_cache_window_cases();
     svg_window_cases();
     picture_svg_window_cases();
+    data_picture_cases();
     covered_link_cases();
     clipped_control_cases();
     classic_downloaded_cases();

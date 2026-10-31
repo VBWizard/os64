@@ -252,8 +252,9 @@ Window**, because a picture alone has no link to open and yonder shows a
 picture on a page of its own. The addresses are copied when the menu opens,
 so a page that changes under it cannot change what a verb acts on: the
 link's resolved address with its fragment, and the picture's address as
-the page's catalog fetched it (`srcset`'s choice; a `data:` picture is not
-in the catalog and offers nothing). A `javascript:` link can be copied but
+the page's catalog fetched it (`srcset`'s choice; a `data:` picture is in
+the catalog and offers its address when it fits the menu's copy, though
+Save takes `http:` and `https:` alone). A `javascript:` link can be copied but
 not opened. Shift+F10 opens the same menu at the pointer when the page has
 the keys. No `contextmenu` event reaches the page: that is web surface,
 and it waits for the arc. Save picture as and Save link as arrived with § 6,

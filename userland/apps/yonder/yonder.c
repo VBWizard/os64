@@ -566,6 +566,7 @@ typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } Pi
 
 typedef struct {
     const char *url;
+    size_t url_len;                 // a data: address may be kilobytes: kept, not measured per probe
     PictureState state;
     yonder_picture_kind_t kind;
     yonder_svg_document_t *svg;
@@ -3969,6 +3970,29 @@ static char *copy_text(const char *text)
     return out;
 }
 
+// Whether the `n` bytes at `text` are a data: address, its scheme in any
+// case, as the URL grammar reads a scheme. The catalog's key for one spells
+// the scheme in lower case, as libpage does.
+static bool data_address(const char *text, size_t n)
+{
+    return n >= 5 && (text[0] | 0x20) == 'd' && (text[1] | 0x20) == 'a' &&
+           (text[2] | 0x20) == 't' && (text[3] | 0x20) == 'a' && text[4] == ':';
+}
+
+// How the page's record names a picture: by its address, except that a
+// long data: address IS the picture, often kilobytes of base64, and may be
+// longer than the line it is written into, so it is named by its opening
+// and its length and the line keeps its reason. The record shortens a long
+// data: run itself (diag.c), but only a line that arrives whole.
+static const char *picture_name(const char *url, char *buf, size_t cap)
+{
+    size_t n = os64_strlen(url);
+    if (!data_address(url, n) || n <= 200)
+        return url;
+    os64_snprintf(buf, cap, "%.64s...(%lu bytes)", url, (unsigned long)n);
+    return buf;
+}
+
 // Whether an arrival can move the page: libflow's rule, asked of the box
 // the element was laid out in. A picture with no box has nothing fixed.
 static bool picture_sized(const Page *p, const os64_html_node_t *node)
@@ -4020,7 +4044,19 @@ static void pictures_feed(Page *p)
         job->svg_enabled = p->modern;
         job->dark = s_dark;
         job->reduced_motion = s_reduce_motion;
-        os64_strcopy(job->url, sizeof(job->url), pic->url);
+        // A data: address is the picture itself, which job->url may not
+        // hold, and the catalog's copy dies with the page: the job keeps its own.
+        if (data_address(pic->url, pic->url_len)) {
+            job->data_url = copy_text(pic->url);
+            if (job->data_url == NULL) {
+                yonder_picture_release(job, NULL);
+                picture_failed(p, pic->url, NULL, "no memory for its address");
+                refused = true;
+                continue;
+            }
+        } else {
+            os64_strcopy(job->url, sizeof(job->url), pic->url);
+        }
         job->hooks.jar = g.way.jar;
         job->hooks.cache = g.cache;
         os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
@@ -4028,7 +4064,7 @@ static void pictures_feed(Page *p)
         os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
         pic->id = os64_work_submit(g.pool, &work);
         if (pic->id == 0) {
-            os64_free(job);
+            yonder_picture_release(job, NULL);
             picture_failed(p, pic->url, NULL, "the workers would not take it");
             refused = true;
             continue;
@@ -4041,55 +4077,67 @@ static void pictures_feed(Page *p)
         diag_pictures_in(p);
 }
 
-static size_t url_hash(const char *url)
+static size_t url_hash(const char *url, size_t n)
 {
     uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
-    for (const char *c = url; *c != '\0'; c++)
-        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ (uint8_t)url[i]) * 1099511628211ull;
     return (size_t)h;
 }
 
-// The table's index slot for `url`: where it is, or the empty slot where it
-// would go. The index is never full (picture_for keeps it half empty).
-static size_t picture_slot(const Page *p, const char *url)
+// The table's index slot for the `n` bytes at `url`, which need not end
+// there: where it is, or the empty slot where it would go. The index is
+// never full (picture_for keeps it half empty).
+static size_t picture_slot(const Page *p, const char *url, size_t n)
 {
-    size_t at = url_hash(url) & (p->pic_slot_cap - 1);
-    while (p->pic_slot[at] >= 0 && !os64_streq(p->pics[p->pic_slot[at]].url, url))
+    size_t at = url_hash(url, n) & (p->pic_slot_cap - 1);
+    while (p->pic_slot[at] >= 0) {
+        const Picture *pic = &p->pics[p->pic_slot[at]];
+        if (pic->url_len == n && os64_memcmp(pic->url, url, n) == 0)
+            break;
         at = (at + 1) & (p->pic_slot_cap - 1);
+    }
     return at;
 }
 
-// The picture at `url` in the page's table, or -1: found through the index,
-// never by a walk of the table — a page names every picture it likes, and a
-// walk per picture is quadratic in them.
-static int32_t picture_find(const Page *p, const char *url)
+// The picture at the `n` bytes at `url` in the page's table, or -1: found
+// through the index, never by a walk of the table — a page names every
+// picture it likes, and a walk per picture is quadratic in them.
+static int32_t picture_find_span(const Page *p, const char *url, size_t n)
 {
     if (p->pic_slot == NULL || url == NULL)
         return -1;
-    return p->pic_slot[picture_slot(p, url)];
+    return p->pic_slot[picture_slot(p, url, n)];
+}
+
+static int32_t picture_find(const Page *p, const char *url)
+{
+    return url != NULL ? picture_find_span(p, url, os64_strlen(url)) : -1;
 }
 
 // The picture at `url`, gathered once however many times the page or its
 // sheets name it: its index in the page's table, QUEUED for pictures_feed
 // when it is new, or -1 for an address nothing here fetches (or no memory).
-// The catalog owns each address. The index grows with the table, so pictures found
-// after a layout join the same one.
+// A data: address is taken as the others are, the picture inside it
+// decoded by the worker. The catalog owns each address. The index grows
+// with the table, so pictures found after a layout join the same one.
 static int32_t picture_for(Page *p, const char *url)
 {
     if (url == NULL)
         return -1;
-    bool fetchable = os64_strlen(url) > 7 &&
-                     (os64_memcmp(url, "http://", 7) == 0 ||
-                      (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
-                      os64_memcmp(url, "file://", 7) == 0);
+    size_t len = os64_strlen(url);
+    bool fetchable = (len > 7 && (os64_memcmp(url, "http://", 7) == 0 ||
+                                  (len > 8 && os64_memcmp(url, "https://", 8) == 0) ||
+                                  os64_memcmp(url, "file://", 7) == 0)) ||
+                     data_address(url, len);
     if (!fetchable)
         return -1;
-    int32_t found = picture_find(p, url);
+    int32_t found = picture_find_span(p, url, len);
     if (found >= 0)
         return found;
     // Script-driven source changes may revisit many URLs between rebuilds.
     // Keep the native catalog bounded as well as its decoded pixel storage.
-    size_t bytes = os64_strlen(url) + 1;
+    size_t bytes = len + 1;
     if (p->npics >= 4096 || bytes > 4u * 1024u * 1024u - p->picture_url_bytes)
         return -1;
     if ((size_t)(p->npics + 1) * 2 > p->pic_slot_cap) {
@@ -4105,7 +4153,7 @@ static int32_t picture_for(Page *p, const char *url)
         p->pic_slot = slot;
         p->pic_slot_cap = cap;
         for (int32_t k = 0; k < p->npics; k++)
-            p->pic_slot[picture_slot(p, p->pics[k].url)] = k;
+            p->pic_slot[picture_slot(p, p->pics[k].url, p->pics[k].url_len)] = k;
     }
     if (p->npics == p->cap_pics) {
         int32_t cap = p->cap_pics > 0 ? p->cap_pics * 2 : 8;
@@ -4119,9 +4167,10 @@ static int32_t picture_for(Page *p, const char *url)
     const char *kept = copy_text(url);
     if (kept == NULL)
         return -1;
-    p->pic_slot[picture_slot(p, kept)] = p->npics;
+    p->pic_slot[picture_slot(p, kept, len)] = p->npics;
     Picture *pic = &p->pics[p->npics];
     pic->url = kept;
+    pic->url_len = len;
     p->picture_url_bytes += bytes;
     pic->state = PIC_QUEUED;
     p->waiting++;
@@ -4454,13 +4503,64 @@ static bool css_url(const Page *p, const flow_layer_t *l, char *out, size_t cap)
     return os64_page_url_absolute(base, written, out, cap);
 }
 
+// A background layer's data: address, which resolves against nothing and
+// is held to no address's length: where it starts in the url() and how
+// long it is, without the spaces around it that the URL parser strips and
+// without its fragment, which Fetch's data: processor drops — so the
+// markup's spelling of one address is the sheet's, and they share a
+// picture. (A byte libpage escapes in the markup's, a control or one past
+// ASCII, is kept as written here; that costs a second entry, not a wrong
+// one.) False for any other address.
+static bool css_data_span(const flow_layer_t *l, const char **at, size_t *n)
+{
+    const char *s = l->image;
+    size_t len = l->image_len;
+    while (len > 0 && (uint8_t)s[0] <= 0x20) {
+        s++;
+        len--;
+    }
+    while (len > 0 && (uint8_t)s[len - 1] <= 0x20)
+        len--;
+    if (!data_address(s, len))
+        return false;
+    const char *hash = os64_memchr(s, '#', len);
+    *at = s;
+    *n = hash != NULL ? (size_t)(hash - s) : len;
+    return true;
+}
+
+// That span as the catalog keys it, its scheme in lower case
+// (os64_malloc'd), or NULL for no memory.
+static char *css_data_key(const char *at, size_t n)
+{
+    char *key = os64_malloc(n + 1);
+    if (key == NULL)
+        return NULL;
+    os64_memcpy(key, at, n);
+    key[n] = '\0';
+    os64_memcpy(key, "data", 4);
+    return key;
+}
+
 // The picture a background layer names, in the page's table, or -1.
 // Asked for every layer with a picture on every paint: a copy, a resolve
-// and one index probe, small beside drawing the box. The layout-time walk
-// has the same answer; keeping it per box would mean a field on libflow's
-// tree for yonder's table, and one to keep true across relayouts.
+// and one index probe, small beside drawing the box — and a data: address
+// is probed where the sheet holds it, copied only when its scheme is not
+// written in lower case. The layout-time walk has the same answer; keeping
+// it per box would mean a field on libflow's tree for yonder's table, and
+// one to keep true across relayouts.
 static int32_t css_picture(const Page *p, const flow_layer_t *l)
 {
+    const char *at;
+    size_t n;
+    if (css_data_span(l, &at, &n)) {
+        if (os64_memcmp(at, "data", 4) == 0)
+            return picture_find_span(p, at, n);
+        char *key = css_data_key(at, n);
+        int32_t k = picture_find(p, key);
+        os64_free(key);
+        return k;
+    }
     char url[OS64_FETCH_URL_MAX];
     if (!css_url(p, l, url, sizeof(url)))
         return -1;
@@ -4496,7 +4596,19 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
         char url[OS64_FETCH_URL_MAX];
         if (l.image == NULL)
             continue;
-        if (!css_url(p, &l, url, sizeof(url))) {
+        const char *at;
+        size_t n;
+        if (css_data_span(&l, &at, &n)) {
+            char *key = css_data_key(at, n);
+            if (key == NULL) {
+                // No memory for its key: on the record by its opening.
+                os64_snprintf(url, sizeof(url), "%.*s", (int)(n < 64 ? n : 64), at);
+                fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
+            } else if (picture_for(p, key) < 0) {
+                fresh |= picture_unasked(p, key, NULL, OS64_PAGE_REASON_OK);
+            }
+            os64_free(key);
+        } else if (!css_url(p, &l, url, sizeof(url))) {
             // Unresolved: the address as the sheet wrote it.
             size_t len = l.image_len < sizeof(url) - 1 ? l.image_len : sizeof(url) - 1;
             os64_memcpy(url, l.image, len);
@@ -4633,38 +4745,39 @@ static bool unasked_first(Page *p, const char *key)
 }
 
 // A picture the page names that never reaches the table, on the record
-// once (unasked_first): one in a scheme nothing here fetches (a `data:`
-// picture, which the resolver does not even take) is MISSING
-// picture-scheme, counted, since its address is the picture itself; an
-// address that was refused (`url` NULL) is FAILED picture, `written` as
-// the page wrote it, with the refusal when there is one; one past what a
-// page may name, or with no memory to hold it, is FAILED picture by its
-// address. True when it was new, and the record changed.
+// once (unasked_first): one in a scheme nothing here fetches (`blob:`, say)
+// is MISSING picture-scheme, counted by its scheme; an address that was refused
+// (`url` NULL) is FAILED picture, `written` as the page wrote it (named
+// short when it is a long data: address), with the refusal when there is
+// one; one past what a page may name, or with no
+// memory to hold it, is FAILED picture by its address (picture_name). True
+// when it was new, and the record changed.
 static bool picture_unasked(Page *p, const char *url, const char *written,
                             os64_page_reason_t refused)
 {
     const char *addr = url != NULL ? url : written != NULL ? written : "";
     if (p->diag == NULL || !unasked_first(p, addr))
         return false;
-    // The scheme as written, by the URL grammar (os64_url_scheme_of): a
-    // `data:` address is no URL the parser takes, and is the case most
-    // worth counting.
+    // The scheme as written, by the URL grammar (os64_url_scheme_of), which
+    // names one even where the rest is no URL the parser takes.
     char scheme[OS64_URL_SCHEME_MAX];
     bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme));
     bool fetched = named && (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
-                             os64_streq(scheme, "file"));
-    char line[OS64_FETCH_URL_MAX + 96];
+                             os64_streq(scheme, "file") || os64_streq(scheme, "data"));
+    char line[OS64_FETCH_URL_MAX + 96], name[128];
     if (named && !fetched) {
         yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);
     } else if (url == NULL) {
+        const char *named_as = picture_name(addr, name, sizeof(name));
         if (refused != OS64_PAGE_REASON_OK)
-            os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)", addr,
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)", named_as,
                           os64_page_reason_name(refused));
         else
-            os64_snprintf(line, sizeof(line), "%.256s: the address was refused", addr);
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused", named_as);
         yonder_diag_failed(p->diag, "picture", line);
     } else {
-        os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory", url);
+        os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory",
+                      picture_name(url, name, sizeof(name)));
         yonder_diag_failed(p->diag, "picture", line);
     }
     if (p == &g.page)
@@ -4706,17 +4819,19 @@ static bool picture_moves_page(const Page *p, int32_t pic)
     return p->pics[pic].moves;
 }
 
-// A picture that will not be shown, on the page's record by its address:
-// an unsupported format or variant is asked for and not had, MISSING image
-// <format>, with the address on a plain line; one that could not be asked
-// for (`asked`, the reason) is FAILED picture; one whose fetch decided it
-// (it would not fetch, came with an error the server answered, or would
-// not decode) is FAILED picture-fetch, a kind of its own because a replay,
+// A picture that will not be shown, on the page's record by its address
+// (picture_name): an unsupported format or variant is asked for and not
+// had, MISSING image <format>, with the address on a plain line; one that
+// could not be asked for (`asked`, the reason) is FAILED picture; one the
+// worker decided (it would not fetch, came with an error the server
+// answered, its data: address would not decode as one, or the picture
+// would not) is FAILED picture-fetch, a kind of its own because a replay,
 // which fetches no picture, cannot reproduce it (MISSING image is one too).
 static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
                            const char *asked)
 {
-    char why[64];
+    char why[64], name[128];
+    url = picture_name(url, name, sizeof(name));
     if (product != NULL && product->format != NULL) {
         yonder_diag_missing(p->diag, "image", product->format, 1);
         char key[OS64_FETCH_URL_MAX + 16];
@@ -4757,8 +4872,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         // all the same, so every picture not shown is on the record.
         pic->state = PIC_NOT_KEPT;
         g.page.not_kept++;
-        char key[OS64_FETCH_URL_MAX + 16];
-        os64_snprintf(key, sizeof(key), "picture %s", pic->url);
+        char key[OS64_FETCH_URL_MAX + 16], name[128];
+        os64_snprintf(key, sizeof(key), "picture %s", picture_name(pic->url, name, sizeof(name)));
         yonder_diag_fact(g.page.diag, key, "past the memory kept for the page's pictures");
         return;
     }
@@ -13566,8 +13681,10 @@ static bool context_link_address(const os64_html_node_t *node, char *out, size_t
 }
 
 // The address the picture was fetched from, `srcset`'s choice included: the
-// page's catalog entry the painter draws it from, so a picture not fetched
-// (a data: address, one the catalog had no room for) offers no address.
+// page's catalog entry the painter draws it from, so a picture the catalog
+// had no room for offers no address, and nor does a data: address too long
+// for `out`. One that fits is offered whole, for Copy and Open; Save takes
+// only what downloadable() does.
 static bool context_picture_address(const os64_html_node_t *node, char *out, size_t cap)
 {
     const Page *p = &g.page;

@@ -287,6 +287,13 @@ bool p_base(os64_page_t *page);
 // Resolve one reference against the page's base, splitting off the `#name`
 // the address itself cannot carry. `ref` NULL means the page spelled none.
 void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out);
+// p_resolve for a picture's address, except that a `data:` reference past
+// OS64_URL_REF_MAX is taken whole instead of refused. A data: picture IS its
+// address, and a search page's inline thumbnails run past 8 KiB; it needs
+// no base and is read by no URL parser, so no buffer of that size is ever
+// asked to hold it. Links and forms keep the limit: the address of a page is
+// a different thing to hand on.
+void p_resolve_picture(os64_page_t *page, const char *ref, os64_page_ref_t *out);
 void p_resolve_action(os64_page_t *page, const char *ref, os64_page_ref_t *out);
 // Canonicalise an address that is already absolute: the scheme's default
 // port is never spelled, because a link nobody wrote must not appear.
