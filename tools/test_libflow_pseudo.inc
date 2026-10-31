@@ -276,10 +276,11 @@ static void texts_walk(const FStyles *st, const os64_html_node_t *n, char *out, 
     }
 }
 
-static void texts_case(const char *name, const char *html, const char *expected)
+static void texts_case_in(const char *name, const char *html, bool scripting, const char *expected)
 {
     Sheeted p;
     sheeted_open(&p, html, 800, 600);
+    p.env.scripting = scripting;
     FStyles *styles = f_style_build(p.doc, p.page, &p.env);
     char got[512] = "";
     if (styles != NULL)
@@ -292,8 +293,53 @@ static void texts_case(const char *name, const char *html, const char *expected)
     sheeted_close(&p);
 }
 
+static void texts_case(const char *name, const char *html, const char *expected)
+{
+    texts_case_in(name, html, false, expected);
+}
+
+// counters() whose spelling would not fit in the lists' budget is refused
+// before it is made: a 1 MiB joiner between 64 counters is never spelled
+// out, the pseudo-element is lost, and the page's next one is drawn.
+static void counter_budget_cases(void)
+{
+    size_t joiner = (size_t)1 << 20;
+    char *html = malloc(joiner + 4096);
+    int at = sprintf(html, "<!doctype html><style>div { counter-reset: n } i::before { content: \"ok\" }"
+                           " b::before { content: counters(n, \"");
+    memset(html + at, 'x', joiner);
+    at += (int)joiner;
+    at += sprintf(html + at, "\") }</style>");
+    for (int i = 0; i < 64; i++)
+        at += sprintf(html + at, "<div>");
+    sprintf(html + at, "<b></b><i></i>");
+    largest = 0;
+    texts_case("counters: one too long for the budget is lost, the next drawn", html, "ok|");
+    char detail[64];
+    snprintf(detail, sizeof(detail), "largest allocation %zu", largest);
+    expect("counters: and its spelling is never made", largest < ((size_t)16 << 20), detail);
+    free(html);
+}
+
 static void counter_cases(void)
 {
+    counter_budget_cases();
+    texts_case("counters: inherit through an ancestor that inherits too",
+        "<!doctype html><style>body { counter-reset: k 7 } div, p { counter-reset: inherit }"
+        " p::before { content: counters(k, \"-\") }</style><div><p></p></div>",
+        "7-7-7|");
+    texts_case("quotes: revert keeps the inherited pairs",
+        "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: revert }</style><p><q>x</q>",
+        "<|>|");
+    texts_case("quotes: initial is auto",
+        "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: initial }</style><p><q>x</q>",
+        "\xe2\x80\x9c|\xe2\x80\x9d|");
+    texts_case_in("counters: a canvas's fallback counts and quotes for nothing",
+        "<!doctype html><style>body { counter-reset: n } span { counter-increment: n }"
+        " span::before { content: open-quote } p::before { content: counter(n) }</style>"
+        "<canvas><span>f</span></canvas><p><q>x</q></p>",
+        true, "0|\xe2\x80\x9c|\xe2\x80\x9d|");
+
     texts_case("counters: nested, joined from the outermost in",
         "<!doctype html><style>.l { counter-reset: item } .i { counter-increment: item }"
         " .i::before { content: counters(item, \".\") \" \" }</style>"

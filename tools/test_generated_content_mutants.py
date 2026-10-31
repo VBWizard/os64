@@ -115,6 +115,12 @@ mutants = [
     ('no-open-quote-draws', STYLE, 'bool drawn = os64_streq(it->keyword, "open-quote") || os64_streq(it->keyword, "close-quote");',
      'bool drawn = it->keyword != NULL;', LIBFLOW),
     ('a-counter-pass-is-not-ordered', STYLE, '    c->out->ordered = true;\n    FCounter *in = innermost(c, name);', '    FCounter *in = innermost(c, name);', LIBFLOW),
+    ('inherit-climbs-one-step', STYLE, '    while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit") && from != NULL) {',
+     '    if (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit") && from != NULL) {', LIBFLOW),
+    ('quotes-revert-is-auto', STYLE, 'return os64_streq(v->keyword, "initial") ? NULL : inherited;',
+     'return os64_streq(v->keyword, "inherit") ? inherited : NULL;', LIBFLOW),
+    ('a-fallback-counts', STYLE, '    if (f_replaced(c->env, el))\n        c->inert = el;', '    if (f_replaced(c->env, el))\n        (void)0;', LIBFLOW),
+    ('counters-spelled-past-the-budget', STYLE, '    if (need > room) {', '    if (need > room && false) {', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

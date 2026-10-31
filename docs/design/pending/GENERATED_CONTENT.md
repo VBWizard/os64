@@ -269,7 +269,16 @@ display is not `none` it does this:
   one with value 0, scoped to its pseudo-element's originating element.
 - **An element whose display is `none`** changes no counter, and neither
   does its subtree, which pass 1 never walks (Lists 3 § 4.5). Neither
-  does a pseudo-element that does not exist (`content: none`).
+  does a pseudo-element that does not exist (`content: none`), nor
+  anything a replaced element holds (a canvas's fallback when scripts
+  run), none of which is drawn.
+- **`inherit`** on a counter property takes the parent's list, climbing
+  past ancestors that inherit too. `quotes` is inherited and the chapter's
+  sheet declares none, so `revert` keeps the inherited pairs, and only
+  `initial` is `auto`.
+- **`counters()`** is spelled only when its longest spelling fits in what
+  is left of the lists' budget. Otherwise the content is lost before
+  anything is made.
 - **Values** are 32-bit integers, and arithmetic past them stays at the
   limit.
 - **The bound**: at most `F_COUNTERS_MAX` (1024) counters are live at once.
