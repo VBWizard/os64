@@ -1512,6 +1512,25 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcom
     return true;
 }
 
+uint64_t yonder_scripts_animation_next(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_animation_next(s->dom) : UINT64_MAX;
+}
+
+bool yonder_scripts_animation_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s != NULL) {
+        s->written = 0;
+        s->task_address = NULL;
+        s->task_us = -1;
+    }
+    if (s == NULL || s->dead || !os64_dom_animation_fire(s->dom, now, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
 bool yonder_scripts_reactions_owed(const yonder_scripts_t *s)
 {
     return s != NULL && !s->dead && os64_dom_reactions_owed(s->dom);
@@ -1562,13 +1581,18 @@ uint64_t yonder_scripts_idle_next(const yonder_scripts_t *s)
 
 bool yonder_scripts_idle_run(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
+    return yonder_scripts_idle_before(s, UINT64_MAX, out);
+}
+
+bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, os64_js_outcome_t *out)
+{
     os64_memset(out, 0, sizeof(*out));
     if (s == NULL || s->dead)
         return false;
     s->written = 0;
     s->task_address = NULL;
     s->task_us = -1;
-    if (!os64_dom_idle_run(s->dom, out))
+    if (!os64_dom_idle_before(s->dom, render_due, out))
         return false;
     judged(s, out);
     return true;

@@ -1389,7 +1389,7 @@ static void tick_cases(void) {
     now_ms=100;
     probe_page(kTickPage,false);
     relayout(true);
-    check(motion_next()==YONDER_NEVER && tick_next()==100 && ticker_due==100,
+    check(motion_next()==YONDER_NEVER && tick_next()==100 && ticker_due==101,
         "ticks: what only painting reads is due for a tick, not a layout");
     int32_t field_was=g.nfw==1 ? g.fw[0]->w->bounds.x : -1;
     uint64_t laid_began=g.motion_began;
@@ -1680,7 +1680,7 @@ static void motion_cases(void) {
         "motion: a layout not made to be shown starts nothing, and nothing is due");
     uint64_t for_motion=s_cost.layouts_motion;
     relayout(true);
-    check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && ticker_due==100,
+    check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && ticker_due==101,
         "motion: the shown page's layout starts its animations, and one moving is due at once");
     check(s_cost.layouts_motion==for_motion,
         "motion: the record does not count the page's own layout as one for animations");
@@ -1928,6 +1928,9 @@ static void motion_cases(void) {
         ".go{animation:slide 1s linear infinite}</style><div id=a></div>"
         "<script>document.getElementById('a').className='go'</script>",true);
     script_turn(); script_turn();
+    check(g.script_painting && motion_next()==YONDER_NEVER,
+        "motion: script layout reaches paint before another animation layout");
+    motion_painted();
     check(g.page.timeline!=NULL && motion_next()==2500,
         "motion: a script's change starts an animation on the page's timeline");
     now_ms=2750;
@@ -1950,8 +1953,10 @@ static void motion_cases(void) {
         "motion: while a script's change waits for its rebuild, nothing is due");
     now_ms=3100;
     motion_tick();
-    check(script_rebuild() && g.motion_us!=UINT64_MAX && motion_next()==3100,
-        "motion: once the rebuild is made, frames are due again");
+    check(script_rebuild() && g.motion_us!=UINT64_MAX && motion_next()==YONDER_NEVER,
+        "motion: the rebuilt frame waits for paint");
+    motion_painted();
+    check(motion_next()==3100,"motion: after the rebuild paints, frames are due again");
     probe_drop();
     s_animations=was_run; s_reduce_motion=was_reduce;
 }
@@ -5726,6 +5731,7 @@ static uint32_t *stand_in_shot(void) {
 }
 #include "test_yonder_svg_images.inc"
 #include "test_yonder_canvas.inc"
+#include "test_yonder_animation.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -8251,7 +8257,7 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
                      "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
-                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
+                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, frames 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
@@ -10819,6 +10825,14 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if(getenv("YONDER_ANIMATION_ONLY")) {
+        animation_window_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"frames: text released");
+        check(live==0,"frames: heap empty");
+        printf("yonder animation: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_GRAFT_FONTS_ONLY")) {
         webfont_cases();
         os64_text_font_release(probe_font);
@@ -10845,6 +10859,7 @@ int main(void)
         printf("yonder profile: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    animation_window_cases();
     classic_browser_cases();
     address_key_cases();
     interface_font_cases();

@@ -288,23 +288,44 @@ after the memo lands. Three rows are booked with those triggers:
 
 ## `requestAnimationFrame`
 
-**rAF rides the rendering step.** libdom keeps per page an ordered list of
-callbacks with ids; `requestAnimationFrame(cb)` appends, `cancelAnimation
-Frame(id)` removes. While the list is non-empty, the page asks yonder's
-ticker for a frame at the frame cadence: the earliest of the animations'
-next frame (`flow_motion_due`) and the rAF cadence, which on a 10 ms tick
-is 20 ms (50 frames a second; 60 is not a thing a 100 Hz tick can do, and
-the as-built says so). At the frame, before the rendering step's layout:
-the timestamp is taken once (`performance.now()`'s clock, slice 1a), every
-callback pending at that moment runs in order with that timestamp, each
-followed by its microtask checkpoint, exceptions reported as a task's are;
-callbacks registered during the run wait for the next frame; then the
-page's rendering step runs ONCE, with the memo above, which is why D13
-comes first: rAF on a whole-layout page is a whole layout per frame
-forever. A covered window naps the frame clock as the animations' does
-(DEBTS § Occlusion); a page whose frame costs more than the cadence is
-paced by its cost (the perf record's rule for animations), never queued
-behind itself.
+**rAF rides the rendering step.** With Modern Web enabled, libdom keeps an
+ordered per-document callback queue. `requestAnimationFrame(cb)` appends a
+one-shot callback; `cancelAnimationFrame(id)` removes it. The batch snapshots
+the last issued handle, removes each callback before invoking it, and checks
+the live queue between calls. Cancellation from a callback or its microtasks
+therefore affects later callbacks in that batch; new requests wait for another
+frame. Exceptions are reported without skipping healthy peers. A runtime limit
+stops the batch. Callbacks and their checkpoints share one execution budget.
+
+The timestamp is sampled once per batch on `performance.now()`'s origin and
+100-microsecond resolution. Yonder's ticker wakes the existing window loop for
+pending frames: nominally 20 ms, matching the OS's 10 ms tick. After an ordinary
+task, due frame callbacks run before the final script rebuild. Their DOM edits
+share that rebuild; pixel-only canvas edits use the existing damage path without
+layout. CSS animation sampling follows the callbacks. A script rebuild has
+already sampled the CSS timeline and prevents a second CSS layout until paint.
+Synchronous geometry reads can still force measurement inside a callback.
+
+A frame remains in progress through the final paint. The next batch waits for
+both its 20 ms deadline and a rest equal to the previous batch's callback,
+rebuild and paint cost. Missed intervals do not accumulate. Covered windows
+retain requests but run no frame callbacks; uncovering permits one current batch.
+The CSS Animations preference does not disable this script API, which pages
+also use for state delivery. Scripts and Modern Web remain its feature gates.
+Navigation drains retained callbacks with the document.
+
+An idle grant stops at the nearest host rendering deadline, including CSS
+motion. After a frame paints, runnable idle work receives a follow-up turn even
+when the pre-frame script turn ran no task. This lets idle work use the gap
+between CSS frames; a turn with neither task nor frame progress does not poll.
+A new animation request made inside an idle callback shortens
+`timeRemaining()` immediately. An overdue frame belonging to a covered window
+does not prevent new idle periods. The Window profile bounds pending callbacks
+to 1024 and uses increasing nonzero 32-bit handles without reuse; exhaustion
+throws `QuotaExceededError`. Dedicated-worker animation frames and iframe script
+realms are outside this cut.
+
+Implementation and evidence: [5d animation frames](../../relayout-evidence/5d-animation.md).
 
 ## The cut, in order
 

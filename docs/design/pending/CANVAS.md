@@ -556,5 +556,9 @@ its implementation contract in [RELAYOUT.md](RELAYOUT.md) and
 passed on 2026-10-29 (corpus 229). Slices 5b and 5c are implemented in
 integration and have passed their hardware acceptance; the final 5c comparison
 is recorded in [5c-p5-acceptance.md](../../relayout-evidence/5c-p5-acceptance.md).
-The next cut is 5d (`requestAnimationFrame`), followed by pointer events and C6.
-Scheduled Canvas animation is not yet implemented.
+Slice 5d implements `requestAnimationFrame` and `cancelAnimationFrame` on
+Yonder's rendering loop. Canvas pixel damage and DOM edits share the frame's
+presentation; SVG, CSS motion and Canvas do not own competing frame loops.
+The animated gallery is `tools/pages/canvas-animation.html`, with the contract
+and evidence in [5d-animation.md](../../relayout-evidence/5d-animation.md).
+Pointer events and capture are the next cut, followed by C6 target fidelity.

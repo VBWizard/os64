@@ -235,6 +235,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_report.inc"
 #include "test_dom_document.inc"
 #include "test_dom_message.inc"
+#include "test_dom_animation.inc"
 #include "test_dom_importmap.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
@@ -364,8 +365,8 @@ static void dom_global_miss_cases(void)
               "global miss: a bare name in a closure, which still throws");
     miss_form(&f,&m,"var r;try{noSuchGlobal}catch(e){r=e.name}assert(r==='ReferenceError');","noSuchGlobal|",
               "global miss: a bare name at top level, which still throws");
-    miss_form(&f,&m,"(function(){assert(typeof requestAnimationFrame==='undefined')})();",
-              "requestAnimationFrame|","global miss: typeof inside a function");
+    miss_form(&f,&m,"(function(){assert(typeof noSuchGlobal==='undefined')})();",
+              "noSuchGlobal|","global miss: typeof inside a function");
     miss_form(&f,&m,"assert(window[Symbol.iterator]===undefined&&window[7]===undefined);","",
               "global miss: a symbol or an index is no name");
     miss_form(&f,&m,"assert(typeof document==='object'&&window.document===document);"
@@ -423,6 +424,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--window")){dom_window_cases();printf("DOM window probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -444,6 +446,7 @@ int main(int argc, char **argv)
     dom_report_cases();
     dom_document_cases();
     dom_p2b_cases();
+    dom_animation_cases();
     dom_import_map_cases();
     dom_geometry_cases();
     dom_global_miss_cases();

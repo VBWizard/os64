@@ -61,7 +61,7 @@
  * of that clock (180 s for a page that says its timeout is long), so the
  * harness's own timeout and every step_timeout fire as they would, in the
  * same order every run. The microsecond clock a script task's deadline is
- * measured against moves 1 ms at each read, so a script that never ends is
+ * measured against advances by the same wait and by 1 ms at each read, so a script that never ends is
  * ended, and its page has no results.
  *
  * THE RESULTS: one line per test, `STATUS<tab>page<tab>name`, and a tab
@@ -866,6 +866,10 @@ static bool wpt_turns(void) {
         bool more=stream_turn();
         more=coming_turn() || more;
         more=script_turn() || more;
+        motion_tick();
+        /* This headless runner presents no pixels, but completes the same
+         * frame boundary so subsequent animation requests can become due. */
+        motion_painted();
         more=wpt_answer() || more;
         if(wpt_navigated || !more) return true;
     }
@@ -1026,6 +1030,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
             break;
         }
         now_ms+=WPT_TICK_MS;
+        clock_us+=(int64_t)WPT_TICK_MS*1000;
     }
     if(text!=NULL) {
         out->reported=true;

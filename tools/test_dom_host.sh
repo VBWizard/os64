@@ -9,7 +9,7 @@ cleanup() {
 trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto report document frames clone message idle options selection importmap controls elements tables \
+    browsing crypto report document frames clone message idle animation options selection importmap controls elements tables \
     forms validity compare custom \
     sheets image_data canvas canvas_path canvas_text canvas_image mutation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
@@ -59,7 +59,7 @@ done
 # allocator name is distinct because these DSOs share one host executable.
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto report document frames clone message idle options selection importmap controls elements tables \
+    browsing crypto report document frames clone message idle animation options selection importmap controls elements tables \
     forms validity compare custom \
     sheets image_data canvas canvas_path canvas_text canvas_image mutation; do
     object="$work/dom-$name.o"

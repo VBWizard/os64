@@ -99,6 +99,7 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"structuredClone", NULL}, d_clone_install},
     {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
+    {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
     /* 0f's node row: members of Node's, Attr's, Text's and a template's
      * prototypes, none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},
