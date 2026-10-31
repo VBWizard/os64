@@ -1361,3 +1361,39 @@ IN: quirks margin-inline: 7
 OUT: invalid
 IN: quirks inline-size: 7
 OUT: invalid
+
+# ── Generated content (Generated Content 3 § 1.1; GENERATED_CONTENT.md) ──
+IN: content: normal
+OUT: content: normal
+IN: content: none
+OUT: content: none
+IN: content: ""
+OUT: content: ""
+IN: content: "\f101"
+OUT: content: ""
+IN: content: "(" attr(title) ")"
+OUT: content: "(" attr("title") ")"
+IN: content: open-quote "x" close-quote no-open-quote no-close-quote
+OUT: content: open-quote "x" close-quote no-open-quote no-close-quote
+IN: content: counter(item) ". "
+OUT: content: counter() ". "
+IN: content: counters(item, ".")
+OUT: content: counters()
+IN: content: url(icon.png)
+OUT: content: url(icon.png)
+IN: content: linear-gradient(red, blue)
+OUT: content: linear-gradient(...)
+IN: content: "★" / "star"
+OUT: content: "★"
+IN: content: none "x"
+OUT: invalid
+IN: content: normal none
+OUT: invalid
+IN: content: attr()
+OUT: invalid
+IN: content: 12px
+OUT: invalid
+IN: content: "x" /
+OUT: invalid
+IN: content: / "alt"
+OUT: invalid

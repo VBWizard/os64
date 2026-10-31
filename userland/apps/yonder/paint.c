@@ -2178,7 +2178,8 @@ static void paint_box(void *ctx, const flow_box_t *b)
         // where the line is painted, and its content box inside it, which
         // must not paint it again — a translucent background or border laid
         // twice is twice as opaque (Quinn, #202).
-        if (b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC && b->parent->node == b->node)
+        if (b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC && b->parent->node == b->node &&
+            b->parent->pseudo == b->pseudo)
             return;
         frame(p, b);
         return;
@@ -2599,7 +2600,7 @@ static const flow_box_t *canvas_owner(const Painter *p, const flow_box_t *root)
     if (has_background(p, root))
         return root;
     for (const flow_box_t *c = root->first; c != NULL; c = c->next)
-        if (c->node != NULL && c->node->kind == OS64_HTML_ELEMENT &&
+        if (c->node != NULL && c->pseudo == 0 && c->node->kind == OS64_HTML_ELEMENT &&
             c->node->tag == OS64_HTML_TAG_BODY)
             return has_background(p, c) ? c : NULL;
     return NULL;

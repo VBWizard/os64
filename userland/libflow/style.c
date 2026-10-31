@@ -3601,6 +3601,8 @@ static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *paren
     return true;
 }
 
+static void medium_widths(Ctx *c, Spec *sp, garb_style_t st);
+
 static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
                    const flow_style_t *parent)
 {
@@ -3611,12 +3613,18 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         return true;
     if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, -1, st.n, NULL))
         return false;
-    // A border style the author drew with no width from any origin has the
-    // initial width, medium. The Spec's declared width starts at 0, not
-    // medium, because the chapter always declares the width it draws — so a
-    // 0 there means NO origin declared one, which is also what `revert`
-    // leaves where the chapter declared none: a width reverted is not a
-    // width declared.
+    medium_widths(c, sp, st);
+    return true;
+}
+
+// A border style the author drew with no width from any origin has the
+// initial width, medium. The Spec's declared width starts at 0, not
+// medium, because the chapter always declares the width it draws — so a
+// 0 there means NO origin declared one, which is also what `revert`
+// leaves where the chapter declared none: a width reverted is not a
+// width declared.
+static void medium_widths(Ctx *c, Spec *sp, garb_style_t st)
+{
     for (int i = 0; i < 4; i++)
         if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
             !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
@@ -3626,7 +3634,6 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (sp->outline_px == 0 && author_sets(st, GARB_OUTLINE_STYLE) &&
         !author_declares(st, GARB_OUTLINE_WIDTH))
         sp->outline_px = css(c, 3);
-    return true;
 }
 
 // ── Resolving ───────────────────────────────────────────────────────────
@@ -4264,6 +4271,17 @@ static bool decoration_edge(const os64_html_node_t *n, const flow_style_t *s, bo
            (quirks && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_TABLE);
 }
 
+// What a child takes by keyword moves only when it is laid out, so a
+// parent whose animation it takes moves by layouts too.
+static void taken_from(const FStyled *up, const FProps *taken)
+{
+    if (up != NULL && up->motion != NULL && up->motion->ticks)
+        for (int32_t a = 0; a < up->motion->nanims; a++)
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                if (up->motion->anims[a].props.w[w] & taken->w[w])
+                    up->motion->ticks = false;
+}
+
 static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
 {
     const FStyled *up = f_map_get(&c->out->map, n->parent);
@@ -4372,13 +4390,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
                        (up != NULL && up->transparent);
     out->taken = sp.taken;
-    // What a child takes by keyword moves only when it is laid out, so a
-    // parent whose animation it takes moves by layouts too.
-    if (up != NULL && up->motion != NULL && up->motion->ticks)
-        for (int32_t a = 0; a < up->motion->nanims; a++)
-            for (int w = 0; w < F_PROP_WORDS; w++)
-                if (up->motion->anims[a].props.w[w] & sp.taken.w[w])
-                    up->motion->ticks = false;
+    taken_from(up, &sp.taken);
     FStyled *holder = f_map_get(&c->out->map, n->parent);
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))
         holder->has_rp = true;
@@ -4409,6 +4421,191 @@ static bool contributes_block(const FStyled *child)
     default:
         return true;
     }
+}
+
+// ── ::before and ::after (GENERATED_CONTENT.md § 4) ─────────────────────
+
+// The names a synthetic node carries, compared by address: no document's
+// node can hold them.
+static const char kBeforeName[] = "::before", kAfterName[] = "::after";
+
+garb_pseudo_t f_pseudo_of(const os64_html_node_t *n)
+{
+    if (n != NULL && n->kind == OS64_HTML_TEXT)
+        n = n->parent;
+    if (n == NULL || n->kind != OS64_HTML_ELEMENT)
+        return GARB_PSEUDO_NONE;
+    return n->name == kBeforeName ? GARB_PSEUDO_BEFORE : n->name == kAfterName ? GARB_PSEUDO_AFTER : GARB_PSEUDO_NONE;
+}
+
+const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n)
+{
+    if (n != NULL && n->kind == OS64_HTML_TEXT)
+        n = n->parent;
+    return f_pseudo_of(n) != GARB_PSEUDO_NONE ? n->parent : NULL;
+}
+
+// The winner `prop` in `st`, or NULL.
+static const garb_val_t *winner(garb_style_t st, garb_prop_t prop)
+{
+    for (int32_t k = 0; k < st.n; k++)
+        if (st.sets[k].prop == prop)
+            return &st.sets[k].value;
+    return NULL;
+}
+
+// The text `content` makes for a pseudo-element of `el`, into the arena:
+// its strings, `attr()`s and quote marks (at `level`, a `q`'s alternation),
+// concatenated; an item 8a does not draw adds nothing. NULL when the
+// content makes no pseudo-element: normal, none, or a CSS-wide keyword,
+// which takes the element's own (normal), and when the lists' budget is
+// spent. Out of memory, *failed.
+static char *content_text(Ctx *c, const os64_html_node_t *el, const garb_val_t *v, int32_t level,
+                          size_t *len, bool *failed)
+{
+    *len = 0;
+    if (v == NULL || v->kind == GARB_V_WIDE || v->kind == GARB_V_KEYWORD)
+        return NULL;
+    // Twice: the length, then the bytes.
+    char *out = NULL;
+    for (int pass = 0; pass < 2; pass++) {
+        size_t at = 0;
+        for (int32_t k = 0; k < v->nitems; k++) {
+            const garb_val_t *it = &v->items[k];
+            const char *piece = NULL;
+            size_t n = 0;
+            if (it->kind == GARB_V_STRING) {
+                piece = it->text;
+                n = it->len;
+            } else if (it->kind == GARB_V_FUNCTION && os64_streq(it->keyword, "attr") && it->nitems == 1) {
+                char name[64];
+                size_t nl = it->items[0].len < sizeof(name) - 1 ? it->items[0].len : sizeof(name) - 1;
+                for (size_t i = 0; i < nl; i++) {
+                    char ch = it->items[0].text[i];
+                    name[i] = ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;
+                }
+                name[nl] = '\0';
+                const os64_html_attr_t *a = os64_html_attr(el, name);
+                if (a != NULL && a->value != NULL) {
+                    piece = a->value;
+                    n = os64_strlen(a->value);
+                }
+            } else if (it->kind == GARB_V_KEYWORD && os64_streq(it->keyword, "open-quote")) {
+                piece = level % 2 == 0 ? "\xe2\x80\x9c" : "\xe2\x80\x98";      // U+201C, U+2018
+                n = 3;
+            } else if (it->kind == GARB_V_KEYWORD && os64_streq(it->keyword, "close-quote")) {
+                piece = level % 2 == 0 ? "\xe2\x80\x9d" : "\xe2\x80\x99";      // U+201D, U+2019
+                n = 3;
+            }
+            if (pass == 1 && n > 0)
+                os64_memcpy(out + at, piece, n);
+            at += n;
+        }
+        if (pass == 0) {
+            // Charged to the lists' budget: one sheet's string copied into
+            // every element its rule reaches is what a page can multiply.
+            // Past it the content is lost, and the pseudo-element with it.
+            bool spent = false;
+            out = list_alloc(c, at + 1, &spent);
+            if (out == NULL) {
+                *failed = !spent;
+                return NULL;
+            }
+        } else {
+            out[at] = '\0';
+            *len = at;
+        }
+    }
+    return out;
+}
+
+// `el`'s ::before or ::after (`which`), when the author's rules give it
+// content (GARB_CONTENT) it draws as something: a synthetic element under
+// `el`, holding the content's text, styled as `el`'s child is, from the
+// pseudo-element's own winners (garb_style_for_pseudo). False only when
+// memory ran out.
+static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_pseudo_t which)
+{
+    garb_style_t st = garb_style_for_pseudo(c->env->cascade, el, which);
+    if (st.n == 0)
+        return true;
+    const garb_val_t *content = winner(st, GARB_CONTENT);
+    int bit = which == GARB_PSEUDO_BEFORE ? 0 : 1;
+    if (content != NULL)
+        of->pseudo_declared |= (uint8_t)(1u << bit);
+    if (content == NULL || content->kind == GARB_V_WIDE || content->kind == GARB_V_KEYWORD)
+        return true;
+    Spec sp;
+    os64_memset(&sp, 0, sizeof(sp));
+    sp.s = inherit(c, &of->style);
+    Spec ua = sp;
+    if (!lay_sets(c, &sp, &ua, &of->style, st.sets, st.sheet, -1, st.n, NULL))
+        return false;
+    medium_widths(c, &sp, st);
+    if (sp.s.display == FLOW_DISPLAY_NONE)
+        return true;
+    bool failed = false;
+    size_t len = 0;
+    int32_t level = of->quotes - is(el, OS64_HTML_TAG_Q);
+    char *text = content_text(c, el, content, level, &len, &failed);
+    if (text == NULL)
+        return !failed;
+    os64_html_node_t *node = f_arena_alloc(&c->out->arena, sizeof(*node));
+    os64_html_node_t *words = f_arena_alloc(&c->out->arena, sizeof(*words));
+    FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
+    if (node == NULL || words == NULL || out == NULL)
+        return false;
+    node->kind = OS64_HTML_ELEMENT;
+    node->ns = OS64_HTML_NS_HTML;
+    node->tag = OS64_HTML_TAG_UNKNOWN;
+    node->document_id = el->document_id;
+    node->name = which == GARB_PSEUDO_BEFORE ? kBeforeName : kAfterName;
+    node->parent = (os64_html_node_t *)el;
+    words->kind = OS64_HTML_TEXT;
+    words->document_id = el->document_id;
+    words->text = text;
+    words->text_len = len;
+    words->parent = node;
+    node->first_child = node->last_child = len > 0 ? words : NULL;
+    finish(c, &sp, &of->style, of->lays_out_items, false);
+    out->style = sp.s;
+    out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display);
+    out->link = of->link;
+    out->lists = of->lists;
+    out->lists_or_dls = of->lists_or_dls;
+    out->items = of->items;
+    out->in_nobr = of->in_nobr;
+    out->quotes = of->quotes;
+    out->anchor = f_contains_absolute(&sp.s) ? node : of->anchor;
+    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? node : of->fixed_anchor;
+    out->transparent = sp.s.opacity == 0 || of->transparent;
+    out->taken = sp.taken;
+    taken_from(of, &sp.taken);
+    out->decoration = sp.s.text_decoration;
+    out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
+    if (!decoration_edge(node, &sp.s, c->quirks))
+        f_decoration_inherit(&out->decoration, &out->decoration_colors, of->decoration,
+                             of->decoration_colors);
+    if (!f_map_put(&c->out->map, node, out))
+        return false;
+    of->pseudo[bit] = node;
+    if (contributes_block(out))
+        of->holds_block = true;
+    // The ::after comes last among the children: the walk of box
+    // generation reaches it from the last child (boxes.c, kids), so the
+    // ::before's sibling is the element's first child, or the ::after.
+    return true;
+}
+
+// `el`'s pseudo-elements, once its own style is known: not on an element
+// that makes no box or is replaced (its children are not drawn), and not on
+// one outside HTML.
+static bool style_pseudos(Ctx *c, const os64_html_node_t *el, FStyled *of)
+{
+    if (c->env->cascade == NULL || of->style.display == FLOW_DISPLAY_NONE || el->ns != OS64_HTML_NS_HTML ||
+        f_replaced(c->env, el))
+        return true;
+    return style_pseudo(c, el, of, GARB_PSEUDO_BEFORE) && style_pseudo(c, el, of, GARB_PSEUDO_AFTER);
 }
 
 static const os64_html_node_t *next_element(const os64_html_node_t *n)
@@ -4455,6 +4652,8 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
     const os64_html_node_t *cur = top != NULL ? next_element(top->first_child) : doc->html;
     while (cur != NULL) {
         FStyled *styled = style_element(&c, cur);
+        if (styled != NULL && !style_pseudos(&c, cur, styled))
+            styled = NULL;
         if (styled == NULL) {
             f_style_free(out);
             return NULL;

@@ -5096,6 +5096,28 @@ static void geometry_cases(void)
     probe_drop();
 }
 
+// An element's geometry is its own box's, not its pseudo-elements'
+// (GENERATED_CONTENT.md § 4): a ::before laid wide and away widens nothing,
+// and its text does not either.
+static void geometry_pseudo_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#d{position:relative;width:100px;height:20px}"
+        "#d::before{content:'';position:absolute;left:300px;top:0;width:400px;height:300px}"
+        "#d::after{content:'tail tail tail';display:block;width:50px}"
+        "</style><div id=d>x</div><script>"
+        "function eq(a,b){if(a!==b)throw Error(a+' != '+b)};"
+        "var d=document.getElementById('d');var r=d.getBoundingClientRect();"
+        "eq(r.width,100);eq(r.left,0);eq(d.offsetWidth,100);eq(d.offsetLeft,0);"
+        "d.setAttribute('data-pseudo-pass','yes');"
+        "</script>",true);
+    check(script_turn(), "geometry pseudo script task completes");
+    const os64_html_attr_t *passed=os64_html_attr(probe_id("d"),"data-pseudo-pass");
+    check(passed!=NULL && os64_streq(passed->value,"yes"),
+          "geometry: an element's rect is its own box's, not its ::before's or ::after's");
+    probe_drop();
+}
+
 static void geometry_body_cases(void)
 {
     probe_page("<!doctype html><div id=box style='height:20px'></div>",false);
@@ -11114,6 +11136,7 @@ int main(void)
     hover_batch_cases();
     classic_hover_profile();
     geometry_cases();
+    geometry_pseudo_cases();
     geometry_body_cases();
     geometry_publish_cases();
     geometry_scroll_cases();

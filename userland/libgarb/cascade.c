@@ -56,9 +56,11 @@ typedef struct {
     int32_t ndecls;
     uint32_t order;
     int32_t sheet;              // which input sheet it came from
-    // The element this rule last matched, and the specificity it matched
-    // with — so one rule matched through two selectors is counted once.
+    // The element and target this rule last matched for, and where in the
+    // match list — so one rule matched through two selectors is counted
+    // once, for an element and for its pseudo-element apart.
     const os64_html_node_t *seen;
+    int32_t seen_target;
     int32_t slot;
 } Rule;
 
@@ -81,6 +83,18 @@ typedef struct {
     Bucket *b;
     uint32_t cap, n;
 } Table;
+
+// Where a rule's selectors are filed for one kind of target: an element,
+// or one of its pseudo-elements (GENERATED_CONTENT.md § 3), keyed by the
+// rightmost compound's id, else a class, else its type, else universal.
+typedef struct {
+    Table ids, classes, types;
+    int32_t universal;
+} Index;
+
+// The targets a cascade files for: an element's own rules, and ::before's
+// and ::after's. A rule for another pseudo-element is read and not filed.
+enum { TARGET_ELEMENT, TARGET_BEFORE, TARGET_AFTER, TARGETS };
 
 // The custom properties an element sees: its own, then its parent's.
 typedef struct CustomMap CustomMap;
@@ -135,6 +149,9 @@ typedef struct {
 typedef struct {
     const os64_html_node_t *node;
     garb_style_t style;
+    // Its ::before's and ::after's winners (TARGET_BEFORE - 1, TARGET_AFTER
+    // - 1), none when no rule for it matched.
+    garb_style_t pseudo[TARGETS - 1];
     const CustomMap *customs;
     OwnFrames *frames;
     int32_t nframes;
@@ -164,8 +181,7 @@ struct garb_cascade {
     bool keyframes_sorted;
     Entry *entries;
     int32_t nentries, entrycap;
-    Table ids, classes, types;
-    int32_t universal;
+    Index index[TARGETS];
     Slot *slots;                // open addressing, keyed by node
     uint32_t slotcap;
     garb_parsed_t *attrs;       // `style` attributes' parses, freed with the cascade
@@ -299,20 +315,21 @@ static Bucket *bucket(garb_cascade_t *c, Table *t, const char *key, size_t len, 
     return &t->b[h];
 }
 
-static void file_selector(garb_cascade_t *c, int32_t rule, int32_t sel)
+static void file_selector(garb_cascade_t *c, int32_t rule, int32_t sel, int32_t target)
 {
     if (!grow(c, (void **)&c->entries, c->nentries, &c->entrycap, sizeof(Entry)))
         return;
     garb_selector_key_t key = garb_selector_key(c->rules[rule].sel, sel);
     bool quirky = c->quirks == OS64_HTML_QUIRKS;
+    Index *ix = &c->index[target];
     Bucket *b = NULL;
     if (key.id != NULL)
-        b = bucket(c, &c->ids, key.id, key.id_len, quirky, true);
+        b = bucket(c, &ix->ids, key.id, key.id_len, quirky, true);
     else if (key.class_name != NULL)
-        b = bucket(c, &c->classes, key.class_name, key.class_len, quirky, true);
+        b = bucket(c, &ix->classes, key.class_name, key.class_len, quirky, true);
     else if (key.type != NULL)
-        b = bucket(c, &c->types, key.type, key.type_len, true, true);
-    int32_t *head = b != NULL ? &b->head : &c->universal;
+        b = bucket(c, &ix->types, key.type, key.type_len, true, true);
+    int32_t *head = b != NULL ? &b->head : &ix->universal;
     if (b == NULL && (key.id != NULL || key.class_name != NULL || key.type != NULL))
         return;                         // no memory to file it
     Entry *e = &c->entries[c->nentries];
@@ -926,9 +943,15 @@ static void add_style_rule(garb_cascade_t *c, garb_parsed_t *owner, const garb_r
     if (rule->ndecls == 0)
         return;
     int32_t index = c->nrules++;
-    for (int32_t s = 0; s < garb_selectors_count(sel); s++)
-        if (garb_selector_pseudo(sel, s) == GARB_PSEUDO_NONE)
-            file_selector(c, index, s);
+    for (int32_t s = 0; s < garb_selectors_count(sel); s++) {
+        garb_pseudo_t pseudo = garb_selector_pseudo(sel, s);
+        if (pseudo == GARB_PSEUDO_NONE)
+            file_selector(c, index, s, TARGET_ELEMENT);
+        else if (pseudo == GARB_PSEUDO_BEFORE)
+            file_selector(c, index, s, TARGET_BEFORE);
+        else if (pseudo == GARB_PSEUDO_AFTER)
+            file_selector(c, index, s, TARGET_AFTER);
+    }
 }
 
 static bool at(const garb_rule_t *r, const char *name)
@@ -1870,9 +1893,9 @@ static bool before(const Applied *a, const Applied *b)
 }
 
 static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rule *r,
-                     uint32_t spec, const os64_html_node_t *el)
+                     uint32_t spec, const os64_html_node_t *el, int32_t target)
 {
-    if (r->seen == el) {
+    if (r->seen == el && r->seen_target == target) {
         if (spec > (*m)[r->slot].spec)
             (*m)[r->slot].spec = spec;
         return;
@@ -1880,26 +1903,27 @@ static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rul
     if (!grow(c, (void **)m, *n, cap, sizeof(Match)))
         return;
     r->seen = el;
+    r->seen_target = target;
     r->slot = *n;
     (*m)[(*n)++] = (Match){r, spec};
 }
 
 static void try_bucket(garb_cascade_t *c, int32_t head, const os64_html_node_t *el, Match **m,
-                       int32_t *n, int32_t *cap)
+                       int32_t *n, int32_t *cap, int32_t target)
 {
     for (int32_t e = head; e >= 0; e = c->entries[e].next) {
         Entry *en = &c->entries[e];
         Rule *r = &c->rules[en->rule];
         if (garb_selector_matches(r->sel, en->sel, el))
-            consider(c, m, n, cap, r, garb_selector_specificity(r->sel, en->sel), el);
+            consider(c, m, n, cap, r, garb_selector_specificity(r->sel, en->sel), el, target);
     }
 }
 
-static void try_classes(garb_cascade_t *c, const os64_html_node_t *el, Match **m, int32_t *n,
-                        int32_t *cap)
+static void try_classes(garb_cascade_t *c, Index *ix, const os64_html_node_t *el, Match **m, int32_t *n,
+                        int32_t *cap, int32_t target)
 {
     const os64_html_attr_t *a = os64_html_attr(el, "class");
-    if (a == NULL || a->value == NULL || c->classes.n == 0)
+    if (a == NULL || a->value == NULL || ix->classes.n == 0)
         return;
     const char *v = a->value;
     bool quirky = c->quirks == OS64_HTML_QUIRKS;
@@ -1911,31 +1935,41 @@ static void try_classes(garb_cascade_t *c, const os64_html_node_t *el, Match **m
             i++;
         if (i == start)
             continue;
-        Bucket *b = bucket(c, &c->classes, v + start, i - start, quirky, false);
+        Bucket *b = bucket(c, &ix->classes, v + start, i - start, quirky, false);
         if (b != NULL)
-            try_bucket(c, b->head, el, m, n, cap);
+            try_bucket(c, b->head, el, m, n, cap, target);
     }
 }
 
-// Every rule that matches `el`, each once, at its heaviest selector.
-static int32_t matching(garb_cascade_t *c, const os64_html_node_t *el, Match **m, int32_t *cap)
+// Every rule that matches `el` for `target` (the element, or one of its
+// pseudo-elements), each once, at its heaviest selector.
+static int32_t matching(garb_cascade_t *c, const os64_html_node_t *el, int32_t target, Match **m,
+                        int32_t *cap)
 {
     int32_t n = 0;
+    Index *ix = &c->index[target];
     const os64_html_attr_t *id = os64_html_attr(el, "id");
-    if (id != NULL && id->value != NULL && c->ids.n > 0) {
-        Bucket *b = bucket(c, &c->ids, id->value, os64_strlen(id->value),
+    if (id != NULL && id->value != NULL && ix->ids.n > 0) {
+        Bucket *b = bucket(c, &ix->ids, id->value, os64_strlen(id->value),
                            c->quirks == OS64_HTML_QUIRKS, false);
         if (b != NULL)
-            try_bucket(c, b->head, el, m, &n, cap);
+            try_bucket(c, b->head, el, m, &n, cap, target);
     }
-    try_classes(c, el, m, &n, cap);
-    if (el->name != NULL && c->types.n > 0) {
-        Bucket *b = bucket(c, &c->types, el->name, os64_strlen(el->name), true, false);
+    try_classes(c, ix, el, m, &n, cap, target);
+    if (el->name != NULL && ix->types.n > 0) {
+        Bucket *b = bucket(c, &ix->types, el->name, os64_strlen(el->name), true, false);
         if (b != NULL)
-            try_bucket(c, b->head, el, m, &n, cap);
+            try_bucket(c, b->head, el, m, &n, cap, target);
     }
-    try_bucket(c, c->universal, el, m, &n, cap);
+    try_bucket(c, ix->universal, el, m, &n, cap, target);
     return n;
+}
+
+// Whether any rule was filed for `target`.
+static bool targeted(const garb_cascade_t *c, int32_t target)
+{
+    const Index *ix = &c->index[target];
+    return ix->ids.n > 0 || ix->classes.n > 0 || ix->types.n > 0 || ix->universal >= 0;
 }
 
 // The `style` attribute's declarations, read into a Decl list.
@@ -2079,18 +2113,24 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
     return n;
 }
 
-static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
+// `el`'s winners for `target`: its own, from its rules, its `style`
+// attribute and its SVG presentation attributes; or one of its
+// pseudo-element's, from that pseudo-element's rules alone, its custom
+// properties inherited from `el` and its own kept for its own reading.
+static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32_t target,
                             const CustomMap *inherited, Match **m, int32_t *mcap)
 {
     Slot *slot = slot_for(c, el, true);
     if (slot == NULL)
         return;
-    slot->customs = inherited;
-    int32_t nm = matching(c, el, m, mcap);
+    bool own = target == TARGET_ELEMENT;
+    if (own)
+        slot->customs = inherited;
+    int32_t nm = matching(c, el, target, m, mcap);
     Decl *inl = NULL;
-    int32_t ninl = inline_decls(c, el, &inl);
+    int32_t ninl = own ? inline_decls(c, el, &inl) : 0;
     Decl *attrs = NULL;
-    int32_t nattrs = svg_attributes(c, el, &attrs);
+    int32_t nattrs = own ? svg_attributes(c, el, &attrs) : 0;
     int32_t total = ninl + nattrs;
     for (int32_t k = 0; k < nm; k++)
         total += (*m)[k].rule->ndecls;
@@ -2128,23 +2168,23 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
         ncustom += ap[i].d->custom;
     const CustomMap *customs = inherited;
     if (ncustom > 0) {
-        CustomMap *own = alloc(c, sizeof(*own));
+        CustomMap *mine = alloc(c, sizeof(*mine));
         Custom *list = alloc(c, (size_t)ncustom * sizeof(Custom));
-        if (own != NULL && list != NULL) {
-            own->parent = inherited;
-            own->own = list;
+        if (mine != NULL && list != NULL) {
+            mine->parent = inherited;
+            mine->own = list;
             for (int32_t i = 0; i < na; i++) {
                 if (!ap[i].d->custom)
                     continue;
                 const garb_decl_t *d = &ap[i].d->decl;
                 // A later declaration of the same name replaces an earlier.
                 int32_t k = 0;
-                while (k < own->n && !(own->own[k].len == d->len &&
-                                       os64_memcmp(own->own[k].name, d->name, d->len) == 0))
+                while (k < mine->n && !(mine->own[k].len == d->len &&
+                                       os64_memcmp(mine->own[k].name, d->name, d->len) == 0))
                     k++;
-                if (k == own->n)
-                    own->n++;
-                Custom *cu = &own->own[k];
+                if (k == mine->n)
+                    mine->n++;
+                Custom *cu = &mine->own[k];
                 cu->name = d->name;
                 cu->len = d->len;
                 cu->value = d->nvalue > 0 ? d->value : kEmptyValue;
@@ -2165,8 +2205,9 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
                     cu->state = 2;
                 }
             }
-            customs = own;
-            slot->customs = own;
+            customs = mine;
+            if (target == TARGET_ELEMENT)
+                slot->customs = mine;
         }
     }
     // The winners, one per longhand.
@@ -2187,7 +2228,8 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
             }
             continue;
         }
-        slot->needs_substitution = true;
+        if (own)
+            slot->needs_substitution = true;
         // var()/env(): replaced now, then read. A value that fails either
         // way is invalid AT COMPUTED-VALUE TIME, and the property acts as
         // `unset` (Custom Properties 1 § 3.1) — it does not fall back to
@@ -2238,10 +2280,14 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
             kept_important[k] = important[p];
             kept[k++] = win[p];
         }
-    slot->style.sets = kept;
-    slot->style.sheet = kept_from;
-    slot->style.important = kept_important;
-    slot->style.n = nwin;
+    garb_style_t *into = own ? &slot->style : &slot->pseudo[target - 1];
+    into->sets = kept;
+    into->sheet = kept_from;
+    into->important = kept_important;
+    into->n = nwin;
+    // A pseudo-element's animations are booked (GENERATED_CONTENT.md § 2).
+    if (!own)
+        return;
     const garb_val_t *names = animation_names(c, el, have[GARB_ANIMATION_NAME]
                                                      ? &win[GARB_ANIMATION_NAME].value : NULL);
     if (names != NULL)
@@ -2286,7 +2332,8 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     }
     c->env = env;
     c->quirks = doc->quirks;
-    c->universal = -1;
+    for (int32_t t = 0; t < TARGETS; t++)
+        c->index[t].universal = -1;
     // The sheets are only read: their rules' blocks, selectors and values
     // go into this cascade's reading of them, the whole budget each time —
     // or, with no memory for that arena, into the cascade's own, which is
@@ -2341,7 +2388,12 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     for (const os64_html_node_t *x = doc->document; x != NULL;) {
         if (is_el(x)) {
             const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
-            cascade_element(c, x, up != NULL ? up->customs : NULL, &m, &mcap);
+            cascade_element(c, x, TARGET_ELEMENT, up != NULL ? up->customs : NULL, &m, &mcap);
+            // Its pseudo-elements inherit its custom properties.
+            const Slot *self = slot_for(c, x, false);
+            for (int32_t t = TARGET_BEFORE; t < TARGETS; t++)
+                if (targeted(c, t))
+                    cascade_element(c, x, t, self != NULL ? self->customs : NULL, &m, &mcap);
         }
         if (x->first_child != NULL) {
             x = x->first_child;
@@ -2412,6 +2464,16 @@ garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *ele
         return none;
     const Slot *s = slot_for(c, element, false);
     return s != NULL ? s->style : none;
+}
+
+garb_style_t garb_style_for_pseudo(const garb_cascade_t *c, const os64_html_node_t *element, garb_pseudo_t pseudo)
+{
+    garb_style_t none = {NULL, NULL, NULL, 0};
+    int32_t target = pseudo == GARB_PSEUDO_BEFORE ? TARGET_BEFORE : pseudo == GARB_PSEUDO_AFTER ? TARGET_AFTER : -1;
+    if (c == NULL || target < 0)
+        return none;
+    const Slot *s = slot_for(c, element, false);
+    return s != NULL ? s->pseudo[target - 1] : none;
 }
 
 bool garb_style_needs_substitution(const garb_cascade_t *c, const os64_html_node_t *element)
@@ -2497,6 +2559,31 @@ static void puts_(Out *o, const char *s)
     put(o, s, os64_strlen(s));
 }
 
+// One line of the dump: the element (`p#x`), its pseudo-element's name
+// after it when the winners are a pseudo-element's, and the winners.
+static void dump_winners(Out *o, const os64_html_node_t *x, const char *pseudo, garb_style_t st)
+{
+    if (st.n == 0)
+        return;
+    puts_(o, x->name != NULL ? x->name : "?");
+    const os64_html_attr_t *id = os64_html_attr(x, "id");
+    if (id != NULL && id->value != NULL) {
+        puts_(o, "#");
+        puts_(o, id->value);
+    }
+    puts_(o, pseudo);
+    puts_(o, ":");
+    for (int32_t k = 0; k < st.n; k++) {
+        char v[512];
+        garb_val_dump(&st.sets[k].value, v, sizeof(v));
+        puts_(o, k ? "; " : " ");
+        puts_(o, garb_prop_name(st.sets[k].prop));
+        puts_(o, ": ");
+        puts_(o, v);
+    }
+    puts_(o, "\n");
+}
+
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,
                          size_t cap)
 {
@@ -2504,24 +2591,10 @@ size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *do
     if (cap > 0)
         out[0] = '\0';
     for (const os64_html_node_t *x = doc->document; x != NULL;) {
-        garb_style_t st = is_el(x) ? garb_style_for(c, x) : (garb_style_t){NULL, NULL, NULL, 0};
-        if (st.n > 0) {
-            puts_(&o, x->name != NULL ? x->name : "?");
-            const os64_html_attr_t *id = os64_html_attr(x, "id");
-            if (id != NULL && id->value != NULL) {
-                puts_(&o, "#");
-                puts_(&o, id->value);
-            }
-            puts_(&o, ":");
-            for (int32_t k = 0; k < st.n; k++) {
-                char v[512];
-                garb_val_dump(&st.sets[k].value, v, sizeof(v));
-                puts_(&o, k ? "; " : " ");
-                puts_(&o, garb_prop_name(st.sets[k].prop));
-                puts_(&o, ": ");
-                puts_(&o, v);
-            }
-            puts_(&o, "\n");
+        if (is_el(x)) {
+            dump_winners(&o, x, "", garb_style_for(c, x));
+            dump_winners(&o, x, "::before", garb_style_for_pseudo(c, x, GARB_PSEUDO_BEFORE));
+            dump_winners(&o, x, "::after", garb_style_for_pseudo(c, x, GARB_PSEUDO_AFTER));
         }
         if (x->first_child != NULL) {
             x = x->first_child;

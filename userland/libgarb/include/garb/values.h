@@ -140,6 +140,14 @@ typedef enum {
     GARB_STROKE_DASHOFFSET,
     GARB_CLIP_PATH, GARB_CLIP_RULE,
     GARB_STOP_COLOR, GARB_STOP_OPACITY,
+    // Generated Content 3 § 1.1 (GENERATED_CONTENT.md): the KEYWORD normal
+    // or none, or the items a pseudo-element's content is made of, in
+    // `items`, the value's own kind a STRING: each item a STRING, a
+    // FUNCTION attr (its one item the attribute's name, a STRING), a
+    // KEYWORD (open-quote, close-quote, no-open-quote, no-close-quote), a
+    // FUNCTION counter or counters (read, their arguments not kept), a URL
+    // or an IMAGE. The alternative text after a `/` is read and not kept.
+    GARB_CONTENT,
     GARB_NPROPS
 } garb_prop_t;
 

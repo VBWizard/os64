@@ -2764,8 +2764,11 @@ static void scroll_to_node(const os64_html_node_t *node)
     }
     if (b != NULL) {
         flow_scroll_reveal(t, b);
+        // A scroller a pseudo-element made is not kept: it names its
+        // element, whose own scroller the position belongs to.
         for (int32_t i = flow_box_scroller(b); i >= 0; i = flow_box_scroller(flow_scroller(t, i)))
-            page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, flow_scroll_at(t, i));
+            if (flow_scroller(t, i)->pseudo == 0)
+                page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, flow_scroll_at(t, i));
     }
     // A target in a fixed box is on the glass wherever the page is: no
     // scroll of the page brings it nearer, so none is made (as Chrome
@@ -2878,8 +2881,12 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
 {
     if (g.page.tree == NULL)
         return NULL;
+    // A box that names an element it is not the box of — a pseudo-element's,
+    // or generated text's — is climbed past: the anchor is put back through
+    // the element's own box (flow_box_for).
     const flow_box_t *b = flow_hit_in_flow(g.page.tree, g.sx + 1, g.sy + 1);
-    while (b != NULL && b->node == NULL)
+    while (b != NULL && (b->node == NULL || b->pseudo != 0 ||
+                         (b->kind == FLOW_BOX_TEXT && b->node->kind == OS64_HTML_ELEMENT)))
         b = b->parent;
     if (b == NULL)
         return NULL;
@@ -6219,10 +6226,12 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
                            const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
                            int32_t oy, os64_gui_rect_t clip);
 
-// A `background` attribute's picture behind a box, or -1.
+// A `background` attribute's picture behind a box, or -1: its element's
+// own box's, never a box its ::before or ::after made, which names the
+// element too.
 static int32_t attribute_picture(const Page *p, const flow_box_t *b)
 {
-    int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
+    int32_t i = b->node != NULL && b->pseudo == 0 ? os64_page_background_for(page_model(p), b->node) : -1;
     return i >= 0 && i < p->nbackground_map && p->bg_of != NULL ? p->bg_of[i] : -1;
 }
 
@@ -11606,7 +11615,7 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         for (int32_t i = 0; i < flow_background_layers(b->style); i++)
             if (flow_background_layer(b->style, i).image != NULL)
                 return true;
-        return b->node != NULL && os64_page_background_for(page_model(p), b->node) >= 0;
+        return b->node != NULL && b->pseudo == 0 && os64_page_background_for(page_model(p), b->node) >= 0;
     }
     if (layer >= 0) {
         l = flow_background_layer(b->style, layer);
@@ -12783,7 +12792,8 @@ static bool wheel_box(int32_t x, int32_t y, int32_t dx, int32_t dy)
                            was.y + (person_scrolls(s->overflow_y) ? dy : 0)};
         flow_point_t now = flow_scroll_set(t, i, to);
         if (now.x != was.x || now.y != was.y) {
-            page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, now);
+            if (flow_scroller(t, i)->pseudo == 0)
+                page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, now);
             mark_whole(WHOLE_SCROLL, false);
             forms_place();
             pictures_schedule();

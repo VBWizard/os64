@@ -368,6 +368,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_cascade.inc"
 #include "test_libflow_origin.inc"
 #include "test_libflow_batch_a.inc"
+#include "test_libflow_pseudo.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
 
@@ -509,6 +510,7 @@ static void cascade_sweep(void)
     static const char kHtml[] =
         "<!doctype html><style>body { font-family: Verdana, sans-serif; margin: 1em }"
         " p { font-family: 'Courier New', monospace; color: inherit } .x { width: calc(50% + 1em) }"
+        " p::before { content: '[' attr(class) ']' } .x::after { content: ''; display: block }"
         "</style><p>a<p class=x>b<span style='font-family: Georgia'>c</span>";
     os64_html_document_t *doc = parse(kHtml);
     os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
@@ -1516,6 +1518,7 @@ int main(int argc, char **argv)
     origin_cases();
     nowrap_atom_cases();
     batch_a_cases();
+    pseudo_cases();
     boxes_cases();
     layout_cases();
     table_cases();

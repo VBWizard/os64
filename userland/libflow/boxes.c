@@ -89,6 +89,34 @@ static const FStyled *styled(const B *b, const os64_html_node_t *n)
     return f_style_of(b->styles, n);
 }
 
+// An element's children as box generation walks them: its ::before first,
+// then its own, then its ::after (GENERATED_CONTENT.md § 4). `kids` is the
+// first of them; `sib` the one after `c`, which past an element's last own
+// child is its ::after. A pseudo-element's own children are its text.
+static const os64_html_node_t *after_of(const B *b, const os64_html_node_t *el)
+{
+    const FStyled *s = el != NULL && el->kind == OS64_HTML_ELEMENT ? styled(b, el) : NULL;
+    return s != NULL ? s->pseudo[1] : NULL;
+}
+
+static const os64_html_node_t *kids(const B *b, const os64_html_node_t *el)
+{
+    const FStyled *s = styled(b, el);
+    if (s != NULL && s->pseudo[0] != NULL)
+        return s->pseudo[0];
+    return el->first_child != NULL ? el->first_child : after_of(b, el);
+}
+
+static const os64_html_node_t *sib(const B *b, const os64_html_node_t *c)
+{
+    garb_pseudo_t p = c->kind == OS64_HTML_ELEMENT ? f_pseudo_of(c) : GARB_PSEUDO_NONE;
+    if (p == GARB_PSEUDO_AFTER)
+        return NULL;
+    if (p == GARB_PSEUDO_BEFORE)
+        return c->parent->first_child != NULL ? c->parent->first_child : after_of(b, c->parent);
+    return c->next != NULL ? c->next : after_of(b, c->parent);
+}
+
 static bool css_space(char c)
 {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -752,7 +780,7 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
                  Mix *m)
 {
     for (const os64_html_node_t *c = first; c != stop && !(m->block && m->inline_content);
-         c = c->next) {
+         c = sib(b, c)) {
         if (c->kind == OS64_HTML_TEXT) {
             if (!foreign_text(c) && !hidden_by_details(c) && text_significant(b, c))
                 m->inline_content = true;
@@ -770,7 +798,7 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
             // goes into them — a descent like any other, and charged as one.
             if (!descend(b))
                 return;
-            scan(b, c->first_child, NULL, m);
+            scan(b, kids(b, c), NULL, m);
             ascend(b);
         } else if (block_level(s->style.display)) {
             m->block = true;
@@ -889,7 +917,7 @@ static FBox *element_box(B *b, FBox *parent, const os64_html_node_t *el, const F
         box->marker = marker;
         box->marker_len = marker_len;
     }
-    build_container(b, box, el->first_child, NULL, use, inside, inside_len);
+    build_container(b, box, kids(b, el), NULL, use, inside, inside_len);
     return box;
 }
 
@@ -967,7 +995,7 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
                 content->parent = ifc;
                 item->content = content;
                 if (descend(b)) {
-                    build_container(b, content, el->first_child, NULL, scope, NULL, 0);
+                    build_container(b, content, kids(b, el), NULL, scope, NULL, 0);
                     ascend(b);
                 }
             }
@@ -1034,10 +1062,14 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
             after = ")";
         }
     }
-    if (before != NULL)
+    // An author's `content` on the element's ::before or ::after, `none`
+    // included, takes the place of the mark it would have drawn
+    // (GENERATED_CONTENT.md § 2): a reset sheet's `q:before { content:
+    // none }` takes `q`'s marks away, as in every browser.
+    if (before != NULL && !(s->pseudo_declared & 1))
         generated(f, el, &s->style, before);
-    flow_range(f, el->first_child, NULL, scope);
-    if (after != NULL)
+    flow_range(f, kids(b, el), NULL, scope);
+    if (after != NULL && !(s->pseudo_declared & 2))
         generated(f, el, &s->style, after);
 
     if (inl->open_in != NULL && inl->open_in == f->target) {
@@ -1055,7 +1087,7 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
     B *b = f->b;
     if (!descend(b))
         return;
-    for (const os64_html_node_t *c = first; c != stop && !b->stopped; c = c->next) {
+    for (const os64_html_node_t *c = first; c != stop && !b->stopped; c = sib(b, c)) {
         if (c->kind == OS64_HTML_TEXT) {
             if (foreign_text(c) || hidden_by_details(c))
                 continue;
@@ -1074,7 +1106,7 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
             continue;
         flow_display_t d = s->style.display;
         if (d == FLOW_DISPLAY_CONTENTS) {
-            flow_range(f, c->first_child, NULL, scope);
+            flow_range(f, kids(b, c), NULL, scope);
         } else if (f_out_of_flow(&s->style)) {
             absolute_box(f, c, s, scope);
         } else if (s->style.float_side != FLOW_FLOAT_NONE) {
@@ -1173,7 +1205,7 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
             FBox *cell = new_box(b, row, FB_CELL, c, &styled(b, c)->style);
             position_box(b, cell, c, true);
             if (cell != NULL)
-                build_container(b, cell, c->first_child, NULL, scope, NULL, 0);
+                build_container(b, cell, kids(b, c), NULL, scope, NULL, 0);
             c = c->next;
         } else if (loose(b, AT_ROW, c)) {
             const os64_html_node_t *end = loose_end(b, AT_ROW, c, stop);
@@ -1202,7 +1234,7 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
         FBox *cap = new_box(b, table, FB_CAPTION, c, s);
         position_box(b, cap, c, true);
         if (cap != NULL)
-            build_container(b, cap, c->first_child, NULL, scope, NULL, 0);
+            build_container(b, cap, kids(b, c), NULL, scope, NULL, 0);
         break;
     }
     case FLOW_DISPLAY_TABLE_COLUMN_GROUP: {
@@ -1292,7 +1324,7 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
         position_box(&b, out->root, html, false);
         Scope scope = {1, false};
         if (out->root != NULL)
-            build_container(&b, out->root, html->first_child, NULL, &scope, NULL, 0);
+            build_container(&b, out->root, kids(&b, html), NULL, &scope, NULL, 0);
     }
     f_map_free(&b.pos_of);
     out->incomplete = b.stopped;

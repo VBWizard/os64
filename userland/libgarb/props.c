@@ -30,6 +30,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_RY] = {"ry", false, true},
     [GARB_STOP_COLOR] = {"stop-color", false, true},
     [GARB_STOP_OPACITY] = {"stop-opacity", false, true},
+    [GARB_CONTENT] = {"content", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -368,6 +369,20 @@ static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
     if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
         prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
+    // `content`'s items 8a reads and draws as nothing (GENERATED_CONTENT.md
+    // § 2): counters, and pictures.
+    if (prop == GARB_CONTENT) {
+        for (int32_t i = 0; i < v->nitems; i++) {
+            const garb_val_t *it = &v->items[i];
+            if (it->kind == GARB_V_FUNCTION && !os64_streq(it->keyword, "attr"))
+                return it->keyword;
+            if (it->kind == GARB_V_URL)
+                return "url";
+            if (it->kind == GARB_V_IMAGE)
+                return it->text;
+        }
+        return NULL;
+    }
     if (!image_drawn(v))
         return v->text;
     // A list of layers is approximated when any layer is: the page asked
@@ -2018,6 +2033,7 @@ typedef enum {
     G_LENGTH,               // <length>, negative too
     G_POSITION,             // <position>, as x and y
     G_RATIO,                // auto || <ratio>
+    G_CONTENT,              // normal | none | <content-list> [/ <string>+]?
 } Grammar;
 
 typedef struct {
@@ -2043,6 +2059,7 @@ static const Longhand kLonghands[] = {
     {GARB_RY, G_SVG_RADIUS, NULL},
     {GARB_STOP_COLOR, G_COLOR, NULL},
     {GARB_STOP_OPACITY, G_ALPHA, NULL},
+    {GARB_CONTENT, G_CONTENT, NULL},
     {GARB_FILL, G_SVG_PAINT, NULL},
     {GARB_STROKE, G_SVG_PAINT, NULL},
     {GARB_FILL_OPACITY, G_ALPHA, NULL},
@@ -2831,6 +2848,104 @@ static bool will_change(Sets *s, VCur *c, garb_val_t *out)
     return layers_done(s, &list, out);
 }
 
+// The most items one `content` value is read with; a value with more is
+// invalid.
+#define CONTENT_ITEMS_MAX 32
+
+// One item of a content list: a string, attr(<name>), counter() or
+// counters() (read, their arguments not kept: 8b's), a quote word, or a
+// picture. False when the next value is none of them.
+static bool content_item(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kQuotes[] = {"open-quote", "close-quote", "no-open-quote", "no-close-quote", NULL};
+    const garb_value_t *t = vc_peek(c);
+    const char *k;
+    os64_memset(out, 0, sizeof(*out));
+    if (t == NULL)
+        return false;
+    if (t->kind == GARB_STRING) {
+        out->kind = GARB_V_STRING;
+        out->text = t->text;
+        out->len = t->len;
+        c->i++;
+        return true;
+    }
+    if ((k = vc_keyword(c, kQuotes)) != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    if (is_fn(t, "attr")) {
+        VCur args = {t->children, t->nchildren, 0};
+        const garb_value_t *name = vc_peek(&args);
+        if (name == NULL || name->kind != GARB_IDENT)
+            return false;
+        garb_val_t named = {0};
+        named.kind = GARB_V_STRING;
+        named.text = name->text;
+        named.len = name->len;
+        out->kind = GARB_V_FUNCTION;
+        out->keyword = "attr";
+        out->items = keep(s, &named, 1);
+        out->nitems = 1;
+        c->i++;
+        return out->items != NULL;
+    }
+    if (is_fn(t, "counter") || is_fn(t, "counters")) {
+        VCur args = {t->children, t->nchildren, 0};
+        const garb_value_t *name = vc_peek(&args);
+        if (name == NULL || name->kind != GARB_IDENT)
+            return false;
+        out->kind = GARB_V_FUNCTION;
+        out->keyword = is_fn(t, "counter") ? "counter" : "counters";
+        c->i++;
+        return true;
+    }
+    if (t->kind == GARB_URL || is_fn(t, "url"))
+        return vc_url(c, out);
+    return vc_image(c, out);
+}
+
+// Generated Content 3 § 1.1: normal | none | [<content-item>]+ [/ [<string>
+// | attr()]+]?, the alternative text read and not kept.
+static bool content(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kAlone[] = {"normal", "none", NULL};
+    const char *k = vc_keyword(c, kAlone);
+    if (k != NULL) {
+        *out = kw(k);
+        return vc_done(c);
+    }
+    garb_val_t items[CONTENT_ITEMS_MAX];
+    int32_t n = 0;
+    while (vc_peek(c) != NULL && !is_delim_v(vc_peek(c), '/')) {
+        if (n == CONTENT_ITEMS_MAX || !content_item(s, c, &items[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    if (vc_peek(c) != NULL) {
+        c->i++;                 // the slash
+        garb_val_t alt;
+        int32_t nalt = 0;
+        while (vc_peek(c) != NULL) {
+            const garb_value_t *t = vc_peek(c);
+            if (t->kind != GARB_STRING && !is_fn(t, "attr"))
+                return false;
+            if (!content_item(s, c, &alt))
+                return false;
+            nalt++;
+        }
+        if (nalt == 0)
+            return false;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, items, n);
+    out->nitems = n;
+    return out->items != NULL;
+}
+
 static bool layered(const Longhand *l)
 {
     return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
@@ -3293,6 +3408,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_EASING: return easing(s, c, out);
     case G_ITERATIONS: return iterations(s, c, out);
     case G_WILL_CHANGE: return will_change(s, c, out);
+    case G_CONTENT: return content(s, c, out);
     case G_CURSOR: return cursor(s, c, l->words, out);
     case G_SPACING_TEXT:
         return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH, true, true, out);
