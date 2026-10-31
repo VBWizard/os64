@@ -164,7 +164,7 @@ and it is said here so 5b and 8a meet on it rather than discover it.
   after their element (`p#y::before: ...`). `content`'s counters and
   pictures are named as approximated, so the record still says what 8a
   does not draw.
-- **libflow pass 1** (`style_pseudos`, `style_pseudo`):
+- **libflow pass 1** (`style_pseudo`, called from the walk by `open_element` and `close_element` since 8b):
   - The winners go through the element's own `lay_sets`, then whatever
     else an element's child is given of it: the medium border and outline
     widths (`medium_widths`), an atomic inline's edge to the decorations,
@@ -203,3 +203,184 @@ and it is said here so 5b and 8a meet on it rather than discover it.
   `::marker` and the line pseudo-elements, a pseudo-element's animations,
   tables' own, and an animation a `display: contents` element draws only
   through its pseudo-elements.
+
+## 8. Slice 8b: counters and `quotes`
+
+*Designed after 8a was built, on its branch.* `counter-reset` and
+`counter-increment` are named by the census in 181 and 163 loads (16 and
+14 sites), `quotes` in 71 (11). They are one piece because both are
+**tree-order state**: a `counter()` in an element's `::before` and an
+`open-quote` in it both depend on every element before it in the
+document, not on its ancestors alone. That is the one new idea 8b brings
+to pass 1, and § 8.4 says what it asks of slice 5.
+
+### 8.1 What 8b does
+
+- **`counter-reset`, `counter-increment` and `counter-set`** (Lists 3 §
+  4): `none` or a list of names, each with an optional integer (0 for a
+  reset and a set, 1 for an increment). A name may be any `<custom-ident>`
+  but `none`. `counter-reset`'s `reversed()` is not read: a declaration
+  with one is invalid, as in an engine that never had it, so an earlier
+  declaration wins.
+- **`counter(name[, style])` and `counters(name, joiner[, style])`** in
+  `content`: the innermost counter of that name, or all of them from the
+  outermost in, joined. With no style given the style is `decimal`. The
+  styles spelled are `list-style-type`'s (decimal, the alphas and Romans,
+  the bullets, `none`); any other name is spelled `decimal`, as an
+  unknown `@counter-style` name is and as `list-style-type` already
+  spells it.
+- **`quotes`** (Content 3 § 4.1, inherited): `auto`, `none`, or pairs of
+  strings. `auto` is the English marks (U+201C/U+201D, then
+  U+2018/U+2019); other languages are not chosen. A quote word takes the
+  pair at the current depth, and the last pair when the depth is past
+  them. An `open-quote` deepens the depth after its mark, a `close-quote`
+  shallows it before its mark, and a close at depth 0 draws nothing and
+  stays at 0. `no-open-quote` and `no-close-quote` change the depth and
+  draw nothing, and `quotes: none` draws nothing for either word.
+- **`q`'s own marks are its pseudo-elements**, as the chapter's sheet
+  makes them (`q::before { content: open-quote }`, `q::after { content:
+  close-quote }`, HTML § 15.3.6). An author's rules for them apply as to
+  any pseudo-element: `quotes`, counters, `text-transform`, any display.
+  An author's `content` replaces the chapter's. So a `q` inside a `q`
+  takes the second pair, and a `q` after an author's unclosed
+  `open-quote` takes the next one. Pass 2 no longer draws them from the
+  count of `q` ancestors.
+
+### 8.2 The algorithm (Lists 3 § 4.4, Content 3 § 4.2)
+
+Pass 1 already walks the elements in tree order. It carries a **stack of
+live counters** (name, value, and the element whose subtree the counter's
+scope ends with) and the **quote depth**, and at each element whose
+display is not `none` it does this:
+
+| Step | When | What |
+|---|---|---|
+| 1 | the element is styled | its `counter-reset`, then `counter-increment`, then `counter-set` (Lists 3 § 4's order) |
+| 2 | then | its `::before`, if it exists (a `q`'s always does): that pseudo-element's own counter properties, then its content resolved |
+| 3 | then | its children, each by these steps |
+| 4 | finished, on the way up | its `::after` (moved here from step 2: it follows the children, so it sees their counters and quotes) |
+| 5 | then | pop the counters whose scope ends with it |
+
+- **A reset** pushes a counter scoped to the element's parent: the
+  element, its descendants and its following siblings see it. A reset on
+  a `::before` or `::after` is scoped to the originating element. When
+  the innermost counter of that name has the same scope (a previous
+  sibling made it), the reset replaces its value instead: siblings
+  replace, never nest (Lists 3 § 4.4.2).
+- **An increment or a set** changes the innermost counter of the name,
+  and makes one first when there is none, as a reset would (Lists 3 §
+  4.2). **A `counter()` or `counters()`** of a name with no counter makes
+  one with value 0, scoped to its pseudo-element's originating element.
+- **An element whose display is `none`** changes no counter, and neither
+  does its subtree, which pass 1 never walks (Lists 3 § 4.5). Neither
+  does a pseudo-element that does not exist (`content: none`). Nor does
+  anything pass 2 does not draw, by the rule pass 2 itself uses
+  (`f_draws_inside`): an element that makes no box (`audio`, `embed`,
+  `f_boxless`) and what it holds, and what a replaced element holds (a
+  canvas's fallback when scripts run), unless the element is laid out
+  through `display: contents`, as a button may be.
+- **`inherit`** on a counter property takes the parent's list, climbing
+  past ancestors that inherit too. `quotes` is inherited and the chapter's
+  sheet declares none, so `revert` keeps the inherited pairs, and only
+  `initial` is `auto`.
+- **`counters()`** is spelled only when its longest spelling fits in what
+  is left of the lists' budget. Otherwise the content is lost before
+  anything is made.
+- **Values** are 32-bit integers, and arithmetic past them stays at the
+  limit.
+- **The bound**: at most `F_COUNTERS_MAX` (1024) counters are live at once.
+  Past that a reset makes none and a use reads 0. A page reaches it only
+  by keeping a thousand counters in scope together, which is not a page
+  anyone writes.
+
+### 8.3 Where it lives
+
+- **libgarb**: four longhands, `GARB_COUNTER_RESET`,
+  `GARB_COUNTER_INCREMENT`, `GARB_COUNTER_SET` (not inherited) and
+  `GARB_QUOTES` (inherited), all modern-marked. A counter list's items
+  are pairs: a name, a KEYWORD as written (so it serializes as the
+  identifier it is), then a NUMBER. `quotes`' items are its strings.
+  `content`'s `counter()` and `counters()` now keep their arguments (the
+  name, the joiner, and the style keyword lowercased, unless it is
+  `decimal`, the style unwritten). They are read to their grammar and
+  are no longer named as approximated.
+- **libflow pass 1**: the stack and the depth live in the pass's `Ctx`.
+  Each `FStyled` keeps the `quotes` value it inherited. A `q`'s
+  pseudo-elements are made with the chapter's content when the author
+  gives none, so pass 2 draws them as it draws any pseudo-element. One spelling of a number in a counter style serves both
+  markers and `counter()`, so a list's marker and a `counter()` in its
+  style never disagree.
+
+### 8.4 Lifecycle
+
+| Event | Counters and depth | A pseudo-element's content (a `q`'s marks too) |
+|---|---|---|
+| a style pass | begun empty and at 0, walked in tree order, gone at the pass's end | resolved at its step (§ 8.2) |
+| an element before it changes (an attribute, a class, an inserted or removed element) | recomputed by the next style pass | may change: it depends on everything before it |
+| `display: none` on an element | its counter properties and its subtree's count for nothing | none generated |
+
+**For slice 5** (RELAYOUT.md's restyle): 8a's note in § 5 holds, and 8b
+adds a rule. A style pass that met a counter property, a `counter()` or
+`counters()`, a quote word or a `q` marks itself **ordered**
+(`FStyles.ordered`). Restyling only the changed elements of an ordered
+pass is wrong, because elements after them depend on them. Whatever 5b
+reuses, an ordered pass is restyled whole.
+
+### 8.5 Not in 8b (DEBTS.md rows)
+
+- **The `list-item` counter**: `counter(list-item)`, an author's counter
+  properties naming `list-item`, and markers numbered by author counters.
+  List markers keep pass 2's numbering, which already handles `start`,
+  `value` and `reversed`.
+- **`reversed()`** in `counter-reset`.
+- **`@counter-style`**, and the predefined styles yonder does not spell
+  (`lower-greek`, `armenian`, the CJK styles), which are spelled decimal.
+- **`quotes: auto` by language**, and `match-parent`.
+
+### 8.6 Proof
+
+- **libgarb**: the four longhands' readers accept and refuse by their
+  grammars (`declarations.txt`), as do `counter()`'s and `counters()`'s
+  arguments, and none of them is a missing property (`skips.txt`).
+- **libflow**: pass 1's generated text and `q` marks read in tree order
+  (`texts_case`, `test_libflow_pseudo.inc`) for:
+  - nested lists numbered by `counters(item, ".")`;
+  - a sibling reset replacing rather than nesting;
+  - an increment with no reset;
+  - reset, increment and set in their order on one element;
+  - an `::after` seeing its children's increments;
+  - a pseudo-element's own increment;
+  - `display: none` counting for nothing;
+  - every spelled style;
+  - quotes by pair, past the last pair, `none`, a close at depth 0, the
+    `no-` words, and a `q` nested in an author's `open-quote`.
+- **WPT**: no expectation lost. `css/cssom`'s `counter()` values already
+  pass in 8a, since a specified value is serialized from its source.
+- **Mutants**: one per row of § 8.2's table and one per rule beneath it.
+
+### 8.7 As built
+
+- **libgarb**: `counters` reads the three counter properties, with its
+  fallback integer (0, or 1 for an increment). `counter_name` keeps a name
+  as a KEYWORD copy, refusing `none` and the CSS-wide words. `quotes`
+  reads pairs of strings. `vc_comma` steps over the commas inside
+  `counter()` and `counters()`, and the style is read as
+  `list-style-type`'s is (`list_type`).
+- **libflow pass 1**: `count_on` applies a counter list in Lists 3's
+  order through `instantiate` (with the sibling rule) and `innermost`.
+  `counter_list` takes `inherit` from the parent, or from the originating
+  element for a pseudo-element. `quote_mark` moves the depth and picks
+  the pair. `content_text` resolves each item once into a `Piece`, then
+  copies them out, charged to the lists' budget. `open_element` and
+  `close_element` are § 8.2's steps 1–2 and 4–5 in the walk, and
+  `close_element` styles the `::after`. `style_pseudo` gives a `q`'s
+  pseudo-elements the chapter's `open-quote`/`close-quote` when an author
+  declares no `content` for them.
+- **Shared**: `f_counter_spell` (boxes.c) spells a number in a counter
+  style without a suffix. `marker_text` adds the suffix, and
+  `counter_text` joins `counters()`' spellings. `list_type_named`
+  (style.c) is `list-style-type`'s table, which `counter()`'s style reads
+  as well.
+- **What waits** is in DEBTS.md § Browser layout: the `list-item`
+  counter, `reversed()`, `@counter-style` and the styles not spelled, and
+  `quotes: auto` by language.

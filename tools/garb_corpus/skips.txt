@@ -151,19 +151,21 @@ WANT
 (end)
 END
 
-# content's items 8a reads and draws as nothing are named as approximated
-# (GENERATED_CONTENT.md § 2): counters and pictures; its strings, attr()
-# and quote words are drawn, and no longer a missing property.
+# content's items read and drawn as nothing are named as approximated
+# (GENERATED_CONTENT.md § 2): pictures. Its strings, attr(), quote words
+# and counters (§ 8) are drawn, and none of the counter properties or
+# quotes is a missing property.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
-li::before { content: counter(item) ". " }
+li::before { content: counter(item) ". " counters(item, ".", lower-roman) }
+ol { counter-reset: item; quotes: "<" ">" }
+li { counter-increment: item; counter-set: item 4 }
 p::before { content: url(i.png) }
 p::after { content: "x" attr(title) open-quote }
 </style>
 <p>x
 WANT
-value content: counter 1
 value content: url 1
 (end)
 END

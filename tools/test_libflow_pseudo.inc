@@ -248,8 +248,226 @@ static void pseudo_layout_cases(void)
     sheeted_close(&p);
 }
 
+// ── Counters and quotes (GENERATED_CONTENT.md § 8) ────────────────────
+
+static void texts_put(char *out, size_t cap, const char *text, size_t len)
+{
+    size_t at = strlen(out);
+    snprintf(out + at, cap - at, "%.*s|", (int)len, text);
+}
+
+// What pass 1 generated, in tree order: each ::before's text (a `q`'s open
+// mark too), the children, each ::after's.
+static void texts_walk(const FStyles *st, const os64_html_node_t *n, char *out, size_t cap)
+{
+    for (; n != NULL; n = n->next) {
+        const FStyled *s = n->kind == OS64_HTML_ELEMENT ? f_style_of(st, n) : NULL;
+        if (s == NULL)
+            continue;
+        if (s->pseudo[0] != NULL && s->pseudo[0]->first_child != NULL)
+            texts_put(out, cap, s->pseudo[0]->first_child->text, s->pseudo[0]->first_child->text_len);
+        texts_walk(st, n->first_child, out, cap);
+        if (s->pseudo[1] != NULL && s->pseudo[1]->first_child != NULL)
+            texts_put(out, cap, s->pseudo[1]->first_child->text, s->pseudo[1]->first_child->text_len);
+    }
+}
+
+static void texts_case_in(const char *name, const char *html, bool scripting, const char *expected)
+{
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    p.env.scripting = scripting;
+    FStyles *styles = f_style_build(p.doc, p.page, &p.env);
+    char got[512] = "";
+    if (styles != NULL)
+        texts_walk(styles, p.doc->html, got, sizeof(got));
+    bool ok = styles != NULL && strcmp(got, expected) == 0;
+    char detail[600];
+    snprintf(detail, sizeof(detail), "got \"%s\"", got);
+    expect(name, ok, ok ? NULL : detail);
+    f_style_free(styles);
+    sheeted_close(&p);
+}
+
+static void texts_case(const char *name, const char *html, const char *expected)
+{
+    texts_case_in(name, html, false, expected);
+}
+
+// counters() whose spelling would not fit in the lists' budget is refused
+// before it is made: a 1 MiB joiner between 64 counters is never spelled
+// out, the pseudo-element is lost, and the page's next one is drawn.
+static void counter_budget_cases(void)
+{
+    size_t joiner = (size_t)1 << 20;
+    char *html = malloc(joiner + 4096);
+    int at = sprintf(html, "<!doctype html><style>div { counter-reset: n } i::before { content: \"ok\" }"
+                           " b::before { content: counters(n, \"");
+    memset(html + at, 'x', joiner);
+    at += (int)joiner;
+    at += sprintf(html + at, "\") }</style>");
+    for (int i = 0; i < 64; i++)
+        at += sprintf(html + at, "<div>");
+    sprintf(html + at, "<b></b><i></i>");
+    largest = 0;
+    texts_case("counters: one too long for the budget is lost, the next drawn", html, "ok|");
+    char detail[64];
+    snprintf(detail, sizeof(detail), "largest allocation %zu", largest);
+    expect("counters: and its spelling is never made", largest < ((size_t)16 << 20), detail);
+    free(html);
+}
+
+static void counter_cases(void)
+{
+    counter_budget_cases();
+    texts_case("counters: inherit through an ancestor that inherits too",
+        "<!doctype html><style>body { counter-reset: k 7 } div, p { counter-reset: inherit }"
+        " p::before { content: counters(k, \"-\") }</style><div><p></p></div>",
+        "7-7-7|");
+    texts_case("quotes: revert keeps the inherited pairs",
+        "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: revert }</style><p><q>x</q>",
+        "<|>|");
+    texts_case("quotes: q's own marks take their pseudo-element's quotes",
+        "<!doctype html><style>q::before, q::after { quotes: \"[\" \"]\" }</style><p><q>x</q>",
+        "[|]|");
+    texts_case("counters: a q's own ::before counts, its content the chapter's",
+        "<!doctype html><style>body { counter-reset: n } q::before { counter-increment: n }"
+        " p::before { content: counter(n) }</style><div><q>x</q></div><p>t</p>",
+        "\xe2\x80\x9c|\xe2\x80\x9d|1|");
+    cascade_layout_case("quotes: a q's own marks are its text, transformed as its text is",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0 }"
+        " q { quotes: \"a\" \"b\"; text-transform: uppercase }</style><p><q>x</q>",
+        200,
+        "page 200 20\n"
+        "block html 0 0 200 20\n"
+        "  block body 0 0 200 20\n"
+        "    block p 0 0 200 20\n"
+        "      line 0 0 200 20 base 14\n"
+        "        span q 0 2 8 16\n"
+        "        span q 16 2 8 16\n"
+        "        span q 0 2 24 16\n"
+        "        text \"A\" 0 2 8 16 serif 16\n"
+        "        text \"X\" 8 2 8 16 serif 16\n"
+        "        text \"B\" 16 2 8 16 serif 16\n");
+    texts_case("quotes: initial is auto",
+        "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: initial }</style><p><q>x</q>",
+        "\xe2\x80\x9c|\xe2\x80\x9d|");
+    texts_case("counters: an audio, and its fallback, count and quote for nothing",
+        "<!doctype html><style>body { counter-reset: n } span, audio { counter-increment: n }"
+        " span::before { content: open-quote } p::before { content: counter(n) }</style>"
+        "<audio><span>f</span></audio><p><q>x</q></p>",
+        "0|\xe2\x80\x9c|\xe2\x80\x9d|");
+    texts_case("counters: a button laid out through display: contents generates inside",
+        "<!doctype html><style>button { display: contents } span::before { content: \"B\" }</style>"
+        "<p><button><span>x</span><q>y</q></button>",
+        "B|\xe2\x80\x9c|\xe2\x80\x9d|");
+    texts_case_in("counters: a canvas's fallback counts and quotes for nothing",
+        "<!doctype html><style>body { counter-reset: n } span { counter-increment: n }"
+        " span::before { content: open-quote } p::before { content: counter(n) }</style>"
+        "<canvas><span>f</span></canvas><p><q>x</q></p>",
+        true, "0|\xe2\x80\x9c|\xe2\x80\x9d|");
+
+    texts_case("counters: nested, joined from the outermost in",
+        "<!doctype html><style>.l { counter-reset: item } .i { counter-increment: item }"
+        " .i::before { content: counters(item, \".\") \" \" }</style>"
+        "<div class=l><div class=i>a</div><div class=i>b<div class=l><div class=i>c</div></div></div>"
+        "<div class=i>d</div></div>",
+        "1 |2 |2.1 |3 |");
+    texts_case("counters: a sibling's reset replaces the counter, never nests in it",
+        "<!doctype html><style>p { counter-reset: x 5 } p::before { content: counter(x) }"
+        " span::before { content: counters(x, \".\") }</style><div><p></p><p></p><span></span></div>",
+        "5|5|5|");
+    texts_case("counters: an increment with no reset makes the counter, shared by its siblings",
+        "<!doctype html><style>i { counter-increment: n } i::before { content: counter(n) }</style>"
+        "<p><i></i><i></i><i></i>",
+        "1|2|3|");
+    texts_case("counters: reset, then increment, then set",
+        "<!doctype html><style>p { counter-reset: a 10; counter-increment: a 5; counter-set: a 2 }"
+        " p::before { content: counter(a) } div { counter-reset: b 10; counter-increment: b 5 }"
+        " div::before { content: counter(b) }</style><p></p><div></div>",
+        "2|15|");
+    texts_case("counters: an ::after sees its element's children's increments",
+        "<!doctype html><style>div { counter-reset: c } span { counter-increment: c }"
+        " div::before, div::after { content: counter(c) }</style><div><span>x</span><span>y</span></div>",
+        "0|2|");
+    texts_case("counters: a pseudo-element's own increment, before its content",
+        "<!doctype html><style>body { counter-reset: h } h2::before { counter-increment: h;"
+        " content: counter(h) \". \" }</style><h2>a</h2><h2>b</h2>",
+        "1. |2. |");
+    texts_case("counters: display none counts for nothing",
+        "<!doctype html><style>i { counter-increment: n } i::before { content: counter(n) } .h { display: none }"
+        "</style><p><i></i><i class=h></i><i></i>",
+        "1|2|");
+    texts_case("counters: and neither does a pseudo-element that does not exist",
+        "<!doctype html><style>i { counter-increment: n } i::before { content: counter(n) }"
+        " i::after { counter-increment: n 10 }</style><p><i></i><i></i>",
+        "1|2|");
+    texts_case("counters: each style spelled, an unknown one decimal",
+        "<!doctype html><style>p { counter-reset: a 4 } p::before { content: counter(a, lower-roman)"
+        " counter(a, upper-alpha) counter(a, disc) \"/\" counter(a, none) \"/\" counter(a, lower-greek) }</style><p></p>",
+        "ivD\xe2\x80\xa2//4|");
+    texts_case("counters: a reset by inherit takes the parent's",
+        "<!doctype html><style>div { counter-reset: k 7 } p { counter-reset: inherit }"
+        " p::before { content: counters(k, \"-\") }</style><div><p></p></div>",
+        "7-7|");
+
+    texts_case("quotes: by pair, the last repeated past them",
+        "<!doctype html><style>body { quotes: \"<\" \">\" \"(\" \")\" }</style><p><q>a<q>b<q>c</q></q></q>",
+        "<|(|(|)|)|>|");
+    texts_case("quotes: auto, English's double then single",
+        "<!doctype html><p><q>a<q>b<q>c</q></q></q>",
+        "\xe2\x80\x9c|\xe2\x80\x98|\xe2\x80\x98|\xe2\x80\x99|\xe2\x80\x99|\xe2\x80\x9d|");
+    texts_case("quotes: none draws nothing and still deepens",
+        "<!doctype html><style>.n { quotes: none } .a { quotes: auto }</style><p><q class=n>a<q class=a>b</q></q>",
+        "\xe2\x80\x98|\xe2\x80\x99|");
+    texts_case("quotes: a close at depth 0 is nothing, the rest drawn",
+        "<!doctype html><style>p::before { content: close-quote \"x\" }</style><p></p>",
+        "x|");
+    texts_case("quotes: no-open-quote deepens, drawing nothing",
+        "<!doctype html><style>p::before { content: no-open-quote } p::after { content: close-quote }</style><p></p>",
+        "\xe2\x80\x9d|");
+    texts_case("quotes: a q after an author's open-quote takes the next pair",
+        "<!doctype html><style>p::before { content: open-quote }</style><p><q>a</q>",
+        "\xe2\x80\x9c|\xe2\x80\x98|\xe2\x80\x99|");
+
+    static const char *const kOrdered[] = {
+        "<!doctype html><p>plain",
+        "<!doctype html><style>p::before { content: counter(n) }</style><p>x",
+        "<!doctype html><p><q>x</q>",
+    };
+    bool ordered[3];
+    for (int i = 0; i < 3; i++) {
+        Sheeted p;
+        sheeted_open(&p, kOrdered[i], 800, 600);
+        FStyles *styles = f_style_build(p.doc, p.page, &p.env);
+        ordered[i] = styles != NULL && styles->ordered;
+        f_style_free(styles);
+        sheeted_close(&p);
+    }
+    expect("counters: a pass that met none is not ordered", !ordered[0], NULL);
+    expect("counters: one that met a counter is", ordered[1], NULL);
+    expect("counters: and one that met a q", ordered[2], NULL);
+}
+
+// An author's content on an `rt`'s ::before or ::after takes the place of
+// the parentheses yonder draws round it, as it does `q`'s marks.
+static void pseudo_rt_cases(void)
+{
+    char *plain = pseudo_boxes_of("<!doctype html><p><ruby>a<rt>b</rt></ruby>");
+    char *taken = pseudo_boxes_of("<!doctype html><style>rt::before, rt::after { content: \"\" }</style>"
+                                  "<p><ruby>a<rt>b</rt></ruby>");
+    expect("pseudo: an rt is drawn with its parentheses",
+           plain != NULL && strstr(plain, "text \"(\" generated-by rt") != NULL, NULL);
+    expect("pseudo: an author's ::before and ::after take their place",
+           taken != NULL && strstr(taken, "text \"(\"") == NULL && strstr(taken, "text \")\"") == NULL, NULL);
+    free(plain);
+    free(taken);
+}
+
 static void pseudo_cases(void)
 {
+    pseudo_rt_cases();
+    counter_cases();
     pseudo_style_cases();
     pseudo_budget_cases();
     pseudo_layout_cases();
@@ -310,14 +528,31 @@ static void pseudo_cases(void)
         "      placeholder ::before\n"
         "      text \"x\"\n"
         "      block ::before out-of-flow\n");
-    pseudo_case("pseudo: an author's q::before replaces q's open mark, its ::after left drawn",
+    pseudo_case("pseudo: an author's q::before replaces q's open mark, its own close left drawn",
+        "<!doctype html><style>q::before { content: \"<\" open-quote }</style><p><q>a</q>",
+        "block html\n"
+        "  block body\n"
+        "    block p\n"
+        "      open q\n"
+        "      open ::before\n"
+        "      text \"<“\"\n"
+        "      close ::before\n"
+        "      text \"a\"\n"
+        "      open ::after\n"
+        "      text \"”\"\n"
+        "      close ::after\n"
+        "      close q\n");
+    // Content 3 § 4.2: with no open mark before it, q's close is at depth 0,
+    // and draws nothing; its ::after is there, empty.
+    pseudo_case("pseudo: q::before { content: none } leaves its close at depth 0, drawn as nothing",
         "<!doctype html><style>q::before { content: none }</style><p><q>a</q>",
         "block html\n"
         "  block body\n"
         "    block p\n"
         "      open q\n"
         "      text \"a\"\n"
-        "      text \"”\" generated-by q\n"
+        "      open ::after\n"
+        "      close ::after\n"
         "      close q\n");
     pseudo_case("pseudo: a table cell's and a caption's are their content's",
         "<!doctype html><style>td::before { content: attr(data-label) \": \" } caption::after { content: \"*\" }</style>"
