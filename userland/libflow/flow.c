@@ -2038,11 +2038,13 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
             tree->reuse = reuse_snapshot_new(tree, width, env, inputs);
             match = reuse_match_new(tree, previous, env);
         }
-        tree->layout = f_layout(tree->boxes, doc, model, env, width);
+        tree->layout = f_layout_reusing(tree->boxes, doc, model, env, width, match,
+                                         inputs ? &tree->reuse_stats : NULL);
         os64_free(match);
         if (profile) {
             profile_elapsed(&timing, began, &profile->layout_us);
             profile->measures = tree->layout ? tree->layout->measures : 0;
+            profile->reused = tree->layout ? tree->layout->reused : 0;
         }
     }
     if (tree->layout == NULL) {

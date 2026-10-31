@@ -14,10 +14,10 @@ struct FReuseSnapshot {
     flow_env_t env;
     const os64_html_document_t *doc;
     uint64_t generation, version;
-    size_t count, slots, bytes;
+    size_t count, slots, bytes, ncalls, nitems;
     int32_t width;
     bool lost;
-    // Nodes and hash slots follow in this allocation, charged together.
+    // Nodes, hash slots and per-box call records share this allocation.
 };
 
 _Static_assert(sizeof(FReuseSnapshot) % _Alignof(FReuseNode) == 0,
@@ -30,6 +30,10 @@ static FReuseNode *reuse_nodes(FReuseSnapshot *r)
 static uint32_t *reuse_slots(FReuseSnapshot *r)
 {
     return (uint32_t *)(reuse_nodes(r) + r->count);
+}
+static FReuseCall *reuse_calls(FReuseSnapshot *r)
+{
+    return (FReuseCall *)(reuse_slots(r) + r->slots);
 }
 static size_t reuse_hash(const os64_html_node_t *node, size_t slots)
 {
@@ -53,6 +57,8 @@ static void reuse_snapshot_free(FReuseSnapshot *r)
 {
     if (!r) return;
     os64_html_reader_free(r->reader);
+    FReuseCall *calls = reuse_calls(r);
+    for (size_t i = 0; i < r->ncalls; ++i) calls[i].box->reuse_call = NULL;
     os64_free(r);
 }
 static const os64_html_node_t *reuse_next(const os64_html_node_t *node)
@@ -134,16 +140,19 @@ static void reuse_source_prepare(flow_tree_t *tree, const flow_tree_t *previous,
 // Include atomic content in the identity inventory. A node with more than one
 // box cannot select a source by identity alone; ordered anonymous children are
 // matched separately. The box builder bounds this recursion by F_DEPTH_MAX.
-static void reuse_index_boxes(FReuseSnapshot *r, const FBox *b)
+static void reuse_index_boxes(FReuseSnapshot *r, FBox *b)
 {
     if (!b) return;
+    b->reuse_call = &reuse_calls(r)[r->ncalls++];
+    b->reuse_call->box = b;
+    r->nitems += b->nitems;
     size_t i = reuse_find(r, b->node);
     if (i != SIZE_MAX) {
         FReuseNode *n = &reuse_nodes(r)[i];
         if (n->box) n->ambiguous = true;
         else n->box = b;
     }
-    for (const FBox *c = b->first; c; c = c->next) reuse_index_boxes(r, c);
+    for (FBox *c = b->first; c; c = c->next) reuse_index_boxes(r, c);
     for (const FItem *it = b->items; it; it = it->next)
         if (it->content) reuse_index_boxes(r, it->content);
 }
@@ -168,11 +177,16 @@ static FReuseSnapshot *reuse_snapshot_new(flow_tree_t *tree, int32_t width,
     size_t bytes = sizeof(FReuseSnapshot) + count * sizeof(FReuseNode);
     if (slots > (cap - bytes) / sizeof(uint32_t)) goto budget;
     bytes += slots * sizeof(uint32_t);
+    if (tree->boxes->count > (cap - bytes) / sizeof(FReuseCall)) goto budget;
+    bytes += tree->boxes->count * sizeof(FReuseCall);
     FReuseSnapshot *r = os64_calloc(1, bytes);
     if (!r) { stats->refused[FLOW_REUSE_NO_MEMORY]++; return NULL; }
     *r = (FReuseSnapshot){.inputs = *inputs, .env = *env, .doc = tree->doc,
         .generation = tree->styles->cascade_generation, .version = os64_html_version(tree->doc),
         .count = count, .slots = slots, .bytes = bytes, .width = width};
+    // These borrowed context pointers are not comparison inputs. Keep no
+    // stale temporary Page/timeline address in the persistent descriptor.
+    r->env.ctx = NULL; r->env.cascade = NULL; r->env.timeline = NULL;
     FReuseNode *nodes = reuse_nodes(r);
     uint32_t *hash = reuse_slots(r);
     size_t i = 0;
@@ -187,6 +201,7 @@ static FReuseSnapshot *reuse_snapshot_new(flow_tree_t *tree, int32_t width,
     }
     reuse_index_boxes(r, tree->boxes->root);
     stats->nodes_indexed = count;
+    stats->metadata_bytes = stats->metadata_peak = bytes;
     return r;
 budget:
     stats->refused[FLOW_REUSE_BUDGET]++;
@@ -206,4 +221,5 @@ static void reuse_snapshot_finish(flow_tree_t *tree)
 discard:
     reuse_snapshot_free(r); tree->reuse = NULL;
     tree->reuse_stats.nodes_indexed = 0;
+    tree->reuse_stats.metadata_bytes = 0;
 }

@@ -1,25 +1,9 @@
 // Review the equality and role inventories when these records change. Size
 // guards supplement that review; a same-size field edit still needs inspection.
-_Static_assert(sizeof(FBox) == 480 && sizeof(FItem) == 104 && sizeof(FInline) == 72,
+_Static_assert(sizeof(FBox) == 504 && sizeof(FItem) == 104 && sizeof(FInline) == 72,
                "review layout correspondence fields");
 // Call-local correspondence. No old arena address escapes into the new tree.
-typedef struct {
-    FBox *box;
-    const FBox *old;
-    size_t parent;
-    bool equal, ordinary;
-    flow_reuse_reason_t reason;
-} FReusePair;
-
-typedef struct {
-    FReusePair *pairs;
-    uint32_t *slots;
-    size_t count, capacity, nslots, bytes;
-    flow_tree_t *tree;
-    const flow_tree_t *previous;
-} FReuseMatch;
-
-static FReusePair *reuse_pair(FReuseMatch *m, const FBox *box)
+FReusePair *f_reuse_pair(const FReuseMatch *m, const FBox *box)
 {
     if (!m || !box) return NULL;
     size_t at = reuse_hash((const void *)box, m->nslots);
@@ -29,6 +13,25 @@ static FReusePair *reuse_pair(FReuseMatch *m, const FBox *box)
         at = (at + 1) & (m->nslots - 1);
     }
     return NULL;
+}
+
+void *f_reuse_pointer(const FReuseMatch *m, const void *old)
+{
+    if (!m || !old) return NULL;
+    size_t at = reuse_hash(old, m->pointer_slots);
+    while (m->pointers[at].from) {
+        if (m->pointers[at].from == old) return m->pointers[at].to;
+        at = (at + 1) & (m->pointer_slots - 1);
+    }
+    return NULL;
+}
+static void reuse_bind(FReuseMatch *m, const void *old, void *fresh)
+{
+    if (!old) return;
+    size_t at = reuse_hash(old, m->pointer_slots);
+    while (m->pointers[at].from && m->pointers[at].from != old)
+        at = (at + 1) & (m->pointer_slots - 1);
+    m->pointers[at] = (FReusePointer){old, fresh};
 }
 
 static const os64_html_node_t *reuse_element(const os64_html_node_t *node)
@@ -102,7 +105,7 @@ static void reuse_match_box(FReuseMatch *m, FBox *box, const FBox *ordered,
 {
     size_t index = m->count++;
     FReusePair *p = &m->pairs[index];
-    *p = (FReusePair){.box = box, .parent = parent, .reason = FLOW_REUSE_NREASONS};
+    *p = (FReusePair){.box = box, .parent = parent, .subtree_count = 1, .reason = FLOW_REUSE_NREASONS};
     size_t at = reuse_hash((const void *)box, m->nslots);
     while (m->slots[at]) at = (at + 1) & (m->nslots - 1);
     m->slots[at] = (uint32_t)index + 1;
@@ -140,6 +143,12 @@ static void reuse_match_box(FReuseMatch *m, FBox *box, const FBox *ordered,
     } else if (!f_style_equal(box->style, old->style)) p->reason = FLOW_REUSE_STYLE;
     else p->reason = reuse_items_equal(m, box, old, &p->ordinary);
 
+    // Missing-image alt text is processed during pass 3, outside fresh
+    // items. Keep that IFC fresh until its processed-byte mapping is shared.
+    if (old) for (const FLine *ln = old->lines; ln; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr; fr = fr->next)
+            if (fr->kind == FF_TEXT && fr->item && fr->item->kind == FI_ATOMIC)
+                p->ordinary = false;
     const FBox *c = old ? old->first : NULL;
     for (FBox *child = box->first; child; child = child->next) {
         reuse_match_box(m, child, c, index, false);
@@ -161,11 +170,22 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
     size_t bytes = sizeof(FReuseMatch) + count * sizeof(FReusePair);
     if (slots > (cap - bytes) / sizeof(uint32_t)) goto budget;
     bytes += slots * sizeof(uint32_t);
+    size_t pointers = 2;
+    if (tree->reuse->nitems > SIZE_MAX / 4) goto budget;
+    while (pointers < tree->reuse->nitems * 4) {
+        if (pointers > SIZE_MAX / 2) goto budget;
+        pointers *= 2;
+    }
+    if (pointers > (cap - bytes) / sizeof(FReusePointer)) goto budget;
+    bytes += pointers * sizeof(FReusePointer);
     FReuseMatch *m = os64_calloc(1, bytes);
     if (!m) { tree->reuse_stats.refused[FLOW_REUSE_NO_MEMORY]++; return NULL; }
     *m = (FReuseMatch){.pairs = (void *)(m + 1), .capacity = count, .nslots = slots,
-        .bytes = bytes, .tree = tree, .previous = previous};
+        .bytes = bytes, .staging_left = cap - bytes, .pointer_slots = pointers,
+        .tree = tree, .previous = previous};
     m->slots = (void *)(m->pairs + count);
+    m->pointers = (void *)(m->slots + slots);
+    tree->reuse_stats.metadata_peak = tree->reuse->bytes + bytes;
     if (tree->boxes->root) reuse_match_box(m, tree->boxes->root, previous->boxes->root, SIZE_MAX, false);
     // Compare ordered children once, then fold each child's result into its
     // parent. A dirty/excluded ancestor does not prevent a local child match.
@@ -173,13 +193,20 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
         FReusePair *p = &m->pairs[i];
         const FBox *a = p->box->first, *b = p->old ? p->old->first : NULL;
         for (; a && b; a = a->next, b = b->next) {
-            FReusePair *child = reuse_pair(m, a);
+            FReusePair *child = f_reuse_pair(m, a);
             if (!child || child->old != b || !child->equal) {
                 if (p->reason == FLOW_REUSE_NREASONS) p->reason = FLOW_REUSE_STRUCTURE;
             }
         }
         if ((a || b) && p->reason == FLOW_REUSE_NREASONS) p->reason = FLOW_REUSE_STRUCTURE;
         p->equal = p->reason == FLOW_REUSE_NREASONS;
+        if (p->equal) {
+            FItem *fresh = p->box->items;
+            for (const FItem *old = p->old->items; old; old = old->next, fresh = fresh->next) {
+                reuse_bind(m, old, fresh);
+                reuse_bind(m, old->inl, fresh->inl);
+            }
+        }
         tree->reuse_stats.boxes_compared++;
         tree->reuse_stats.subtrees_equal += p->equal;
         bool item = p->box->parent && (p->box->parent->flex || p->box->parent->grid);
@@ -189,6 +216,7 @@ static FReuseMatch *reuse_match_new(flow_tree_t *tree, const flow_tree_t *previo
         if (p->parent != SIZE_MAX) {
             FReusePair *up = &m->pairs[p->parent];
             up->ordinary &= p->ordinary;
+            up->subtree_count += p->subtree_count;
             if (!p->equal && up->reason == FLOW_REUSE_NREASONS) up->reason = FLOW_REUSE_STRUCTURE;
         }
     }

@@ -2,9 +2,9 @@
 // the host against dumps computed by hand from the standard.
 //
 // THIS FILE IS THE DURABLE ARTEFACT (LAYOUT.md § Proof before integration).
-// Every expected dump here was worked out from the Rendering chapter and
-// CSS 2.1 with a pencil, not captured from the engine: a case that passes
-// says the engine agrees with the rule.
+// Literal expected dumps are worked out from the Rendering chapter and
+// CSS 2.1. Incremental-layout cases additionally compare independent whole
+// layouts, proving equivalence and ownership rather than spec conformance.
 
 #include <float.h>
 #include <stdarg.h>
@@ -23,6 +23,7 @@
 #include "garb/cascade.h"
 #include "internal.h"
 #include "os64/text.h"
+#include "libos64/text_internal.h"
 #include "test_libflow_fonts.h"
 
 // libos64's formatter reaches for the write syscall on paths nothing here
@@ -1403,9 +1404,15 @@ static void layout_sweep(void)
 #include "test_libflow_computed.inc"
 #include "test_libflow_restyle.inc"
 #include "test_libflow_snapshot.inc"
+#include "test_libflow_graft.inc"
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--graft") == 0) {
+        text_setup(); graft_cases(); graft_stress(); graft_failures(); graft_retain_failure(); text_teardown();
+        printf("libflow graft: %d checks, %d failed%s\n", checks, failures, live ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--snapshots") == 0) {
         text_setup(); snapshot_cases(); correspondence_cases(); text_teardown();
         printf("libflow snapshots: %d checks, %d failed%s\n", checks, failures,
@@ -1560,6 +1567,10 @@ int main(int argc, char **argv)
     restyle_cases();
     snapshot_cases();
     correspondence_cases();
+    graft_cases();
+    graft_stress();
+    graft_failures();
+    graft_retain_failure();
     restyle_mutations();
     computed_cases();
     computed_round1_cases();

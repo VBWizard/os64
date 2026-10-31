@@ -1151,6 +1151,11 @@ typedef enum {
     FLOW_REUSE_STYLE,
     FLOW_REUSE_MOTION,
     FLOW_REUSE_BOX_ROLE,
+    FLOW_REUSE_CALL_INPUTS,
+    FLOW_REUSE_FLOATS,
+    FLOW_REUSE_MARKER,
+    FLOW_REUSE_TRANSLATION,
+    FLOW_REUSE_RETAIN,
     FLOW_REUSE_NREASONS
 } flow_reuse_reason_t;
 
@@ -1162,13 +1167,17 @@ typedef enum {
 typedef struct {
     uint64_t nodes_indexed, dirty_nodes, dirty_subtrees;
     uint64_t boxes_compared, subtrees_equal, geometry_candidates;
+    uint64_t intrinsic_hits, marker_measures;
+    size_t metadata_bytes, metadata_peak;
     uint64_t refused[FLOW_REUSE_NREASONS];
     bool source_ready;
 } flow_reuse_stats_t;
 
 /* The restyled layout with bounded, independent mutation-history snapshots.
- * Box construction and geometry are rebuilt; RELAYOUT_GRAFT.md tracks the
- * geometry graft. Preparation failure leaves a normally built layout usable.
+ * Box construction is fresh. Eligible ordinary subtrees copy completed layout
+ * results into fresh storage and retain their immutable text runs. Intrinsic
+ * width reuse is counted separately. Preparation failure builds normally;
+ * failure during copying follows the incomplete-layout contract.
  * A previous snapshot's private dirty set advances cumulatively; the caller
  * must serialize uses of that source and must not mutate/reenter via callbacks.
  * No reference to the previous tree survives the call. Profiling charges
