@@ -545,6 +545,8 @@ typedef struct { double px, pct; bool number; } FNumeric;
 bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_font,
                      const garb_val_t *value, FNumeric *out);
 uint32_t f_style_colour(garb_color_t color);
+// Compare scalar and pointed-to style values, independent of their arenas.
+bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
 void f_style_free(FStyles *styles);
 // The styles pass 1 made for a tree, which live as long as it does.
 const FStyles *f_tree_styles(const flow_tree_t *tree);

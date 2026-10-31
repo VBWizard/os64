@@ -1127,6 +1127,58 @@ flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_pa
 flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_page_t *model,
                                   int32_t width, const flow_env_t *env, const flow_tree_t *previous,
                                   flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
+/* Resource answers can change without a DOM mutation. The caller serializes
+ * layouts and advances revisions before such answers change. Owner identities
+ * must be stable across temporary resolver contexts; renew an owner on revision
+ * wrap. A NULL resource owner disables snapshot preparation. State owner/version
+ * identify the shared form state (both zero when there is none). */
+typedef struct {
+    const void *resource_owner;
+    uint64_t fonts_revision, replaced_revision;
+    const void *state_owner;
+    uint64_t state_version;
+} flow_reuse_inputs_t;
+
+typedef enum {
+    FLOW_REUSE_NO_SOURCE = 0,
+    FLOW_REUSE_INCOMPLETE,
+    FLOW_REUSE_INPUTS_CHANGED,
+    FLOW_REUSE_HISTORY_LOST,
+    FLOW_REUSE_BUDGET,
+    FLOW_REUSE_NO_MEMORY,
+    FLOW_REUSE_STRUCTURE,
+    FLOW_REUSE_DIRTY,
+    FLOW_REUSE_STYLE,
+    FLOW_REUSE_MOTION,
+    FLOW_REUSE_BOX_ROLE,
+    FLOW_REUSE_NREASONS
+} flow_reuse_reason_t;
+
+/* Snapshot diagnostics, separate from geometry's profile.reused. Refusals
+ * count failed preparation checks; source and destination preparation may
+ * each refuse in one call. Box checks count one refusal per rejected subtree.
+ * Equal subtrees/candidates certify structure, not a layout call signature. Dirty counts describe the previous snapshot's
+ * cumulative changes, including ancestors in dirty_subtrees. */
+typedef struct {
+    uint64_t nodes_indexed, dirty_nodes, dirty_subtrees;
+    uint64_t boxes_compared, subtrees_equal, geometry_candidates;
+    uint64_t refused[FLOW_REUSE_NREASONS];
+    bool source_ready;
+} flow_reuse_stats_t;
+
+/* The restyled layout with bounded, independent mutation-history snapshots.
+ * Box construction and geometry are rebuilt; RELAYOUT_GRAFT.md tracks the
+ * geometry graft. Preparation failure leaves a normally built layout usable.
+ * A previous snapshot's private dirty set advances cumulatively; the caller
+ * must serialize uses of that source and must not mutate/reenter via callbacks.
+ * No reference to the previous tree survives the call. Profiling charges
+ * preparation to layout_us. Ordinary layout entries register no reader. */
+flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64_page_t *model,
+                                    int32_t width, const flow_env_t *env,
+                                    const flow_tree_t *previous, const flow_reuse_inputs_t *inputs,
+                                    flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
+/* NULL supplies zero statistics. The answer is copied, not borrowed. */
+flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
 uint64_t flow_styles_reused(const flow_tree_t *tree);
 void flow_free(flow_tree_t *tree);
 // Borrowed snapshot whose indices the boxes carry; NULL if built without one.

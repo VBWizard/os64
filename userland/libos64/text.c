@@ -155,7 +155,7 @@ os64_font_status_t os64_text_layout(os64_text_context_t *c, const uint8_t *bytes
         return OS64_FONT_LIMIT;
     os64_text_run_t *r=text_alloc(c,sizeof(*r));
     if (!r) return c->refusal;
-    *r=(os64_text_run_t){.context=c,.encoding=o->encoding,.cell_advance=o->cell_advance,
+    *r=(os64_text_run_t){.context=c,.refs=1,.encoding=o->encoding,.cell_advance=o->cell_advance,
         .cell_ascent=o->fonts[0]->info.ascent,.cell_height=o->fonts[0]->info.line_height};
     c->runs++;
     os64_font_status_t status=OS64_FONT_OK;
@@ -216,9 +216,15 @@ os64_font_status_t os64_text_run_view(const os64_text_run_t *r, os64_text_run_vi
     if (!r || !out) return OS64_FONT_BAD_ARGUMENT;
     *out=r->view;return OS64_FONT_OK;
 }
+os64_font_status_t os64_text_run_retain(os64_text_run_t *r)
+{
+    if (!r) return OS64_FONT_BAD_ARGUMENT;
+    if (r->refs==SIZE_MAX) return OS64_FONT_LIMIT;
+    r->refs++;return OS64_FONT_OK;
+}
 void os64_text_run_release(os64_text_run_t *r)
 {
-    if (!r) return;
+    if (!r || --r->refs) return;
     os64_text_context_t *c=r->context;
     for (size_t n=0;n<r->view.glyph_count;n++) text_image_unpin(r->images[n]);
     for (size_t n=0;n<r->font_count;n++) os64_text_font_release(r->fonts[n]);

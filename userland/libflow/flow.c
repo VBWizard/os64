@@ -69,9 +69,13 @@ typedef struct {
     bool changed;
 } FTick;
 
+typedef struct FReuseSnapshot FReuseSnapshot;
+
 struct flow_tree {
     const os64_html_document_t *doc;
     os64_html_pin_t pin;
+    FReuseSnapshot *reuse;
+    flow_reuse_stats_t reuse_stats;
     const os64_page_t *model;
     FStyles *styles;
     FBoxes *boxes;
@@ -108,6 +112,9 @@ struct flow_tree {
     size_t tick_room;
     uint64_t tick_ms;
 };
+
+#include "reuse_snapshot.inc"
+#include "reuse_match.inc"
 
 typedef struct {
     flow_tree_t *t;
@@ -1652,6 +1659,7 @@ void flow_free(flow_tree_t *tree)
 {
     if (tree == NULL)
         return;
+    reuse_snapshot_free(tree->reuse);
     f_layout_free(tree->layout);
     f_boxes_free(tree->boxes);
     f_style_free(tree->styles);
@@ -1968,6 +1976,17 @@ flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_pa
                                   int32_t width, const flow_env_t *env, const flow_tree_t *previous,
                                   flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx)
 {
+    return flow_layout_incremental(doc, model, width, env, previous, NULL, profile, clock, clock_ctx);
+}
+flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree)
+{
+    return tree ? tree->reuse_stats : (flow_reuse_stats_t){0};
+}
+flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64_page_t *model,
+                                    int32_t width, const flow_env_t *env,
+                                    const flow_tree_t *previous, const flow_reuse_inputs_t *inputs,
+                                    flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx)
+{
     Profile timing = {profile, clock, clock_ctx};
     if (profile) os64_memset(profile, 0, sizeof(*profile));
     if (doc == NULL || env == NULL || env->text == NULL || env->fonts == NULL || width < 0)
@@ -1994,6 +2013,11 @@ flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_pa
     tree->tick_ms = env->now_ms;
     tree->live = -1;
     int64_t began = profile_clock(&timing);
+    if (inputs) {
+        reuse_source_prepare(tree, previous, width, env, inputs);
+        if (profile) profile_elapsed(&timing, began, &profile->layout_us);
+        began = profile_clock(&timing);
+    }
     tree->styles = f_style_build_reusing(doc, model, env, previous ? previous->styles : NULL);
     if (profile) {
         profile_elapsed(&timing, began, &profile->style_us);
@@ -2009,7 +2033,13 @@ flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_pa
     }
     if (tree->boxes) {
         began = profile_clock(&timing);
+        FReuseMatch *match = NULL;
+        if (inputs) {
+            tree->reuse = reuse_snapshot_new(tree, width, env, inputs);
+            match = reuse_match_new(tree, previous, env);
+        }
         tree->layout = f_layout(tree->boxes, doc, model, env, width);
+        os64_free(match);
         if (profile) {
             profile_elapsed(&timing, began, &profile->layout_us);
             profile->measures = tree->layout ? tree->layout->measures : 0;
@@ -2048,6 +2078,11 @@ flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_pa
         return NULL;
     }
     if (profile) profile_elapsed(&timing, began, &profile->public_us);
+    if (inputs) {
+        began = profile_clock(&timing);
+        reuse_snapshot_finish(tree);
+        if (profile) profile_elapsed(&timing, began, &profile->layout_us);
+    }
     return tree;
 }
 
