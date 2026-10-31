@@ -122,7 +122,37 @@ uint64_t get_thread_id()
 	return tid;
 }
 
-thread_t* createThread(void* ownerTask, bool kernelThread)
+// The ring-3 stack a thread is given (SCRIPT_STACK.md § 4): what its
+// program asked for, when that is from the default up to
+// THREAD_USER_STACK_MAX, rounded up to a page; otherwise the default. A
+// declared stack the frame table cannot give degrades to the default rather
+// than failing: the task already exists here, and nothing unwinds a
+// half-built one. Its esp3Size says what it got. 0 when even the default
+// was refused. The lines name the thread: its task has no ID yet, and a
+// main thread's ID becomes the task's.
+static uintptr_t user_stack(thread_t *thread, task_t *task, uint64_t asked)
+{
+	unsigned long tid = (unsigned long)thread->threadID;
+	uint64_t size = THREAD_USER_STACK_SIZE;
+	if (asked > THREAD_USER_STACK_SIZE && asked <= THREAD_USER_STACK_MAX)
+		size = (asked + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+	else if (asked != 0 && asked != THREAD_USER_STACK_SIZE)
+		printd(DEBUG_TASK, "createThread: thread %lu asked for a %lu-byte stack, outside %u..%u; it gets %u\n",
+		       tid, asked, THREAD_USER_STACK_SIZE, THREAD_USER_STACK_MAX, THREAD_USER_STACK_SIZE);
+	uintptr_t base = (uintptr_t)task_alloc_guarded_stack(task, size, true);
+	if (base == 0 && size != THREAD_USER_STACK_SIZE) {
+		printd(DEBUG_TASK, "createThread: thread %lu's %lu-byte stack could not be had; it gets %u\n",
+		       tid, size, THREAD_USER_STACK_SIZE);
+		size = THREAD_USER_STACK_SIZE;
+		base = (uintptr_t)task_alloc_guarded_stack(task, size, true);
+	}
+	if (base == 0)
+		printd(DEBUG_TASK, "createThread: thread %lu: no %lu-byte user stack could be had\n", tid, size);
+	thread->esp3Size = base != 0 ? size : 0;
+	return base;
+}
+
+thread_t* createThread(void* ownerTask, bool kernelThread, uint64_t userStack)
 {
 	thread_t* newThread;
 
@@ -155,7 +185,7 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 		newThread->regs.DS = newThread->regs.ES = newThread->regs.FS = newThread->regs.GS = newThread->regs.SS = GDT_USER_DATA_ENTRY << 3 | 3;
 		newThread->regs.CS = GDT_USER_CODE_ENTRY << 3 | 3;
 		// Allocate user stack (ring 3) in task's lower-half address space
-		newThread->esp3BaseV = (uintptr_t)task_alloc_guarded_stack((task_t*)ownerTask, THREAD_USER_STACK_SIZE, true);
+		newThread->esp3BaseV = user_stack(newThread, (task_t*)ownerTask, userStack);
 		newThread->esp3BaseP = 0; // Not needed - stack is in task-specific virtual space
 	    printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring3 stack for thread at V=0x%016lx\n", newThread->esp3BaseV);
 	}
@@ -216,7 +246,7 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 		// The exit path itself (where a ring3 `ret` from _start lands) cannot be
 		// seeded here: the trampoline page isn't mapped until task_create() has
 		// built the task's address space.  See task_setup_ring3_exit_path().
-		newThread->regs.RSP = newThread->esp3BaseV + THREAD_USER_STACK_SIZE - sizeof(uintptr_t) * 6 - sizeof(uintptr_t);
+		newThread->regs.RSP = newThread->esp3BaseV + newThread->esp3Size - sizeof(uintptr_t) * 6 - sizeof(uintptr_t);
 		newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
 		newThread->regs.RSP0 = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 	}

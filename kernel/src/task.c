@@ -1943,7 +1943,10 @@ void task_init_page_tables(task_t *task)
     paging_init_null_guard(task->pml4v, task->tableArena);
 }
 
-task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedCPU)
+// `userStack`: the main thread's stack the program declared (elf_can_load),
+// 0 for the default; createThread decides what it gets.
+task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedCPU,
+                        uint64_t userStack)
 {
     printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
            "task_initialize: Initializing task\n");
@@ -2031,7 +2034,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		}
 	}
 
-	newTask->threads = createThread((void*)newTask, kernelTask);
+	newTask->threads = createThread((void*)newTask, kernelTask, userStack);
 	newTask->threads->idleThread = idleTask;
 	newTask->threads->pinnedCPU = pinnedCPU;
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
@@ -2585,6 +2588,7 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	// clean: there is no task-teardown path in this tree to unwind with (see
 	// DEBTS), so the only way to fail without leaking is to fail before we
 	// build. spawn() now returns -1 and husk prints "cannot run <path>".
+	uint64_t declaredStack = 0;
 	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		// ── #! — a script names its interpreter (2026-08-22) ────────────────
@@ -2634,7 +2638,9 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 			return task_create_checked(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedCPU, error);
 		}
 
-		if (!elf_can_load(path))
+		// The same look answers the main thread's stack size the program
+		// asks for (SCRIPT_STACK.md § 4), carried into task_initialize.
+		if (!elf_can_load(path, &declaredStack))
 		{
 			printd(DEBUG_TASK, "task_create: cannot load '%s' — not spawning\n", path);
 			return NULL;
@@ -2669,7 +2675,7 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	if (!isKernelTask && pinnedCPU == THREAD_NO_AFFINITY)
 		pinnedCPU = task_env_pin(inheritedEnv, path);
 
-	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedCPU);
+	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedCPU, declaredStack);
 	newTask->env = inheritedEnv;
 
     //Copy the path (parameter) value from the parentTask's memory.

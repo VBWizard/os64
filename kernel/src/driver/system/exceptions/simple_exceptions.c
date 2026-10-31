@@ -762,7 +762,8 @@ static bool try_catch_segv(task_t *task)
 // Which side of a thread's user stack a faulting address fell on, if it
 // fell in the unmapped guard on either side: a word for the headline, or
 // NULL. The stack is `task_alloc_guarded_stack`'s layout — esp3BaseV is the
-// lowest usable byte, THREAD_USER_STACK_SIZE above it, and
+// lowest usable byte, esp3Size (the size the thread got, which a main
+// thread's program may declare, SCRIPT_STACK.md) above it, and
 // THREAD_STACK_GUARD_PAGE_COUNT unmapped pages beyond each end.
 //
 // A fault in the guard below is a stack overflow: a frame the stack had no
@@ -780,7 +781,7 @@ static const char *stack_guard_side(const thread_t *thread, uint64_t cr2)
 		return NULL;
 	uint64_t guard = (uint64_t)THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE;
 	uint64_t low   = thread->esp3BaseV;
-	uint64_t high  = low + THREAD_USER_STACK_SIZE;
+	uint64_t high  = low + thread->esp3Size;     // the size it got (SCRIPT_STACK.md)
 	if (cr2 >= low - guard && cr2 < low)
 		return "Stack overflow";
 	if (cr2 >= high && cr2 < high + guard)
@@ -831,7 +832,7 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	// A guard hit: where the stack is, and how far past it the fault fell.
 	if (guard_side != NULL) {
 		uint64_t low  = gthr->esp3BaseV;
-		uint64_t high = low + THREAD_USER_STACK_SIZE;
+		uint64_t high = low + gthr->esp3Size;
 		FAULT_PRINT(false, "  stack: thread 0x%08x user stack 0x%016lx-0x%016lx (%u guard pages each side); fault %lu bytes %s it\n",
 		            gthr->threadID, low, high, (unsigned)THREAD_STACK_GUARD_PAGE_COUNT,
 		            cr2 < low ? low - cr2 : cr2 - high + 1, cr2 < low ? "below" : "above");
