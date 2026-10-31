@@ -237,6 +237,19 @@ static void claimed_order(void)
     os64_work_pool_destroy(p); clean();
     assert(jobs[3].released==1);
     puts("work: a younger job that would take an older one's room waits for it PASS");
+
+    // Older reserves near SIZE_MAX saturate rather than wrap: two of them
+    // in a pool of SIZE_MAX leave a younger job of 2 no room (Codex #428 rd1).
+    p=pool(1,SIZE_MAX);
+    os64_lock_acquire(&p->lock);
+    p->slots[0]=(work_slot_t){.work={run,release,&jobs[0],SIZE_MAX-1},.id=256,.state=WAITING};
+    p->slots[2]=(work_slot_t){.work={run,release,&jobs[2],SIZE_MAX-1},.id=258,.state=WAITING};
+    p->slots[1]=(work_slot_t){.work={run,release,&jobs[1],2},.id=513,.state=WAITING};
+    assert(older_reserves_locked(p,&p->slots[1])==SIZE_MAX);
+    p->slots[0].state=p->slots[1].state=p->slots[2].state=FREE;
+    os64_lock_release(&p->lock);
+    os64_work_pool_destroy(p); clean();
+    puts("work: older reserves saturate at the cap instead of wrapping PASS");
 }
 
 static void full_and_destroy(void)
