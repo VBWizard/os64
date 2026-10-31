@@ -133,7 +133,9 @@ static void synthetic(int64_t win)
     collect(p,b,1); collect(p,d,2); os64_work_pool_destroy(p);
     CHECK(heap_live()==before);
 
-    control_t full[OS64_WORK_MAX_JOBS+1]={0};
+    // Static: a table's worth of controls is more than a stack frame holds.
+    static control_t full[OS64_WORK_MAX_JOBS+1];
+    os64_memset(full,0,sizeof(full));
     p=os64_work_pool_create(1,1,win,4); CHECK(p!=NULL); if (!p) return;
     CHECK(submit(p,&full[0],0,1,true,NULL)); await(&full[0].started,1);
     for (unsigned i=1;i<OS64_WORK_MAX_JOBS;++i) {

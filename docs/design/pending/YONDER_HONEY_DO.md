@@ -481,3 +481,18 @@ platform surface; each is small; none is scheduled.
   show them all.
 - **An `img` with no `src` paints as a picture still coming**: booked in
   DEBTS § Browser layout the same day; listed here so the batch sees it.
+
+## Added 2026-10-31, from Chris's reload tests
+
+Low priority, kept at the end of the list on Chris's word, but likely to
+matter one day.
+
+- **A reload is slower than the first load.** In one window, a corpus
+  page's first load compiled its 207 modules in about 185 ms
+  and loaded in 4.3 to 4.8 s. Every reload of it in the same window took
+  about twice that CPU work (modules compiled in 340 to 435 ms, load 4.6
+  to 5.8 s), whatever the window's size. A fresh window was fast again
+  (records 0773 to 0790). The lead is the heap: allocations grow slower as
+  departed pages leave memory behind, which lengthens HEAP_BINS.md's
+  first-fit walk. Proof needs an allocation count or the walk's length for
+  a first load against a third reload of one page.
