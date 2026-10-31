@@ -1376,9 +1376,25 @@ OUT: content: "(" attr("title") ")"
 IN: content: open-quote "x" close-quote no-open-quote no-close-quote
 OUT: content: open-quote "x" close-quote no-open-quote no-close-quote
 IN: content: counter(item) ". "
-OUT: content: counter() ". "
+OUT: content: counter(item) ". "
 IN: content: counters(item, ".")
-OUT: content: counters()
+OUT: content: counters(item, ".")
+IN: content: counter(Item, Lower-Roman) counters(x, "-", disc) counter(y, decimal)
+OUT: content: counter(Item, lower-roman) counters(x, "-", disc) counter(y)
+IN: content: counter(none)
+OUT: invalid
+IN: content: counter(item,)
+OUT: invalid
+IN: content: counter(item, "x")
+OUT: invalid
+IN: content: counter(item, decimal, decimal)
+OUT: invalid
+IN: content: counters(item)
+OUT: invalid
+IN: content: counters(item, x)
+OUT: invalid
+IN: content: counter(item, inherit)
+OUT: invalid
 IN: content: url(icon.png)
 OUT: content: url(icon.png)
 IN: content: linear-gradient(red, blue)
@@ -1396,4 +1412,44 @@ OUT: invalid
 IN: content: "x" /
 OUT: invalid
 IN: content: / "alt"
+OUT: invalid
+
+# ── Counters and quotes (Lists 3 § 4, Content 3 § 4.1; GENERATED_CONTENT.md § 8) ──
+IN: counter-reset: none
+OUT: counter-reset: none
+IN: counter-reset: item
+OUT: counter-reset: item 0
+IN: counter-increment: item
+OUT: counter-increment: item 1
+IN: counter-set: item
+OUT: counter-set: item 0
+IN: counter-reset: a 3 b c -2
+OUT: counter-reset: a 3 b 0 c -2
+IN: counter-increment: list-item 2
+OUT: counter-increment: list-item 2
+IN: counter-reset: none a
+OUT: invalid
+IN: counter-reset: a none
+OUT: invalid
+IN: counter-reset: a 1.5
+OUT: invalid
+IN: counter-reset: 3
+OUT: invalid
+IN: counter-reset: reversed(a)
+OUT: invalid
+IN: counter-reset: a default
+OUT: invalid
+IN: quotes: auto
+OUT: quotes: auto
+IN: quotes: none
+OUT: quotes: none
+IN: quotes: "<" ">" "(" ")"
+OUT: quotes: "<" ">" "(" ")"
+IN: quotes: "<"
+OUT: invalid
+IN: quotes: "<" ">" "("
+OUT: invalid
+IN: quotes: none "<" ">"
+OUT: invalid
+IN: quotes: a b
 OUT: invalid

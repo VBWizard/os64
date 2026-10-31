@@ -20,4 +20,5 @@ a:link, a:visited { color: #00e !important; text-decoration: underline }
 .bad { color: red; width: 10px 20px {oops}; } } .after { color: \62 lue }
 <!-- .cdo { x: y } -->
 p::before, p.a::after { content: "x" attr(title) open-quote; color: red }
+ol { counter-reset: item 2 sub; quotes: "<" ">" } li::before { counter-increment: item; content: counters(item, ".", upper-roman) " " }
 .unterminated { content: "abc
