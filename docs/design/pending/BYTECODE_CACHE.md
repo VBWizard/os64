@@ -250,7 +250,7 @@ held to the queue's 64 MiB.
   keeps nothing; a form for a page that is gone is freed.
 - A mutant harness for the rules (`tools/test_bytecode_mutants.py`).
 - **The P5**: a page with a large classic bundle loaded twice; its
-  `ran in` before and after, and `ls /var/cache/yonder/*.b`.
+  `ran in` before and after, and `ls /var/cache/yonder/*/*.b`.
 
 ## 9. Cuts, and what waits
 

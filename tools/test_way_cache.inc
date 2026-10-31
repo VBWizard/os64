@@ -267,8 +267,9 @@ static void chain_rules(void)
            way_chain_apply(&chain, &k, D) && way_keep_lifetime(&k) == 600 && !k.no_cache, NULL);
 }
 
-// The bytes of entries in `dir`, as the disk has them.
-static uint64_t dir_bytes(const char *dir)
+// The store's files in `dir` and its buckets, as the disk has them: their
+// bytes, and how many are of kind `kind` (0 counts every kind).
+static uint64_t kept_files(const char *dir, char kind, int *count)
 {
     uint64_t total = 0;
     DIR *d = opendir(dir);
@@ -277,12 +278,24 @@ static uint64_t dir_bytes(const char *dir)
         char path[1200];
         struct stat st;
         snprintf(path, sizeof(path), "%s/%s", dir, x->d_name);
-        if (strlen(x->d_name) == 18 && stat(path, &st) == 0)
+        if (stat(path, &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode) && strlen(x->d_name) == 2 && strcmp(x->d_name, "..") != 0)
+            total += kept_files(path, kind, count);
+        else if (strlen(x->d_name) == 18 && x->d_name[16] == '.') {
             total += (uint64_t)st.st_size;
+            if (count != NULL && (kind == 0 || x->d_name[17] == kind))
+                (*count)++;
+        }
     }
     if (d != NULL)
         closedir(d);
     return total;
+}
+
+static uint64_t dir_bytes(const char *dir)
+{
+    return kept_files(dir, 0, NULL);
 }
 
 // ── The store ───────────────────────────────────────────────────────────
@@ -292,7 +305,8 @@ static uint64_t dir_bytes(const char *dir)
 static const char kPartition[] = "https page.test";
 #define KEY(url) (&(way_cache_key_t){kPartition, true, (url)})
 
-// The name the store gives a key: FNV-1a over its parts, as cache.c spells it.
+// The name the store gives a key: FNV-1a over its parts, in the bucket of
+// its top byte, as cache.c spells it.
 static void key_path(const char *dir, const char *partition, bool credentials, const char *url, char kind,
                      char *out, size_t cap)
 {
@@ -303,7 +317,7 @@ static void key_path(const char *dir, const char *partition, bool credentials, c
         h ^= (uint8_t)*s;
         h *= 0x100000001b3ull;
     }
-    snprintf(out, cap, "%s/%016llx.%c", dir, (unsigned long long)h, kind);
+    snprintf(out, cap, "%s/%02llx/%016llx.%c", dir, (unsigned long long)(h >> 56), (unsigned long long)h, kind);
 }
 
 static void entry_path(const char *dir, const char *url, char *out, size_t cap)
@@ -344,12 +358,7 @@ static void puts_during_sweep(void)
 static int count_entries(const char *dir)
 {
     int n = 0;
-    DIR *d = opendir(dir);
-    struct dirent *x;
-    while (d != NULL && (x = readdir(d)) != NULL)
-        n += strlen(x->d_name) == 18 && strcmp(x->d_name + 16, ".e") == 0;
-    if (d != NULL)
-        closedir(d);
+    (void)kept_files(dir, 'e', &n);
     return n;
 }
 
@@ -850,6 +859,71 @@ static void reply_rules(void)
            n != SIZE_MAX && n == sizeof(want) - 1 && memcmp(merged, want, n) == 0, merged);
 }
 
+// The layout: each key's files in the bucket its hash's top byte names,
+// the bucket made by its first file; and a file in the store's own
+// directory, as the store kept them before buckets, never found by a key
+// but counted, swept oldest first, and cleared.
+static void bucket_cases(void)
+{
+    char root[] = "/tmp/way_bucketsXXXXXX";
+    if (mkdtemp(root) == NULL) {
+        expect("buckets: a temporary directory", false, NULL);
+        return;
+    }
+    char dir[600], path[1200], flat[1200], bucket[700];
+    snprintf(dir, sizeof(dir), "%s/cache", root);
+    s_clock = D;
+    way_cache_t *c = way_cache_open(dir, 64 * 1024);
+    uint8_t body[4000];
+    memset(body, 'b', sizeof(body));
+    const char *url = "https://cdn.test/bucket.js";
+    entry_path(dir, url, path, sizeof(path));
+    snprintf(bucket, sizeof(bucket), "%.*s", (int)(strrchr(path, '/') - path), path);
+    struct stat st;
+    expect("buckets: none is made before a file goes in", stat(bucket, &st) != 0, bucket);
+    way_entry_t e = entry(url, "max-age=600");
+    expect("buckets: an entry is kept in its key's bucket",
+           way_cache_put(c, &e, NULL, body, sizeof(body)) && stat(path, &st) == 0, path);
+    expect("buckets: its companion beside it",
+           way_cache_companion_put(c, KEY(url), "tag", body, 10) && kept_files(bucket, 'b', NULL) > 0, NULL);
+
+    // The same file where the store kept it before buckets.
+    snprintf(flat, sizeof(flat), "%s/%s", dir, strrchr(path, '/') + 1);
+    char cmd[2600];
+    snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", path, flat);
+    expect("buckets: an old file is planted", system(cmd) == 0, NULL);
+    set_mtime(flat, (time_t)(D - 3600));
+    unlink(path);
+    way_entry_t got;
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    expect("buckets: a file outside its bucket is not found by its key",
+           !way_cache_find(c, KEY(url), &got, &bytes, &len, NULL, 1 << 20), NULL);
+    way_cache_stats_t stats;
+    way_cache_stats(c, &stats);
+    expect("buckets: but it is counted", stats.entries == 1 && stats.bytes > sizeof(body), NULL);
+
+    // Over the cap, the old file is the oldest and goes first.
+    for (int i = 0; i < 20; i++) {
+        char u[64];
+        snprintf(u, sizeof(u), "https://cdn.test/fill%d.js", i);
+        way_entry_t x = entry(u, "max-age=600");
+        (void)way_cache_put(c, &x, NULL, body, sizeof(body));
+    }
+    expect("buckets: the sweep reaches the store's own directory", stat(flat, &st) != 0 && dir_bytes(dir) <= 64 * 1024,
+           NULL);
+    snprintf(cmd, sizeof(cmd), "cp '%s/%s' '%s'", bucket, strrchr(path, '/') + 1, flat);
+    way_entry_t again = entry(url, "max-age=600");
+    (void)way_cache_put(c, &again, NULL, body, sizeof(body));
+    expect("buckets: an old file is planted again", system(cmd) == 0, NULL);
+    expect("buckets: clearing empties the buckets and the store's own directory",
+           way_cache_clear(c) > 0 && dir_bytes(dir) == 0 && stat(flat, &st) != 0, NULL);
+    way_cache_close(c);
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+    if (system(cmd) != 0)
+        expect("buckets: the temporary directory is removed", false, root);
+}
+
 static void cache_cases(void)
 {
     keep_rules();
@@ -858,4 +932,5 @@ static void cache_cases(void)
     store_cases();
     companion_cases();
     key_cases();
+    bucket_cases();
 }

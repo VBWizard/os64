@@ -24,8 +24,8 @@ the cache holds when it opens.
 
 ## Where it lives
 
-`/var/cache/yonder/` on the root filesystem, one file per response. Root
-is the P5's large disk, and both disks persist there. The one thing that
+`/var/cache/yonder/` on the root filesystem, one file per response, in
+the bucket its key's hash names (below). Root is the P5's large disk, and both disks persist there. The one thing that
 wiped root was `tools/p5-refresh.sh`, which mirrors the build with `rsync
 --delete`; it now excludes `/var/cache/`, which rsync's `--delete` leaves
 alone. A cache is the system's own disposable state, so it is the
@@ -103,6 +103,17 @@ stored — a blank line, and the body. It is written under a name no other
 writer has (`<hash>.<task>.<n>.new`) and renamed over its place, so a
 reader sees the old entry or the new one and two yonder windows share the
 directory safely.
+
+**In buckets** (2026-10-30): a key's files live in the subdirectory the
+top byte of its hash names, `/var/cache/yonder/3f/3f….e`, made by the
+first file that goes into it. ext2 looks a name up by reading its
+directory from the start, so one directory of every file made each open,
+create and rename cost as much as the cache was large: on the P5, 16,090
+files in one directory made a kept read take 64–76 ms where a small
+cache's took 2, and a sweep's unlinks each read the whole list again. With
+256 buckets each holds a 256th. A file an older build left in the store's
+own directory is never found by its key; it is counted, swept oldest
+first and cleared like any other until it ages out.
 
 **An entry is found by its KEY** (2026-10-30, SCRIPT_CACHE.md § 2-3): the
 partition of the page it was fetched for — the page's site, as the
