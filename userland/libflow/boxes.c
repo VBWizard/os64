@@ -1061,27 +1061,22 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         }
     }
 
-    // Generated content the sheet asks for: `q`'s quotation marks, which
-    // pass 1 resolved at its place in the document (FStyled.q_open,
-    // GENERATED_CONTENT.md § 8); and the parentheses a browser that lays
-    // out no ruby puts round an `rt` whose ruby has no `rp`, pass 1's
-    // answer too (FStyled.has_rp): asked here across the siblings, it would
-    // be quadratic on a ruby of many annotations.
+    // Generated content the sheet asks for: the parentheses a browser that
+    // lays out no ruby puts round an `rt` whose ruby has no `rp`, pass 1's
+    // answer (FStyled.has_rp): asked here across the siblings, it would be
+    // quadratic on a ruby of many annotations. (A `q`'s marks are its
+    // pseudo-elements, GENERATED_CONTENT.md § 8.)
     const char *before = NULL, *after = NULL;
     const FStyled *holder = styled(b, el->parent);
-    if (is(el, OS64_HTML_TAG_Q)) {
-        before = s->q_open;
-        after = s->q_close;
-    } else if (is(el, OS64_HTML_TAG_RT) && el->parent != NULL) {
+    if (is(el, OS64_HTML_TAG_RT) && el->parent != NULL) {
         if (holder == NULL || !holder->has_rp) {
             before = "(";
             after = ")";
         }
     }
     // An author's `content` on the element's ::before or ::after, `none`
-    // included, takes the place of the mark it would have drawn
-    // (GENERATED_CONTENT.md § 2): a reset sheet's `q:before { content:
-    // none }` takes `q`'s marks away, as in every browser.
+    // included, takes the place of the marks it would have drawn
+    // (GENERATED_CONTENT.md § 2).
     if (before != NULL && !(s->pseudo_declared & 1))
         generated(f, el, &s->style, before);
     flow_range(f, kids(b, el), NULL, scope);

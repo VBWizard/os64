@@ -237,10 +237,14 @@ to pass 1, and § 8.4 says what it asks of slice 5.
   shallows it before its mark, and a close at depth 0 draws nothing and
   stays at 0. `no-open-quote` and `no-close-quote` change the depth and
   draw nothing, and `quotes: none` draws nothing for either word.
-- **`q`'s own marks** follow `quotes` and the depth as well, so a `q`
-  inside a `q` takes the second pair, and a `q` after an author's unclosed
-  `open-quote` takes the next one. They stop being pass 2's guess from
-  the count of `q` ancestors.
+- **`q`'s own marks are its pseudo-elements**, as the chapter's sheet
+  makes them (`q::before { content: open-quote }`, `q::after { content:
+  close-quote }`, HTML § 15.3.6). An author's rules for them apply as to
+  any pseudo-element: `quotes`, counters, `text-transform`, any display.
+  An author's `content` replaces the chapter's. So a `q` inside a `q`
+  takes the second pair, and a `q` after an author's unclosed
+  `open-quote` takes the next one. Pass 2 no longer draws them from the
+  count of `q` ancestors.
 
 ### 8.2 The algorithm (Lists 3 § 4.4, Content 3 § 4.2)
 
@@ -252,9 +256,9 @@ display is not `none` it does this:
 | Step | When | What |
 |---|---|---|
 | 1 | the element is styled | its `counter-reset`, then `counter-increment`, then `counter-set` (Lists 3 § 4's order) |
-| 2 | then | its `::before`, if it exists: that pseudo-element's own counter properties, then its content resolved; or `q`'s own open mark |
+| 2 | then | its `::before`, if it exists (a `q`'s always does): that pseudo-element's own counter properties, then its content resolved |
 | 3 | then | its children, each by these steps |
-| 4 | finished, on the way up | its `::after` (moved here from step 2: it follows the children, so it sees their counters and quotes); or `q`'s own close mark |
+| 4 | finished, on the way up | its `::after` (moved here from step 2: it follows the children, so it sees their counters and quotes) |
 | 5 | then | pop the counters whose scope ends with it |
 
 - **A reset** pushes a counter scoped to the element's parent: the
@@ -298,20 +302,19 @@ display is not `none` it does this:
   `decimal`, the style unwritten). They are read to their grammar and
   are no longer named as approximated.
 - **libflow pass 1**: the stack and the depth live in the pass's `Ctx`.
-  Each `FStyled` keeps the `quotes` value it inherited, and a `q` keeps
-  its two marks as resolved text (`q_open`, `q_close`, NULL for none),
-  which pass 2 draws in place of the marks it chose from the count of
-  `q` ancestors. One spelling of a number in a counter style serves both
+  Each `FStyled` keeps the `quotes` value it inherited. A `q`'s
+  pseudo-elements are made with the chapter's content when the author
+  gives none, so pass 2 draws them as it draws any pseudo-element. One spelling of a number in a counter style serves both
   markers and `counter()`, so a list's marker and a `counter()` in its
   style never disagree.
 
 ### 8.4 Lifecycle
 
-| Event | Counters and depth | A pseudo-element's content | `q`'s marks |
-|---|---|---|---|
-| a style pass | begun empty and at 0, walked in tree order, gone at the pass's end | resolved at its step (§ 8.2) | resolved at steps 2 and 4 |
-| an element before it changes (an attribute, a class, an inserted or removed element) | recomputed by the next style pass | may change: it depends on everything before it | may change |
-| `display: none` on an element | its counter properties and its subtree's count for nothing | — | — |
+| Event | Counters and depth | A pseudo-element's content (a `q`'s marks too) |
+|---|---|---|
+| a style pass | begun empty and at 0, walked in tree order, gone at the pass's end | resolved at its step (§ 8.2) |
+| an element before it changes (an attribute, a class, an inserted or removed element) | recomputed by the next style pass | may change: it depends on everything before it |
+| `display: none` on an element | its counter properties and its subtree's count for nothing | none generated |
 
 **For slice 5** (RELAYOUT.md's restyle): 8a's note in § 5 holds, and 8b
 adds a rule. A style pass that met a counter property, a `counter()` or
@@ -367,8 +370,9 @@ reuses, an ordered pass is restyled whole.
   the pair. `content_text` resolves each item once into a `Piece`, then
   copies them out, charged to the lists' budget. `open_element` and
   `close_element` are § 8.2's steps 1–2 and 4–5 in the walk, and
-  `close_element` styles the `::after`. `q_mark` resolves a `q`'s own
-  marks into `FStyled.q_open`/`q_close`, charged as content is.
+  `close_element` styles the `::after`. `style_pseudo` gives a `q`'s
+  pseudo-elements the chapter's `open-quote`/`close-quote` when an author
+  declares no `content` for them.
 - **Shared**: `f_counter_spell` (boxes.c) spells a number in a counter
   style without a suffix. `marker_text` adds the suffix, and
   `counter_text` joins `counters()`' spellings. `list_type_named`

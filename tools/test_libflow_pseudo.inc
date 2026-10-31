@@ -256,23 +256,19 @@ static void texts_put(char *out, size_t cap, const char *text, size_t len)
     snprintf(out + at, cap - at, "%.*s|", (int)len, text);
 }
 
-// What pass 1 generated, in tree order: each `q`'s open mark, each
-// ::before's text, the children, each ::after's, each close mark.
+// What pass 1 generated, in tree order: each ::before's text (a `q`'s open
+// mark too), the children, each ::after's.
 static void texts_walk(const FStyles *st, const os64_html_node_t *n, char *out, size_t cap)
 {
     for (; n != NULL; n = n->next) {
         const FStyled *s = n->kind == OS64_HTML_ELEMENT ? f_style_of(st, n) : NULL;
         if (s == NULL)
             continue;
-        if (s->q_open != NULL)
-            texts_put(out, cap, s->q_open, strlen(s->q_open));
         if (s->pseudo[0] != NULL && s->pseudo[0]->first_child != NULL)
             texts_put(out, cap, s->pseudo[0]->first_child->text, s->pseudo[0]->first_child->text_len);
         texts_walk(st, n->first_child, out, cap);
         if (s->pseudo[1] != NULL && s->pseudo[1]->first_child != NULL)
             texts_put(out, cap, s->pseudo[1]->first_child->text, s->pseudo[1]->first_child->text_len);
-        if (s->q_close != NULL)
-            texts_put(out, cap, s->q_close, strlen(s->q_close));
     }
 }
 
@@ -334,6 +330,25 @@ static void counter_cases(void)
     texts_case("quotes: q's own marks take their pseudo-element's quotes",
         "<!doctype html><style>q::before, q::after { quotes: \"[\" \"]\" }</style><p><q>x</q>",
         "[|]|");
+    texts_case("counters: a q's own ::before counts, its content the chapter's",
+        "<!doctype html><style>body { counter-reset: n } q::before { counter-increment: n }"
+        " p::before { content: counter(n) }</style><div><q>x</q></div><p>t</p>",
+        "\xe2\x80\x9c|\xe2\x80\x9d|1|");
+    cascade_layout_case("quotes: a q's own marks are its text, transformed as its text is",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0 }"
+        " q { quotes: \"a\" \"b\"; text-transform: uppercase }</style><p><q>x</q>",
+        200,
+        "page 200 20\n"
+        "block html 0 0 200 20\n"
+        "  block body 0 0 200 20\n"
+        "    block p 0 0 200 20\n"
+        "      line 0 0 200 20 base 14\n"
+        "        span q 0 2 8 16\n"
+        "        span q 16 2 8 16\n"
+        "        span q 0 2 24 16\n"
+        "        text \"A\" 0 2 8 16 serif 16\n"
+        "        text \"X\" 8 2 8 16 serif 16\n"
+        "        text \"B\" 16 2 8 16 serif 16\n");
     texts_case("quotes: initial is auto",
         "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: initial }</style><p><q>x</q>",
         "\xe2\x80\x9c|\xe2\x80\x9d|");
@@ -514,10 +529,12 @@ static void pseudo_cases(void)
         "      text \"<“\"\n"
         "      close ::before\n"
         "      text \"a\"\n"
-        "      text \"”\" generated-by q\n"
+        "      open ::after\n"
+        "      text \"”\"\n"
+        "      close ::after\n"
         "      close q\n");
     // Content 3 § 4.2: with no open mark before it, q's close is at depth 0,
-    // and draws nothing.
+    // and draws nothing; its ::after is there, empty.
     pseudo_case("pseudo: q::before { content: none } leaves its close at depth 0, drawn as nothing",
         "<!doctype html><style>q::before { content: none }</style><p><q>a</q>",
         "block html\n"
@@ -525,6 +542,8 @@ static void pseudo_cases(void)
         "    block p\n"
         "      open q\n"
         "      text \"a\"\n"
+        "      open ::after\n"
+        "      close ::after\n"
         "      close q\n");
     pseudo_case("pseudo: a table cell's and a caption's are their content's",
         "<!doctype html><style>td::before { content: attr(data-label) \": \" } caption::after { content: \"*\" }</style>"

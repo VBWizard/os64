@@ -8165,6 +8165,7 @@ block html 0 0 800 53564
                           line 48 24812 744 20 base 14
                             span span 244 24814 52 16
                             span span 172 24814 160 16
+                            span q 340 24814 8 16
                             span span 48 24814 720 16
                             span cite 48 24814 720 16
                             span q 340 24814 428 16
@@ -8176,6 +8177,7 @@ block html 0 0 800 53564
                             text "“" 340 24814 8 16 serif 16 italic
                             text "SGML is very general. HTML is a specific application of the SGML" 348 24814 420 16 serif 16 italic
                           line 48 24832 744 20 base 14
+                            span q 484 24834 8 16
                             span q 48 24834 444 16
                             span cite 48 24834 444 16
                             span span 492 24834 0 16
@@ -8245,6 +8247,7 @@ block html 0 0 800 53564
                           line 48 24932 744 20 base 14
                             span span 112 24934 52 16
                             span span 48 24934 152 16
+                            span q 208 24934 8 16
                             span span 48 24934 700 16
                             span cite 48 24934 700 16
                             span q 208 24934 540 16
@@ -8265,6 +8268,7 @@ block html 0 0 800 53564
                             span q 48 24974 716 16
                             text "response to a growing understanding of the needs of information providers. These extensions include text flow" 48 24974 716 16 serif 16 italic
                           line 48 24992 744 20 base 14
+                            span q 528 24994 8 16
                             span q 48 24994 488 16
                             span cite 48 24994 488 16
                             span span 536 24994 0 16
@@ -8302,6 +8306,7 @@ block html 0 0 800 53564
                             span i 300 25034 52 16
                             span span 468 25034 8 16
                             span a 476 25034 32 16 link 734
+                            span q 516 25034 8 16
                             span span 48 25034 740 16
                             span q 516 25034 272 16
                             text "Group. " 48 25034 44 16 serif 16 italic
@@ -8327,6 +8332,7 @@ block html 0 0 800 53564
                             span q 48 25054 728 16
                             text "(to distinguish it from the previous informal specifications). Future (generally upwardly compatible) versions of" 48 25054 728 16 serif 16
                           line 48 25072 744 20 base 14
+                            span q 504 25074 8 16
                             span q 48 25074 464 16
                             span span 48 25074 464 16
                             text "HTML with new features will be released with higher version numbers." 48 25074 456 16 serif 16
@@ -8399,6 +8405,7 @@ block html 0 0 800 53564
                           line 48 25152 744 20 base 14
                             span span 320 25154 88 16
                             span span 248 25154 192 16
+                            span q 448 25154 8 16
                             span span 48 25154 688 16
                             span cite 48 25154 688 16
                             span q 448 25154 288 16
@@ -8410,6 +8417,7 @@ block html 0 0 800 53564
                             text "“" 448 25154 8 16 serif 16 italic
                             text "This document recommends HTML 5.0 after" 456 25154 280 16 serif 16 italic
                           line 48 25172 744 20 base 14
+                            span q 124 25174 8 16
                             span q 48 25174 84 16
                             span cite 48 25174 84 16
                             span span 132 25174 0 16
@@ -8453,6 +8461,7 @@ block html 0 0 800 53564
                             span a 180 25234 56 16 link 751
                             span span 560 25234 52 16
                             span span 488 25234 160 16
+                            span q 656 25234 8 16
                             span span 60 25234 724 16
                             span cite 60 25234 724 16
                             span q 656 25234 128 16
@@ -8469,6 +8478,7 @@ block html 0 0 800 53564
                             text "“" 656 25234 8 16 serif 16 italic
                             text "Note: This working" 664 25234 120 16 serif 16 italic
                           line 48 25252 744 20 base 14
+                            span q 148 25254 8 16
                             span q 48 25254 108 16
                             span cite 48 25254 108 16
                             span span 156 25254 0 16
@@ -10642,6 +10652,7 @@ block html 0 0 800 53564
                             span a 104 28154 56 16 link 1002
                             span span 480 28154 80 16
                             span span 408 28154 188 16
+                            span q 604 28154 8 16
                             span span 48 28154 728 16
                             span cite 48 28154 728 16
                             span q 604 28154 172 16
@@ -10670,6 +10681,7 @@ block html 0 0 800 53564
                             span q 48 28214 640 16
                             text "other document conforming to this specification, may also be labeled with the Internet Media Type" 48 28214 640 16 serif 16 italic
                           line 48 28232 744 20 base 14
+                            span q 380 28234 8 16
                             span q 48 28234 340 16
                             span cite 48 28234 340 16
                             span span 388 28234 0 16
@@ -10708,6 +10720,7 @@ block html 0 0 800 53564
                             span i 340 28274 152 16
                             span span 596 28274 8 16
                             span a 604 28274 28 16 link 1011
+                            span q 640 28274 8 16
                             span span 48 28274 736 16
                             span q 640 28274 144 16
                             text "Group. " 48 28274 44 16 serif 16 italic
@@ -10738,6 +10751,7 @@ block html 0 0 800 53564
                             span q 48 28314 708 16
                             text "particular item, but the full implications must be understood and carefully weighed before choosing a different" 48 28314 708 16 serif 16
                           line 48 28332 744 20 base 14
+                            span q 96 28334 8 16
                             span q 48 28334 56 16
                             span span 48 28334 56 16
                             text "course." 48 28334 48 16 serif 16
@@ -10764,6 +10778,7 @@ block html 0 0 800 53564
                           line 48 28372 744 20 base 14
                             span span 304 28374 80 16
                             span span 232 28374 188 16
+                            span q 428 28374 8 16
                             span span 48 28374 704 16
                             span cite 48 28374 704 16
                             span q 428 28374 324 16
@@ -10775,6 +10790,7 @@ block html 0 0 800 53564
                             text "“" 428 28374 8 16 serif 16 italic
                             text "XHTML 1.1 documents SHOULD be labeled with the" 436 28374 316 16 serif 16 italic
                           line 48 28392 744 20 base 14
+                            span q 744 28394 8 16
                             span q 48 28394 704 16
                             span cite 48 28394 704 16
                             span span 752 28394 0 16

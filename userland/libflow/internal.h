@@ -459,11 +459,8 @@ typedef struct {
     int32_t lists, lists_or_dls, items;
     bool in_nobr;
     // Its `quotes` (inherited): the winner's value, its marks' pairs, or
-    // NULL for auto (GENERATED_CONTENT.md § 8). And a `q`'s own marks, as
-    // pass 1 resolved them at its place in the document, NULL for none:
-    // what pass 2 draws round it.
+    // NULL for auto (GENERATED_CONTENT.md § 8).
     const garb_val_t *quotes;
-    const char *q_open, *q_close;
     // An `rp` among this element's children: whether an `rt` in it gets
     // the parentheses a browser that lays out no ruby adds. Set by the
     // child, and read by pass 2 once every child has been styled.
@@ -494,7 +491,8 @@ typedef struct {
     // when the pseudo-element does not exist. `pseudo_declared` says, per
     // pseudo-element (bit 0 ::before, bit 1 ::after), whether the author
     // declared its content at all, `none` included: what takes the place of
-    // the marks a `q` draws of its own.
+    // the parentheses an `rt` draws of its own. A `q`'s marks are its
+    // pseudo-elements, from the chapter's sheet (style_pseudo).
     const os64_html_node_t *pseudo[2];
     uint8_t pseudo_declared;
 } FStyled;

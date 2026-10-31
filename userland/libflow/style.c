@@ -4758,13 +4758,25 @@ static char *content_text(Ctx *c, const os64_html_node_t *el, const garb_val_t *
 // `el`'s children, the ::after once they are done.
 static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_pseudo_t which)
 {
-    garb_style_t st = garb_style_for_pseudo(c->env->cascade, el, which);
-    if (st.n == 0)
+    // The chapter's sheet gives a `q` its marks (HTML § 15.3.6): `q::before
+    // { content: open-quote }`, `q::after { content: close-quote }`, which
+    // an author's `content` replaces.
+    static const garb_val_t kOpen = {.kind = GARB_V_KEYWORD, .keyword = "open-quote"};
+    static const garb_val_t kClose = {.kind = GARB_V_KEYWORD, .keyword = "close-quote"};
+    static const garb_val_t kQuoted[2] = {{.kind = GARB_V_STRING, .items = &kOpen, .nitems = 1},
+                                          {.kind = GARB_V_STRING, .items = &kClose, .nitems = 1}};
+    garb_style_t st = {0};
+    if (c->env->cascade != NULL)
+        st = garb_style_for_pseudo(c->env->cascade, el, which);
+    bool q = is(el, OS64_HTML_TAG_Q);
+    if (st.n == 0 && !q)
         return true;
     const garb_val_t *content = winner(st, GARB_CONTENT);
     int bit = which == GARB_PSEUDO_BEFORE ? 0 : 1;
     if (content != NULL)
         of->pseudo_declared |= (uint8_t)(1u << bit);
+    else if (q)
+        content = &kQuoted[bit];
     if (content == NULL || content->kind == GARB_V_WIDE || content->kind == GARB_V_KEYWORD)
         return true;
     Spec sp;
@@ -4832,41 +4844,15 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     return true;
 }
 
-// A `q`'s own open or close mark, at its place in the document, into its
-// record (FStyled.q_open, .q_close); charged to the lists' budget as
-// content is, and past it the mark is not drawn. The mark is its
-// pseudo-element's, so it takes that pseudo-element's `quotes` when an
-// author's rule gives it one. False when memory ran out.
-static bool q_mark(Ctx *c, const os64_html_node_t *el, FStyled *of, bool open)
-{
-    const garb_val_t *own = c->env->cascade != NULL
-        ? winner(garb_style_for_pseudo(c->env->cascade, el, open ? GARB_PSEUDO_BEFORE : GARB_PSEUDO_AFTER),
-                 GARB_QUOTES)
-        : NULL;
-    const char *text;
-    size_t len;
-    quote_mark(c, own_quotes(own, of->quotes), open, true, &text, &len);
-    if (len == 0)
-        return true;
-    bool spent = false;
-    char *mark = list_alloc(c, len + 1, &spent);
-    if (mark == NULL)
-        return spent;
-    os64_memcpy(mark, text, len);
-    mark[len] = '\0';
-    *(open ? &of->q_open : &of->q_close) = mark;
-    return true;
-}
-
-// Whether `el` has pseudo-elements and marks: not when it is replaced (its
-// children are not drawn), and not outside HTML.
+// Whether `el` has pseudo-elements: not when it is replaced (its children
+// are not drawn), and not outside HTML.
 static bool generates(const Ctx *c, const os64_html_node_t *el)
 {
     return el->ns == OS64_HTML_NS_HTML && !f_replaced(c->env, el);
 }
 
 // Steps 1 and 2 of GENERATED_CONTENT.md § 8.2, once `el` is styled: its
-// counters, then its ::before, or a `q`'s own open mark. An element whose
+// counters, then its ::before (a `q`'s open mark too). An element whose
 // display is none counts for nothing and generates nothing, and nor does
 // anything a replaced element holds. False when memory ran out.
 static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
@@ -4880,28 +4866,21 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     }
     if (f_replaced(c->env, el))
         c->inert = el;
-    else if (generates(c, el)) {
-        if (c->env->cascade != NULL && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
-            return false;
-        if (is(el, OS64_HTML_TAG_Q) && !(of->pseudo_declared & 1) && !q_mark(c, el, of, true))
-            return false;
-    }
+    else if (generates(c, el) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
+        return false;
     return !c->counters_failed;
 }
 
-// Steps 4 and 5, once everything under `el` is styled: its ::after, or a
-// `q`'s own close mark, then the end of the counters scoped to it.
+// Steps 4 and 5, once everything under `el` is styled: its ::after (a `q`'s
+// close mark too), then the end of the counters scoped to it.
 static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
 {
     if (c->inert != NULL && c->inert != el)
         return true;
     c->inert = NULL;
-    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el)) {
-        if (c->env->cascade != NULL && !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
-            return false;
-        if (is(el, OS64_HTML_TAG_Q) && !(of->pseudo_declared & 2) && !q_mark(c, el, of, false))
-            return false;
-    }
+    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el) &&
+        !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
+        return false;
     while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)
         c->ncounters--;
     return !c->counters_failed;

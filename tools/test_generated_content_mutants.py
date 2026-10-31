@@ -104,8 +104,8 @@ mutants = [
     ('siblings-nest', STYLE, '    if (in != NULL && in->scope == scope) {', '    if (in != NULL && in->scope == scope && false) {', LIBFLOW),
     ('a-scope-never-ends', STYLE, '        c->ncounters--;\n', '        break;\n', LIBFLOW),
     ('an-increment-makes-no-counter', STYLE, '            if (f == NULL)\n                f = instantiate(c, name, 0, scope);\n', '', LIBFLOW),
-    ('display-none-counts', STYLE, '    if (of->style.display == FLOW_DISPLAY_NONE)\n        return true;\n    if (c->env->cascade != NULL) {',
-     '    if (c->env->cascade != NULL) {', LIBFLOW),
+    ('display-none-counts', STYLE, '    if (of->style.display == FLOW_DISPLAY_NONE || c->inert != NULL)\n        return true;',
+     '    if (c->inert != NULL)\n        return true;', LIBFLOW),
     ('a-pseudo-elements-own-counters-ignored', STYLE, '    count_on(c, st, el, el);\n', '', LIBFLOW),
     ('inherit-takes-nothing', STYLE, 'os64_streq(v->keyword, "inherit") && from != NULL', 'false && from != NULL', LIBFLOW),
     ('counters-is-the-innermost-alone', STYLE, '    if (n <= 1) {', '    if (n <= 1 || true) {', LIBFLOW),
@@ -121,7 +121,10 @@ mutants = [
      'return os64_streq(v->keyword, "inherit") ? inherited : NULL;', LIBFLOW),
     ('a-fallback-counts', STYLE, '    if (f_replaced(c->env, el))\n        c->inert = el;', '    if (f_replaced(c->env, el))\n        (void)0;', LIBFLOW),
     ('counters-spelled-past-the-budget', STYLE, '    if (need > room) {', '    if (need > room && false) {', LIBFLOW),
-    ('a-q-mark-takes-its-elements-quotes', STYLE, 'quote_mark(c, own_quotes(own, of->quotes), open, true, &text, &len);', 'quote_mark(c, own != NULL ? of->quotes : of->quotes, open, true, &text, &len);', LIBFLOW),
+    ('a-pseudo-element-takes-its-elements-quotes', STYLE,
+     'const garb_val_t *quotes = own_quotes(winner(st, GARB_QUOTES), of->quotes);',
+     'const garb_val_t *quotes = own_quotes(NULL, of->quotes);', LIBFLOW),
+    ('a-q-has-no-marks-of-its-own', STYLE, '        content = &kQuoted[bit];', '        content = bit < 0 ? &kQuoted[bit] : NULL;', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []
