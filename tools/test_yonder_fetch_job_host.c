@@ -1243,6 +1243,205 @@ static void http_cache_cases(void)
            g != NULL && g->served == WAY_SERVED_NETWORK, NULL);
     yonder_fetched_free(g);
 
+    // Codex #425 rd1. An entry way_fetch_whole kept has no head: a script's
+    // request does not take it, and the answer it keeps replaces it. Kept
+    // first by a script's request, for its key, and put back headless. Same
+    // origin, so no CORS check stands in for the missing head.
+    fake_answer(NULL, "https://a.test/plain.js", 200, MODULE_HEAD "Cache-Control: max-age=600\r\n", kModule);
+    g = run(&(Ask){page, "https://a.test/plain.js"});
+    char plain_partition[WAY_PARTITION_MAX];
+    snprintf(plain_partition, sizeof(plain_partition), "https a.test");
+    bool plain_kept = g != NULL && g->ok && g->served == WAY_SERVED_NETWORK;
+    yonder_fetched_free(g);
+    way_entry_t plain;
+    uint8_t *plain_body = NULL;
+    size_t plain_len = 0;
+    bool plain_found = false;
+    for (int cred = 0; cred < 2 && !plain_found; cred++) {
+        const way_cache_key_t k = {plain_partition, cred == 1, "https://a.test/plain.js"};
+        plain_found = way_cache_find(http_cache, &k, &plain, &plain_body, &plain_len, NULL, 1 << 20);
+    }
+    expect("headless: an entry is put back as way_fetch_whole keeps one, with no head",
+           plain_kept && plain_found && way_cache_put(http_cache, &plain, NULL, plain_body, plain_len), NULL);
+    os64_free(plain_body);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/plain.js"});
+    expect("headless: a script's request asks the network over it, and has its headers",
+           g != NULL && g->ok && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1 &&
+               has_line(g, "Content-Type: text/javascript\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://a.test/plain.js"});
+    expect("headless: and what it kept answers the next", g != NULL && g->served == WAY_SERVED_KEPT &&
+           has_line(g, "Content-Type: text/javascript\r\n"), NULL);
+    yonder_fetched_free(g);
+
+    // A redirect from a stale entry: the entry's validator stays on its own
+    // address, never the hop it is sent on to.
+    fake_answer_t *moved = fake_answer(NULL, "https://cdn.test/moved.js", 200,
+                                       MODULE_HEAD "Cache-Control: max-age=60\r\nETag: \"m1\"\r\n", kModule);
+    yonder_fetched_free(run(&(Ask){page, "https://cdn.test/moved.js"}));
+    s_epoch += 120;
+    moved->status = 302;
+    moved->reason = "Found";
+    moved->headers = "Location: https://other.test/moved.js\r\nAccess-Control-Allow-Origin: *\r\n";
+    moved->body = NULL;
+    fake_answer(NULL, "https://other.test/moved.js", 200, MODULE_HEAD, kModule);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/moved.js"});
+    int hop = -1;
+    for (int i = before; i < nfake_requests; i++)
+        if (strcmp(fake_requests[i].url, "https://other.test/moved.js") == 0)
+            hop = i;
+    expect("redirect: the stale entry's validator goes to its own address",
+           !strcmp(field(before, "If-None-Match"), "\"m1\""), NULL);
+    expect("redirect: and not to the hop it is sent on to",
+           g != NULL && g->ok && g->redirected && hop >= 0 && field(hop, "If-None-Match")[0] == '\0', g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // A default-mode request with a precondition of the page's own is
+    // no-store: the server judges it.
+    fake_answer(NULL, "https://a.test/state.json", 200,
+                "Content-Type: application/json\r\nCache-Control: max-age=600\r\nETag: \"current\"\r\n", "{}");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/state.json"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/state.json", .headers = "If-Match: \"old\"\r\n"});
+    expect("preconditions: a request carrying one is not answered from the cache",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1 &&
+               !strcmp(field(before, "If-Match"), "\"old\""), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://a.test/state.json"});
+    expect("preconditions: one without is", g != NULL && g->served == WAY_SERVED_KEPT, NULL);
+    yonder_fetched_free(g);
+
+    // Codex #425 rd2. A reload whose answer may not be kept drops what was
+    // kept, though a reload does not read it.
+    fake_answer_t *rl = fake_answer(NULL, "https://a.test/reloaded.json", 200,
+                                    "Content-Type: application/json\r\nCache-Control: max-age=600\r\n", "old");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/reloaded.json"}));
+    rl->headers = "Content-Type: application/json\r\nCache-Control: no-store\r\n";
+    rl->body = "new";
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/reloaded.json", .cache_mode = WAY_CACHE_RELOAD}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/reloaded.json"});
+    expect("reload: an answer it may not keep drops the one kept before",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1 && g->body_len == 3 &&
+               memcmp(g->body, "new", 3) == 0, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // Repeated lines a reply varies on are one list: a request differing in
+    // the second is another request.
+    fake_answer(NULL, "https://a.test/listed.json", 200,
+                "Content-Type: application/json\r\nVary: X-Test\r\nCache-Control: max-age=600\r\n", "{}");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/listed.json", .headers = "X-Test: same\r\nX-Test: one\r\n"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/listed.json", .headers = "X-Test: same\r\nX-Test: two\r\n"});
+    expect("vary: a request differing in a repeated line is not served the kept reply",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://a.test/listed.json", .headers = "X-Test: same\r\nX-Test: two\r\n"});
+    expect("vary: one sending the same lines is", g != NULL && g->served == WAY_SERVED_KEPT, NULL);
+    yonder_fetched_free(g);
+
+    // A successful unsafe request invalidates what was kept for its address.
+    fake_answer_t *posted = fake_answer(NULL, "https://a.test/item.json", 200,
+                                        "Content-Type: application/json\r\nCache-Control: max-age=600\r\n", "v1");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/item.json"}));
+    posted->body = "v2";
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/item.json", "POST", "Content-Type: text/plain\r\n", "x"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/item.json"});
+    expect("unsafe: after a POST that worked, the address's kept reply is gone",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1 && g->body_len == 2 &&
+               memcmp(g->body, "v2", 2) == 0, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // A request asking no-cache is asked about, however fresh the kept reply.
+    fake_answer_t *nc = fake_answer(NULL, "https://a.test/live.json", 200,
+                                    "Content-Type: application/json\r\nCache-Control: max-age=600\r\nETag: \"l1\"\r\n",
+                                    "old");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/live.json"}));
+    nc->headers = "Content-Type: application/json\r\nCache-Control: max-age=600\r\nETag: \"l2\"\r\n";
+    nc->body = "new";
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/live.json", .headers = "Cache-Control: no-cache\r\n"});
+    expect("no-cache: a request asking it reaches the server over a fresh kept reply",
+           g != NULL && g->ok && nfake_requests == before + 1 && g->body_len == 3 && memcmp(g->body, "new", 3) == 0 &&
+               !strcmp(field(before, "If-None-Match"), "\"l1\""), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/live.json", .headers = "Pragma: no-cache\r\n"});
+    expect("no-cache: and so does one sending Pragma no-cache alone", g != NULL && nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+
+    // Codex #425 rd3. A header not sent and one sent empty are two requests
+    // to a reply that varies on it.
+    fake_answer(NULL, "https://a.test/empty.json", 200,
+                "Content-Type: application/json\r\nVary: X-Test\r\nCache-Control: max-age=600\r\n", "{}");
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/empty.json"}));
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/empty.json", .headers = "X-Test: \r\n"});
+    expect("vary: a request sending empty what the kept one did not send is not served it",
+           g != NULL && g->served == WAY_SERVED_NETWORK && nfake_requests == before + 1, g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // A 304 that sends a readable line a kept reply had omitted: the line is
+    // the 304's now, and what it exposes is exposed.
+    fake_answer_t *ex = fake_answer(NULL, "https://cdn.test/exposed.json", 200,
+                                    MODULE_HEAD "Cache-Control: max-age=60\r\nETag: \"x1\"\r\nX-Token: secret\r\n",
+                                    "{}");
+    ex->omitted = "Access-Control-Expose-Headers\r\n";
+    g = run(&(Ask){page, "https://cdn.test/exposed.json"});
+    expect("omitted: an expose list too long to read exposes nothing",
+           g != NULL && g->ok && !has_line(g, "X-Token: secret\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    s_epoch += 120;
+    ex->status = 304;
+    ex->reason = "Not Modified";
+    ex->headers = "ETag: \"x1\"\r\nCache-Control: max-age=60\r\nAccess-Control-Expose-Headers: X-Token\r\n";
+    ex->omitted = NULL;
+    ex->body = NULL;
+    g = run(&(Ask){page, "https://cdn.test/exposed.json"});
+    expect("omitted: a 304 sending it readable exposes what it names",
+           g != NULL && g->served == WAY_SERVED_CONFIRMED && has_line(g, "X-Token: secret\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){page, "https://cdn.test/exposed.json"});
+    expect("omitted: and so does the kept reply after it",
+           g != NULL && g->served == WAY_SERVED_KEPT && has_line(g, "X-Token: secret\r\n"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // Codex #425 rd4. A 304 repeating the Vary an entry was kept under
+    // confirms it, its compiled form beside it kept.
+    fake_answer_t *vo = fake_answer(NULL, "https://cdn.test/origin.js", 200,
+                                    "Content-Type: text/javascript\r\nAccess-Control-Allow-Origin: https://a.test\r\n"
+                                    "Vary: Origin\r\nCache-Control: max-age=60\r\nETag: \"o1\"\r\n", kModule);
+    g = run(&(Ask){page, "https://cdn.test/origin.js", .module = true});
+    bool vo_kept = g != NULL && g->bytecode != NULL && keep_where(g->bytecode, "origin-blob");
+    yonder_fetched_free(g);
+    s_epoch += 120;
+    vo->status = 304;
+    vo->reason = "Not Modified";
+    vo->headers = "ETag: \"o1\"\r\nVary: Origin\r\nCache-Control: max-age=600\r\n";
+    vo->body = NULL;
+    g = run(&(Ask){page, "https://cdn.test/origin.js", .module = true});
+    expect("vary: a 304 repeating Vary: Origin confirms the entry, its blob with it",
+           vo_kept && g != NULL && g->served == WAY_SERVED_CONFIRMED && blob_is(g, "origin-blob"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/origin.js", .module = true});
+    expect("vary: and it is fresh again", g != NULL && g->served == WAY_SERVED_KEPT && nfake_requests == before &&
+           blob_is(g, "origin-blob"), g ? g->why : NULL);
+    yonder_fetched_free(g);
+
+    // only-if-cached with no cache: a network error, nothing asked.
+    way_cache_t *saved = http_cache;
+    http_cache = NULL;
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/state.json", .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+    expect("only-if-cached: with no cache, a network error and nothing asked",
+           g != NULL && !g->ok && nfake_requests == before, NULL);
+    yonder_fetched_free(g);
+    http_cache = saved;
+
     // Vary on what the page sends: a different value is a miss, the kept
     // one's a hit.
     fake_answer(NULL, "https://cdn.test/acc.js", 200, MODULE_HEAD "Vary: Accept\r\nCache-Control: max-age=600\r\n",

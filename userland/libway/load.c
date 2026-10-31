@@ -230,7 +230,11 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     way_entry_t *e = caching ? os64_malloc(sizeof(*e)) : NULL;
     uint8_t *kept = NULL;
     size_t kept_len = 0;
-    bool have = e != NULL && way_cache_find(cache, &key, e, &kept, &kept_len, NULL, cap);
+    // A reply a script's request kept may vary on what it sent (its
+    // recorded Vary values, SCRIPT_CACHE.md § 4), which these requests do
+    // not say: such an entry is another request's, and a miss here.
+    way_blocks_t blocks;
+    bool have = e != NULL && way_cache_find(cache, &key, e, &kept, &kept_len, &blocks, cap) && blocks.vary_len == 0;
     int64_t now = now_utc();
     if (have && way_keep_fresh(&e->keep, now)) {
         serve(out, e, kept, kept_len, WAY_SERVED_KEPT);
