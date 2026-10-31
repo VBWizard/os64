@@ -4363,7 +4363,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->motion = motion;
     out->list_cost = before_lists - c->out->lists_left;
     out->steady = copied || (old && !old->motion && !motion &&
-                             style_values_equal(&old->style, &out->style));
+                             f_style_equal(&old->style, &out->style));
     out->subtree_steady = out->steady;
     out->reuse_safe = untouched && ancestry && out->steady;
     if (motion != NULL) {

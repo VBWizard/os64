@@ -1402,9 +1402,16 @@ static void layout_sweep(void)
 #include "test_libflow_motion.inc"
 #include "test_libflow_computed.inc"
 #include "test_libflow_restyle.inc"
+#include "test_libflow_snapshot.inc"
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--snapshots") == 0) {
+        text_setup(); snapshot_cases(); correspondence_cases(); text_teardown();
+        printf("libflow snapshots: %d checks, %d failed%s\n", checks, failures,
+               live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--restyle") == 0) {
         text_setup(); restyle_cases(); restyle_mutations(); text_teardown();
         printf("libflow restyle: %d checks, %d failed%s\n", checks, failures,
@@ -1551,6 +1558,8 @@ int main(int argc, char **argv)
     cliptext_cases();
     motion_cases();
     restyle_cases();
+    snapshot_cases();
+    correspondence_cases();
     restyle_mutations();
     computed_cases();
     computed_round1_cases();

@@ -6,6 +6,15 @@
 2026-10-31. All four implementation steps are approved to build. This
 refines [RELAYOUT.md](RELAYOUT.md).*
 
+## Implementation checkpoint
+
+Steps 1 and 2 are implemented: checked text-run retention, independent snapshot
+history, bounded structural correspondence and refusal diagnostics. The explicit
+`flow_layout_incremental` entry builds fresh geometry while collecting this
+evidence; ordinary entries do not register snapshot readers. Geometry grafts,
+the intrinsic-width memo and Yonder opt-in remain steps 3 and 4. Validation is
+recorded in [5c-foundation.md](../../relayout-evidence/5c-foundation.md).
+
 ## Decision and scope
 
 Keep pass 2's fresh box/item construction. Reuse pass 3's completed results
@@ -221,6 +230,9 @@ positive/negative pending margins, whether its first-content position is set,
 containing-height definiteness and value, sizing mode, and the environmental
 and structural qualifications above. Compare resolved inputs, not merely the
 old border width. Equal border widths can hide different percentage bases.
+Sizing mode includes formatting-context role and the containing box's HTML
+alignment value: `widths` reads that parent value through `html_align_shift`,
+even when the child's own `text-align` overrides inheritance.
 For this first cut require equal containing-height inputs even if no percentage
 height is detected; dependency narrowing is an optimization, not a safety need.
 

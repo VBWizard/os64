@@ -156,7 +156,7 @@ static bool style_gradients_equal(const flow_gradient_t *a,const flow_gradient_t
     flow_gradient_t x=*a,y=*b;x.stops=y.stops=NULL;
     return !os64_memcmp(&x,&y,sizeof(x)) && style_bytes_equal(a->stops,b->stops,(size_t)a->nstops*sizeof(*a->stops));
 }
-static bool style_values_equal(const flow_style_t *a,const flow_style_t *b)
+bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
 {
     flow_style_t x=*a,y=*b;
     x.family.names=y.family.names=NULL;
