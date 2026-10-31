@@ -1850,6 +1850,11 @@ void yonder_scripts_mark(yonder_scripts_t *s, os64_dom_milestone_t which, uint64
     s->timing.at[which] = now_us > s->timing.origin_us ? now_us - s->timing.origin_us : 0;
 }
 
+const os64_dom_timing_t *yonder_scripts_timing(const yonder_scripts_t *s)
+{
+    return s != NULL ? &s->timing : NULL;
+}
+
 uint64_t yonder_scripts_storage_due(const yonder_scripts_t *s)
 {
     return s != NULL && s->dom != NULL ? os64_dom_storage_due(s->dom) : UINT64_MAX;

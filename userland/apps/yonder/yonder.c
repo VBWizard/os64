@@ -2520,6 +2520,37 @@ static void diag_observe(Page *p, const char *when)
         diag_paint(p);
 }
 
+// Where an arrival's time went, from performance.timing's milestones,
+// each after the navigation began: the document's first byte and its last,
+// its parse done, DOMContentLoaded (after the deferred scripts and the
+// module graphs have run), and load's end. "-" for one not reached.
+static void diag_navigation(Page *p)
+{
+    static const struct {
+        os64_dom_milestone_t which;
+        const char *name;
+    } kMarks[] = {{OS64_DOM_TIMING_RESPONSE_START, "first byte"}, {OS64_DOM_TIMING_RESPONSE_END, "last byte"},
+                  {OS64_DOM_TIMING_DOM_INTERACTIVE, "parsed"},
+                  {OS64_DOM_TIMING_DOM_CONTENT_LOADED_START, "DOMContentLoaded"},
+                  {OS64_DOM_TIMING_LOAD_END, "load"}};
+    const os64_dom_timing_t *t = yonder_scripts_timing(p->scripts);
+    if (t == NULL)
+        return;
+    char v[256];
+    size_t at = 0;
+    for (size_t i = 0; i < sizeof(kMarks) / sizeof(kMarks[0]) && at < sizeof(v); i++) {
+        uint64_t us = t->at[kMarks[i].which];
+        int n = us == OS64_DOM_TIMING_NOT_YET
+                    ? os64_snprintf(v + at, sizeof(v) - at, "%s%s -", i ? ", " : "", kMarks[i].name)
+                    : os64_snprintf(v + at, sizeof(v) - at, "%s%s %lu ms", i ? ", " : "", kMarks[i].name,
+                                    (unsigned long)(us / 1000));
+        if (n < 0)
+            return;
+        at += (size_t)n;
+    }
+    yonder_diag_fact(p->diag, "navigation", v);
+}
+
 // The page has arrived: what it is now is written, and the badge is its.
 static void diag_arrived(Page *p, uint64_t laid_ms)
 {
@@ -2533,6 +2564,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
                   (unsigned long)laid_ms);
     yonder_diag_head_fact(p->diag, "laid out at", v);
@@ -8406,6 +8438,7 @@ static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, co
         return 0;
     os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job,
                         job->module ? YONDER_FETCH_MODULE_RESERVE : YONDER_FETCH_RESERVE};
+    job->submitted_us = os64_micros();
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
         yonder_fetch_release(job, NULL);
@@ -8450,9 +8483,17 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
     }
     char key[OS64_FETCH_URL_MAX + 48];
     char value[160];
-    char took[32] = "";
+    char took[96] = "";
     if (got->elapsed_us >= 0)
         os64_snprintf(took, sizeof(took), " in %ld ms", (long)(got->elapsed_us / 1000));
+    // A wait for a worker, or for the window to hear the answer, a
+    // millisecond or more: time the request spent not being fetched.
+    int64_t heard = got->finished_us >= 0 ? os64_micros() - got->finished_us : -1;
+    size_t at = os64_strlen(took);
+    if (got->queued_us >= 1000 && at < sizeof(took))
+        at += (size_t)os64_snprintf(took + at, sizeof(took) - at, ", queued %ld ms", (long)(got->queued_us / 1000));
+    if (heard >= 1000 && at < sizeof(took))
+        os64_snprintf(took + at, sizeof(took) - at, ", heard %ld ms later", (long)(heard / 1000));
     os64_snprintf(key, sizeof(key), "request %s %s", job->request.method, job->url);
     // An answer the cache gave says so (SCRIPT_CACHE.md § 9): kept, served
     // without asking; confirmed, served after a 304.

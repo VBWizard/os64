@@ -7342,6 +7342,8 @@ static void diag_page_cases(void) {
         has(text,"\nscript http://fixture.test/final#inline-1: ran in 0 us\n") && !has(text,"script load"),
         "diag: a clean page's file says clean, carries no token, and says what ran and how long the "
         "engine took over it, on the clock that stood still");
+    check(has(text,"\nnavigation: first byte 0 ms, last byte 0 ms, parsed 0 ms, DOMContentLoaded 0 ms, load 0 ms\n"),
+        "diag: and where its arrival went, milestone by milestone");
     check(g.badge_text[0]=='\0' && g.badge.hidden,"diag: a clean page shows no badge");
     loop_drop();
     check(has(diag_file("/tmp/diag",name),"\nwritten: when the page was left\n"),"diag: leaving rewrites the file");
