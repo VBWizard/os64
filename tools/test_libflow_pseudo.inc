@@ -96,6 +96,16 @@ static void pseudo_replaced_cases(void)
     sheeted_close(&p);
 }
 
+// How many of `el`'s pseudo-elements' boxes are painted, and how many not.
+static void pseudo_paint_walk(const flow_box_t *b, const os64_html_node_t *el, int *painted, int *hidden)
+{
+    for (; b != NULL; b = b->next) {
+        if (b->pseudo != GARB_PSEUDO_NONE && b->node == el)
+            (*(b->unpainted ? hidden : painted))++;
+        pseudo_paint_walk(b->first, el, painted, hidden);
+    }
+}
+
 static void pseudo_count_text(void *ctx, const flow_box_t *text)
 {
     (void)text;
@@ -221,6 +231,21 @@ static void pseudo_layout_cases(void)
     expect("pseudo: its element's holds its own and the pseudo-element's", own != NULL && seen[1] == 3, NULL);
     flow_free(tree);
     sheeted_close(&p);
+
+    // Its opacity is its own: an invisible ::before of a visible element
+    // is not painted, and the element still is.
+    sheeted_open(&p, "<!doctype html><style>#h::before { content: \"HIDDEN\"; opacity: 0 }</style>"
+                     "<p><span id=h>shown</span>", 800, 600);
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    span = pseudo_find(p.doc->document, "h");
+    own = tree != NULL ? flow_box_for(tree, span) : NULL;
+    int painted = 0, hidden = 0;
+    if (tree != NULL)
+        pseudo_paint_walk(flow_root(tree), span, &painted, &hidden);
+    expect("pseudo: a transparent pseudo-element is not painted", hidden >= 2 && painted == 0, NULL);
+    expect("pseudo: its element still is", own != NULL && !own->unpainted, NULL);
+    flow_free(tree);
+    sheeted_close(&p);
 }
 
 // ── Counters and quotes (GENERATED_CONTENT.md § 8) ────────────────────
@@ -272,8 +297,9 @@ static void counter_cases(void)
     texts_case("counters: nested, joined from the outermost in",
         "<!doctype html><style>.l { counter-reset: item } .i { counter-increment: item }"
         " .i::before { content: counters(item, \".\") \" \" }</style>"
-        "<div class=l><div class=i>a</div><div class=i>b<div class=l><div class=i>c</div></div></div></div>",
-        "1 |2 |2.1 |");
+        "<div class=l><div class=i>a</div><div class=i>b<div class=l><div class=i>c</div></div></div>"
+        "<div class=i>d</div></div>",
+        "1 |2 |2.1 |3 |");
     texts_case("counters: a sibling's reset replaces the counter, never nests in it",
         "<!doctype html><style>p { counter-reset: x 5 } p::before { content: counter(x) }"
         " span::before { content: counters(x, \".\") }</style><div><p></p><p></p><span></span></div>",

@@ -2263,6 +2263,30 @@ static void motion_due_cases(void)
         expect(kOutsideNames[i], due == (i < 3 ? 1000 : FLOW_NEVER), detail);
         moving_close(&m);
     }
+    // A pseudo-element's box is such a box: it names its originating
+    // element, whose animation it takes as a child does, by its own record
+    // (GENERATED_CONTENT.md § 4).
+    static const struct {
+        const char *name, *keyframes, *pseudo;
+        uint64_t due;
+    } kPseudo[] = {
+        {"motion due: seen through a fixed ::before", "to{color:red}", "", 1000},
+        {"motion due: not for the element's own background", "to{background-color:red}", "", FLOW_NEVER},
+        {"motion due: but for a background the ::before inherits", "to{background-color:red}",
+         "background-color:inherit", 1000},
+    };
+    for (size_t i = 0; i < sizeof(kPseudo) / sizeof(kPseudo[0]); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{%s}.c{animation:c 1s linear}"
+                 ".c::before{content:'x';position:fixed;top:0;%s}</style>"
+                 "<div class=c style='margin-top:2000px'>y</div>", kPseudo[i].keyframes, kPseudo[i].pseudo);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kPseudo[i].name, due == kPseudo[i].due, detail);
+        moving_close(&m);
+    }
     // And only for what it hands down: an inherited value and a fade reach
     // the box inside it; its own background and border do not — unless
     // the author hands them down by keyword, at every element between.

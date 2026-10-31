@@ -201,7 +201,8 @@ and it is said here so 5b and 8a meet on it rather than discover it.
 - **What waits** is in DEBTS.md § Browser layout: counters and `quotes`
   (8b), pictures in `content`, `getComputedStyle(el, '::before')`,
   `::marker` and the line pseudo-elements, a pseudo-element's animations,
-  and tables' own.
+  tables' own, and an animation a `display: contents` element draws only
+  through its pseudo-elements.
 
 ## 8. Slice 8b: counters and `quotes`
 
@@ -325,9 +326,9 @@ reuses, an ordered pass is restyled whole.
 
 - **libgarb**: the four longhands' readers accept and refuse by their
   grammars (`declarations.txt`), as do `counter()`'s and `counters()`'s
-  arguments; the cascade dump shows them on an element and its
-  `::before`.
-- **libflow**: box dumps for:
+  arguments, and none of them is a missing property (`skips.txt`).
+- **libflow**: pass 1's generated text and `q` marks read in tree order
+  (`texts_case`, `test_libflow_pseudo.inc`) for:
   - nested lists numbered by `counters(item, ".")`;
   - a sibling reset replacing rather than nesting;
   - an increment with no reset;
