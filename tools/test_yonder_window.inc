@@ -240,7 +240,53 @@ static void window_idle_case(void) {
     loop_drop();
 }
 
+/* A stack overflow says where it recursed: its place, and the callers that
+ * show the cycle (scripts.c's yonder_scripts_failure). Every new failure is
+ * said on the console too, once, prefixed "yonder:" (diag.c). */
+static void window_overflow_case(void) {
+    yonder_host_console_clear();
+    loop_page("<script>function deep(n){return deep(n+1)+1}\ndeep(0)</script>");
+    check(loop_settle(),"window: a page whose script recurses without end settles");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: InternalError: stack overflow, "
+                            "at deep inline:1:") &&
+          window_record_has(", called from deep 1:29, deep 1:29, deep 1:29 (1)"),
+        "window: a stack overflow names its place and the callers that recurse");
+    check(strstr(yonder_host_console,"yonder: FAILED script http://fixture.test/final#inline-1: InternalError: "
+                                     "stack overflow, at deep inline:1:")!=NULL &&
+          strstr(yonder_host_console,", called from deep 1:29, deep 1:29, deep 1:29\n")!=NULL,
+        "window: and says it on the console, prefixed yonder:");
+    loop_drop();
+    loop_page("<script>null.a</script>");
+    check(loop_settle() && window_record_has("FAILED script http://fixture.test/final#inline-1: TypeError: "
+                                             "cannot read property 'a' of null, at inline:1:5 (1)"),
+        "window: another failure's place is its first frame alone");
+    loop_drop();
+
+    // Once a page: the same failure twice is one console line.
+    yonder_diag_t *d=yonder_diag_new("https://fixture.test/twice",1,0);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,"script x","TypeError: t, at 1:2");
+    yonder_diag_failed(d,"script x","TypeError: t, at 1:2");
+    yonder_diag_failed_seen(d,"script x","TypeError: t, at 1:2");
+    check(yonder_host_console_lines==1 &&
+          strcmp(yonder_host_console,"yonder: FAILED script x: TypeError: t, at 1:2\n")==0,
+        "window: the console hears a failure once a page");
+    // A long address is cut on the console, its place kept.
+    char what[400], message[400];
+    char long_path[260];
+    memset(long_path,'p',sizeof(long_path)-1); long_path[sizeof(long_path)-1]='\0';
+    snprintf(what,sizeof(what),"script https://cdn.test/%s/bundle.js",long_path);
+    snprintf(message,sizeof(message),"TypeError: t, at https://cdn.test/%s/bundle.js?v=1:777:731",long_path);
+    yonder_host_console_clear();
+    yonder_diag_failed(d,what,message);
+    check(strcmp(yonder_host_console,"yonder: FAILED script https://cdn.test/.../bundle.js: TypeError: t, at "
+                                     "https://cdn.test/.../bundle.js:777:731\n")==0,
+        "window: a long address is cut on the console to its host and last part, its place kept");
+    yonder_diag_free(d);
+}
+
 static void window_cases(void) {
+    window_overflow_case();
     window_message_case();
     window_message_view_case();
     window_idle_case();

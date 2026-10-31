@@ -407,9 +407,85 @@ void yonder_diag_missing_seen(yonder_diag_t *d, const char *kind, const char *na
         l->count = count;
 }
 
+// An address longer than this is cut on the console (console_short).
+#define CONSOLE_ADDRESS_MAX 96
+// And how much of its last part is kept.
+#define CONSOLE_LAST_MAX 40
+
+static bool starts(const char *s, const char *word);
+
+// `text` for the console, into `out`: each address in it longer than
+// CONSOLE_ADDRESS_MAX cut to its scheme and host, "/.../", and the start of
+// its last part, the line and column after it kept. ASCII only, as a
+// terminal reads it.
+static void console_short(const char *text, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (const char *at = text; *at != '\0' && o + 1 < cap;) {
+        if (!starts(at, "http://") && !starts(at, "https://")) {
+            out[o++] = *at++;
+            continue;
+        }
+        const char *end = at;
+        while (*end != '\0' && *end != ' ')
+            end++;
+        // A place after it, ":line:col", is kept whole.
+        const char *core_end = end, *p = end;
+        for (int part = 0; part < 2; part++) {
+            const char *digits = p;
+            while (digits > at && digits[-1] >= '0' && digits[-1] <= '9')
+                digits--;
+            if (digits == p || digits == at || digits[-1] != ':')
+                break;
+            p = digits - 1;
+            if (part == 1)
+                core_end = p;
+        }
+        size_t length = (size_t)(core_end - at);
+        if (length <= CONSOLE_ADDRESS_MAX) {
+            os64_snprintf(out + o, cap - o, "%.*s", (int)(end - at), at);
+        } else {
+            const char *host_end = at + (at[4] == 's' ? 8 : 7);
+            while (host_end < core_end && *host_end != '/')
+                host_end++;
+            const char *last = core_end;
+            while (last > host_end && last[-1] != '/')
+                last--;
+            const char *last_end = last;
+            while (last_end < core_end && *last_end != '?')
+                last_end++;
+            size_t kept = (size_t)(last_end - last);
+            bool cut = kept > CONSOLE_LAST_MAX;
+            os64_snprintf(out + o, cap - o, "%.*s/.../%.*s%s%.*s", (int)(host_end - at), at,
+                          (int)(cut ? CONSOLE_LAST_MAX : kept), last, cut ? "..." : "", (int)(end - core_end),
+                          core_end);
+        }
+        o += os64_strlen(out + o);
+        at = end;
+    }
+    out[o < cap ? o : cap - 1] = '\0';
+}
+
+// A failure the page's record has not held before is said on the console
+// as well (os64_complain: the terminal yonder was started from, and the
+// kernel log), once a page, as "yonder: FAILED <what>: <message>". The
+// prefix says it is the browser talking, not the page's own console.log,
+// which goes to standard output as the page wrote it. The record keeps the
+// line whole; the console's is cut to be read (console_short).
+static void said_on_console(const Line *l, const char *what, const char *message)
+{
+    if (l == NULL || l->count != 0)
+        return;
+    char w[512], m[768];
+    console_short(what, w, sizeof(w));
+    console_short(message, m, sizeof(m));
+    os64_complain("yonder: FAILED %s: %s\n", w, m);
+}
+
 void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
+    said_on_console(l, what, message);
     if (l != NULL)
         l->count = saturating(l->count, 1);
 }
@@ -517,6 +593,7 @@ const char *yonder_diag_fact_value(const yonder_diag_t *d, const char *key)
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
+    said_on_console(l, what, message);
     if (l != NULL && l->count == 0)
         l->count = 1;
 }
@@ -524,6 +601,8 @@ void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *mes
 void yonder_diag_failed_most(yonder_diag_t *d, const char *what, const char *message, uint32_t count)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
+    if (count > 0)
+        said_on_console(l, what, message);
     if (l != NULL && count > l->count)
         l->count = count;
 }

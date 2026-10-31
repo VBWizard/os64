@@ -200,6 +200,25 @@ DOMException, a thrown primitive) says its message alone (DEBTS.md). The
 same message at two places is two lines; the status line says the
 message alone, as before.
 
+A stack overflow's place is a recursion, which one frame does not show,
+so its line names the callers too: up to three, each its function and
+`line:col`, with its file only when that is not the first frame's
+(`InternalError: stack overflow, at deep inline:1:29, called from deep
+1:29, deep 1:29, deep 1:29`). A cycle of the same places is the recursion.
+The parser's `SyntaxError: stack overflow` has no callers to name.
+
+**Each failure is said on the console as well** (2026-10-31, Chris's ask),
+the first time a page's record holds it: `yonder: FAILED <what>:
+<message>`, through `os64_complain`, which writes the terminal yonder was
+started from and the kernel log. The prefix says it is the browser
+talking. A page's own `console.log` goes to standard output as the page
+wrote it, with no prefix. The record keeps its line whole (a 3,666-byte
+bundle address included, above), but a terminal line is read, so on the
+console an address over 96 characters is cut to its scheme and host,
+`/.../`, and the first 40 characters of its last part, its query dropped and its
+`:line:col` kept (`diag.c`'s `console_short`). The console is ASCII, as a
+terminal reads it.
+
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 
 A page with `@font-face` rules, or one whose layout asked for a family,

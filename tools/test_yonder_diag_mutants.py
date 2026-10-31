@@ -266,6 +266,15 @@ mutants = [
     ('data-value-whole', DIAG, '    value = shown(value, &made_value);\n', '    made_value = NULL;\n', WINDOW),
     ('data-lookup-whole', DIAG, '    char *made;\n    key = shown(key, &made);',
      '    char *made = NULL;', WINDOW),
+    # A failure on the console, and a stack overflow's callers (2026-10-31).
+    ('an-overflow-names-no-callers', SCRIPTS, '    if (ml < ol || !os64_streq(message + ml - ol, kOverflow))',
+     '    if (true || !os64_streq(message + ml - ol, kOverflow))', WINDOW),
+    ('the-console-hears-it-every-time', DIAG, '    if (l == NULL || l->count != 0)\n        return;\n    char w[512]',
+     '    if (l == NULL)\n        return;\n    char w[512]', WINDOW),
+    ('the-console-hears-nothing', DIAG,
+     '    said_on_console(l, what, message);\n    if (l != NULL)\n        l->count = saturating(l->count, 1);',
+     '    if (l != NULL)\n        l->count = saturating(l->count, 1);', WINDOW),
+    ('a-long-address-is-not-cut', DIAG, '        if (length <= CONSOLE_ADDRESS_MAX) {', '        if (length > 0) {', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

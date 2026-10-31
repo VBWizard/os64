@@ -24,6 +24,7 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
 #include "../userland/apps/yonder/settings.c"
 #undef s
 #include "yonder_host_menus.h"
+#include "yonder_host_console.h"
 
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
 
