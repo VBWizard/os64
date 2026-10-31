@@ -510,6 +510,7 @@ static void cascade_sweep(void)
     static const char kHtml[] =
         "<!doctype html><style>body { font-family: Verdana, sans-serif; margin: 1em }"
         " p { font-family: 'Courier New', monospace; color: inherit } .x { width: calc(50% + 1em) }"
+        " p::before { content: '[' attr(class) ']' } .x::after { content: ''; display: block }"
         "</style><p>a<p class=x>b<span style='font-family: Georgia'>c</span>";
     os64_html_document_t *doc = parse(kHtml);
     os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
