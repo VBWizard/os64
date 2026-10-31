@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Growing Without Starting Over — Yonder layout lab</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eaf3ed;color:#203c30;font-family:sans-serif;line-height:1.5}
+main{max-width:1050px;margin:auto;padding:24px}h1{font-size:34px;margin:8px 0}h2{font-size:22px;margin:0 0 12px}
+.eyebrow{color:#47735a;font-size:13px;letter-spacing:2px}.intro{max-width:780px}
+.card{background:#fff;border:1px solid #b9d3c2;border-radius:12px;padding:20px;margin:18px 0}
+button,select{font:inherit;padding:10px 14px;margin:5px;border:1px solid #6c967c;border-radius:6px}
+button{background:#2c6a48;color:white;cursor:pointer}button:disabled{background:#8da397}
+#stop{background:white;color:#2c6a48}#status{font-weight:bold}pre{white-space:pre-wrap;font:12px monospace}
+.grid{display:grid;grid-template-columns:1fr}.article p{margin:8px 0}.float{float:right;width:145px;height:112px;margin:0 0 10px 16px;padding:15px;background:#d9e9fa;color:#264968;border:1px solid #87accd}
+#viewport{height:190px;overflow:auto;border:1px solid #aac7b5;background:#f2f7f3;padding:10px 25px}
+#rows{margin:0;padding-left:28px}#rows li{padding:2px 5px;font-family:monospace;font-size:14px}
+#report{max-height:240px;overflow:auto;background:#f2f7f3;padding:12px}.note{font-size:14px;color:#50705e}
+</style></head><body><main>
+<div class="eyebrow">YONDER · LAYOUT LAB</div><h1>Growing Without Starting Over</h1>
+<p class="intro">A changing paragraph, a patient infobox, and a list with room for one more. These two synthetic experiments exercise ordinary content inside a grid column and below a float.</p>
+<section class="card"><h2>Give it a little work</h2>
+<button id="change">Grow the first paragraph</button><button id="append">Add one more row</button>
+<p id="status">Ready. The list begins with 2,000 rows.</p>
+<label>Rows <select id="size"><option value="200">200 · quick check</option><option value="2000" selected>2,000 · hardware comparison</option></select></label>
+<label>Samples <select id="samples"><option value="3">3 · quick check</option><option value="20" selected>20 · comparison</option></select></label>
+<button id="run">Measure both experiments</button><button id="stop" disabled>Cancel</button>
+<p class="note">Five warm-ups, then timed samples. Keep the window size and zoom fixed during a run. Manual buttons are for looking; the measurement button resets the experiment first.</p>
+<pre id="report">Measurements will appear here, including every sample and the viewport.</pre></section>
+<section class="card"><h2>A column with an infobox</h2><div class="grid"><article id="article" class="article"><aside class="float">An infobox<br>Paragraphs must flow around me.</aside><p id="first">A short beginning leaves the paragraphs below room to move.</p><div id="paragraphs"></div></article></div></section>
+<section class="card"><h2>One more among many</h2><p id="count">2,000 rows</p><div id="viewport"><ol id="rows"></ol></div></section>
+<p class="note">Launch with <code>--layout-profile</code>. After Complete, click ordinary page text and press <strong>d</strong> to save the native work counts. This synthetic page is separate from the unchanged Wikipedia article used as a fallback control.</p>
+</main><script>
+(function(){'use strict';
+var byId=function(id){return document.getElementById(id);};
+var rows=byId('rows'),first=byId('first'),article=byId('article'),report=byId('report'),status=byId('status');
+var run=byId('run'),stop=byId('stop'),change=byId('change'),append=byId('append');
+var size=byId('size'),samples=byId('samples'),count=byId('count');
+var active=false,token=0,grown=false,next=0,phase=0,iteration=0,warm=5,wanted=20,rowCount=2000;
+var values=[],results=[],width=0,height=0,ratio=1,started='',initial=0,sink=0;
+var shortText='A short beginning leaves the paragraphs below room to move.';
+var longText='A longer beginning asks the whole column to adjust. The infobox stays beside the first paragraphs, while the later ones move down together. Their words and widths are unchanged, so a browser can keep the work it has already done. This is still ordinary text, just asking for a little more room. ';
+function row(){var li=document.createElement('li');li.textContent='Row '+(++next)+' — another small piece of the page.';return li;}
+function rebuild(){next=0;rows.textContent='';var fragment=document.createDocumentFragment();for(var i=0;i<rowCount;i++)fragment.appendChild(row());rows.appendChild(fragment);count.textContent=next+' rows';grown=false;first.textContent=shortText;}
+function grow(){grown=!grown;first.textContent=grown?longText+longText:shortText;}
+function add(){rows.appendChild(row());count.textContent=next+' rows';}
+function controls(on){active=on;run.disabled=on;change.disabled=on;append.disabled=on;size.disabled=on;samples.disabled=on;stop.disabled=!on;}
+function finish(state,message){controls(false);status.textContent=message;report.textContent=JSON.stringify({format:'yonder-layout-graft-v1',state:state,started:started,rows:rowCount,samples:wanted,warmup:warm,initial_layout_ms:initial,viewport:{width:width,height:height,devicePixelRatio:ratio},results:results},null,2);}
+function step(id){if(id!==token||!active)return;try{
+ if(innerWidth!==width||innerHeight!==height||(devicePixelRatio||1)!==ratio){finish('invalid','Window size or zoom changed. Run again.');return;}
+ var before=performance.now();if(phase===0){grow();sink=article.offsetHeight;}else{add();sink=rows.offsetHeight;}var elapsed=performance.now()-before;
+ if(!isFinite(elapsed)||elapsed<0){finish('invalid','Invalid clock interval. Run again.');return;}
+ if(iteration>=warm)values.push(elapsed);iteration++;
+ if(iteration===warm+wanted){var ordered=values.slice().sort(function(a,b){return a-b;}),middle=Math.floor(ordered.length/2);
+ results.push({experiment:phase===0?'Change paragraph around a float':'Append one list row',median_ms:ordered.length%2?ordered[middle]:(ordered[middle-1]+ordered[middle])/2,samples_ms:values.slice()});phase++;iteration=0;values=[];
+ if(phase===2){finish('complete','Complete. The old rows kept their place; the new ones joined them.');return;}}
+ setTimeout(function(){step(id);},20);
+ }catch(error){finish('failed','Measurement stopped: '+String(error));}}
+change.addEventListener('click',grow);append.addEventListener('click',add);
+run.addEventListener('click',function(){token++;phase=0;iteration=0;values=[];results=[];rowCount=Number(size.value);wanted=Number(samples.value);started=new Date().toISOString();controls(true);status.textContent='Measuring… keep the window size and zoom unchanged.';
+ try{rebuild();var before=performance.now();sink=rows.offsetHeight;initial=performance.now()-before;width=innerWidth;height=innerHeight;ratio=devicePixelRatio||1;var id=token;setTimeout(function(){step(id);},20);}catch(error){finish('failed','Setup stopped: '+String(error));}});
+stop.addEventListener('click',function(){token++;finish('cancelled','Cancelled. Run again when ready.');});
+var paragraphs=byId('paragraphs');for(var j=0;j<24;j++){var p=document.createElement('p');p.textContent='Paragraph '+(j+1)+'. A steady line of familiar words belongs to this column. It flows beside the infobox while space is shared, then uses the full width below it. The paragraphs farther down should keep their shapes as the beginning grows and shrinks.';paragraphs.appendChild(p);}rebuild();
+})();
+</script></body></html>
