@@ -8,12 +8,13 @@ refines [RELAYOUT.md](RELAYOUT.md).*
 
 ## Implementation checkpoint
 
-Steps 1 and 2 are implemented: checked text-run retention, independent snapshot
-history, bounded structural correspondence and refusal diagnostics. The explicit
-`flow_layout_incremental` entry builds fresh geometry while collecting this
-evidence; ordinary entries do not register snapshot readers. Geometry grafts,
-the intrinsic-width memo and Yonder opt-in remain steps 3 and 4. Validation is
-recorded in [5c-foundation.md](../../relayout-evidence/5c-foundation.md).
+Steps 1 through 3 are implemented: checked text-run retention, independent
+snapshot history, bounded structural correspondence, refusal diagnostics,
+ordinary-block geometry copying and an intrinsic-width memo. The explicit
+`flow_layout_incremental` entry enables reuse; ordinary entries do not register
+snapshot readers. Yonder opt-in remains step 4. Validation is recorded in
+[5c-foundation.md](../../relayout-evidence/5c-foundation.md) and
+[5c-geometry.md](../../relayout-evidence/5c-geometry.md).
 
 ## Decision and scope
 

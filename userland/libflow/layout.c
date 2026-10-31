@@ -34,7 +34,11 @@ typedef struct {
     // The floats of the block formatting context being laid out (Space,
     // below): NULL until the root's layout opens one.
     struct Space *space;
+    struct GraftProbe *graft;
+    FReuseMatch *reuse;
+    flow_reuse_stats_t *reuse_stats;
 } L;
+static void graft_query(L *l, int64_t y);
 
 // Vertical margins that adjoin collapse to the largest positive one plus
 // the most negative (CSS 2.1 § 8.3.1), so a set of them is held as those
@@ -1702,7 +1706,7 @@ static void line_room(L *l, int64_t y, int64_t h, int64_t cx, int64_t cw, int64_
                       int64_t *w);
 static int64_t room_next(L *l, int64_t y);
 static bool floats_waiting(const L *l);
-static int64_t clear_y(const L *l, flow_clear_t c);
+static int64_t clear_y(L *l, flow_clear_t c, int64_t at);
 
 // How wide the line's first unbreakable piece is: its segments up to the
 // first wrap opportunity, spaces aside. A line too narrow for it beside
@@ -2096,6 +2100,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 break;
             }
             case SG_MARKER: {
+                if (l->reuse_stats) l->reuse_stats->marker_measures++;
                 Fonts f;
                 if (!fonts_for(l, g->style, &f))
                     break;
@@ -2440,7 +2445,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // `<br clear>` (HTML maps it to `clear` on the br, and every engine
         // honours it although CSS 2.1 clears blocks alone: FLOATS.md,
         // Decision 6): the line after it starts below what it clears.
-        int64_t below = clear_y(l, brk_clear);
+        int64_t below = clear_y(l, brk_clear, cur->y);
         if (below > cur->y)
             cur->y = below;
         start = end;
@@ -2493,6 +2498,7 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
         return;
     b->x += dx;
     b->y += dy;
+    if (b->reuse_call) { b->origin_x += dx; b->origin_y += dy; }
     if (b->has_baseline)
         b->baseline += dy;
     for (FLine *ln = b->lines; ln != NULL; ln = ln->next) {
@@ -2722,6 +2728,7 @@ static bool first_baseline_in(const FBox *b, int64_t *out)
 static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x,
                          int64_t content_y)
 {
+    if (l->reuse_stats) l->reuse_stats->marker_measures++;
     Fonts f;
     if (!fonts_for(l, b->style, &f))
         return;
@@ -2807,6 +2814,8 @@ typedef struct Space {
     Wait *wait;             // scratch
     int32_t nwait, cap_wait;
 } Space;
+
+#include "reuse_probe.inc"
 
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
 
@@ -3107,6 +3116,7 @@ static int64_t float_outer_w(const FBox *f, int64_t cw)
 static void line_room(L *l, int64_t y, int64_t h, int64_t cx, int64_t cw, int64_t *x,
                       int64_t *w)
 {
+    graft_query(l, y);
     Space *sp = l->space;
     *x = cx;
     *w = cw;
@@ -3122,6 +3132,7 @@ static void line_room(L *l, int64_t y, int64_t h, int64_t cx, int64_t cw, int64_
 // context's moved coordinates, or INT64_MAX.
 static int64_t room_next(L *l, int64_t y)
 {
+    graft_query(l, y);
     Space *sp = l->space;
     if (sp == NULL || !sp->any)
         return INT64_MAX;
@@ -3133,8 +3144,9 @@ static int64_t room_next(L *l, int64_t y)
 // The bottom margin edge of the lowest float `c` clears in the context —
 // its side's, or both sides' — in the context's moved coordinates, or
 // INT64_MIN when there is none.
-static int64_t clear_y(const L *l, flow_clear_t c)
+static int64_t clear_y(L *l, flow_clear_t c, int64_t at)
 {
+    if (c != FLOW_CLEAR_NONE) graft_query(l, at);
     const Space *sp = l->space;
     if (sp == NULL || c == FLOW_CLEAR_NONE)
         return INT64_MIN;
@@ -3161,7 +3173,7 @@ static void clearance(L *l, FBox *b, Cursor *cur, int64_t mt)
         return;
     settle(l, cur->y + margins_sum(cur->pm));
     int64_t at = cur->y + margins_sum(margins_join(cur->pm, margin_of(mt)));
-    int64_t below = clear_y(l, b->style->clear);
+    int64_t below = clear_y(l, b->style->clear, at);
     if (below <= at)
         return;
     cur->y += margins_sum(cur->pm);
@@ -3187,6 +3199,7 @@ static void avoid_floats(L *l, Cursor *cur, int64_t mt, int64_t need, int64_t h,
                          int64_t *cbw)
 {
     int64_t at = cur->y + margins_sum(margins_join(cur->pm, margin_of(mt)));
+    graft_query(l, at);
     settle(l, at);
     Space *sp = l->space;
     if (sp == NULL || !sp->any || l->failed)
@@ -5437,12 +5450,18 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         cur->first -= dy;
 }
 
+#include "reuse_graft.inc"
+
+static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw,
+                            Cursor *cur, Replaced rep, int64_t forced_w, int64_t mt, int64_t mb);
+
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
 {
     if (b->kind == FB_TABLE) {
         table(l, styles, b, cbx, cbw, cur);
         return;
     }
+    bool pending = l->space && l->space->nwait;
     const flow_style_t *s = b->style;
     Replaced rep = {0, 0, false, false};
     int64_t forced_w = -1;
@@ -5486,6 +5505,23 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     }
     int64_t mt = len(s->margin[FLOW_TOP], cbw), mb = len(s->margin[FLOW_BOTTOM], cbw);
     clearance(l, b, cur, mt);
+    GraftProbe probe;
+    GraftProbe *outer_probe = l->graft;
+    bool record = b->reuse_call != NULL;
+    if (record) graft_enter(l, &probe, b, cbx, cbw, cur, forced_w, pending);
+    bool copied = record && graft_try(l, styles, b, cbx, cbw, cur, &probe);
+    if (!copied && !l->failed)
+        block_contents(l, styles, b, cbx, cbw, cur, rep, forced_w, mt, mb);
+    if (record) graft_leave(l, &probe, b, cur);
+    l->graft = outer_probe;
+}
+
+static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw,
+                            Cursor *cur, Replaced rep, int64_t forced_w, int64_t mt, int64_t mb)
+{
+    const flow_style_t *s = b->style;
+    // Record the potential outer-space query even when it has no floats.
+    if (avoids_floats(b)) graft_query(l, cur->y + margins_sum(margins_join(cur->pm, margin_of(mt))));
     if (avoids_floats(b) && (l->space != NULL && (l->space->any || l->space->nwait > 0))) {
         // Its width is its containing block's to resolve, not the band's.
         int64_t frame = hframe(b, cbw);
@@ -6110,6 +6146,14 @@ static Intr intrinsic(L *l, FBox *b)
 {
     if (b->intrinsic_known)
         return (Intr){b->intrinsic_min, b->intrinsic_max};
+    FReusePair *pair = f_reuse_pair(l->reuse, b);
+    if (pair && pair->equal && pair->ordinary && pair->old->intrinsic_known) {
+        b->intrinsic_min = pair->old->intrinsic_min; b->intrinsic_max = pair->old->intrinsic_max;
+        b->content_min = pair->old->content_min; b->content_max = pair->old->content_max;
+        b->intrinsic_known = true;
+        l->reuse_stats->intrinsic_hits++;
+        return (Intr){b->intrinsic_min, b->intrinsic_max};
+    }
     Intr r = {0, 0};
     const flow_style_t *s = b->style;
     b->intrinsic_computed++;
@@ -6816,6 +6860,9 @@ static void distribute(Col *cols, int32_t n, int64_t w)
 
 static void translate_content(FBox *b, int64_t dy)
 {
+    // The cell's content moved independently of its border. Its children
+    // get translated origins; the cell itself cannot replay one call result.
+    if (b->reuse_call) b->reuse_call->valid = false;
     for (FLine *ln = b->lines; ln != NULL; ln = ln->next) {
         ln->y += dy;
         ln->baseline += dy;
@@ -7490,6 +7537,12 @@ static void page_extent(const FBox *b, int64_t *width, int64_t *height)
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
                   const flow_env_t *env, int32_t width)
 {
+    return f_layout_reusing(boxes, doc, model, env, width, NULL, NULL);
+}
+FLayout *f_layout_reusing(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
+                          const flow_env_t *env, int32_t width, FReuseMatch *match,
+                          flow_reuse_stats_t *stats)
+{
     if (boxes == NULL || env == NULL || width < 0)
         return NULL;
     FLayout *out = os64_calloc(1, sizeof(*out));
@@ -7505,7 +7558,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     out->incomplete = boxes->incomplete || (doc != NULL && doc->refusal != 0) ||
                       (model != NULL && os64_page_incomplete(model));
     L l = {.out = out, .env = env, .model = model, .quirks = out->quirks == OS64_HTML_QUIRKS,
-           .any_quirks = out->quirks != OS64_HTML_NO_QUIRKS};
+           .any_quirks = out->quirks != OS64_HTML_NO_QUIRKS, .reuse = match, .reuse_stats = stats};
     int64_t w = (int64_t)width * 64;
     out->width = w;
     if (boxes->root != NULL) {
