@@ -183,7 +183,7 @@ mutants = [
     ('a-picture-refused-before-the-table-is-unnamed', YONDER,
      '        if (k < 0)\n            fresh |= picture_unasked(p, img->src.url, written_attr(img->node, "src"), img->src.refused);',
      '        (void)0;', WINDOW),
-    ('a-data-picture-is-not-counted', YONDER,
+    ('an-unfetched-scheme-is-not-counted', YONDER,
      '        yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);',
      '            (void)scheme;', WINDOW),
     ('pictures-still-coming-are-not-counted', YONDER,

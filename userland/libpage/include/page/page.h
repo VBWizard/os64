@@ -274,7 +274,8 @@ typedef struct {
 // listed, and `os64_page_image_for` answers -1.
 typedef struct {
     const os64_html_node_t *node;   // the `img` or `input type=image`
-    os64_page_ref_t src;            // resolved against the base; refused says why
+    os64_page_ref_t src;            // resolved against the base; refused says why. A data:
+                                    // address is kept at any length (it IS the picture)
     // As written, or NULL when the page wrote none: an ABSENT alt and an
     // EMPTY one differ, because `alt=""` says the picture is decoration and
     // its absence says nothing at all.
@@ -449,7 +450,7 @@ int32_t os64_page_image_for(const os64_page_t *page, const os64_html_node_t *nod
 // attribute names nothing and is not listed, as an empty `src` is not.
 typedef struct {
     const os64_html_node_t *node;   // the element the picture is behind
-    os64_page_ref_t src;            // resolved against the base; refused says why
+    os64_page_ref_t src;            // resolved as an image's `src` is, a data: address whole
 } os64_page_background_t;
 
 int32_t os64_page_nbackgrounds(const os64_page_t *page);

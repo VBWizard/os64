@@ -735,7 +735,7 @@ static void add_image(os64_page_t *page, const os64_html_node_t *n)
     os64_page_image_t *image = &page->images[page->nimages];
     os64_memset(image, 0, sizeof(*image));
     image->node = n;
-    p_resolve(page, src, &image->src);
+    p_resolve_picture(page, src, &image->src);
     image->alt = p_attr(n, "alt");
     if (!p_ptrmap_put(&page->image_map, n, page->nimages))
         page->incomplete = true;
@@ -763,7 +763,7 @@ static void add_background(os64_page_t *page, const os64_html_node_t *n)
     os64_page_background_t *b = &page->backgrounds[page->nbackgrounds];
     os64_memset(b, 0, sizeof(*b));
     b->node = n;
-    p_resolve(page, src, &b->src);
+    p_resolve_picture(page, src, &b->src);
     if (!p_ptrmap_put(&page->background_map, n, page->nbackgrounds))
         page->incomplete = true;
     page->nbackgrounds++;

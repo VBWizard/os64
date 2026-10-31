@@ -394,7 +394,17 @@ bool p_base(os64_page_t *page)
     return true;
 }
 
-void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
+// Whether the `n` bytes at `ref` are an opaque `data:` reference, its scheme
+// in any case: one that carries its document in itself.
+static bool data_reference(const char *ref, size_t n)
+{
+    return n >= 5 && (ref[0] | 0x20) == 'd' && (ref[1] | 0x20) == 'a' && (ref[2] | 0x20) == 't' &&
+           (ref[3] | 0x20) == 'a' && opaque_reference(ref, n);
+}
+
+// `long_data`: a `data:` reference past OS64_URL_REF_MAX is taken whole
+// rather than refused (p_resolve_picture says why).
+static void resolve_ref(os64_page_t *page, const char *ref, os64_page_ref_t *out, bool long_data)
 {
     os64_memset(out, 0, sizeof(*out));
     out->refused = OS64_PAGE_REASON_OK;
@@ -440,6 +450,18 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
         return;
     }
     if (head >= OS64_URL_REF_MAX) {
+        // Spelled as a shorter one is (p_canonical's opaque rule): the input
+        // as cleaned, its scheme in lower case.
+        if (long_data && data_reference(ref, head)) {
+            char *whole = p_copy(page, ref, head);
+            if (whole == NULL) {
+                out->refused = OS64_PAGE_REASON_NO_MEMORY;
+                return;
+            }
+            os64_memcpy(whole, "data", 4);
+            out->url = whole;
+            return;
+        }
         out->refused = OS64_PAGE_REASON_TOO_LONG;
         return;
     }
@@ -473,6 +495,16 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
         return;
     }
     out->refused = OS64_PAGE_REASON_BAD_ACTION;
+}
+
+void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
+{
+    resolve_ref(page, ref, out, false);
+}
+
+void p_resolve_picture(os64_page_t *page, const char *ref, os64_page_ref_t *out)
+{
+    resolve_ref(page, ref, out, true);
 }
 
 bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_url,

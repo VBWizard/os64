@@ -833,9 +833,12 @@ each was a page dying on something that browsers have had since the 2000s.
   fetch (no-memory)`, never `(ok)`. A picture the page or its sheets name
   that never reaches the table is on the record too, ONCE however often a
   rebuild or a layout meets it (a set of them, `unasked_first`): one in a
-  scheme nothing here fetches is `MISSING picture-scheme data`, counted,
+  scheme nothing here fetches is `MISSING picture-scheme blob`, counted,
   and an address that was refused is `FAILED picture` as written, with
-  the refusal. Met with no picture out, it writes the record then.
+  the refusal. Met with no picture out, it writes the record then. A
+  `data:` picture is decoded, not fetched, and fails as a fetched one does;
+  one longer than 200 bytes is named by its first 64 and its length, so
+  the line keeps its reason.
   However the pictures settle, if one moved the page the record waits
   until the page is laid out again (`diag_pictures_in` leaves it
   `record_owed`, `pictures_settle` writes it), so it says what that
