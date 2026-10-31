@@ -56,8 +56,7 @@ mutants = [
      '    return ix->ids.n > 0 || ix->classes.n > 0 || ix->types.n > 0 || ix->universal >= 0;',
      '    return ix == NULL;', GARB),
     # libgarb: content's grammar.
-    ('none-takes-items-after-it', PROPS, '        *out = kw(k);\n        return vc_done(c);\n    }\n    garb_val_t items[CONTENT_ITEMS_MAX];',
-     '        *out = kw(k);\n        return true;\n    }\n    garb_val_t items[CONTENT_ITEMS_MAX];', GARB),
+    ('a-slash-needs-its-alternative', PROPS, '        if (nalt == 0)\n            return false;\n', '', GARB),
     ('an-undrawn-counter-is-not-named', PROPS,
      '            if (it->kind == GARB_V_FUNCTION && !os64_streq(it->keyword, "attr"))\n                return it->keyword;',
      '            if (it->kind == GARB_V_FUNCTION && !os64_streq(it->keyword, "attr"))\n                return NULL;', GARB),
@@ -70,7 +69,8 @@ mutants = [
     ('attr-is-case-sensitive', STYLE, "                    name[i] = ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;",
      '                    name[i] = ch;', LIBFLOW),
     # libflow pass 2.
-    ('before-is-not-first', BOXES, '    if (s != NULL && s->pseudo[0] != NULL)\n        return s->pseudo[0];\n', '', LIBFLOW),
+    ('before-is-not-first', BOXES, '    if (s != NULL && s->pseudo[0] != NULL)\n        return s->pseudo[0];',
+     '    if (s != NULL && s->pseudo[0] != NULL && false)\n        return s->pseudo[0];', LIBFLOW),
     ('after-is-not-last', BOXES, '    return c->next != NULL ? c->next : after_of(b, c->parent);', '    return c->next;', LIBFLOW),
     ('q-draws-its-mark-over-the-authors', BOXES, '    if (before != NULL && !(s->pseudo_declared & 1))',
      '    if (before != NULL)', LIBFLOW),

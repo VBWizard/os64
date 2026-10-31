@@ -70,9 +70,36 @@ static void pseudo_boundary_cases(void)
     sheeted_close(&p);
 }
 
+// A replaced element has no pseudo-element at all: pass 1 makes none, as
+// well as pass 2 drawing none.
+static void pseudo_replaced_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>img::before, img::after, span::before { content: \"x\" }</style>"
+                     "<p><img src=x.png><span>s</span>", 800, 600);
+    FStyles *styles = f_style_build(p.doc, p.page, &p.env);
+    const os64_html_node_t *img = NULL, *span = NULL;
+    for (const os64_html_node_t *n = p.doc->body; n != NULL; n = n->first_child)
+        for (const os64_html_node_t *k = n; k != NULL; k = k->next)
+            if (k->kind == OS64_HTML_ELEMENT && k->name != NULL) {
+                if (strcmp(k->name, "img") == 0)
+                    img = k;
+                if (strcmp(k->name, "span") == 0)
+                    span = k;
+            }
+    const FStyled *si = styles != NULL && img != NULL ? f_style_of(styles, img) : NULL;
+    const FStyled *ss = styles != NULL && span != NULL ? f_style_of(styles, span) : NULL;
+    expect("pseudo: a replaced element is given none", si != NULL && si->pseudo[0] == NULL && si->pseudo[1] == NULL,
+           NULL);
+    expect("pseudo: beside it, an element that is not replaced is", ss != NULL && ss->pseudo[0] != NULL, NULL);
+    f_style_free(styles);
+    sheeted_close(&p);
+}
+
 static void pseudo_cases(void)
 {
     pseudo_boundary_cases();
+    pseudo_replaced_cases();
     pseudo_case("pseudo: inline ::before and ::after, strings and attr()",
         "<!doctype html><style>p::before { content: \"[\" attr(TITLE) \"] \" } p::after { content: \"!\" }</style>"
         "<p title=T>x",
