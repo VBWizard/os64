@@ -286,6 +286,26 @@ static bool test_allocator_try_refuses(void)
     return true;
 }
 
+// A stack a program declared, refused, degrades (SCRIPT_STACK.md): the
+// fallible stack allocator answers NULL for more than all memory, panics
+// nothing, reserves nothing, and the refusal is counted, so createThread's
+// fallback to the default can run (Codex #441 rd1).
+static bool test_stack_try_refuses(void)
+{
+    allocator_stats_t before, after;
+    allocator_stats(&before, 0);
+    uintptr_t next = task_reserve_task_virt(kKernelTask, 0);    // the counter, unmoved
+    void *got = task_try_guarded_stack(kKernelTask, (before.frames_usable + 1) * PAGE_SIZE, false);
+    allocator_stats(&after, 0);
+    if (got != NULL)
+        TEST_FAIL("task_try_guarded_stack of more than all memory answered a stack");
+    if (task_reserve_task_virt(kKernelTask, 0) != next)
+        TEST_FAIL("a refused stack reserved address space");
+    if (after.free_bytes != before.free_bytes || after.refusals != before.refusals + 1)
+        TEST_FAIL("a refused stack changed the books, or was not counted");
+    return true;
+}
+
 // Zero-on-allocate after a poisoned free, through both layers. Frame runs zero
 // OUTSIDE the frame lock, and the exact-length list hands a freed run straight
 // back to the next request of its size, so "free, then allocate the same
@@ -6070,6 +6090,9 @@ static void register_builtin_tests(void)
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("frame_table_scale", test_frame_table_scale, TEST_PHASE_PREBOOT);
 	test_register("allocator_try_refuses", test_allocator_try_refuses, TEST_PHASE_PREBOOT);
+	// Pre-boot, beside the allocator's own refusal test: after kKernelTask
+	// exists, and before any other task allocates under the books it reads.
+	test_register("stack_try_refuses", test_stack_try_refuses, TEST_PHASE_PREBOOT);
 	test_register("allocator_zero_after_free", test_allocator_zero_after_free, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);

@@ -962,7 +962,9 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 			char name[32];
 			if (th->esp3BaseV != 0)
 			{
-				uintptr_t s = th->esp3BaseV, e = s + THREAD_USER_STACK_SIZE;
+				// The size it got: a main thread's is what its program
+				// declared (SCRIPT_STACK.md), and yonder reads it here.
+				uintptr_t s = th->esp3BaseV, e = s + th->esp3Size;
 				snprintf(name, sizeof(name), "[stack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);

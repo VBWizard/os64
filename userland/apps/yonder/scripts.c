@@ -393,18 +393,89 @@ static void net_release(void *opaque, os64_dom_response_t *response)
 
 static yonder_modules_t *module_map_new(yonder_scripts_t *s);
 
+size_t yonder_script_stack_limit(size_t stack)
+{
+    if (stack < YONDER_SCRIPT_HEADROOM + YONDER_SCRIPT_STACK_MIN)
+        return YONDER_SCRIPT_STACK_MIN;
+    size_t limit = stack - YONDER_SCRIPT_HEADROOM;
+    return limit > YONDER_SCRIPT_STACK_MAX ? YONDER_SCRIPT_STACK_MAX : limit;
+}
+
+static bool hex_word(const char **text, uintptr_t *value)
+{
+    const char *p = *text;
+    unsigned digits = 0;
+    *value = 0;
+    for (;; p++) {
+        unsigned c = (unsigned char)*p, n;
+        if (c >= '0' && c <= '9') n = c - '0';
+        else if (c >= 'a' && c <= 'f') n = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') n = c - 'A' + 10;
+        else break;
+        if (++digits > 16)
+            return false;
+        *value = *value * 16 + n;
+    }
+    *text = p;
+    return digits != 0;
+}
+
+// The size of the stack this thread runs on: its row in /proc/self/maps,
+// `[stack:<tid>]`, the one whose bounds hold one of its locals; 0 when it
+// cannot be read. yonder's scripts run on its main thread, whose size its
+// program declares (SCRIPT_STACK.md § 4). The map is read into a static
+// buffer, so the read takes none of the stack it is measuring.
+static size_t own_stack_bytes(void)
+{
+    static char maps[32768];
+    int64_t handle = os64_open("/proc/self/maps", "r");
+    if (handle < 0)
+        return 0;
+    size_t length = 0;
+    while (length < sizeof(maps) - 1) {
+        int64_t got = os64_read((int32_t)handle, maps + length, sizeof(maps) - 1 - length);
+        if (got <= 0)
+            break;
+        length += (size_t)got;
+    }
+    os64_close((int32_t)handle);
+    maps[length] = '\0';
+    uintptr_t here = (uintptr_t)&handle;
+    for (const char *line = maps; *line != '\0';) {
+        const char *end = os64_strchr(line, '\n');
+        const char *stop = end != NULL ? end : line + os64_strlen(line);
+        const char *p = line;
+        uintptr_t low, high;
+        if (hex_word(&p, &low) && *p++ == '-' && hex_word(&p, &high) && here >= low && here < high) {
+            for (const char *l = p; l < stop; l++)
+                if (*l == '[')
+                    return stop - l >= 7 && os64_memcmp(l, "[stack:", 7) == 0 ? (size_t)(high - low) : 0;
+            return 0;
+        }
+        if (end == NULL)
+            break;
+        line = end + 1;
+    }
+    return 0;
+}
+
 // The runtime and its binding, made at the first script that runs. Heap
-// and source keep the profile measured for libdom (DOM.md § D5b); the stack
-// is the 128 KiB DOM_D10.md measured, because geometry shares it with native
-// layout. The deadline is the page's task budget, and the job cap a backstop
-// only: a job costs time, which the deadline already bounds. Teardown
-// reclaims and reports a leak rather than ending the window (DOM_D8.md).
+// and source keep the profile measured for libdom (DOM.md § D5b). The stack
+// is the engine's share of yonder's window thread, which layout shares
+// (SCRIPT_STACK.md): the thread's size, read once, less layout's headroom
+// (yonder_script_stack_limit). The deadline is the page's task budget, and
+// the job cap a backstop only: a job costs time, which the deadline already
+// bounds. Teardown reclaims and reports a leak rather than ending the window
+// (DOM_D8.md).
 static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
+    static size_t engine_stack;
     if (s->runtime != NULL)
         return true;
+    if (engine_stack == 0)
+        engine_stack = yonder_script_stack_limit(own_stack_bytes());
     os64_js_config_t config = {os64_js_default_limits()};
-    config.limits.stack_bytes = 128 * 1024;
+    config.limits.stack_bytes = engine_stack;
     config.limits.execution_ms = s->options.execution_ms;
     config.limits.jobs_per_turn = (uint64_t)1 << 20;
     if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,

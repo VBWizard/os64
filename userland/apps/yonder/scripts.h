@@ -103,6 +103,16 @@ typedef struct {
     bool (*focus)(void *opaque, const os64_html_node_t **focused);
 } yonder_scripts_options_t;
 
+// The script engine's stack, out of yonder's window thread's `stack` bytes
+// (SCRIPT_STACK.md § 5): what is left above layout's headroom, which shares
+// the thread, clamped to [YONDER_SCRIPT_STACK_MIN, YONDER_SCRIPT_STACK_MAX].
+// A stack too small for the headroom and the least, the default 1 MiB or one
+// whose size could not be read (0), gives the least: DOM_D10.md's 128 KiB.
+#define YONDER_SCRIPT_STACK_MIN ((size_t)128 * 1024)
+#define YONDER_SCRIPT_STACK_MAX ((size_t)8 * 1024 * 1024)
+#define YONDER_SCRIPT_HEADROOM ((size_t)2 * 1024 * 1024)
+size_t yonder_script_stack_limit(size_t stack);
+
 // A host for `doc`, whose control state is `state` (which must outlive it).
 // No runtime yet. NULL on no memory.
 yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_t *state,
