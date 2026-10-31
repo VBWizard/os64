@@ -137,6 +137,24 @@ static void pseudo_cases(void)
         "      text \"a\"\n"
         "      text \"”\" generated-by q\n"
         "      close q\n");
+    pseudo_case("pseudo: a table cell's and a caption's are their content's",
+        "<!doctype html><style>td::before { content: attr(data-label) \": \" } caption::after { content: \"*\" }</style>"
+        "<table><caption>c</caption><tr><td data-label=Name>v</td></tr></table>",
+        "block html\n"
+        "  block body\n"
+        "    table table\n"
+        "      caption caption\n"
+        "        text \"c\"\n"
+        "        open ::after\n"
+        "        text \"*\"\n"
+        "        close ::after\n"
+        "      row-group tbody\n"
+        "        row tr\n"
+        "          cell td\n"
+        "            open ::before\n"
+        "            text \"Name: \"\n"
+        "            close ::before\n"
+        "            text \"v\"\n");
     pseudo_case("pseudo: quote words outside q, and a flex container's ::before is an item",
         "<!doctype html><style>p::before { content: open-quote } p::after { content: close-quote no-close-quote }"
         "div { display: flex } div::before { content: \"i\" }</style><p>x<div>y</div>",

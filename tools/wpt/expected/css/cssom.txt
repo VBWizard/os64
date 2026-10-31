@@ -189,6 +189,7 @@ idlharness.html	idl_test validation
 [passing]
 CSS-escape-numeric-id.html	Sanity check
 HTMLLinkElement-disabled-001.html	<link disabled> prevents the stylesheet from being in document.styleSheets (from parser)
+MutationObserver-style.html	Updating cssText triggers an observation callback even if the value is the same
 StyleSheet-properties.html	<link>: disabled is false initially
 StyleSheet-properties.html	<link>: href is the resolved URL of the stylesheet
 StyleSheet-properties.html	<link>: ownerNode is the link element
@@ -316,6 +317,7 @@ cssstyledeclaration-csstext.html	cssText on computed style declaration returns t
 cssstyledeclaration-csstext.html	uppercase property
 cssstyledeclaration-mutability.html	HTMLElement's CSSStyleDeclaration is mutable
 cssstyledeclaration-mutability.html	getComputedStyle's CSSStyleDeclaration is not mutable
+cssstyledeclaration-mutationrecord-001.html	CSSStyleDeclaration.setPropertyValue queues a mutation record when serialization is changed
 cssstyledeclaration-properties.html	CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames()
 cssstyledeclaration-removeProperty-all.html	CSSStyleDeclaration.removeProperty("all") 1
 cssstyledeclaration-setter-attr.html	Setting an invalid property via the declaration setter doesn't create a declaration
@@ -1005,6 +1007,18 @@ serialize-values.html	color: inherit
 serialize-values.html	color: red
 serialize-values.html	color: rgb(50, 75, 100)
 serialize-values.html	color: rgba(5, 7, 10, 0.5)
+serialize-values.html	content: "string"
+serialize-values.html	content: attr(foo, "")
+serialize-values.html	content: attr(foo-bar)
+serialize-values.html	content: attr(foo-bar, "fallback")
+serialize-values.html	content: attr(foo_bar)
+serialize-values.html	content: attr(foo_bar, "fallback")
+serialize-values.html	content: counter(par-num)
+serialize-values.html	content: counter(par-num, upper-roman)
+serialize-values.html	content: inherit
+serialize-values.html	content: none
+serialize-values.html	content: normal
+serialize-values.html	content: url("http://localhost/")
 serialize-values.html	cursor: auto
 serialize-values.html	cursor: crosshair
 serialize-values.html	cursor: default

@@ -1205,7 +1205,7 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
             FBox *cell = new_box(b, row, FB_CELL, c, &styled(b, c)->style);
             position_box(b, cell, c, true);
             if (cell != NULL)
-                build_container(b, cell, c->first_child, NULL, scope, NULL, 0);
+                build_container(b, cell, kids(b, c), NULL, scope, NULL, 0);
             c = c->next;
         } else if (loose(b, AT_ROW, c)) {
             const os64_html_node_t *end = loose_end(b, AT_ROW, c, stop);
@@ -1234,7 +1234,7 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
         FBox *cap = new_box(b, table, FB_CAPTION, c, s);
         position_box(b, cap, c, true);
         if (cap != NULL)
-            build_container(b, cap, c->first_child, NULL, scope, NULL, 0);
+            build_container(b, cap, kids(b, c), NULL, scope, NULL, 0);
         break;
     }
     case FLOW_DISPLAY_TABLE_COLUMN_GROUP: {

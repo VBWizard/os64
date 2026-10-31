@@ -369,6 +369,20 @@ static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
     if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
         prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
+    // `content`'s items 8a reads and draws as nothing (GENERATED_CONTENT.md
+    // § 2): counters, and pictures.
+    if (prop == GARB_CONTENT) {
+        for (int32_t i = 0; i < v->nitems; i++) {
+            const garb_val_t *it = &v->items[i];
+            if (it->kind == GARB_V_FUNCTION && !os64_streq(it->keyword, "attr"))
+                return it->keyword;
+            if (it->kind == GARB_V_URL)
+                return "url";
+            if (it->kind == GARB_V_IMAGE)
+                return it->text;
+        }
+        return NULL;
+    }
     if (!image_drawn(v))
         return v->text;
     // A list of layers is approximated when any layer is: the page asked
