@@ -234,14 +234,21 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
         bd->failed = true;
         return NULL;
     }
+    // A pseudo-element's synthetic node never leaves libflow: its box names
+    // the element it is made for, and its style is still its own.
+    const os64_html_node_t *styled_by = node;
+    garb_pseudo_t pseudo = f_pseudo_of(node);
+    if (pseudo != GARB_PSEUDO_NONE)
+        node = f_pseudo_origin(node);
     b->kind = kind;
     b->node = node;
+    b->pseudo = (uint8_t)pseudo;
     b->style = style;
     b->link = b->control = b->scroller = -1;
     b->parent = parent;
     // Transparent: its element's opacity, or an ancestor's, is 0; a box
     // with no element of its own is as its parent is.
-    const os64_html_node_t *e = node;
+    const os64_html_node_t *e = styled_by;
     while (e != NULL && e->kind != OS64_HTML_ELEMENT)
         e = e->parent;
     const FStyled *st = e != NULL ? f_style_of(bd->t->styles, e) : NULL;
@@ -258,7 +265,7 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
             parent->first = b;
         *last = b;
     }
-    if (node != NULL && f_map_get(&bd->t->first, node) == NULL) {
+    if (node != NULL && pseudo == GARB_PSEUDO_NONE && f_map_get(&bd->t->first, node) == NULL) {
         if (!f_map_put(&bd->t->first, node, b)) {
             bd->failed = true;
             return b;
@@ -1006,11 +1013,14 @@ void flow_visit_text_clip(const flow_box_t *box, void (*visit)(void *ctx, const 
         return;
     }
     // A piece is its text's sibling on the line: what is the span's on
-    // this line is what its element holds.
+    // this line is what its element holds. A pseudo-element's span names
+    // its originating element (flow_box_t.pseudo), and holds only what it
+    // generated.
     if (box->parent == NULL || box->node == NULL)
         return;
     for (const flow_box_t *c = box->parent->first; c != NULL; c = c->next) {
-        if (!node_within(c->node, box->node) || leaves_text_clip(c))
+        if (!node_within(c->node, box->node) || (box->pseudo != 0 && c->pseudo != box->pseudo) ||
+            leaves_text_clip(c))
             continue;
         if (c->kind == FLOW_BOX_TEXT)
             visit(ctx, c);
@@ -1925,7 +1935,10 @@ static bool ticking_build(flow_tree_t *t)
     }
     for (int32_t k = 0; ok && k < t->nlayers; k++) {
         const Layer *l = &t->layers[k];
-        FTick *e = l->part == PART_OPEN && l->box->node != NULL ? f_map_get(&of, l->box->node) : NULL;
+        // A group a pseudo-element's box opens names its originating element
+        // (flow_box_t.pseudo) and is not that element's.
+        FTick *e = l->part == PART_OPEN && l->box->node != NULL && l->box->pseudo == GARB_PSEUDO_NONE
+                       ? f_map_get(&of, l->box->node) : NULL;
         if (e != NULL && e->open < 0)
             e->open = k;
     }
@@ -2152,11 +2165,20 @@ static void stacked_from(const flow_tree_t *tree, const flow_box_t *b,
         if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
             f_props_add(&handed, (garb_prop_t)p);
     const FStyled *own = f_style_of(tree->styles, b->node);
+    const os64_html_node_t *up = b->node->parent;
+    // A pseudo-element's box names its originating element
+    // (flow_box_t.pseudo): what it takes is its own record's, and the
+    // first element it takes from is that one.
+    if (b->pseudo != GARB_PSEUDO_NONE) {
+        const os64_html_node_t *gen = own != NULL ? own->pseudo[b->pseudo == GARB_PSEUDO_BEFORE ? 0 : 1] : NULL;
+        own = gen != NULL ? f_style_of(tree->styles, gen) : NULL;
+        up = b->node;
+    }
     FProps took;
     for (int w = 0; w < F_PROP_WORDS; w++)
         took.w[w] = own != NULL ? own->taken.w[w] : ~(uint64_t)0;
     bool in_clip = !leaves_text_clip(b);
-    for (const os64_html_node_t *a = b->node->parent; a != NULL; a = a->parent) {
+    for (const os64_html_node_t *a = up; a != NULL; a = a->parent) {
         const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
         if (st != NULL) {
             FProps ask;
@@ -3531,8 +3553,9 @@ int32_t flow_box_scroller(const flow_box_t *box)
 
 int32_t flow_scroller_for(const flow_tree_t *tree, const os64_html_node_t *node)
 {
+    // The element's own scroller, never one its ::before or ::after made.
     for (int32_t i = 0; node != NULL && i < flow_nscrollers(tree); i++)
-        if (tree->scrollers[i]->box->node == node)
+        if (tree->scrollers[i]->box->node == node && tree->scrollers[i]->box->pseudo == 0)
             return i;
     return -1;
 }
@@ -3934,12 +3957,12 @@ static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow
     bool groups = false;
     for (int32_t k = 0; !groups && k < t->nlayers; k++)
         groups = t->layers[k].part == PART_OPEN && t->layers[k].box->node != NULL &&
-                 f_map_get(changed, t->layers[k].box->node) != NULL;
+                 t->layers[k].box->pseudo == GARB_PSEUDO_NONE && f_map_get(changed, t->layers[k].box->node) != NULL;
     os64_gui_rect_t *bounds = groups ? all_group_bounds(t, scroll) : NULL;
     for (int32_t k = 0; ok && k < t->nlayers; k++) {
         const Layer *l = &t->layers[k];
-        if (l->part != PART_OPEN || l->box->node == NULL || f_map_get(changed, l->box->node) == NULL ||
-            f_map_get(&grouped, l->box->node) != NULL)
+        if (l->part != PART_OPEN || l->box->node == NULL || l->box->pseudo != GARB_PSEUDO_NONE ||
+            f_map_get(changed, l->box->node) == NULL || f_map_get(&grouped, l->box->node) != NULL)
             continue;
         int32_t end;
         os64_gui_rect_t in = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);

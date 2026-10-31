@@ -369,7 +369,14 @@ would have cost more than it saved. 7b, modules, followed on its own path
 **Slice 8: generated content and the rest of the census's CSS.**
 `::before`/`::after` with `content` (144 asks, the icon fonts' whole
 mechanism), `filter` and `clip-path` basics, `mix-blend-mode`, the
-`will-change` values yonder draws nothing of (read, no effect). Opus.
+`will-change` values yonder draws nothing of (read, no effect). Opus. *8a
+built 2026-10-31 ([GENERATED_CONTENT.md](GENERATED_CONTENT.md)):
+`::before`/`::after` with strings, `attr()` and the quote words, any
+display. The census of that day put `content` first among the CSS
+properties yonder lacked (555 of 740 loads, 70 of 91 sites). 8b, built
+the same day (GENERATED_CONTENT.md § 8), is counters and `quotes`, in
+tree order. 8c will be `filter` and `backdrop-filter`, and 8d
+`mix-blend-mode`.*
 
 **Tier 1 slices**, designed when Tier 0 is done and the P5 has been used
 on it for a week: `iframe` and `postMessage` (**Fable design**, its own

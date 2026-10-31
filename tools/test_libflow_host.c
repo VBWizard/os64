@@ -37,6 +37,8 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
 static size_t allocations, fail_at, live;
+// The largest one asked for since a test cleared it.
+static size_t largest;
 // Fail ONE allocation (the fail_at'th) rather than every one from there
 // on: the shape of a budget the text engine hits while malloc still works.
 static bool fail_single;
@@ -51,6 +53,8 @@ void os64_exit(int32_t code)
 void *os64_malloc(size_t size)
 {
     allocations++;
+    if (size > largest)
+        largest = size;
     if (fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
@@ -368,6 +372,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_cascade.inc"
 #include "test_libflow_origin.inc"
 #include "test_libflow_batch_a.inc"
+#include "test_libflow_pseudo.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
 
@@ -509,6 +514,7 @@ static void cascade_sweep(void)
     static const char kHtml[] =
         "<!doctype html><style>body { font-family: Verdana, sans-serif; margin: 1em }"
         " p { font-family: 'Courier New', monospace; color: inherit } .x { width: calc(50% + 1em) }"
+        " p::before { content: '[' attr(class) ']' } .x::after { content: ''; display: block }"
         "</style><p>a<p class=x>b<span style='font-family: Georgia'>c</span>";
     os64_html_document_t *doc = parse(kHtml);
     os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
@@ -1516,6 +1522,7 @@ int main(int argc, char **argv)
     origin_cases();
     nowrap_atom_cases();
     batch_a_cases();
+    pseudo_cases();
     boxes_cases();
     layout_cases();
     table_cases();

@@ -1440,6 +1440,23 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
         if (!declared(c, prop, &o))
             puts_(&o, "none");
         break;
+    case GARB_CONTENT:
+        // An element's content computes as it is declared; its initial
+        // value is normal.
+        if (!declared(c, prop, &o))
+            puts_(&o, "normal");
+        break;
+    case GARB_QUOTES:
+        if (!declared(c, prop, &o))
+            puts_(&o, "auto");
+        break;
+    case GARB_COUNTER_RESET:
+    case GARB_COUNTER_INCREMENT:
+    case GARB_COUNTER_SET:
+        // As declared, as content is; initially none.
+        if (!declared(c, prop, &o))
+            puts_(&o, "none");
+        break;
     default:
         // A property libgarb reads and libflow does not model yet: what
         // the page's sheets declared, which is what an engine without the

@@ -2,6 +2,7 @@
 #define FLOW_INTERNAL_H
 
 #include "flow/flow.h"
+#include "garb/select.h"
 #include "garb/values.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -178,6 +179,15 @@ bool f_parse_nonnegative(const char *s, int32_t *out);
 // Whether `n` is laid out as a replaced element (boxes.c): a canvas only
 // where `env` says scripting is on.
 bool f_replaced(const flow_env_t *env, const os64_html_node_t *n);
+// Elements that make no box in this browser, nor anything inside them
+// (boxes.c): `embed`, `audio`, `source`, `track`, `keygen`.
+bool f_boxless(const os64_html_node_t *n);
+// Whether pass 2 draws anything inside element `n`, whose display is
+// `display`: nothing inside a boxless element, nor inside a replaced one
+// unless it is laid out through `display: contents` (a button's, whose
+// content then flows where it is). Pass 1's tree-order state follows it
+// (GENERATED_CONTENT.md § 8.2).
+bool f_draws_inside(const flow_env_t *env, const os64_html_node_t *n, flow_display_t display);
 // "Rules for parsing a legacy colour value", `chucknorris` and all: a
 // page's colour attribute means the colour every browser draws.
 bool f_parse_legacy_color(const char *s, uint32_t *out);
@@ -454,10 +464,12 @@ typedef struct {
     // How many of this element and its ancestors are lists (`ul ol menu
     // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
     // for its children, by the same bargain. And whether one of them is a
-    // `nobr`, which is what `nobr wbr` asks, and how many are `q`s, which
-    // is how deep a quotation's marks nest.
-    int32_t lists, lists_or_dls, items, quotes;
+    // `nobr`, which is what `nobr wbr` asks.
+    int32_t lists, lists_or_dls, items;
     bool in_nobr;
+    // Its `quotes` (inherited): the winner's value, its marks' pairs, or
+    // NULL for auto (GENERATED_CONTENT.md § 8).
+    const garb_val_t *quotes;
     // An `rp` among this element's children: whether an `rt` in it gets
     // the parentheses a browser that lays out no ruby adds. Set by the
     // child, and read by pass 2 once every child has been styled.
@@ -482,7 +494,29 @@ typedef struct {
     // declaration or any keyframe of its animations: a value an ancestor
     // hands down to a box it does not hold (flow_motion_due).
     FProps taken;
+    // Its ::before and ::after (GENERATED_CONTENT.md § 4): each a synthetic
+    // element node of pass 1's arena, its parent this element and its one
+    // child the content's text, styled in the map as any element is; NULL
+    // when the pseudo-element does not exist. `pseudo_declared` says, per
+    // pseudo-element (bit 0 ::before, bit 1 ::after), whether the author
+    // declared its content at all, `none` included: what takes the place of
+    // the parentheses an `rt` draws of its own. A `q`'s marks are its
+    // pseudo-elements, from the chapter's sheet (style_pseudo).
+    const os64_html_node_t *pseudo[2];
+    uint8_t pseudo_declared;
 } FStyled;
+
+// `value` spelled in counter style `type`, its symbols without a suffix
+// (CSS Counter Styles 3), into `out`: what a list's marker and `counter()`
+// share. Returns the length; `none` spells nothing.
+#define F_COUNTER_SPELL_MAX 24
+uint32_t f_counter_spell(flow_list_style_type_t type, int32_t value, char out[F_COUNTER_SPELL_MAX]);
+
+// The pseudo-element a node of libflow's own is, or belongs to (its text),
+// GARB_PSEUDO_NONE for any node of a document; and the element it is made
+// for. A synthetic node never leaves libflow (GENERATED_CONTENT.md § 4).
+garb_pseudo_t f_pseudo_of(const os64_html_node_t *n);
+const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n);
 
 // What is left of the budget for the lists a declaration hands each element
 // it reaches (style.c, list_alloc): the one part of styling a page can
@@ -507,6 +541,10 @@ typedef struct {
     // (f_timeline_begin), which its FMotions point into; freed with the
     // styles unless the face takes it (flow_timeline_commit).
     flow_timeline_t *timeline;
+    // The pass met tree-order state, a counter or a quote mark
+    // (GENERATED_CONTENT.md § 8.4): an element's generated content then
+    // depends on every element before it, so the pass is restyled whole.
+    bool ordered;
 } FStyles;
 
 // ALL OR NOTHING: NULL when memory runs out anywhere. A style is a few

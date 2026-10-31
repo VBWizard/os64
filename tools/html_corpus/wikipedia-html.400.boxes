@@ -9179,6 +9179,7 @@ block html 0 0 400 67410
                             text "June 16," 316 34600 52 16 serif 16 italic
                           line 48 34618 344 20 base 14
                             span span 48 34620 32 16
+                            span q 88 34620 8 16
                             span span 48 34620 312 16
                             span cite 48 34620 312 16
                             span q 88 34620 272 16
@@ -9192,6 +9193,7 @@ block html 0 0 400 67410
                             span q 48 34640 308 16
                             text "application of the SGML basic syntax applied to" 48 34640 308 16 serif 16 italic
                           line 48 34658 344 20 base 14
+                            span q 328 34660 8 16
                             span q 48 34660 288 16
                             span cite 48 34660 288 16
                             span span 336 34660 0 16
@@ -9276,6 +9278,7 @@ block html 0 0 400 67410
                           line 48 34838 344 20 base 14
                             span span 176 34840 52 16
                             span span 104 34840 160 16
+                            span q 272 34840 8 16
                             span span 48 34840 320 16
                             span cite 48 34840 320 16
                             span q 272 34840 96 16
@@ -9322,6 +9325,7 @@ block html 0 0 400 67410
                             span q 48 34980 308 16
                             text "figures, fill-out forms, tables, and mathematical" 48 34980 308 16 serif 16 italic
                           line 48 34998 344 20 base 14
+                            span q 116 35000 8 16
                             span q 48 35000 76 16
                             span cite 48 35000 76 16
                             span span 124 35000 0 16
@@ -9374,6 +9378,7 @@ block html 0 0 400 67410
                             span i 48 35080 52 16
                             span span 216 35080 8 16
                             span a 224 35080 32 16 link 734
+                            span q 264 35080 8 16
                             span span 48 35080 320 16
                             span q 264 35080 104 16
                             text "Historic." 48 35080 52 16 serif 16 italic
@@ -9401,6 +9406,7 @@ block html 0 0 400 67410
                             span q 48 35160 288 16
                             text "features will be released with higher version" 48 35160 288 16 serif 16
                           line 48 35178 344 20 base 14
+                            span q 108 35180 8 16
                             span q 48 35180 68 16
                             span span 48 35180 68 16
                             text "numbers." 48 35180 60 16 serif 16
@@ -9487,6 +9493,7 @@ block html 0 0 400 67410
                           line 48 35318 344 20 base 14
                             span span 112 35320 88 16
                             span span 48 35320 184 16
+                            span q 240 35320 8 16
                             span span 48 35320 296 16
                             span cite 48 35320 296 16
                             span q 240 35320 104 16
@@ -9497,6 +9504,7 @@ block html 0 0 400 67410
                             text "“" 240 35320 8 16 serif 16 italic
                             text "This document" 248 35320 96 16 serif 16 italic
                           line 48 35338 344 20 base 14
+                            span q 308 35340 8 16
                             span q 48 35340 268 16
                             span cite 48 35340 268 16
                             span span 316 35340 0 16
@@ -9557,6 +9565,7 @@ block html 0 0 400 67410
                           line 48 35458 344 20 base 14
                             span span 240 35460 52 16
                             span span 168 35460 160 16
+                            span q 336 35460 8 16
                             span span 48 35460 328 16
                             span cite 48 35460 328 16
                             span q 336 35460 40 16
@@ -9568,6 +9577,7 @@ block html 0 0 400 67410
                             text "“" 336 35460 8 16 serif 16 italic
                             text "Note:" 344 35460 32 16 serif 16 italic
                           line 48 35478 344 20 base 14
+                            span q 236 35480 8 16
                             span q 48 35480 196 16
                             span cite 48 35480 196 16
                             span span 244 35480 0 16
@@ -12297,6 +12307,7 @@ block html 0 0 400 67410
                             text " 2008" 336 40920 36 16 serif 16 italic
                             text "." 372 40920 4 16 serif 16 italic
                           line 48 40938 344 20 base 14
+                            span q 48 40940 8 16
                             span span 48 40940 336 16
                             span cite 48 40940 336 16
                             span q 48 40940 336 16
@@ -12333,6 +12344,7 @@ block html 0 0 400 67410
                             span q 48 41060 292 16
                             text "also be labeled with the Internet Media Type" 48 41060 292 16 serif 16 italic
                           line 48 41078 344 20 base 14
+                            span q 380 41080 8 16
                             span q 48 41080 340 16
                             span cite 48 41080 340 16
                             span span 388 41080 0 16
@@ -12389,6 +12401,7 @@ block html 0 0 400 67410
                             span i 48 41160 152 16
                             span span 304 41160 8 16
                             span a 312 41160 28 16 link 1011
+                            span q 348 41160 8 16
                             span span 48 41160 320 16
                             span q 348 41160 20 16
                             text "Best Current Practice 14." 48 41160 152 16 serif 16 italic
@@ -12416,6 +12429,7 @@ block html 0 0 400 67410
                             span q 48 41240 300 16
                             text "implications must be understood and carefully" 48 41240 300 16 serif 16
                           line 48 41258 344 20 base 14
+                            span q 332 41260 8 16
                             span q 48 41260 292 16
                             span span 48 41260 292 16
                             text "weighed before choosing a different course." 48 41260 284 16 serif 16
@@ -12452,6 +12466,7 @@ block html 0 0 400 67410
                           line 48 41338 344 20 base 14
                             span span 48 41340 80 16
                             span span 48 41340 116 16
+                            span q 172 41340 8 16
                             span span 48 41340 340 16
                             span cite 48 41340 340 16
                             span q 172 41340 216 16
@@ -12471,6 +12486,7 @@ block html 0 0 400 67410
                             span q 48 41380 328 16
                             text "defined in [RFC2854] or application/xhtml+xml as" 48 41380 328 16 serif 16 italic
                           line 48 41398 344 20 base 14
+                            span q 192 41400 8 16
                             span q 48 41400 152 16
                             span cite 48 41400 152 16
                             span span 200 41400 0 16
