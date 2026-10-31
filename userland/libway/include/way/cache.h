@@ -60,8 +60,11 @@ size_t way_keep_conditions(const way_keep_t *k, char *out, size_t cap);
 
 // A 304's fields laid over the stored ones at `now` (§ 4.3.4): what it
 // sent replaces what was kept, and the clock of its freshness restarts.
-// False when the 304 forbids keeping it any longer.
+// False when the 304 forbids keeping it any longer. way_keep_confirm_varied
+// is the same for an entry whose request's Vary'd values are recorded
+// (way_keep_read_varied): a 304 repeating that Vary still confirms it.
 bool way_keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now);
+bool way_keep_confirm_varied(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t now);
 
 // Whether a stale reply may be used while the server cannot be reached at
 // all (§ 4.2.4): not when it asked to be checked every time.
@@ -118,20 +121,22 @@ typedef enum {
 // (way_vary_matches).
 bool way_keep_read_varied(const os64_fetch_keep_t *fields, int64_t now, way_keep_t *out);
 
-// The value a request sends for header `name` (`nlen` bytes, any case), into
-// `out`: "" when it sends none. False when the caller cannot say, which
-// keeps nothing that varies on that header.
-typedef bool (*way_request_value_t)(void *ctx, const char *name, size_t nlen, char *out, size_t cap);
+// What a request sends for header `name` (`nlen` bytes, any case): a VALUE
+// into `out` (one sent empty is a value, ""), NONE when it sends no such
+// line, which a server can tell apart from an empty one, or UNKNOWN when
+// the caller cannot say, which keeps nothing that varies on that header.
+typedef enum { WAY_SAID_UNKNOWN, WAY_SAID_NONE, WAY_SAID_VALUE } way_said_t;
+typedef way_said_t (*way_request_value_t)(void *ctx, const char *name, size_t nlen, char *out, size_t cap);
 
 // A header line's value is at most this long here; one longer is a header
 // nothing that varies on it is kept for.
 #define WAY_VARY_VALUE_MAX 1024
 
 // What the request said of each header `vary` (a response's Vary value)
-// names, as lines "name: value\r\n" into `out` — but Accept-Encoding, which
-// libfetch asks for the same way every time. The length written; SIZE_MAX
-// when `vary` is `*`, or names a header `value_of` cannot say, or the lines
-// do not fit.
+// names, as lines into `out`: "name: =value\r\n" for one it sent, "name:
+// -\r\n" for one it did not — but Accept-Encoding, which libfetch asks for
+// the same way every time. The length written; SIZE_MAX when `vary` is `*`,
+// or names a header `value_of` cannot say, or the lines do not fit.
 size_t way_vary_lines(const char *vary, way_request_value_t value_of, void *ctx, char *out, size_t cap);
 // Whether a request says, of each header `lines` (way_vary_lines') names,
 // the value written there.

@@ -6550,12 +6550,16 @@ static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 
 // The shown page has nothing more coming of its own accord: it has
 // streamed and arrived, its pictures and fonts are in and its record is
-// not owed, and no script of its is waiting (what a script fetches comes
-// back as a job, which restarts the quiet).
+// not owed, and no script of its is waiting to run or still being fetched
+// (a `src` script, or a module script's graph: one slower than the quiet
+// would otherwise be cut off). What a running script fetches for itself
+// is not waited for, since a page that polls would never settle; its
+// answer comes back as a job, which restarts the quiet.
 static bool exit_settled(void)
 {
     return g.page.tree != NULL && !g.stream.active && !g.coming.active && g.page.waiting == 0 &&
-           !g.page.record_owed && s_web.waiting == 0 && !yonder_scripts_pending(g.page.scripts);
+           !g.page.record_owed && s_web.waiting == 0 && !yonder_scripts_pending(g.page.scripts) &&
+           !yonder_scripts_fetching(g.page.scripts);
 }
 
 // When an `--exit-when-loaded` run next looks at whether to leave.

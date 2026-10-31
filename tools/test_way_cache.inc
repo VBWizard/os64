@@ -166,6 +166,16 @@ static void keep_rules(void)
            way_keep_confirm(&k, &n, D + 300) && k.max_age == 60, NULL);
     n = fields("no-store", "", "");
     expect("keep: a 304 saying no-store ends it", !way_keep_confirm(&k, &n, D + 300), NULL);
+    // A 304 repeating a Vary other than Accept-Encoding: the varied
+    // confirmation keeps what the plain one would let go (Codex #425 rd4).
+    f = fields("max-age=60", kDate, "");
+    (void)way_keep_read(&f, D, &k);
+    n = fields("max-age=600", "", "");
+    snprintf(n.vary, sizeof(n.vary), "Origin");
+    way_keep_t plain = k;
+    expect("keep: a 304 varying on Origin does not confirm a plain entry", !way_keep_confirm(&plain, &n, D + 300),
+           NULL);
+    expect("keep: but does confirm a varied one", way_keep_confirm_varied(&k, &n, D + 300) && k.max_age == 600, NULL);
 
     // Stale while the server cannot be reached.
     f = fields("max-age=60", "", "");
@@ -773,22 +783,24 @@ static void key_cases(void)
 
 // A request that sends Origin and Accept, says nothing of X-Absent, and
 // cannot say what it would send for X-Unknown.
-static bool request_value(void *ctx, const char *name, size_t nlen, char *out, size_t cap)
+// X-Absent is not sent, unless the case says it is, sent empty.
+static bool s_absent_sent;
+static way_said_t request_value(void *ctx, const char *name, size_t nlen, char *out, size_t cap)
 {
     const char *origin = ctx;
     if (nlen == 6 && strncasecmp(name, "origin", 6) == 0) {
         snprintf(out, cap, "%s", origin);
-        return true;
+        return WAY_SAID_VALUE;
     }
     if (nlen == 6 && strncasecmp(name, "accept", 6) == 0) {
         snprintf(out, cap, "*/*");
-        return true;
+        return WAY_SAID_VALUE;
     }
     if (nlen == 8 && strncasecmp(name, "x-absent", 8) == 0) {
         snprintf(out, cap, "%s", "");
-        return true;
+        return s_absent_sent ? WAY_SAID_VALUE : WAY_SAID_NONE;
     }
-    return false;
+    return WAY_SAID_UNKNOWN;
 }
 
 // SCRIPT_CACHE.md § 4, § 6: Vary recorded and held to, the cookies never
@@ -798,10 +810,14 @@ static void reply_rules(void)
     char lines[512];
     size_t n = way_vary_lines("Origin, accept-encoding, Accept, X-Absent", request_value, "https://a.test", lines,
                               sizeof(lines));
-    expect("vary: what the request said of each header, the encoding left out",
-           n != SIZE_MAX && n == strlen("Origin: https://a.test\r\nAccept: */*\r\nX-Absent: \r\n") &&
-               memcmp(lines, "Origin: https://a.test\r\nAccept: */*\r\nX-Absent: \r\n", n) == 0, NULL);
+    expect("vary: what the request said of each header, the encoding left out, one not sent marked so",
+           n != SIZE_MAX && n == strlen("Origin: =https://a.test\r\nAccept: =*/*\r\nX-Absent: -\r\n") &&
+               memcmp(lines, "Origin: =https://a.test\r\nAccept: =*/*\r\nX-Absent: -\r\n", n) == 0, lines);
     expect("vary: the same request matches", way_vary_matches(lines, n, request_value, "https://a.test"), NULL);
+    s_absent_sent = true;
+    expect("vary: one sending empty what the other did not send does not (Codex #425 rd3)",
+           !way_vary_matches(lines, n, request_value, "https://a.test"), NULL);
+    s_absent_sent = false;
     expect("vary: another origin does not", !way_vary_matches(lines, n, request_value, "https://b.test"), NULL);
     expect("vary: a header nobody can say keeps nothing",
            way_vary_lines("X-Unknown", request_value, "https://a.test", lines, sizeof(lines)) == SIZE_MAX, NULL);
