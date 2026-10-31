@@ -3,7 +3,9 @@
 This completes the four implementation steps in
 [RELAYOUT_GRAFT.md](../design/pending/RELAYOUT_GRAFT.md). The foundation and
 geometry-copy slices passed review in #430 and #431. Integration is isolated
-from userland. **P5 timing, memory and manual visual acceptance remain pending.**
+from userland. Manual gallery acceptance and the final timing/memory comparison
+are complete; see [hardware acceptance](5c-p5-acceptance.md) for the initial
+regressions, follow-up changes and final three-pair pass.
 
 ## Browser contract
 
