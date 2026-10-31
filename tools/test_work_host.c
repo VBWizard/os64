@@ -254,12 +254,20 @@ static void claimed_order(void)
 
 static void full_and_destroy(void)
 {
-    os64_work_pool_t *p=pool(1,10); job j[257]={0};
+    static job j[OS64_WORK_MAX_JOBS+1];
+    os64_work_pool_t *p=pool(1,10); memset(j,0,sizeof(j));
     j[0].wait=true; assert(submit(p,&j[0],10)); until(&j[0].started,1);
-    for (int i=1;i<256;++i) { os64_work_id_t id=submit(p,&j[i],1); assert(id); os64_work_cancel(p,id); }
-    assert(!submit(p,&j[256],1)); assert(!j[256].released);
+    // Every slot fills, each id names its own slot (a cancel finds it,
+    // past the first 256 too), and the next submit is refused.
+    for (int i=1;i<OS64_WORK_MAX_JOBS;++i) {
+        os64_work_id_t id=submit(p,&j[i],1); assert(id); os64_work_cancel(p,id);
+        os64_lock_acquire(&p->lock);
+        assert(p->slots[id&(OS64_WORK_MAX_JOBS-1)].id==id && p->slots[id&(OS64_WORK_MAX_JOBS-1)].cancelled);
+        os64_lock_release(&p->lock);
+    }
+    assert(!submit(p,&j[OS64_WORK_MAX_JOBS],1)); assert(!j[OS64_WORK_MAX_JOBS].released);
     os64_work_pool_destroy(p);
-    for (int i=0;i<256;++i) assert(j[i].released==1 && j[i].started==(i==0));
+    for (int i=0;i<OS64_WORK_MAX_JOBS;++i) assert(j[i].released==1 && j[i].started==(i==0));
     clean();
     p=pool(4,4); job active[10]={0};
     for (int i=0;i<10;++i) { active[i].wait=true; assert(submit(p,&active[i],1)); }
