@@ -88,5 +88,7 @@ sweeps run separately. The missing-global lookup fixture uses `noSuchGlobal`
 instead of the newly implemented `requestAnimationFrame`.
 
 QEMU visual checks cover moving drawings, stable paused pixels, resumption,
-and zoom. P5 visual acceptance is pending; this cut makes no new hardware
-performance acceptance claim.
+and zoom. P5 visual acceptance passed: the gallery's controls worked correctly
+and the animations displayed successfully. A slight stutter was observed in
+the orbiting square. Frame pacing and rendering performance remain follow-up
+work; this cut makes no new hardware performance acceptance claim.
