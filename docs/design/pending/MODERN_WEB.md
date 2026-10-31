@@ -508,7 +508,7 @@ From 2026-10-07, so they are not re-argued from scratch:
 | D13 (incremental relayout) before `requestAnimationFrame` | ruled; slice 5 |
 | The runtime's memory limit (D5b's profile) | becomes a per-page policy before Tier 1; the recon's 33 MB bytecode for one bundle says the limit is per PAGE, not per runtime |
 | The 5 s per-task budget | measured after slice 0's instrument; the recon says compile of the largest bundle alone is 4 to 5 s on the P5, so the budget cannot include compile |
-| The 128 KiB script stack | remeasured in D7c; unchanged until a WPT directory says otherwise |
+| The script stack | 128 KiB until 2026-10-31; since then 2 MiB of a declared 4 MiB window thread, because real pages overflowed 160 calls (SCRIPT_STACK.md) |
 | Scripts on by default | Chris's, after the gates; the kill switch does not change it |
 | Not reopened | the engine, D4's worker/window split, the cookie jar, HTTP/1.1 |
 

@@ -1,9 +1,9 @@
 # SCRIPT_STACK.md — a script stack real pages fit in
 
 *Opus, 2026-10-31, at Chris's ask after he caught a `stack overflow` in
-yonder's status bar. A design for review: the change it asks for is the
-kernel's, so it goes to Fable before any code (CLAUDE.md's rule for kernel
-designs).*
+yonder's status bar. Reviewed by Fable the same day
+(SCRIPT_STACK_REVIEW.md): option A, build it, with six findings, folded in
+below (§ 9 lists where each went).*
 
 ## 1. The problem, measured
 
@@ -27,9 +27,11 @@ expression a few hundred levels, runs in every browser and fails here.
   one stack.
 - That stack is **1 MiB**: `THREAD_USER_STACK_SIZE` in
   `kernel/include/thread.h`, every user thread's, main and spawned alike.
-- Layout of the deepest page libhtml admits used **870 KB** of it under the
-  engine (509 nested blocks, from a listener chain). A 256 KiB engine left
-  71 KB of headroom, so the browser kept 128 KiB.
+- With the engine 160 calls deep, layout of the deepest page libhtml admits
+  brought the whole stack to **870 KB used** (509 nested blocks, from a
+  listener chain): that figure is the engine's share and layout's together,
+  and layout's own is about **740 KB**. A 256 KiB engine left 71 KB of
+  headroom, so the browser kept 128 KiB.
 
 So the engine's limit cannot rise by itself: the thread under it has to.
 
@@ -43,27 +45,59 @@ the constant for everyone multiplies that by every thread of every program
 
 ## 4. Options
 
-**A. A program declares its main thread's stack size (my lean).** The
+**A. A program declares its main thread's stack size (built).** The
 linker already writes one: `ld -z stack-size=N` sets `p_memsz` of the
 `PT_GNU_STACK` program header (checked with our `x86_64-elf-ld`:
-`-z stack-size=4194304` gives `GNU_STACK` a MemSiz of `0x400000`). The ELF loader reads it. When it is present
-and within bounds (say 1 to 16 MiB, a multiple of the page), the main thread
-gets that stack, allocated as today's is; otherwise 1 MiB, as now. yonder
-links with `-z stack-size=4M`, and its engine limit becomes the stack less
-layout's headroom (`scripts.c` reads the size it was given). Every other
-program is unchanged.
-- Kernel cost: reading one program header, and threading a size through
-  main-thread creation instead of the constant. Spawned threads keep 1 MiB.
-- RAM cost: 3 MiB more for yonder's window thread, one per yonder process.
-- Risk: a contiguous 4 MiB physical allocation can fail where 1 MiB would
-  not. Then exec fails and says so, rather than handing yonder a stack its
-  engine limit does not fit.
+`-z stack-size=4194304` gives `GNU_STACK` a MemSiz of `0x400000`). glibc
+reads that field as its default thread stack size and Fuchsia for its main
+thread, so os64 reading it is interop. Every shipped binary already carries
+the header with a MemSiz of 0 (`-z noexecstack`), so the rule is: absent or
+0 is the default.
+- **Where it is read:** `elf_can_load`, the one check every user program
+  passes before `task_create` builds anything. yonder is dynamically linked
+  and never takes `elf_load_from_path`'s segment walk, and the main thread
+  is made in `task_initialize`, before either loader touches the image.
+  `elf_can_load` already opens the file and validates the header; it answers
+  the declared size beside its yes, and `task_create` carries it through
+  `task_initialize` into `createThread`.
+- **Bounds:** a size from 1 MiB to `THREAD_USER_STACK_MAX` (16 MiB) is kept,
+  rounded up to a page; any other, the default, with a `printd` line saying
+  so.
+- **The size a thread got is recorded** in its `esp3Size`. The three places
+  that re-derived it from the constant read that instead: the RSP seed
+  (`createThread`), the stack guard's name and forensics line
+  (`simple_exceptions.c`), and `/proc/<pid>/maps`' `[stack:n]` and `[guard]`
+  rows (`procfs.c`).
+- **A refused allocation degrades, never fails exec.** The stack is
+  allocated inside `task_initialize`, after the task exists, and nothing
+  unwinds a half-built task. So `createThread` asks for the declared size,
+  and when the frame table says no, asks for the default and logs one line
+  naming the task and both sizes. yonder reads the size it really got, and
+  § 5's clamp gives it today's 128 KiB. A refused default, today's unchecked
+  case, is logged too.
+- **yonder reads its size from `/proc/self/maps`:** the `[stack:<tid>]` row
+  whose bounds hold the address of one of its locals. One reader, no new
+  ABI. The engine runs on yonder's MAIN thread (yonder spawns only the
+  ticker and libos64's work pool, neither of which runs a script), which is
+  why declaring the main thread's size reaches it; moving the engine to a
+  spawned thread would need § 8's spawned-thread size. And
+  `JS_UpdateStackTop` (libjs `runtime.c`) re-reads the top at each run, so
+  the engine's limit is measured from where that run starts, which is what
+  § 5's sum assumes.
+- Spawned threads keep 1 MiB, and every program that declares nothing is
+  unchanged.
+- RAM cost: 3 MiB more for yonder's window thread, one per yonder process:
+  one contiguous run of frames, which the allocator zeroes.
 
 **B. Demand-paged stacks.** Reserve a large virtual stack and back pages on
 fault, as Linux does (8 MiB by default). Every program could have a big
-stack at no cost until used. It is the right long-term shape, and a larger
-kernel change (the fault path, guard pages that grow, accounting), so it is
-named here, not proposed.
+stack at no cost until used. It is nearer than it looks: anonymous VMAs
+already fault their pages in (`vma_resolve_backing_page`), and
+`-fstack-clash-protection` already makes a frame touch its pages in order.
+What it adds is a stack VMA kind whose fault handler will not grow into the
+guard, with its burial and accounting. Named here, not proposed: A gives
+the 4 MiB now, and A's declared size is exactly the reservation B would
+take, so none of A is thrown away when B comes.
 
 **C. Userland only: run each script task on a stack yonder allocates.**
 A small trampoline switches the window thread to a large heap block for the
@@ -76,7 +110,7 @@ of faulting. And it hides yonder's real stack from the kernel's accounting.
 | Part | Size | Why |
 |---|---|---|
 | Engine limit | 2 MiB | about 13× today's depth, about 2,000 levels, measured as § 7 says |
-| Native headroom under it | 2 MiB | layout's 870 KB worst case, doubled, plus the dispatch frames |
+| Native headroom under it | 2 MiB | layout's own worst case, about 740 KB, more than doubled, with the dispatch frames |
 | Main thread stack | 4 MiB | the two |
 
 `scripts.c` computes the engine limit as stack − 2 MiB, clamped to
@@ -89,7 +123,7 @@ gives today's 128 KiB, never more than fits.
 |---|---|---|
 | exec of a program with no `PT_GNU_STACK` size | 1 MiB, as today | (not yonder) |
 | exec of yonder (declares 4 MiB) | 4 MiB, allocated at exec | read once at start: 2 MiB |
-| the allocation fails | exec fails, logged | — |
+| the declared allocation is refused | the default 1 MiB, logged with both sizes | read at start: the clamp's 128 KiB |
 | a thread yonder spawns (workers) | 1 MiB, as today | workers run no scripts |
 | a script recurses past 2 MiB | the engine's own check | `InternalError: stack overflow`, as today, said on the console |
 
@@ -102,10 +136,12 @@ gives today's 128 KiB, never more than fits.
   gone. 2 MiB is kept only if it covers every one, with room.
 - **Headroom, re-measured:** DOM_D10.md's guest stack fixtures rerun at the
   new size, with the engine recursing to its new limit before forcing
-  layout. Sampled headroom must stay above layout's measured worst case.
+  layout, the engine's depth recorded beside the total used. Sampled
+  headroom must stay above layout's measured worst case.
 - **Kernel:** a program with no size gets 1 MiB, one with 4 MiB gets 4 MiB
-  (its usable range checked from inside), an out-of-range size is refused,
-  and a refused allocation fails exec cleanly.
+  (its usable range checked from inside, and its `/proc` maps row and
+  guards where the stack really is), an out-of-range size gets the default,
+  and a refused allocation gets the default, logged.
 - **The P5:** the 15 loads' pages, before and after, on the console.
 
 ## 8. Not in this
@@ -114,3 +150,58 @@ gives today's 128 KiB, never more than fits.
 - Spawned threads' sizes (`os64_thread` with a size): no caller needs one yet.
 - The parser's own recursion limit, which is the engine's and follows its
   stack limit.
+
+## 9. The review, and where it went
+
+| Fable's finding | Where |
+|---|---|
+| 1. the 870 KB is the whole stack; layout's share is about 740 KB | § 2 |
+| 2. read the size in `elf_can_load`, carried into `task_initialize` | § 4 A, "Where it is read" |
+| 3. the size is a thread field; three readers follow it | § 4 A, "The size a thread got is recorded" |
+| 4. degrade to 1 MiB on a refused allocation; log the default's refusal | § 4 A and § 6 |
+| 5. yonder's door is `/proc/self/maps`; the engine is on the main thread | § 4 A, "yonder reads its size" |
+| 6. option B is nearer than it read | § 4 B |
+
+
+## 10. As built
+
+- **Kernel.** `elf_can_load(path, &declared)` reads `PT_GNU_STACK`'s
+  `p_memsz` (`elf.h` now names `PT_GNU_STACK`), looking through at most
+  `ELF_STACK_PHDRS_MAX` headers. `task_create` carries it through
+  `task_initialize` into `createThread(task, kernel, userStack)`, whose
+  `user_stack` keeps a size from `THREAD_USER_STACK_SIZE` up to
+  `THREAD_USER_STACK_MAX`, falls back to the default when the frames are
+  not there, logs each of those and a refused default, and records what it
+  gave in `esp3Size`. The RSP seed, `stack_guard_side` with the forensics
+  line, and `/proc/<pid>/maps` read `esp3Size`. Spawned threads
+  (`thread_join.c`) ask 0, the default.
+- **Build.** `BIG_STACK_PROGRAMS` (`userland/GNUmakefile`, yonder and
+  `stacktest`) link with `BIG_STACK_LDFLAGS`, `-z stack-size=4194304`; so
+  does libdom's geometry probe.
+- **yonder.** `scripts.c` reads its own row from `/proc/self/maps`
+  (`own_stack_bytes`, into a static buffer) once, and gives the engine
+  `yonder_script_stack_limit` of it: 2 MiB on the declared 4 MiB, and
+  128 KiB on 1 MiB or a size it could not read.
+
+### Measured (QEMU, 2026-10-31)
+
+- **`/tests/stacktest`** (in testrun): the main thread's maps row is
+  4 MiB, a recursion through 3.3 MB of it returns, and a spawned thread's
+  row is 1 MiB. `stackprobe`, on the default stack, still dies in its guard
+  as "Stack overflow", exit 139.
+- **DOM_D10.md's geometry probe**, re-run on the declared 4 MiB with the
+  engine at 2 MiB (2,097,152 bytes), the engine's depth beside the stack
+  used (finding 1). 61 checks, 0 failures:
+
+| Shape | Native nesting | Engine depth | Used bytes | Headroom bytes |
+|---|---:|---:|---:|---:|
+| Blocks | 509 | 3040 | 3167905 | 1026399 |
+| Tables | 126 | 3040 | 2443841 | 1750463 |
+| Inline-blocks | 254 | 3040 | 2962625 | 1231679 |
+| Absolute | 254 | 3040 | 2803953 | 1390351 |
+| Blocks from a listener chain | 509 | 3008 | 3159281 | 1035023 |
+
+  The engine reaches 3,040 calls, where 128 KiB reached 160, and the
+  deepest layout under it leaves at least 1,026,399 bytes of the stack
+  unused, against the 128 KiB the probe requires. The probe's descent now
+  runs to 16,384 calls, so the engine's own limit, not the loop, ends it.

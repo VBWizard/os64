@@ -331,7 +331,22 @@ static void window_overflow_case(void) {
     loop_drop();
 }
 
+/* The engine's stack out of the window thread's (scripts.c's
+ * yonder_script_stack_limit, SCRIPT_STACK.md § 5): the declared 4 MiB gives
+ * 2 MiB; the default 1 MiB, or a size that could not be read, gives
+ * DOM_D10.md's 128 KiB; a huge one stops at the most. */
+static void window_stack_case(void) {
+    check(yonder_script_stack_limit((size_t)4<<20)==((size_t)2<<20),"window: a 4 MiB stack gives the engine 2 MiB");
+    check(yonder_script_stack_limit((size_t)1<<20)==(size_t)128*1024,"window: the default 1 MiB gives it 128 KiB, as before");
+    check(yonder_script_stack_limit(0)==(size_t)128*1024,"window: a stack whose size could not be read gives 128 KiB");
+    check(yonder_script_stack_limit(((size_t)2<<20)+(size_t)128*1024)==(size_t)128*1024 &&
+          yonder_script_stack_limit(((size_t)2<<20)+(size_t)256*1024)==(size_t)256*1024,
+        "window: what is left above the headroom, never less than 128 KiB");
+    check(yonder_script_stack_limit((size_t)16<<20)==((size_t)8<<20),"window: a 16 MiB stack stops the engine at 8 MiB");
+}
+
 static void window_cases(void) {
+    window_stack_case();
     window_overflow_case();
     window_message_case();
     window_message_view_case();
