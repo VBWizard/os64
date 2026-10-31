@@ -4834,12 +4834,18 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
 
 // A `q`'s own open or close mark, at its place in the document, into its
 // record (FStyled.q_open, .q_close); charged to the lists' budget as
-// content is, and past it the mark is not drawn. False when memory ran out.
-static bool q_mark(Ctx *c, FStyled *of, bool open)
+// content is, and past it the mark is not drawn. The mark is its
+// pseudo-element's, so it takes that pseudo-element's `quotes` when an
+// author's rule gives it one. False when memory ran out.
+static bool q_mark(Ctx *c, const os64_html_node_t *el, FStyled *of, bool open)
 {
+    const garb_val_t *own = c->env->cascade != NULL
+        ? winner(garb_style_for_pseudo(c->env->cascade, el, open ? GARB_PSEUDO_BEFORE : GARB_PSEUDO_AFTER),
+                 GARB_QUOTES)
+        : NULL;
     const char *text;
     size_t len;
-    quote_mark(c, of->quotes, open, true, &text, &len);
+    quote_mark(c, own_quotes(own, of->quotes), open, true, &text, &len);
     if (len == 0)
         return true;
     bool spent = false;
@@ -4877,7 +4883,7 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     else if (generates(c, el)) {
         if (c->env->cascade != NULL && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
             return false;
-        if (is(el, OS64_HTML_TAG_Q) && !(of->pseudo_declared & 1) && !q_mark(c, of, true))
+        if (is(el, OS64_HTML_TAG_Q) && !(of->pseudo_declared & 1) && !q_mark(c, el, of, true))
             return false;
     }
     return !c->counters_failed;
@@ -4893,7 +4899,7 @@ static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el)) {
         if (c->env->cascade != NULL && !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
             return false;
-        if (is(el, OS64_HTML_TAG_Q) && !(of->pseudo_declared & 2) && !q_mark(c, of, false))
+        if (is(el, OS64_HTML_TAG_Q) && !(of->pseudo_declared & 2) && !q_mark(c, el, of, false))
             return false;
     }
     while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)

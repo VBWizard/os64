@@ -331,6 +331,9 @@ static void counter_cases(void)
     texts_case("quotes: revert keeps the inherited pairs",
         "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: revert }</style><p><q>x</q>",
         "<|>|");
+    texts_case("quotes: q's own marks take their pseudo-element's quotes",
+        "<!doctype html><style>q::before, q::after { quotes: \"[\" \"]\" }</style><p><q>x</q>",
+        "[|]|");
     texts_case("quotes: initial is auto",
         "<!doctype html><style>body { quotes: \"<\" \">\" } q { quotes: initial }</style><p><q>x</q>",
         "\xe2\x80\x9c|\xe2\x80\x9d|");

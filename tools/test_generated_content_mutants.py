@@ -121,6 +121,7 @@ mutants = [
      'return os64_streq(v->keyword, "inherit") ? inherited : NULL;', LIBFLOW),
     ('a-fallback-counts', STYLE, '    if (f_replaced(c->env, el))\n        c->inert = el;', '    if (f_replaced(c->env, el))\n        (void)0;', LIBFLOW),
     ('counters-spelled-past-the-budget', STYLE, '    if (need > room) {', '    if (need > room && false) {', LIBFLOW),
+    ('a-q-mark-takes-its-elements-quotes', STYLE, 'quote_mark(c, own_quotes(own, of->quotes), open, true, &text, &len);', 'quote_mark(c, own != NULL ? of->quotes : of->quotes, open, true, &text, &len);', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []
