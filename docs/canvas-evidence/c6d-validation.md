@@ -48,8 +48,12 @@ The gallery's native pointer/button and scheduled-frame tests pass. Its moving
 light changes pixels while retaining the layout tree and DOM version. A
 scratch stroke erases foil through the retained clip; a fresh-foil action
 restores the bitmap. A visible QEMU run confirms the gallery, hover feedback,
-scheduled motion and the scratch threshold completing its reveal. Hardware
-acceptance is pending.
+scheduled motion and the scratch threshold completing its reveal.
+
+P5 hardware acceptance is approved. The tester confirmed that the gallery
+works correctly, including the scratch-off reveal and the self-animating scene.
+The tested runtime cohort remains frozen at implementation commit `6dfcd23b`;
+this acceptance update changes documentation only.
 
 ## Corrections caught during validation
 
