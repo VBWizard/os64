@@ -561,7 +561,9 @@ Yonder's rendering loop. Canvas pixel damage and DOM edits share the frame's
 presentation; SVG, CSS motion and Canvas do not own competing frame loops.
 The animated gallery is `tools/pages/canvas-animation.html`, with the contract
 and evidence in [5d-animation.md](../../relayout-evidence/5d-animation.md).
-Pointer events and capture are the next cut, followed by C6 target fidelity.
+[PE1: pointer events and capture](POINTER_EVENTS.md) is the next cut, followed
+by C6 target fidelity. Its design connects mouse-backed input, capture,
+compatibility events and cancellation through the existing browser task path.
 
 The post-5d [userland reconciliation](../../canvas-evidence/userland-reconciliation.md)
 combines the data-picture backport, observers, generated content, caches and
