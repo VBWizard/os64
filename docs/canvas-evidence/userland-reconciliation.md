@@ -69,8 +69,29 @@ remains covered by the dedicated regression and the existing failure sweeps.
 - The retirement-reference check was inspected: the named historical design
   documents still exist. Observer comments now name the shared dispatcher.
 
-P5 acceptance of this reconciliation remains pending. The handoff contains
-22 runtime files (10 changed, 12 reused) and the existing animation and
-data-picture galleries. Exercise pause/resume and inspect both galleries
-with Scripts and Modern Web enabled; card 6 of data-pictures is intentionally
-broken. This is a focused compatibility check, not another timing campaign.
+P5 compatibility acceptance passed on November 1 with the frozen `cc246292`
+bundle: both the animation and data-picture galleries displayed and behaved
+as expected, including the deliberately blank sixth data-picture card.
+The handoff contains 22 runtime files (10 changed, 12 reused). This was a
+focused compatibility check, not another timing campaign.
+
+## Cache review corrections
+
+PR #447's two cache findings reproduced in focused host regressions before
+correction (11 failed assertions). A 304 now rebuilds the recorded request
+values when it replaces `Vary`, retains the existing selection when `Vary`
+is absent, and removes it when explicitly empty. Unknown or unreadable values,
+allocation refusal and failed publication evict the old entry. The refusal
+sweep reseeds its entry for each allocation index so eviction cannot cause
+later indices to skip the revalidation path.
+
+Unsafe requests invalidate the current hop's address when its non-error
+response arrives, before redirects can rewrite the method or change the
+address. Tests cover 301/302/303, method-preserving 307/308, both source and
+destination cache entries, and a 500 response that leaves the entry alone.
+This follows [RFC 9111 § 4.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.4).
+
+After correction: fetch jobs 704 checks and browser 15,610 checks, zero
+failures, with ASan/UBSan and LeakSanitizer enabled. The native Yonder build
+passed. These cache corrections follow the accepted `cc246292` gallery
+build; the frozen P5 handoff remains unchanged.

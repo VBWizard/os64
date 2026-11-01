@@ -1010,10 +1010,32 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
     bool ok = serve_kept(c, r, current, &b, got, max_body, WAY_SERVED_CONFIRMED);
     if (!ok)
         network_error(got, "CORS: the answer does not allow this origin to read it");
-    else if (way_keep_confirm_varied(&c->e.keep, fields, now_utc()))
-        c->held = way_cache_put(job->cache, &c->e, &b, c->body, c->len);
-    else
-        way_cache_drop(job->cache, &c->key);
+    else {
+        bool keep = way_keep_confirm_varied(&c->e.keep, fields, now_utc());
+        // An absent Vary preserves the stored selection rule. A present
+        // one replaces it, even when empty: record this request's values
+        // before publishing the merged headers. Unknown values or refusal
+        // must evict the old entry rather than leave its broader rule live.
+        size_t at = 0;
+        way_header_t line;
+        bool replaces = false;
+        while (way_header_next(h->block, h->len, &at, &line))
+            replaces |= is_named(line.name, line.name_len, "vary");
+        char *vary = NULL;
+        if (names_hold(h->omitted, h->olen, "vary", 4))
+            keep = false;
+        if (keep && replaces) {
+            vary = os64_malloc(OS64_FETCH_EXTRA_MAX);
+            keep = vary != NULL &&
+                   (b.vary_len = way_vary_lines(fields->vary, request_value, c, vary,
+                                                OS64_FETCH_EXTRA_MAX)) != SIZE_MAX;
+            b.vary = vary;
+        }
+        c->held = keep && way_cache_put(job->cache, &c->e, &b, c->body, c->len);
+        if (!c->held)
+            way_cache_drop(job->cache, &c->key);
+        os64_free(vary);
+    }
     os64_free(merged);
     os64_free(omitted);
     return ok && got->ok;
@@ -1077,19 +1099,20 @@ static void module_bytecode(const yonder_fetch_job_t *job, const Cached *c, yond
     got->bytecode = bc;
 }
 
-// A successful unsafe request invalidates what the cache keeps for its
-// address (RFC 9111 § 4.4): a POST, PUT, PATCH or DELETE that worked has
-// changed it. Under both credentials, since the page's GETs of it may be
-// kept under either.
-static void cache_invalidate(const yonder_fetch_job_t *job, const way_request_t *r, const yonder_fetched_t *got)
+// A non-error response to an unsafe hop invalidates its target (RFC 9111
+// § 4.4), before redirect handling can rewrite the method or move the URL.
+// Both credential variants are dropped, since the page may have kept either.
+// A later CORS, redirect or body-read failure cannot undo the server's change.
+static void cache_invalidate(const yonder_fetch_job_t *job, const way_request_t *r, const char *current,
+                             int32_t status)
 {
     static const char *const kSafe[] = {"GET", "HEAD", "OPTIONS", "TRACE"};
     for (size_t i = 0; i < sizeof(kSafe) / sizeof(kSafe[0]); i++)
         if (os64_streq(r->method, kSafe[i]))
             return;
-    if (!got->ok || got->status < 200 || got->status >= 400 || !way_cache_enabled(job->cache))
+    if (status < 200 || status >= 400 || !way_cache_enabled(job->cache))
         return;
-    char *target = without_fragment(job->url);
+    char *target = without_fragment(current);
     if (target == NULL)
         return;
     char partition[WAY_PARTITION_MAX];
@@ -1274,6 +1297,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
             os64_fetch_close(f);
             break;
         }
+        cache_invalidate(job, r, current, head->status);
         // A 304 to the question the cache asked: the kept reply, its headers
         // brought up to date, judged and served as one from the cache.
         if (cached != NULL && cached->asked && r->urls == 1 && head->status == 304) {
@@ -1341,7 +1365,6 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     }
     got->hops = r->urls > 0 ? r->urls - 1 : 0;
     branches_clear(&branches, job, r, !got->ok);
-    cache_invalidate(job, r, got);
     if (job->module && got->ok && cached != NULL && cached->held && !(cancelled != NULL && cancelled(ctx)))
         module_bytecode(job, cached, got);
     cached_free(cached);

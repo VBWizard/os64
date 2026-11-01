@@ -1109,8 +1109,10 @@ static void cache_sweep(const char *page, CacheSweep how)
         snprintf(url, sizeof(url), "https://cdn.test/sweep-%d-%zu.js", (int)how, how == SWEEP_STORE ? n : 0);
         fake_answer_t *a = fake_answer(NULL, url, 200, MODULE_HEAD "Cache-Control: max-age=60\r\nETag: \"s\"\r\n",
                                        kModule);
-        if (how != SWEEP_STORE && n == 1) {
-            yonder_fetched_t *g = run(&(Ask){page, url, .module = true});
+        // A failed refresh can evict the entry. Seed it anew so every
+        // refusal index still exercises the intended cache path.
+        if (how != SWEEP_STORE) {
+            yonder_fetched_t *g = run(&(Ask){page, url, .module = true, .cache_mode = WAY_CACHE_RELOAD});
             if (g == NULL || g->bytecode == NULL || !keep_where(g->bytecode, "swept")) {
                 expect("cache sweep: its entry and blob are planted", false, kName[how]);
                 yonder_fetched_free(g);
@@ -1122,7 +1124,7 @@ static void cache_sweep(const char *page, CacheSweep how)
             s_epoch += 120;
             a->status = 304;
             a->reason = "Not Modified";
-            a->headers = "ETag: \"s\"\r\nCache-Control: max-age=60\r\n";
+            a->headers = "ETag: \"s\"\r\nVary: X-Test\r\nCache-Control: max-age=60\r\n";
             a->body = NULL;
         }
         size_t base = live;
@@ -1130,6 +1132,13 @@ static void cache_sweep(const char *page, CacheSweep how)
         fail_at = n;
         yonder_fetched_t *g = run(&(Ask){page, url, .module = true});
         fail_at = 0;
+        size_t spent = allocations;
+        if (how == SWEEP_CONFIRMED && g != NULL && g->ok && g->served == WAY_SERVED_CONFIRMED) {
+            yonder_fetched_t *probe = run(&(Ask){page, url, .headers = "X-Test: different\r\n",
+                                                .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+            expect("cache sweep: confirmed Vary is replaced or the entry is evicted", probe && !probe->ok, NULL);
+            yonder_fetched_free(probe);
+        }
         char name[96];
         snprintf(name, sizeof(name), "cache sweep %s %zu: whole or a network error", kName[how], n);
         expect(name, g == NULL || (g->ok ? g->body_len == strlen(kModule) : g->type == WAY_TYPE_ERROR), NULL);
@@ -1141,12 +1150,87 @@ static void cache_sweep(const char *page, CacheSweep how)
         yonder_fetched_free(g);
         snprintf(name, sizeof(name), "cache sweep %s %zu: nothing leaked", kName[how], n);
         expect(name, live == base, NULL);
-        if (allocations < n)
+        if (spent < n)
             break;
     }
     char name[64];
     snprintf(name, sizeof(name), "cache sweep %s reached the end", kName[how]);
     expect(name, n < 2000, NULL);
+}
+
+// Revalidation can replace the variation rule, omit it, or make it
+// impossible for this client to record. Probe reuse with only-if-cached
+// so a miss cannot be hidden by another successful network response.
+static void cache_revalidation_vary(const char *page)
+{
+    const char *initial[] = {"", "Vary: X-Old\r\n", "Vary: X-Test\r\n",
+                             "Vary: X-Test\r\n", ""};
+    const char *updated[] = {"Vary: X-Test\r\n", "Vary: X-Test\r\n", "",
+                             "Vary: \r\n", "Vary: User-Agent\r\n"};
+    for (size_t i = 0; i < sizeof(initial) / sizeof(initial[0]); i++) {
+        fresh();
+        char url[100], head[300];
+        snprintf(url, sizeof(url), "https://a.test/revary-%zu", i);
+        snprintf(head, sizeof(head), "%sCache-Control: max-age=60\r\nETag: \"v\"\r\n", initial[i]);
+        fake_answer_t *a = fake_answer(NULL, url, 200, head, "body");
+        const char *original = "X-Test: one\r\nX-Old: one\r\n";
+        yonder_fetched_free(run(&(Ask){page, url, .headers = original}));
+        s_epoch += 120;
+        snprintf(head, sizeof(head), "%sCache-Control: max-age=600\r\n", updated[i]);
+        a->status = 304;
+        a->body = NULL;
+        yonder_fetched_t *g = run(&(Ask){page, url, .headers = original});
+        expect("vary update: confirmation serves the stored body", g && g->ok &&
+               g->served == WAY_SERVED_CONFIRMED && g->body_len == 4, g ? g->why : NULL);
+        yonder_fetched_free(g);
+        g = run(&(Ask){page, url, .headers = original, .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+        expect("vary update: known values remain reusable, unknown values evict",
+               g && g->ok == (i != 4), NULL);
+        yonder_fetched_free(g);
+        g = run(&(Ask){page, url, .headers = "X-Test: two\r\nX-Old: one\r\n",
+                       .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+        expect("vary update: changed values miss unless Vary was emptied",
+               g && g->ok == (i == 3), NULL);
+        yonder_fetched_free(g);
+        if (i == 1) {
+            g = run(&(Ask){page, url, .headers = "X-Test: one\r\nX-Old: two\r\n",
+                           .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+            expect("vary update: replaced field no longer selects the response", g && g->ok, NULL);
+            yonder_fetched_free(g);
+        }
+    }
+}
+
+// Seed GETs at both ends of a redirect. A rewritten POST invalidates its
+// source; a preserved POST also invalidates the destination it changes.
+static void cache_unsafe_redirects(const char *page)
+{
+    const int statuses[] = {301, 302, 303, 307, 308, 500};
+    for (size_t i = 0; i < sizeof(statuses) / sizeof(statuses[0]); i++) {
+        fresh();
+        char source[100], target[100], head[150];
+        snprintf(source, sizeof(source), "https://a.test/unsafe-%d", statuses[i]);
+        snprintf(target, sizeof(target), "https://a.test/target-%d", statuses[i]);
+        const char *kept = "Cache-Control: max-age=600\r\n";
+        fake_answer("GET", source, 200, kept, "old source");
+        fake_answer("GET", target, 200, kept, "old target");
+        yonder_fetched_free(run(&(Ask){page, source}));
+        yonder_fetched_free(run(&(Ask){page, target}));
+        snprintf(head, sizeof(head), "Location: %s\r\n", target);
+        fake_answer("POST", source, statuses[i], head, NULL);
+        fake_answer("POST", target, 200, "", "changed");
+        yonder_fetched_t *g = run(&(Ask){page, source, "POST", "Content-Type: text/plain\r\n", "x"});
+        expect("unsafe redirect: response arrives", g && g->ok, g ? g->why : NULL);
+        yonder_fetched_free(g);
+        g = run(&(Ask){page, source, .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+        expect("unsafe redirect: successful hop invalidates its source, failure does not",
+               g && g->ok == (statuses[i] == 500), NULL);
+        yonder_fetched_free(g);
+        g = run(&(Ask){page, target, .cache_mode = WAY_CACHE_ONLY_IF_CACHED});
+        expect("unsafe redirect: destination evicted only when its hop is unsafe",
+               g && g->ok == (statuses[i] != 307 && statuses[i] != 308), NULL);
+        yonder_fetched_free(g);
+    }
 }
 
 static void http_cache_cases(void)
@@ -1538,6 +1622,9 @@ static void http_cache_cases(void)
            g ? g->why : NULL);
     yonder_fetched_free(g);
 
+    cache_revalidation_vary(page);
+    cache_unsafe_redirects(page);
+    fresh();
     module_bytecode_cases(page);
     cache_sweep(page, SWEEP_STORE);
     cache_sweep(page, SWEEP_KEPT);
