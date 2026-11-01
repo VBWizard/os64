@@ -582,8 +582,7 @@ static int string_tag(JSContext *ctx, JSValueConst prototype, JSAtom key, const 
  * `Element.prototype` is what every element inherits, so `el instanceof
  * Element` holds and a page may patch the prototype, as the Wayback
  * Machine's player does. One interface per prototype: an interface with no
- * prototype of its own here (most HTML elements have only HTMLElement's,
- * and SVG's subclasses only SVGElement's) is not installed, since aliasing
+ * prototype of its own here is not installed, since aliasing
  * it to a broader one would make `instanceof` lie, and the census says what
  * is missing (INTERFACES_FORMS.md). Each prototype's `constructor` is its
  * interface, and each interface object inherits its parent's

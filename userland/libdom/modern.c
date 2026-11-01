@@ -83,6 +83,8 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"external", "External", NULL}, d_external_install},
     /* After the encoding row, whose DataView it tells a view by. */
     {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
+    {(const char *const[]){"DOMPointReadOnly", "DOMPoint", NULL}, d_point_install},
+    {(const char *const[]){"SVGGraphicsElement", "SVGGeometryElement", NULL}, d_svg_geometry_install},
     {(const char *const[]){"ImageData", NULL}, d_image_data_install},
     {(const char *const[]){"CanvasRenderingContext2D", "CanvasGradient", "TextMetrics", "Path2D", NULL}, d_canvas_install},
     {(const char *const[]){"onerror", "onunhandledrejection", "onrejectionhandled", "reportError", "ErrorEvent",

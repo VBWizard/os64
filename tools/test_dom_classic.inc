@@ -34,7 +34,7 @@ static void dom_classic_cases(void)
         "assert(a instanceof HTMLAnchorElement&&s instanceof HTMLScriptElement&&!(a instanceof HTMLScriptElement));"
         "var holder=document.createElement('div');holder.innerHTML='<svg><circle/></svg>';"
         "var svg=holder.firstChild;"
-        "assert(svg instanceof Element&&!(svg instanceof HTMLElement)&&svg.constructor===SVGElement);"
+        "assert(svg instanceof Element&&!(svg instanceof HTMLElement)&&svg.constructor===SVGGraphicsElement);"
         "assert(svg instanceof SVGElement&&svg.firstChild instanceof SVGElement&&!(b instanceof SVGElement));"
         "assert(Object.getPrototypeOf(SVGElement)===Element&&Object.getPrototypeOf(SVGElement.prototype)===Element.prototype);"
         "holder.innerHTML='<math><mi>x</mi></math>';var mathml=holder.firstChild.firstChild;"

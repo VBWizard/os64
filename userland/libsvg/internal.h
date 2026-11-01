@@ -64,6 +64,7 @@ typedef struct {
     double angle, sweep, numerical_error;
 } SvgArc;
 bool svg_arc_center(Context *, Point, const svg_command_t *, SvgArc *);
+unsigned svg_bezier_extrema(const Point *, unsigned degree, unsigned axis, double roots[2]);
 Status svg_geometric_bounds(Context *, const svg_path_t *, const Map *, svg_bounds_t *);
 Status svg_object_bounds(Context *, const svg_scene_t *, size_t, svg_bounds_t *);
 Status svg_lower(Context *, const svg_path_t *, const Map *, double, svg_geometry_t **);

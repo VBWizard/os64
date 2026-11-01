@@ -4,6 +4,7 @@
 #include <html/html.h>
 #include <page/page.h>
 #include <os64/js.h>
+#include <os64/geometry_backend.h>
 #include <os64/url.h>
 #include <way/origin.h>
 
@@ -542,6 +543,16 @@ typedef bool (*os64_dom_computed_provider_t)(void *opaque, const os64_html_node_
  * copied. A property not put reads "". False when the binding could not
  * keep it (its budget), which the provider answers as its own false. */
 bool os64_dom_computed_put(os64_dom_computed_t *out, int32_t prop, const char *value, size_t length);
+/* Synchronous SVG fill query in element-local user units. The provider resolves
+ * fresh geometry/fill-rule after argument coercion, ignoring visual effects.
+ * No script or I/O runs in the callback. Temporary storage uses memory; poll
+ * cancelled during bounded work. Clear inside on refusal and report layout
+ * costs even on failure. Borrowed nodes and callbacks expire on return. */
+typedef os64_geometry_status_t (*os64_dom_svg_hit_provider_t)(void *,
+    const os64_html_node_t *, double x, double y, const os64_geometry_memory_t *,
+    bool (*cancelled)(void *), void *, bool *inside, os64_dom_geometry_stats_t *cost);
+void os64_dom_set_svg_hit(os64_dom_t *, os64_dom_svg_hit_provider_t, void *);
+
 /* What making the style current cost, added to os64_dom_geometry_stats. */
 void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t elapsed_us);
 /* NULL removes it; a declaration's read then throws InvalidStateError for

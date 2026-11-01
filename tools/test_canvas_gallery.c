@@ -67,7 +67,8 @@ int main(int argc,char **argv)
     char *html=malloc(n+1);if(!html)return 2;
     if(fread(html,1,n,file)!=(size_t)n)return 2;
     html[n]=0;fclose(file);
-    bool retained=strstr(html,"YONDER / CANVAS 2D / C6C")!=NULL;
+    bool hit=strstr(html,"YONDER / CANVAS 2D / C6D")!=NULL;
+    bool retained=hit||strstr(html,"YONDER / CANVAS 2D / C6C")!=NULL;
     bool shadows=strstr(html,"YONDER / CANVAS 2D / C6B")!=NULL;
     bool paints=strstr(html,"YONDER / CANVAS 2D / C5")!=NULL;
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -85,7 +86,7 @@ int main(int argc,char **argv)
     }
     if(images){pool_open=true;g.pool=(os64_work_pool_t *)1;pool_submit_hook=gallery_submit;}
     gallery_pump();
-    if(retained)check(probe_text_is("status","Four experiments, ready to turn, transform, and uncover."),"retained-path gallery initializes completely");
+    if(retained)check(probe_text_is("status",hit?"Ready — four live geometry checks. Scripts + Modern Web; try 25% to 400% zoom.":"Four experiments, ready to turn, transform, and uncover."),"retained-path gallery initializes completely");
     const char *names[]={retained?"medals":shadows?"cast":paints?"glow":images?"stamps":"route",retained?"rings":shadows?"window":paints?"shared":images?"crop":"turn",retained?"curve":shadows?"stamp":paints?"lettering":images?"echo":"stencil",retained?"ticket":shadows?"type":paints?"fitted":images?"returned":"scratch"};
     const char *buttons[]={retained?"turn":shadows?"light":paints?"light":images?"stamp":"march",retained?"rule":shadows?"reveal":paints?"color":images?"inspect":"spin",retained?"stretch":shadows?"stamp-change":paints?"turn":images?"scoot":"slide",retained?"foil":shadows?"words":paints?"words":images?"export":"reveal"};
     for(unsigned i=0;i<4;++i) {
@@ -95,6 +96,16 @@ int main(int argc,char **argv)
             size_t ink=0;for(uint32_t y=0;y<b.height;y++)for(uint32_t x=0;x<b.width;x++)ink+=b.pixels[(size_t)y*b.stride/4+x]>>24?1:0;
             check(ink>100,"retained-path gallery has visible ink");
         }
+    }
+    if(hit) {
+        canvas_bitmap_t b;check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("curve"),&b),"hit light bitmap");
+        uint32_t *before=malloc(b.capacity);check(before!=NULL,"hit light snapshot");
+        if(!before)return 2;
+        memcpy(before,b.pixels,b.capacity);flow_tree_t *tree=g.page.tree;
+        uint64_t version=os64_html_version(page_doc(&g.page));
+        for(unsigned i=0;i<10;i++){now_ms+=40;clock_us+=40000;script_turn();motion_painted();}
+        check(memcmp(before,b.pixels,b.capacity)!=0,"SVG queries drive moving light frames");free(before);
+        check(g.page.tree==tree&&os64_html_version(page_doc(&g.page))==version,"fill queries and pixel-only frames preserve layout");
     }
     for(unsigned i=0;i<4;++i) {
         os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};

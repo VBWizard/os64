@@ -56,6 +56,7 @@ typedef struct {
     // `opaque`: it answers from a layout of the page as far as it has been
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
+    os64_dom_svg_hit_provider_t svg_hit;
     void *opaque;
     // The window's view, the computed style's provider (given `opaque`)
     // and the session's history, for the Modern Web arc's surface

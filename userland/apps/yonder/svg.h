@@ -61,4 +61,9 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *, const ga
 void yonder_svg_pixels_free(const os64_geometry_memory_t *, yonder_svg_pixels_t *);
 bool yonder_svg_natural_size(const os64_html_node_t *, const garb_cascade_t *, int32_t *, int32_t *);
 bool yonder_svg_size(const os64_html_node_t *, int32_t *, int32_t *);
+// Local geometry only; resolves the live cascade without rendering a scene.
+svg_status_t yonder_svg_contains(const os64_html_document_t *, const garb_cascade_t *,
+    const flow_tree_t *, const os64_html_node_t *, uint32_t zoom,
+    const os64_geometry_memory_t *, bool (*cancelled)(void *), void *,
+    double x, double y, bool *inside);
 #endif

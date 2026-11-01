@@ -40,7 +40,7 @@ typedef struct {
     os64_geometry_memory_t memory;
     Instance *instances;
     size_t capacity;
-    bool base_checked, clip_geometry, clip_style;
+    bool base_checked, clip_geometry, clip_style, query_without_viewport;
     svg_mode_t mode;
     svg_viewport_t image_viewport;
     svg_status_t stopped;
@@ -965,8 +965,8 @@ static svg_status_t geometry_value(Adapter *a, uint64_t instance, garb_prop_t pr
             instance = parent;
             continue;
         }
-        if (a->clip_geometry && v->kind == GARB_V_PERCENTAGE)
-            return SVG_UNSUPPORTED; // Resource percentage bases need their own viewport contract.
+        if ((a->clip_geometry || a->query_without_viewport) && v->kind == GARB_V_PERCENTAGE)
+            return SVG_UNSUPPORTED; // No resolved local percentage basis.
         return value(v, percent, out) ? SVG_OK : SVG_UNSUPPORTED;
     }
     return SVG_OK;
@@ -1044,7 +1044,7 @@ static svg_status_t line_coordinate(Adapter *a, const os64_html_node_t *n, const
     if (!number(&s, &parsed))
         return SVG_OK; // Invalid coordinates use the attribute's initial zero.
     if (s.left && *s.p == '%') {
-        if (a->clip_geometry)
+        if (a->clip_geometry || a->query_without_viewport)
             return SVG_UNSUPPORTED;
         parsed *= percent / 100;
         ++s.p;
@@ -2150,4 +2150,77 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *doc,
     Map output = {(double)pw / view->width, 0, 0, (double)ph / view->height, 0, 0};
     return render_adapter(&a, &output, (os64_gui_rect_t){0, 0, pw, ph},
                           0, 0, pw, ph, backend, view->cache, out);
+}
+
+svg_status_t yonder_svg_contains(const os64_html_document_t *doc,const garb_cascade_t *cascade,
+    const flow_tree_t *tree,const os64_html_node_t *node,uint32_t zoom,
+    const os64_geometry_memory_t *memory,bool (*cancelled)(void *),void *cancel_context,
+    double x,double y,bool *inside)
+{
+    if(!inside)return SVG_BAD_ARGUMENT;
+    *inside=false;
+    if(!doc||!cascade||!node||!memory||!memory->alloc||!memory->free||!zoom||
+       !os64_html_owns_node(doc,node))return SVG_BAD_ARGUMENT;
+    if(node_kind(node)!=SVG_NODE_PATH && !basic_shape(node))return SVG_BAD_ARGUMENT;
+    if(garb_cascade_incomplete(cascade))return SVG_LIMIT;
+    Adapter a={.doc=doc,.cascade=cascade,.memory=*memory,.width=300,.height=150,
+        .cancelled=cancelled,.cancel_context=cancel_context};
+    const os64_html_node_t *chain[SVG_DEPTH_MAX];size_t count=0;
+    for(const os64_html_node_t *n=node;n&&n->kind==OS64_HTML_ELEMENT;n=n->parent) {
+        if(count==SVG_DEPTH_MAX)return SVG_LIMIT;
+        chain[count++]=n;
+    }
+    /* The cascade contains connected document nodes. A detached node has no
+     * resolved style here; absence of a winner cannot mean an initial value. */
+    if(!count || chain[count-1]->parent!=doc->document)return SVG_UNSUPPORTED;
+    svg_status_t status=SVG_OK;Computed computed=initial(0xff000000);
+    uint64_t instance=0;
+    while(count && status==SVG_OK) {
+        const os64_html_node_t *n=chain[--count];
+        svg_style_request_t request={.source=(uintptr_t)n,.instance=instance+1,.parent_instance=instance};
+        status=remember(&a,&request);if(status!=SVG_OK)break;
+        instance++;
+        const garb_val_t *rule=winner(cascade,n,GARB_FILL_RULE);
+        if(rule) {Computed parent=computed;status=apply(&a,&computed,&parent,GARB_FILL_RULE,rule);}
+        /* Only viewport dimensions affect geometry. Display, paint, clipping,
+         * opacity and transforms must not alter a local fill membership query. */
+        if(status==SVG_OK && node_kind(node)!=SVG_NODE_PATH &&
+           n->ns==OS64_HTML_NS_SVG && same_word(n->name,"svg")) {
+            double w=a.width,h=a.height;
+            const flow_box_t *box=tree?flow_box_for(tree,n):NULL;
+            if(!a.root && box) {
+                w=(double)box->content.w*1000/zoom;h=(double)box->content.h*1000/zoom;
+            } else {
+                status=geometry_value(&a,instance,GARB_WIDTH,a.width,a.width,&w);
+                if(status==SVG_OK)status=geometry_value(&a,instance,GARB_HEIGHT,a.height,a.height,&h);
+            }
+            if(!a.root)a.root=n;
+            Map ignored;
+            if(status==SVG_OK)status=viewport_map(n,w,h,&a.width,&a.height,&ignored);
+            if(status==SVG_PENDING)status=SVG_UNSUPPORTED;
+            a.instances[instance].width=a.width;a.instances[instance].height=a.height;
+        }
+    }
+    svg_options_t options={.memory=*memory,.cancelled=cancelled,.cancel_context=cancel_context,
+                           .limits=svg_default_limits()};
+    svg_context_t *ctx=NULL;svg_path_t *path=NULL;svg_parse_result_t parsed;
+    if(status==SVG_OK)status=svg_create(&options,&ctx);
+    if(status==SVG_OK && node_kind(node)==SVG_NODE_PATH) {
+        const char *d=attr(node,"d");size_t len=0;
+        while(len<=options.limits.input_bytes && d[len])len++;
+        if(len>options.limits.input_bytes)status=SVG_LIMIT;
+        else status=svg_path_parse(ctx,(svg_string_t){d,len},&path,&parsed);
+    } else if(status==SVG_OK) {
+        svg_shape_t resolved;
+        a.query_without_viewport=!a.root;
+        svg_style_request_t request={.source=(uintptr_t)node,.instance=instance};
+        status=shape(&a,NULL,&request,&resolved);
+        if(status==SVG_OK)status=svg_path_from_shape(ctx,&resolved,&path,&parsed);
+    }
+    if(status==SVG_MALFORMED && path)status=SVG_OK;
+    if(status==SVG_OK)status=svg_path_contains(ctx,path,(os64_geometry_point_t){x,y},computed.s.even_odd,inside);
+    if(path)svg_path_release(ctx,path);
+    if(ctx)svg_destroy(ctx);
+    if(a.instances)memory->free(memory->context,a.instances,a.capacity*sizeof(Instance));
+    return status;
 }
