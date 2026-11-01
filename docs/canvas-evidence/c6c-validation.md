@@ -86,5 +86,7 @@ acceptance remains C6 work.
 
 `tools/pages/canvas-path2d.html`, “Paths Worth Keeping,” has transformed copied
 stars, a fill-rule toggle, transformed SVG arcs and a pointer-driven scratch
-card. Enable Scripts and Modern Web; inspect controls and 25%–400% zoom.
-P5 acceptance is pending for the frozen delivery.
+card. Scripts and Modern Web must be enabled. Chris accepted the frozen
+delivery from `545bd45c` on the P5: all four examples worked as expected,
+including pointer-driven scratching. This records functional hardware
+acceptance, not a timed performance measurement.
