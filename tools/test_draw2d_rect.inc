@@ -59,3 +59,34 @@ static void rectangle_spans(void)
                         }
                     }
 }
+
+/* Large interiors exercise the byte lookup with every source alpha and
+ * destination byte, including clipping and fractional edge coverage. */
+static void rectangle_blend_table(void)
+{
+    enum { W=65,H=33,STRIDE=68 };
+    uint32_t pixels[STRIDE*H], expected[STRIDE*H];
+    const uint16_t opacity[]={1,32768,65534,65535};
+    const double rectangles[][4]={{0,0,32,32},{0,0,31,33},{0,0,W,H},
+                                  {.25,.5,64.5,32.25},{-1,-1,67,35}};
+    draw2d_surface_t surface={pixels,W,H,STRIDE*4,((H-1)*STRIDE+W)*4,DRAW2D_ARGB8_PREMULTIPLIED};
+    for (unsigned a=0;a<256;a++) for (unsigned o=0;o<4;o++) for (unsigned r=0;r<5;r++) {
+        uint32_t color=(a<<24)|0x17b3ef;
+        for(unsigned i=0;i<STRIDE*H;i++) {
+            unsigned d=i%256;
+            pixels[i]=expected[i]=(d<<24)|((d/2)<<16)|((d/3)<<8)|d;
+        }
+        double x=rectangles[r][0],y=rectangles[r][1],w=rectangles[r][2],h=rectangles[r][3];
+        for(unsigned py=0;py<H;py++) for(unsigned px=0;px<W;px++) {
+            double cx=fmax(0,fmin(x+w,px+1.)-fmax(x,px));
+            double cy=fmax(0,fmin(y+h,py+1.)-fmax(y,py));
+            uint16_t coverage=(uint16_t)(cx*cy*65535+.5);
+            unsigned at=py*STRIDE+px;
+            expected[at]=draw2d_pack(draw2d_over(draw2d_color(color,opacity[o],coverage),
+                                               draw2d_unpack(expected[at])));
+        }
+        CHECK(draw2d_paint_rect(&surface,x,y,w,h,(draw2d_solid_t){color},
+              (draw2d_composite_t){DRAW2D_SOURCE_OVER,opacity[o]},W*H,NULL)==DRAW2D_OK);
+        CHECK(!memcmp(pixels,expected,sizeof(pixels)));
+    }
+}

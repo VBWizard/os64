@@ -158,7 +158,8 @@ bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
     bool premultiplied = source->format == DRAW2D_ARGB8_PREMULTIPLIED;
     if (box.w <= 0 || box.h <= 0 || sw == 0 || sh == 0)
         return true;
-    smooth = smooth && !((uint32_t)box.w == sw && (uint32_t)box.h == sh);
+    bool own = (uint32_t)box.w == sw && (uint32_t)box.h == sh;
+    smooth = smooth && !own;
     // Edges are added in 64 bits: a picture may be as wide as an int32_t
     // says (a width of 1000000% three tables deep), and its box need not
     // start at zero. What is walked is cut to `clip`, a real surface's.
@@ -168,9 +169,17 @@ bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
     for (int32_t y = y0; y < y1; y++) {
         // The source row whose span covers the middle of this one:
         // floor((y - box.y + 1/2) * sh / box.h), in integers.
-        uint32_t sy = (uint32_t)((((int64_t)y - box.y) * 2 + 1) * sh / ((int64_t)box.h * 2));
+        uint32_t sy = own ? (uint32_t)((int64_t)y - box.y) :
+            (uint32_t)((((int64_t)y - box.y) * 2 + 1) * sh / ((int64_t)box.h * 2));
         const uint32_t *row = src + (uint64_t)sy * stride;
         uint32_t *out = dst + (uint64_t)y * pitch;
+        // At native size the pixel centers coincide. Walk the clipped row
+        // directly instead of dividing to rediscover each source position.
+        if (own) {
+            for (int32_t x = x0; x < x1; x++)
+                put(&out[x], row[(size_t)((int64_t)x - box.x)], premultiplied);
+            continue;
+        }
         for (int32_t x = x0; x < x1; x++) {
             if (smooth) {
                 put(&out[x], smooth_at(src, sw, sh, (uint32_t)((int64_t)x - box.x), box.w,

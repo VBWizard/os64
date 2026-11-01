@@ -307,8 +307,10 @@ already sampled the CSS timeline and prevents a second CSS layout until paint.
 Synchronous geometry reads can still force measurement inside a callback.
 
 A frame remains in progress through the final paint. The next batch waits for
-both its 20 ms deadline and a rest equal to the previous batch's callback,
-rebuild and paint cost. Missed intervals do not accumulate. Covered windows
+both its 20 ms DOM deadline and a fixed 10 ms pause after painting, leaving
+a turn for input and eligible idle work without doubling an expensive frame's
+cost. The DOM deadline is measured after callbacks finish; this policy is not
+a CPU percentage cap. Missed intervals do not accumulate. Covered windows
 retain requests but run no frame callbacks; uncovering permits one current batch.
 The CSS Animations preference does not disable this script API, which pages
 also use for state delivery. Scripts and Modern Web remain its feature gates.

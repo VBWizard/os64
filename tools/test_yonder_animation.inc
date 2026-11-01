@@ -23,8 +23,10 @@ static void animation_window_cases(void)
     check((px[10*800+10]&0xffffff)==0x00ff00 && (px[10*800+30]&0xffffff)==0x0000ff,
           "frame window: one paint contains both ordered callbacks");
     os64_free(px);
-    clock_us+=70000;motion_painted();
-    check(animation_next()==1090,"frame window: callback through paint cost paces next batch");
+    clock_us+=70000;now_ms+=70;motion_painted();
+    check(animation_next()==1100,"frame window: expensive paint leaves a fixed input/idle opportunity");
+    now_ms=1099;script_turn();
+    check(!g.raf_painting,"frame window: callback waits through post-paint pause");
     g.covered=true;now_ms=6000;
     script_turn();
     check(animation_next()==YONDER_NEVER && !g.raf_painting,
@@ -73,6 +75,33 @@ static void animation_window_cases(void)
     motion_painted();probe_drop();
     probe_page("<p>replacement</p>",true);
     check(animation_next()==YONDER_NEVER,"frame window: navigation drops old callbacks");
+    probe_drop();
+    // Repeated costly paints must still admit timers, pointer input and idle
+    // work; a late frame resumes once, without replaying missed intervals.
+    now_ms=1000;
+    probe_page("<button id=hit>waiting</button><p id=timer>waiting</p><p id=idle>waiting</p>"
+        "<p id=count>0</p><script>var n=0;function frame(){"
+        "document.getElementById('count').textContent=String(++n);requestAnimationFrame(frame)}"
+        "requestAnimationFrame(frame);"
+        "document.getElementById('hit').onclick=()=>{document.getElementById('hit').textContent='clicked';"
+        "requestIdleCallback(()=>document.getElementById('idle').textContent='ran')};"
+        "setTimeout(()=>document.getElementById('timer').textContent='fired',95);"
+        "</script>",true);
+    script_turn();
+    now_ms=1020;script_turn();
+    now_ms=1090;clock_us+=70000;motion_painted();
+    check(animation_next()==1100,"frame pacing: a slow paint incurs ten milliseconds, not its own cost");
+    now_ms=1095;input_click_at("hit");script_turn();
+    check(probe_text_is("hit","clicked") && probe_text_is("timer","fired"),
+          "frame pacing: pointer and timer tasks run during the pause");
+    motion_painted();script_turn();
+    check(probe_text_is("idle","ran"),"frame pacing: eligible idle work uses the post-paint gap");
+    check(probe_text_is("count","1"),"frame pacing: ordinary task does not bypass frame deadline");
+    now_ms=1100;script_turn();motion_painted();
+    check(probe_text_is("count","2") && animation_next()==1120,
+          "frame pacing: fast frame retains nominal DOM deadline");
+    now_ms=9000;script_turn();motion_painted();
+    check(probe_text_is("count","3"),"frame pacing: long absence runs one batch without catching up");
     probe_drop();
     // Wake for CSS alone: idle must get a turn between frames even when
     // no ordinary task or animation-frame callback made script_turn succeed.

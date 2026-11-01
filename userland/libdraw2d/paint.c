@@ -73,6 +73,22 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *s, double x, double y,
     uint32_t replacement = composite.operation == DRAW2D_CLEAR ? 0 : source.argb;
     draw2d_pixel_t wide_replacement = draw2d_unpack(replacement);
     draw2d_pixel_t solid = draw2d_color(source.argb, composite.opacity, 65535);
+    /* A large 8-bit span has just 256 possible destination values per
+     * channel. Tabulate the existing wide blend and pack rounding once;
+     * small fills avoid paying for the table. Fractional edges stay below. */
+    uint32_t blend[4][256];
+    bool tabulated = !replace && s->format == DRAW2D_ARGB8_PREMULTIPLIED &&
+        (right - ceil(left)) * (bottom - ceil(top)) >= 1024 &&
+        right - ceil(left) >= 1 && bottom - ceil(top) >= 1;
+    if (tabulated) {
+        for (unsigned i = 0; i < 256; ++i) {
+            uint32_t packed = draw2d_pack(draw2d_over(solid, draw2d_unpack(i * 0x01010101u)));
+            blend[0][i] = packed & 0xff000000u;
+            blend[1][i] = packed & 0x00ff0000u;
+            blend[2][i] = packed & 0x0000ff00u;
+            blend[3][i] = packed & 0x000000ffu;
+        }
+    }
     for (uint32_t py = y0; py < y1; ++py) {
         unsigned char *row = (unsigned char *)s->pixels + (size_t)py * s->stride;
         double cy = min(bottom, (double)py + 1) - max(top, py);
@@ -87,6 +103,13 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *s, double x, double y,
                     while (px < end) {
                         ((draw2d_pixel_t *)row)[px] = draw2d_over(solid, ((draw2d_pixel_t *)row)[px]);
                         ++px;
+                    }
+                } else if (tabulated) {
+                    while (px < end) {
+                        uint32_t dest = ((uint32_t *)row)[px];
+                        ((uint32_t *)row)[px++] = blend[0][dest >> 24] |
+                            blend[1][(dest >> 16) & 255] |
+                            blend[2][(dest >> 8) & 255] | blend[3][dest & 255];
                     }
                 } else {
                     while (px < end) {

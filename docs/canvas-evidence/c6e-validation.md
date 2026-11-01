@@ -12,20 +12,37 @@ premultiplied surfaces retain their stride, capacity and work-limit contracts.
 Fractional edges retain the original area-coverage calculation.
 
 This changes `libdraw2d`, so Canvas callers benefit without another renderer.
-The animation scheduler, frame deadlines, rest policy and geometry limits are
-unchanged. Large drawing operations no longer repeat coverage calculations
-and source-color conversion for each fully covered interior pixel.
+Large drawing operations avoid repeated coverage calculations and source-color
+conversion for fully covered interior pixels. Large translucent 8-bit fills also
+tabulate the wide blend and packing result for each possible destination byte;
+the four channel tables occupy 4 KiB on the call's stack, with no retained cache.
+Small spans and 16-bit surfaces keep their arithmetic paths. Native-size browser
+presentation walks source rows directly while preserving alpha and clipping.
+
+Script frames retain their 20 ms DOM deadline, measured after callbacks finish,
+and leave a fixed 10 ms pause after painting. The pause admits input and eligible
+idle work without repeating an expensive frame's elapsed time as a mandatory
+rest. This is not a CPU percentage cap. Covered-window handling, batch ownership,
+missed-frame coalescing and geometry limits retain their contracts.
 
 ## Correctness
 
-- Native Canvas/shared-paint suite: **230,101 assertions**, ASan, UBSan and
+- Native Canvas/shared-paint suite: **240,341 assertions**, ASan, UBSan and
   LeakSanitizer enabled. The rectangle oracle calculates each pixel's area
   coverage independently of span selection. It covers opaque/translucent
   colors, opacity endpoints, clear, both surface formats, negative and
   fractional dimensions, clipping, extreme finite coordinates, row padding,
-  exact final-row capacity, damage and atomic work-limit refusal.
-- Complete scripted-browser suite: **15,931 checks, zero failures**, with
+  exact final-row capacity, damage and atomic work-limit refusal. Large-span
+  tests cover every source alpha and destination byte, opacity endpoints and
+  intermediate values, and rectangles above and below the lookup threshold.
+- Complete scripted-browser suite: **15,942 checks, zero failures**, with
   ASan, UBSan and LeakSanitizer enabled.
+- Painter suite: **2,077 checks, zero failures**, with ASan, UBSan and
+  LeakSanitizer enabled. Native-size presentation cases cover translated clips,
+  negative placement, padded rows and straight/premultiplied transparency.
+- Frame-loop tests cover the post-paint pause, fast-frame nominal deadline,
+  clicks, timers and idle work during repeated animation, one-batch resumption
+  after a long absence, covered windows and navigation teardown.
 - Captured example runs release their tracked allocations. Final Canvas pixel
   hashes match the baseline at both tested sizes for Bouncing Balls, 2D Wave
   Simulation, and Starfield.
@@ -39,7 +56,7 @@ captured resources, the production FreeType backend with a fixture font, and
 a controlled clock for scheduling. Native mouse ingress starts each animation.
 Wall-clock measurements separate script/drawing from browser painting.
 
-Each row is the median drawing-plus-painting cost of eight subsequent frames
+The initial rectangle-span comparison below is the median drawing-plus-painting cost of eight subsequent frames
 in the sanitized host harness. These exclude deliberate inter-frame rest and
 OS window presentation; they are **not P5 frame-rate measurements**.
 
@@ -61,6 +78,28 @@ At 1920 × 1080, opaque fills fall from 30.81 to 0.75 ms, clears from 16.66 to
 0.58 ms, translucent fills from 30.36 to 13.48 ms, and a 50 × 50 fractional
 rectangle grid from 35.39 to 5.48 ms. Those isolate this primitive and must not
 be presented as whole-browser or hardware speedups.
+
+## Fullscreen pacing follow-up
+
+The first P5 browsing pass confirmed the examples draw correctly, but fullscreen
+Bouncing Balls remained visibly slow. The example advances physics once per
+frame, rather than by elapsed time, so fewer frames also slow its simulation.
+The equal-cost rest in Yonder contributed to the reported roughly 50% thread
+utilization; it was an animation scheduling policy, not a Canvas CPU quota.
+
+A matched eight-frame sanitized host replay compares the first delivered build
+(`479efaeb`) with the byte tables and native-size presentation changes:
+
+| Bouncing Balls viewport | Prior frame work | Revised frame work | Reduction |
+|---|---:|---:|---:|
+| 600 × 600 | 8.11 ms | 6.72 ms | 17.1% |
+| 1920 × 1080 | 41.52 ms | 33.03 ms | 20.5% |
+
+Both final bitmap hashes match. These measurements exclude the host's frame
+waiting and native window presentation, so they do not quantify the pacing
+change or predict P5 frame rates. A separate optimized primitive benchmark
+reduces a 1920 × 1080 translucent fill from 13.59 to 2.10 ms with matching pixels;
+that is the fill alone. P5 acceptance of the revised pacing remains pending.
 
 ## Native handoff
 
@@ -85,6 +124,6 @@ coordinate debt, separate from rectangle painting; the hover-started frame
 measurements do not exercise it. The guide names this limitation rather than
 promising that the grid can be edited.
 
-P5 acceptance is pending. The delivery changes only `libdraw2d.so` in the
-runtime cohort and reuses the other tested binaries. The earlier Danlegt
+P5 acceptance of the follow-up is pending. Its runtime delivery changes
+`libdraw2d.so` and `yonder` and reuses the other tested binaries. The earlier Danlegt
 [checkpoint](c6-target-checkpoint.md) records its independent startup blockers.

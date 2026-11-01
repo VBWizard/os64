@@ -1076,6 +1076,22 @@ static void scale_cases(void)
     expect("surface: truncated final row is refused before writing",
         !yonder_draw_surface(result,2,(os64_gui_rect_t){0,0,2,2},(os64_gui_rect_t){0,0,2,2},false,&surface) &&
         result[0]==0xffff7f7f,NULL);
+    surface.capacity++;
+    for (unsigned straight=0;straight<2;straight++) {
+        surface.format=straight?DRAW2D_ARGB8_STRAIGHT:DRAW2D_ARGB8_PREMULTIPLIED;
+        premul[0]=straight?0x80ff0000:0x80800000;
+        uint32_t clipped[15],expected[15];
+        for (unsigned i=0;i<15;i++) clipped[i]=expected[i]=0xffffffff;
+        expected[6]=0xffff7f7f;expected[11]=0xff00ff00;
+        expect("surface: native-size smooth draw respects translated clip, alpha and row padding",
+            yonder_draw_surface(clipped,5,(os64_gui_rect_t){1,0,1,3},
+                (os64_gui_rect_t){1,1,2,2},true,&surface) && pixels_are(clipped,expected,15),NULL);
+        for (unsigned i=0;i<15;i++) clipped[i]=expected[i]=0xffffffff;
+        expected[5]=0xff0000ff;
+        expect("surface: native-size source offset survives negative placement",
+            yonder_draw_surface(clipped,5,(os64_gui_rect_t){0,0,3,3},
+                (os64_gui_rect_t){-1,0,2,2},false,&surface) && pixels_are(clipped,expected,15),NULL);
+    }
 
     const uint32_t A = 0xff112233u, B = 0xff445566u, C = 0xff778899u;
     uint32_t dst[16] = {0};

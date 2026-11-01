@@ -680,8 +680,12 @@ C6e optimizes shared rectangle painting: fully covered spans reuse their
 source color, and opaque fills/clears avoid destination reads. Fractional-edge
 coverage, blend rounding and work-limit admission retain their contracts.
 Captured Bouncing Balls and 2D Wave Simulation frames match the baseline's
-pixels and use less drawing time at both tested sizes. P5 acceptance remains
-pending; see [C6e validation](../../canvas-evidence/c6e-validation.md).
+pixels and use less drawing time at both tested sizes. The first P5 browsing
+pass found fullscreen Bouncing Balls still slow. Its follow-up tabulates large
+translucent 8-bit fills, presents native-size images without per-pixel coordinate
+division, and replaces equal-cost frame rest with a fixed 10 ms post-paint pause
+under the existing DOM deadline. P5 acceptance of the follow-up remains pending;
+see [C6e validation](../../canvas-evidence/c6e-validation.md).
 
 Danlegt's wall and selected rainbow cursor render in the broader captured
 replay. Its game startup reaches missing observer/media APIs, and its modal
