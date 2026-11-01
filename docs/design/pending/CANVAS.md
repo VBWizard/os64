@@ -10,6 +10,13 @@ The next implementation work follows the dependency map below. This design
 does not promise that drawing rectangles alone makes the live site work.
 WebGL, OffscreenCanvas workers and video playback are separate features.
 
+Acceptance update, 2026-11-01: use the
+[HTML5 Canvas examples](https://curran.github.io/HTML5Examples/) for the next
+real-page checks, including animation at different window sizes. Danlegt is
+retained as diagnostic evidence rather than a release gate: its normal game
+startup reaches missing observer and media APIs before installing the drawing
+handlers. See [the captured-page checkpoint](../../canvas-evidence/c6-target-checkpoint.md).
+
 ## Acceptance targets and existing foundations
 
 [Danlegt](https://danlegt.com/) uses Canvas 2D. The
@@ -669,13 +676,19 @@ sector reveals and the completion callback. Its fixture omits external page
 styling and symbol images and performs no remote submission. See
 [C6d validation](../../canvas-evidence/c6d-validation.md).
 
-Remaining C6 work includes complete captured/live signature-wall and
-scratch-game acceptance.
-The signature editor has a narrower successful replay: its unchanged public
-script draws, undoes, redoes, erases and clears through native pointer input
-against captured markup. That diagnostic omits external CSS and images and
-does not establish wall rendering or whole-site compatibility. Cursor effects
-still need their selected-effect inventory. These are acceptance tasks, not a
-fixed count of remaining PRs.
+C6e optimizes shared rectangle painting: fully covered spans reuse their
+source color, and opaque fills/clears avoid destination reads. Fractional-edge
+coverage, blend rounding and work-limit admission retain their contracts.
+Captured Bouncing Balls and 2D Wave Simulation frames match the baseline's
+pixels and use less drawing time at both tested sizes. P5 acceptance remains
+pending; see [C6e validation](../../canvas-evidence/c6e-validation.md).
+
+Danlegt's wall and selected rainbow cursor render in the broader captured
+replay. Its game startup reaches missing observer/media APIs, and its modal
+layout still needs native investigation. The isolated signature-editor and
+CD-ROM checks remain narrower evidence. The current release checks use
+Curran's examples instead; the [target checkpoint](../../canvas-evidence/c6-target-checkpoint.md)
+separates these outcomes from full-site support. Acceptance is not a fixed
+count of remaining PRs.
 
 See [C6a validation and target checkpoint](../../canvas-evidence/c6a-validation.md).

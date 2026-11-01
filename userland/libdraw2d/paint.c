@@ -65,10 +65,37 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *s, double x, double y,
     if (bottom > y1) ++y1;
     if ((uint64_t)(x1 - x0) * (y1 - y0) > max_pixels)
         return DRAW2D_LIMIT;
+    /* Interior pixels share full coverage and one premultiplied source color.
+     * Clear and opaque source-over also avoid reading the destination. Keep
+     * fractional edges on the coverage path to preserve its rounding order. */
+    bool replace = composite.operation == DRAW2D_CLEAR ||
+        (composite.opacity == 65535 && (source.argb >> 24) == 255);
+    uint32_t replacement = composite.operation == DRAW2D_CLEAR ? 0 : source.argb;
+    draw2d_pixel_t wide_replacement = draw2d_unpack(replacement);
+    draw2d_pixel_t solid = draw2d_color(source.argb, composite.opacity, 65535);
     for (uint32_t py = y0; py < y1; ++py) {
         unsigned char *row = (unsigned char *)s->pixels + (size_t)py * s->stride;
         double cy = min(bottom, (double)py + 1) - max(top, py);
-        for (uint32_t px = x0; px < x1; ++px) {
+        for (uint32_t px = x0; px < x1;) {
+            if (cy == 1 && px >= left && (double)px + 1 <= right) {
+                uint32_t end = (uint32_t)right;
+                if (replace && s->format == DRAW2D_ARGB16_PREMULTIPLIED) {
+                    while (px < end) ((draw2d_pixel_t *)row)[px++] = wide_replacement;
+                } else if (replace) {
+                    while (px < end) ((uint32_t *)row)[px++] = replacement;
+                } else if (s->format == DRAW2D_ARGB16_PREMULTIPLIED) {
+                    while (px < end) {
+                        ((draw2d_pixel_t *)row)[px] = draw2d_over(solid, ((draw2d_pixel_t *)row)[px]);
+                        ++px;
+                    }
+                } else {
+                    while (px < end) {
+                        ((uint32_t *)row)[px] = draw2d_pack(draw2d_over(solid, draw2d_unpack(((uint32_t *)row)[px])));
+                        ++px;
+                    }
+                }
+                continue;
+            }
             double cx = min(right, (double)px + 1) - max(left, px);
             uint16_t coverage = (uint16_t)(cx * cy * 65535 + .5);
             draw2d_pixel_t dest = s->format == DRAW2D_ARGB16_PREMULTIPLIED
@@ -81,6 +108,7 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *s, double x, double y,
                 ((draw2d_pixel_t *)row)[px] = result;
             else
                 ((uint32_t *)row)[px] = draw2d_pack(result);
+            ++px;
         }
     }
     if (damage)
