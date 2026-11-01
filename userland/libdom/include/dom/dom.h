@@ -201,7 +201,7 @@ static inline os64_dom_options_t os64_dom_default_options(void)
 
 /* Which interface a host event is, with the Modern Web switch on: an
  * Event, a MouseEvent, a KeyboardEvent, a FocusEvent, an InputEvent (a
- * person's edit of a text control), a SubmitEvent. With it off every one is
+ * person's edit of a text control), a SubmitEvent or a PointerEvent. With it off every one is
  * an Event, MOUSE and KEY carrying their fields as data properties. */
 typedef enum {
     OS64_DOM_EVENT_PLAIN = 0,
@@ -209,11 +209,12 @@ typedef enum {
     OS64_DOM_EVENT_KEY,
     OS64_DOM_EVENT_FOCUS,
     OS64_DOM_EVENT_INPUT,
-    OS64_DOM_EVENT_SUBMIT
+    OS64_DOM_EVENT_SUBMIT,
+    OS64_DOM_EVENT_POINTER
 } os64_dom_event_kind_t;
 
 /* An event the host dispatches. Strings are borrowed for the call. Mouse
- * fields are read for MOUSE, key fields for KEY. related is the other node:
+ * fields are read for MOUSE and POINTER, key fields for KEY. related is the other node:
  * mouseover's and mouseout's, a focus change's (the node losing focus for
  * focus, the one gaining it for blur), a submission's submitter; or NULL.
  * detail is UIEvent's: a mouse button's click count, 0 for any other
@@ -223,7 +224,7 @@ typedef struct {
     const char *type;
     bool bubbles, cancelable;
     os64_dom_event_kind_t kind;
-    int32_t client_x, client_y, screen_x, screen_y;
+    double client_x, client_y, screen_x, screen_y;
     int32_t button;
     int32_t detail;
     uint16_t buttons;
@@ -233,7 +234,12 @@ typedef struct {
     bool shift, ctrl, alt, meta;
     // Optional CSS-page coordinates captured with the event, before callbacks.
     bool page_coordinates;
-    int32_t page_x, page_y;
+    double page_x, page_y;
+    /* POINTER adds identity and pressure to the mouse coordinate record. */
+    int32_t pointer_id;
+    const char *pointer_type;
+    bool is_primary;
+    double pressure;
 } os64_dom_event_t;
 
 typedef enum {
@@ -242,18 +248,19 @@ typedef enum {
     OS64_DOM_NAVIGATE_REPLACE,   /* location.replace() */
     OS64_DOM_NAVIGATE_RELOAD,
     OS64_DOM_NAVIGATE_HISTORY,   /* history.back/forward/go: delta */
-    OS64_DOM_NAVIGATE_FOLLOW,    /* a link's click() not cancelled: node */
+    OS64_DOM_NAVIGATE_FOLLOW,    /* an uncanceled link activation: node */
     OS64_DOM_NAVIGATE_SUBMIT     /* form.submit(), or a submit button's click()
                                   * and submit event not cancelled: node is the
                                   * form, submitter the button or NULL */
 } os64_dom_navigation_kind_t;
 
-/* The last navigation a script asked for. Nodes arrive HELD: the taker
+/* The last script navigation request or native activation. Nodes arrive HELD: the taker
  * releases them with os64_html_release when it is done with them. */
 typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
     int32_t delta;
+    bool user_activated; /* the default of a trusted native click, not a script request */
     char url[OS64_DOM_URL_MAX];
 } os64_dom_navigation_t;
 
@@ -792,7 +799,7 @@ bool os64_dom_idle_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * leaves the grant bounded by timers, pending frames and its 50 ms period. */
 bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_t *outcome);
 
-/* The navigation a script asked for since the last take, if any: the last
+/* A script navigation request or native activation since the last take: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add
  * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the
  * one before it. False when there is none. */

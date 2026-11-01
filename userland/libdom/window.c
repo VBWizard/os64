@@ -29,6 +29,7 @@ void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_htm
     if (dom->navigation.node != NULL) os64_html_release(dom->document, dom->navigation.node);
     if (dom->navigation.submitter != NULL) os64_html_release(dom->document, dom->navigation.submitter);
     dom->navigation.kind = kind;
+    dom->navigation.user_activated = false;
     dom->navigation.node = node;
     dom->navigation.submitter = submitter;
     dom->navigation.delta = delta;
@@ -40,6 +41,7 @@ bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask)
     if (ask != NULL) os64_memset(ask, 0, sizeof(*ask));
     if (dom == NULL || ask == NULL || dom->navigation.kind == OS64_DOM_NAVIGATE_NONE) return false;
     ask->kind = dom->navigation.kind;
+    ask->user_activated = dom->navigation.user_activated;
     ask->node = dom->navigation.node;
     ask->submitter = dom->navigation.submitter;
     ask->delta = dom->navigation.delta;
@@ -481,7 +483,7 @@ enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
  * form in a document with no window, or in no document, cannot navigate,
  * and HTML submits nothing from it, not even the event. */
 static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
-                  const os64_html_node_t *submitter, bool event)
+                  const os64_html_node_t *submitter, bool event, bool native)
 {
     if (!d_window_document(dom, form) || !d_connected(form)) return 1;
     if (!event) {
@@ -500,7 +502,10 @@ static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
     int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
     int result = valid > 0 ? fire_made(dom, ctx, form, d_submit_event_new(dom, ctx, submitter)) : valid < 0 ? -1 : 1;
     dom->submitting = self.next;
-    if (valid > 0 && result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
+    if (valid > 0 && result > 0) {
+        d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
+        dom->navigation.user_activated = native;
+    }
     return result;
 }
 
@@ -521,8 +526,8 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
  * back (legacy-canceled-activation), and one nobody cancelled runs the
  * activation behaviour: a changed box's input and change, a link
  * followed, a form submitted or reset (not by a disabled button). Both
- * element.click() and a MouseEvent click a script dispatches come here
- * (event.c's dispatch); a host's click is the host's own to act on. */
+ * element.click() and script-dispatched MouseEvent/PointerEvent clicks come
+ * here, as do native pointer clicks. Legacy host clicks retain host defaults. */
 bool d_activation_has(const os64_html_node_t *node)
 {
     if (html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA))
@@ -537,7 +542,7 @@ int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
 {
     bool radio = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "radio", false);
     bool checkbox = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "checkbox", false);
-    *saved = (DActivation){radio || checkbox, checkbox, false, false};
+    *saved = (DActivation){.checkable = (radio || checkbox) && !disabled(node), .checkbox = checkbox};
     if (!saved->checkable) return 0;
     int64_t status = os64_page_node_checked(dom->state, node, &saved->was);
     if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &saved->was_indeterminate);
@@ -564,24 +569,27 @@ int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
         }
         return result;
     }
-    if (canceled) return 0;
+    if (canceled || disabled(node)) return 0;
     if ((html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA)) &&
         os64_html_attr(node, "href") != NULL) {
         /* A link in a document with no window cannot navigate. */
-        if (d_window_document(dom, node)) d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW, node, NULL, NULL, 0);
+        if (d_window_document(dom, node)) {
+            d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW, node, NULL, NULL, 0);
+            dom->navigation.user_activated = saved->native;
+        }
         return 1;
     }
     bool button = html_element(node, OS64_HTML_TAG_BUTTON);
     bool input = html_element(node, OS64_HTML_TAG_INPUT);
     const os64_html_node_t *form = d_form_owner(node);
     if (form == NULL || disabled(node)) return 1;
-    if (submit_button(node)) return submit(dom, ctx, form, node, true);
+    if (submit_button(node)) return submit(dom, ctx, form, node, true, saved->native);
     if ((button || input) && type_is(node, "reset", false)) return reset(dom, ctx, form);
     return 1;
 }
 
 /* element.click() is a synthetic click. With the switch on it is a
- * MouseEvent (d_click_event_new), whose dispatch runs the activation, the
+ * PointerEvent (d_click_event_new), whose dispatch runs the activation, the
  * element's or, for one with none, its nearest ancestor's. With it off it
  * is a plain Event, which no dispatch activates, so the element's own
  * activation runs here, around it, as before the arc. */
@@ -619,8 +627,8 @@ JSValue d_element_action(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
     case A_CLICK: result = click(dom, ctx, node); break;
     case A_FOCUS: notify(dom, node, OS64_DOM_ACTIVATE_FOCUS); break;
     case A_BLUR: notify(dom, node, OS64_DOM_ACTIVATE_BLUR); break;
-    case A_SUBMIT: result = submit(dom, ctx, node, NULL, false); break;
-    case A_REQUEST_SUBMIT: result = submit(dom, ctx, node, NULL, true); break;
+    case A_SUBMIT: result = submit(dom, ctx, node, NULL, false, false); break;
+    case A_REQUEST_SUBMIT: result = submit(dom, ctx, node, NULL, true, false); break;
     case A_RESET: result = reset(dom, ctx, node); break;
     default: return JS_ThrowTypeError(ctx, "Unknown element action");
     }
@@ -643,7 +651,7 @@ static JSValue element_method(JSContext *ctx, JSValueConst self, int argc, JSVal
         if (!submit_button(submitter)) return JS_ThrowTypeError(ctx, "The submitter is not a submit button");
         if (d_form_owner(submitter) != node)
             return d_error(ctx, "NotFoundError", "The submitter is not this form's");
-        return submit(dom, ctx, node, submitter, true) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        return submit(dom, ctx, node, submitter, true, false) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     return d_element_action(dom, ctx, node, magic);
 }

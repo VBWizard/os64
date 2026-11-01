@@ -2669,11 +2669,26 @@ static void cost_reset(void)
     yonder_paint_cache_counts_restart(g.paint_cache);
 }
 
+// Pointer hit testing follows published geometry, not every drawing operation.
+static bool s_pointer_replay, s_pointer_ignore_cancel, s_pointer_cancel_owed;
+static bool s_pointer_known, s_pointer_rehit, s_pointer_draining;
+static uint16_t s_pointer_buttons;
+static unsigned s_pointer_modifiers;
+static os64_ui_menu_model_t *s_pointer_menu;
+static os64_gui_rect_t s_pointer_menu_anchor;
+static uint64_t s_pointer_menu_serial;
+static uint64_t s_pointer_revision, s_pointer_rested;
+static void pointer_geometry_changed(void) { s_pointer_revision++; s_pointer_rehit = true; }
+static uint64_t pointer_next(void);
+static bool pointer_turn(void);
+static void pointer_cancel_run(void);
+
 // A layout, timed (s_cost): page_lay_out_run is the layout itself.
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     cost_begin(PS_LAYOUTS);
     bool laid = page_lay_out_run(p, width, height, zoom, reclaim);
+    if (laid && p == &g.page) pointer_geometry_changed();
     cost_end(PS_LAYOUTS);
     s_cost.layouts++;
     cost_fold(PS_LAYOUTS, PS_LAYOUTS);
@@ -3313,6 +3328,9 @@ static void refresh_if_declared(void)
 // draining it cancels each one.
 static void page_departs(void)
 {
+    // The compositor keeps a pressed window's grab across navigation.
+    // Consume that physical tail even after the old document is gone.
+    if (s_pointer_known && s_pointer_buttons) s_pointer_draining = true;
     yonder_scripts_depart(g.page.scripts);
 }
 
@@ -7078,6 +7096,7 @@ static void pictures_schedule(void)
     deadline_offer(&d, motion_next(), PAST_LAYOUTS);
     deadline_offer(&d, tick_next(), PAST_TICKS);
     deadline_offer(&d, animation_next(), PAST_FRAMES);
+    deadline_offer(&d, pointer_next(), PAST_FRAMES);
     if (g.coming.active)
         deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
     if (g.stream.active && g.stream.sheets_due != 0)
@@ -7556,6 +7575,7 @@ static void forms_sync_from_model(bool text);
 // libpage's, so picking one may have cleared others.
 static void check_changed(os64_ui_checkbox_t *cb, void *user)
 {
+    if (s_pointer_replay) { forms_sync_from_model(false); return; }
     const FormWidget *fw = user;
     uint8_t was = 0;
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
@@ -7617,6 +7637,7 @@ static void form_reset(int32_t form)
 
 static void button_clicked(os64_ui_widget_t *w, void *user)
 {
+    if (s_pointer_replay) return;
     (void)w;
     const FormWidget *fw = user;
     if (scripts_live()) {
@@ -8223,6 +8244,7 @@ static const os64_ui_class_t *unpainted_class(const os64_ui_class_t *cls)
 
 static void forms_place(void)
 {
+    pointer_geometry_changed();
     const os64_gui_rect_t v = g.view.bounds;
     for (int32_t i = 0; i < g.nfw; i++) {
         FormWidget *fw = g.fw[i];
@@ -9274,10 +9296,9 @@ static void unshown_go(Page *p, int32_t delta)
         session_go((int32_t)target, WAY_BY_PAGE, from);
 }
 
-// A navigation a page's script asked for. Every one is the page's own
-// (WAY_BY_PAGE): no person's activation, even for a click() or submit() a
-// listener ran inside the person's own click, which HTML would give it
-// (transient activation, which yonder does not track: DIVERGENCES).
+// Navigation requested by the binding. A native click's default retains
+// the person's activation; script requests remain WAY_BY_PAGE, including
+// a click() or submit() called by a listener (DIVERGENCES: transient activation).
 static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
                                bool shown)
 {
@@ -9366,7 +9387,7 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         if (shown) {
             int32_t link = os64_page_link_for(page_model(&g.page), ask->node);
             if (link >= 0)
-                follow_link_asked(link, WAY_ASK_GO, WAY_BY_PAGE);
+                follow_link_asked(link, WAY_ASK_GO, ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE);
         }
         return;
     case OS64_DOM_NAVIGATE_SUBMIT:
@@ -9380,10 +9401,10 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             // submitter's submission before its submit event (libdom's
             // window.c), and the model must not judge it again.
             if (control >= 0)
-                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, WAY_BY_PAGE, g.page.modern);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE, g.page.modern);
             else
                 form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind,
-                             WAY_BY_PAGE, false);
+                             ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE, false);
         }
         return;
     case OS64_DOM_NAVIGATE_NONE:
@@ -10390,12 +10411,14 @@ static bool script_turn(void)
         }
     }
     if (!ran)
-        return false;
+        return pointer_turn();
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree.
     bool rendered = script_rebuild();
-    if (rendered)
+    if (rendered) {
         asks_perform(g.page.scripts, doc, true);
+        if (page_doc(&g.page) == doc) (void)pointer_turn();
+    }
     return rendered;
 }
 
@@ -10552,6 +10575,9 @@ static void input_release(const Input *in)
 // the focus were resting on in it, are let go.
 static void inputs_drop(void)
 {
+    if (s_pointer_known && s_pointer_buttons) s_pointer_draining = true;
+    s_pointer_cancel_owed = s_pointer_known = s_pointer_rehit = false;
+    s_pointer_buttons = 0; s_pointer_modifiers = 0; s_pointer_rested = 0; s_pointer_menu = NULL;
     for (int32_t i = 0; i < g.ninputs; i++)
         input_release(&g.inputs[i]);
     g.ninputs = 0;
@@ -10641,6 +10667,9 @@ static os64_dom_event_t mouse_event(const char *type, bool cancelable, const Inp
     ev.page_y = clamp32(((int64_t)in->y - g.view.bounds.y + g.sy)*1000/zoom);
     ev.screen_x = in->x;
     ev.screen_y = in->y;
+    if (g.modern && os64_streq(type, "click")) {
+        ev.kind = OS64_DOM_EVENT_POINTER; ev.pointer_id = -1; ev.pointer_type = "";
+    }
     return ev;
 }
 
@@ -10933,6 +10962,8 @@ static void inputs_run(void)
 
 static void input_lost(void)
 {
+    yonder_scripts_pointer_cancel(g.page.scripts);
+    s_pointer_cancel_owed = true;
     g.seq = g.key_seq = 0;
     g.pressed_link = -1;
     if (g.pressed_node != NULL)
@@ -13403,6 +13434,11 @@ static bool wheel_box(int32_t x, int32_t y, int32_t dx, int32_t dy)
 static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_t *ev)
 {
     (void)ui;
+    if (s_pointer_replay && (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN ||
+                            ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP || ev->type == OS64_GUI_EVENT_MOUSE_MOVE)) {
+        if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) os64_ui_set_focus(&g.ui, w);
+        return true;
+    }
     int32_t page = w->bounds.h - line_step();
     switch (ev->type) {
     case OS64_GUI_EVENT_MOUSE_WHEEL: {
@@ -13575,8 +13611,11 @@ static bool download_taken(void *ctx, const char *name)
 static void download_ask(const char *url, const char *referrer, const char *disposition)
 {
     if (s_ask.url != NULL) {
-        if (s_save.window > 0)
+        if (s_save.window > 0) {
+            yonder_scripts_pointer_cancel(g.page.scripts);
+            s_pointer_cancel_owed = true;
             (void)os64_gui_window_focus(s_save.window);
+        }
         return;
     }
     if (!downloadable(url)) {
@@ -14354,6 +14393,12 @@ static bool view_context(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *
     os64_ui_menu_model_t *model = g.context_menus[has_link && has_picture ? CONTEXT_BOTH
                                                   : has_link              ? CONTEXT_LINK
                                                                           : CONTEXT_PICTURE];
+    if (g.modern && scripts_live()) {
+        s_pointer_menu = model; s_pointer_menu_anchor = (os64_gui_rect_t){x,y,0,0};
+        s_pointer_menu_serial = g.page_serial;
+        yonder_scripts_pointer_cancel(g.page.scripts); s_pointer_cancel_owed = true;
+        return true;
+    }
     (void)os64_ui_actions_refresh(g.action_view);
     os64_ui_status_code_t rc = os64_ui_menu_open(g.menus, model, g.action_view,
                                                  (os64_gui_rect_t){x, y, 0, 0}, OS64_UI_MENU_CONTEXT);
@@ -14376,7 +14421,7 @@ static void hover(int32_t x, int32_t y)
     g.pointer_y = y;
     // The element under the pointer, for mouseover and mouseout: hover
     // tracks the node now, not only the link (DOM_D7.md § Input events).
-    if (scripts_live()) {
+    if (scripts_live() && !g.modern) {
         const os64_html_node_t *over = element_at(x, y, NULL);
         if (over != g.hover_node) {
             if (g.hover_node != NULL) {
@@ -14997,6 +15042,8 @@ static void ui_dispatch(const os64_gui_event_t *ev)
         field_selection_chosen(g.ui.focus);
 }
 
+#include "pointer_input.inc"
+
 // One of yonder's window's events. The pointer is read before libui
 // because a widget is handed moves only while a button is held and the
 // status line follows its current position; the question bar answers by
@@ -15008,16 +15055,27 @@ static void window_event(void *user, const os64_gui_event_t *event)
         return;
     const os64_gui_event_t ev = *event;
     // The Save dialog is modal (§ Downloads): a press, a key, the wheel or
-    // Settings brings it forward instead. A release still goes through, so
-    // a press that began before the dialog finishes where it began.
+    // Settings brings it forward instead. Cancel a page gesture before the
+    // dialog takes over; its later release drains without activating it.
     if (s_save.window > 0 &&
         (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || ev.type == OS64_GUI_EVENT_KEY_DOWN ||
          ev.type == OS64_GUI_EVENT_MOUSE_WHEEL || ev.type == OS64_GUI_EVENT_SETTINGS)) {
+        yonder_scripts_pointer_cancel(g.page.scripts);
+        s_pointer_cancel_owed = true;
+        pointer_cancel_run();
         (void)os64_gui_window_focus(s_save.window);
         return;
     }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
         input_lost();
+    if (ev.type == OS64_GUI_EVENT_INPUT_LOST || ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
+        ev.type == OS64_GUI_EVENT_WINDOW_RESIZE || ev.type == OS64_GUI_EVENT_SETTINGS ||
+        (ev.type == OS64_GUI_EVENT_WINDOW_FOCUS && !ev.focus.gained)) {
+        yonder_scripts_pointer_cancel(g.page.scripts);
+        s_pointer_cancel_owed = true;
+        pointer_cancel_run();
+    }
+    if (ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED) pointer_geometry_changed();
     if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
         hover(ev.mouse.x, ev.mouse.y);
     else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
@@ -15032,9 +15090,18 @@ static void window_event(void *user, const os64_gui_event_t *event)
                              motion_use, g.modern, modern_use,
                              s_cookies != NULL ? yonder_cookies_mode(s_cookies) : s_cookies_asked,
                              cookies_use);
-    else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
-             !password_key(&ev))
+    else if (!((s_pointer_draining || yonder_scripts_pointer_active(g.page.scripts)) && pointer_route(&ev)) &&
+             !bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
+             !password_key(&ev) && !pointer_route(&ev))
         ui_dispatch(&ev);
+    pointer_cancel_run();
+    if (s_pointer_menu) {
+        os64_ui_menu_model_t *menu = s_pointer_menu; s_pointer_menu = NULL;
+        if (s_pointer_menu_serial == g.page_serial) {
+            (void)os64_ui_actions_refresh(g.action_view);
+            (void)os64_ui_menu_open(g.menus, menu, g.action_view, s_pointer_menu_anchor, OS64_UI_MENU_CONTEXT);
+        }
+    }
     interface_font_finish();
     // What the event became, as DOM events, now libui is done with it.
     inputs_run();
@@ -15134,6 +15201,11 @@ int main(int argc, char **argv)
     g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network
 
     os64_ui_init(&g.ui, &g.ctx);
+    if (!os64_ui_on_gesture_cancel(&g.ui, pointer_widget_canceled)) {
+        os64_printf("yonder: could not install pointer cancellation observer\n");
+        os64_gui_window_destroy(g.win);
+        return 1;
+    }
     g.ui.on_resize = on_resize;
     g.ui.on_close = on_close;
     g.ui.on_doorbell = on_doorbell;

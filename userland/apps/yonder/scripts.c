@@ -1509,6 +1509,28 @@ static uint64_t handler_types(yonder_scripts_t *s)
     return s->handlers;
 }
 
+os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *s, const os64_dom_pointer_sample_t *sample,
+                                         os64_dom_pointer_default_t action, void *opaque,
+                                         bool *ran, os64_js_outcome_t *out)
+{
+    *ran = false;
+    os64_memset(out, 0, sizeof(*out));
+    if (!s || s->dead || !s->options.modern) return OS64_JS_OK;
+    s->task_address = NULL; s->task_us = -1; s->written = 0;
+    if (!ensure_runtime(s, out)) { retire(s); return out->status; }
+    os64_dom_pointer_dispatch(s->dom, sample, action, opaque, ran, out);
+    if (*ran) judged(s, out);
+    return out->status;
+}
+void yonder_scripts_pointer_cancel(yonder_scripts_t *s)
+{
+    if (s && !s->dead) os64_dom_pointer_cancel(s->dom);
+}
+bool yonder_scripts_pointer_active(const yonder_scripts_t *s)
+{
+    return s && !s->dead && os64_dom_pointer_active(s->dom);
+}
+
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_node_t *node,
                                          const os64_dom_event_t *event, bool *prevented,
                                          os64_js_outcome_t *out)

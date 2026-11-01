@@ -1,6 +1,7 @@
 #ifndef OS64_UI_INTERNAL_H
 #define OS64_UI_INTERNAL_H
 #include "os64/ui.h"
+void ui_gesture_canceled(os64_ui_t *, os64_ui_widget_t *);
 // Apply signed row motion without wrapping at either end of size_t.
 static inline size_t ui_scroll_rows(size_t top, int32_t delta)
 {

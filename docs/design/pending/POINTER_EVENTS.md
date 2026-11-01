@@ -1,6 +1,6 @@
 # PE1 — Mouse-backed pointer events and capture
 
-Draft, 2026-11-01. Base: Canvas reconciliation `c1f354a4` (PR #447),
+Implemented for hardware acceptance, 2026-11-01. Base: Canvas reconciliation `c1f354a4` (PR #447),
 stacked on `canvas-integration`. PE1 follows Modern Web 5d and precedes
 Canvas C6. It supplies the input path for drawing and scratching; C6 owns
 end-to-end acceptance of the captured Danlegt applications.
@@ -22,9 +22,8 @@ buttons: hovering is not the same as a button-active gesture.
 
 Pen/touch hardware, gesture arbitration, pointer lock, raw updates and motion
 prediction are outside PE1. Do not advertise working raw/predicted input.
-Any coalesced-event interface exposed must report the samples actually kept;
-constructor/IDL compatibility and trusted hardware support are separate
-claims. `touch-action` does not control this mouse-only stream.
+PE1 does not expose `getCoalescedEvents` or `getPredictedEvents`;
+constructor compatibility and trusted hardware support are separate claims. `touch-action` does not control this mouse-only stream.
 
 Normative reference: [Pointer Events Level 3](https://www.w3.org/TR/pointerevents3/),
 especially sections 4.1–4.2, 9 and 11. Use its constructor defaults, button
@@ -54,21 +53,23 @@ missed up leaves scratching active. Tests must reproduce both arrangements.
 Put pointer identity, button state, pending/current capture and compatibility
 suppression in a small document-owned controller in libdom (`pointer.c`).
 Yonder owns native input acquisition, hit testing, task scheduling and browser
-default actions. A proposed host pointer-dispatch entry accepts a normalized
-sample plus a held physical hit target and returns the default-action verdict
-and any activation target needed by the host. Final C names belong to the
-implementation; the ownership boundary is the contract.
+default actions. `os64_dom_pointer_dispatch` in `dom/pointer.h` accepts a
+normalized sample and a borrowed physical hit target, with a callback for
+native control defaults. The controller holds targets across listener calls.
+Shared libdom activation handles clicks and records navigation requests;
+Yonder takes those requests after the packet. The optional `ran` result
+separates script tasks from quiet hover updates.
 
 Do not make JavaScript's synthetic `dispatchEvent` a source of physical
 pointer state. Synthetic PointerEvents use normal dispatch; their chosen IDs
 cannot activate a pointer or take over a native drag.
 
-The native queue records a document generation, sample coordinates, button
+The browser ingress records a document generation, sample coordinates, button
 mask, changed button and modifiers. Convert content-local positions using
 the viewport origin, scroll position and zoom captured with the sample;
 widen the coordinate members of `os64_dom_event_t` to `double` in PE1
 (client/page/screen x and y), and preserve fractional values through host
-construction and property getters. Widen the queued CSS snapshot as well;
+construction and property getters. Widen the legacy queued CSS snapshot as well;
 keep native GUI positions and hit-test arithmetic integral. Update the C
 callers, layouts of shared records, and format strings together; distribute
 matching Yonder/libdom libraries. No kernel event ABI change is needed.
@@ -77,7 +78,7 @@ include the window's placement, rather than relabeling content coordinates.
 MouseEvent also receives doubles, so this is a deliberate shared-interface
 change, not a fractional PointerEvent feeding an integer mouse adapter.
 Do not reconstruct `buttons` from a subsequently changed pressed node.
-Keep the physical hit and related nodes alive through queued delivery.
+Keep the physical hit and related nodes alive through packet delivery.
 
 Capture is resolved at delivery, after the preceding callback can change it.
 A down listener can capture before the next queued move/up is dispatched.
@@ -99,14 +100,15 @@ continues a page-owned gesture outside the viewport. Native chrome and
 non-page gestures keep their existing libui route. Modern Web off uses the
 old route unchanged.
 
-The route queues one normalized packet, then drains it outside libui. Pointer
+The route dispatches one synchronous normalized packet outside libui. Pointer
 and permitted compatibility events run before their corresponding native
 defaults. Invoke libui for an allowed native control default at that phase,
 with a scoped flag preventing the old `view_event`/widget callback path from
-also emitting the DOM mouse/click event. Widget activation callbacks record
-an action result; they cannot dispatch script while libui is on the stack.
-The packet dispatcher emits the DOM click once, outside libui, and commits
-or restores the control action using the existing cancelable-click rules.
+also emitting the DOM mouse/click event. Widget activation callbacks are
+suppressed during replay; checkbox widgets are restored from the model.
+They cannot dispatch script while libui is on the stack. The packet emits
+one DOM click and uses shared libdom preactivation, cancellation rollback
+and activation for controls and links.
 Resolve the widget/control again by node after script; do not replay to a
 saved widget address freed by a rebuild. Native focus/selection defaults
 must respect a suppressed mousedown. Navigation or document-generation
@@ -126,7 +128,10 @@ Yonder also feeds focus loss, window coverage, resize, input loss and modal
 opening through the same idempotent cancellation door, including page
 captures with no toolkit grab. Initial focus movement before a page gesture
 exists must not cancel the new gesture. Duplicate notifications produce one
-cancel. Other applications retain their existing routing and cancel behavior.
+cancel. `os64_ui_on_gesture_cancel` stores the observer in the toolkit's
+private per-window binding, released by `os64_ui_font_release`; it does not
+enlarge the public `os64_ui_t` record allocated by existing applications.
+Other applications retain their existing routing and cancel behavior.
 
 ### Button and menu policy
 
@@ -276,24 +281,23 @@ queue. Preserve that drain boundary in PE1. A normalized sample consumes one
 packet slot; its ancestor boundary walks and generated events are dispatched
 directly within the packet's task and use the normal script budget.
 
-Before accepting another native record, drain pending packets and deferred
-control actions outside libui. If a drain cannot make room, stop polling;
-retain at most one already-polled record in a reserved ingress slot,
-separate from the batch's look-ahead `pending` record.
-No accepted sample is discarded because its expansion needs more queue slots.
-Focus/control records also use this admission rule. Add a host stress test
-with a full 32-record native batch of pressed moves and deep boundary paths:
-there must be no artificial cancel and the release must arrive.
+The call stack is the ingress slot: `window_event` completes its pointer
+packet and deferred control work before the next native record is polled.
+There is no pointer DOM-event queue to overflow as boundary depth grows.
+The native batch's look-ahead record remains separate. Boundary paths hold
+nodes and emit directly under the packet's task budget. A 32-record pressed
+sequence must reach its release without artificial cancellation.
 
 An impossible internal overflow or actual native loss requests cancellation
 through reserved state rather than appending to a full queue. No allocation
 is required to remember it. Construction failure clears native ownership and
 prevents activation even if JavaScript cannot receive the cancellation event.
 
-For PE1, do not merge pressed movement in the DOM queue. Idle motion may be
-merged only with the immediately adjacent compatible sample, without crossing
-button, boundary, modifier or generation changes. This fixes the current
-whole-queue move search while retaining the native fairness limit.
+PE1 does not merge pressed movement at the DOM boundary. Idle motion uses
+the native batch's adjacent-sample coalescing; the pointer route bypasses the
+legacy DOM queue's whole-queue move search. The native fairness limit stays
+in place. A hover with no relevant listeners updates native state and its
+widget default without opening a script task.
 
 ## Lifecycle audit
 
@@ -357,6 +361,9 @@ owed for a later eligible opportunity. A failed native packet cannot be
 retried as a second press. An ordinary failed capture API call is different:
 it leaves the prior native state intact and reports failure to its caller.
 The cancellation table also applies when the script budget aborts dispatch.
+A fatal packet abandons its remaining defaults, including activation. A
+fresh later click can use the existing native fallback after the failed
+script runtime is retired; it does not replay the failed packet's click.
 
 ## Implementation and acceptance
 
@@ -366,7 +373,7 @@ One implementation slice, reviewed before C6, with these internal steps:
    and capture bindings; add controller and host API. Gate exposure until the
    native route is connected. Cover constructor coercion, errors and synthetic
    event isolation in the DOM host suite.
-2. Normalize native samples, connect queued dispatch and deferred defaults,
+2. Normalize native samples, connect packet dispatch and deferred defaults,
    then add capture/loss/teardown and layout-boundary integration. Correct
    comments that describe primary-only fields or absent PointerEvent support.
 3. Exercise the complete path in the scripted-browser host, using GUI records
@@ -379,8 +386,9 @@ One implementation slice, reviewed before C6, with these internal steps:
    a testdriver bridge into the native GUI-record path. Until that bridge
    exists, record those as unrun, not as passes from synthetic dispatch.
 4. Deliver a small frozen gallery bundle after QEMU verification. The gallery
-   offers freehand drawing, captured travel across neighboring boxes, explicit
-   release/target removal, and an event-order log with ordinary form controls.
+   offers freehand drawing, a captured draggable light, a three-button chord
+   display, a moving target under a stationary cursor, and an ordinary
+   checkbox. Transfer/removal and exact ordering have deterministic host tests.
    On P5, draw outside the canvas and window, release, return, interrupt a
    drag, and repeat at the usual zooms. This is interaction acceptance, not
    another control/candidate performance campaign.
@@ -389,10 +397,14 @@ Host gates include pointer-only listeners, first/final button transitions and
 chording, capture transfer from listeners, removal while pending/current,
 up/cancel release, no-button capture, unknown IDs, boundaries across nested
 nodes, stationary layout changes, cancellation versus click, keyboard clicks,
-navigation during handlers, Modern Web off, full input queues and allocation
+navigation during handlers, Modern Web off, full native input batches and allocation
 refusal. Assert event order, targets, fields and default actions; retain
 ASan/UBSan/LeakSanitizer. Existing mouse/form/selection tests must stay green.
 
 C6 then replays the saved signature/scratch scripts against these interfaces,
 adds the remaining Canvas fidelity features, and tests the full applications.
 PE1's gallery alone is not a claim that the live site already works.
+
+
+Implementation evidence and remaining hardware acceptance are recorded in
+[POINTER_EVENTS_PE1.md](POINTER_EVENTS_PE1.md).

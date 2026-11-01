@@ -21,7 +21,7 @@ LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.
 LIBDOM_SRCS += libdom/document.c
 # P2b: the structured clone, same-window postMessage, idle callbacks.
-LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c
+LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c libdom/pointer.c
 # 0f P1a: the select's options and the Option factory.
 LIBDOM_SRCS += libdom/options.c
 # 0f P2's core: the text controls' selection and the window's Selection.

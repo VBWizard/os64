@@ -40,7 +40,7 @@ execution trace or a complete site-support inventory.
 | libsvg | Reuse numeric gradient sampling and extract dash cutting, image sampling and compositing operations. Geometry construction, stroking and rasterization already belong to the FreeType backend. Keep SVG scene/reference semantics in SVG. |
 | Yonder image loading and drawing | Reuse decoded-image ownership, scaling, clipping and damage where their contracts fit; extend source access for detached image/canvas callers. |
 | Yonder ticker and script turns | Host shared rendering opportunities and repaint scheduling. requestAnimationFrame is not implemented at this baseline. |
-| DOM event dispatch | Mouse events exist. PointerEvent, pointer dispatch and capture are missing; an interface constructor alone would mislead feature detection. |
+| DOM event dispatch | PE1 supplies mouse-backed PointerEvent dispatch and capture alongside compatibility mouse events; exposure follows the connected native route. |
 
 ## Dependency order
 
@@ -561,9 +561,12 @@ Yonder's rendering loop. Canvas pixel damage and DOM edits share the frame's
 presentation; SVG, CSS motion and Canvas do not own competing frame loops.
 The animated gallery is `tools/pages/canvas-animation.html`, with the contract
 and evidence in [5d-animation.md](../../relayout-evidence/5d-animation.md).
-[PE1: pointer events and capture](POINTER_EVENTS.md) is the next cut, followed
-by C6 target fidelity. Its design connects mouse-backed input, capture,
-compatibility events and cancellation through the existing browser task path.
+[PE1: pointer events and capture](POINTER_EVENTS.md) is implemented for
+hardware acceptance, followed by C6 target fidelity. It connects mouse-backed
+input, capture, compatibility events and cancellation through the browser
+task path. [PE1 evidence](POINTER_EVENTS_PE1.md) records the host checks,
+upstream test scope and interactive gallery; this does not yet claim the
+captured signature and scratch applications work end to end.
 
 The post-5d [userland reconciliation](../../canvas-evidence/userland-reconciliation.md)
 combines the data-picture backport, observers, generated content, caches and

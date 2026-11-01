@@ -76,6 +76,8 @@ static char *modern_chain_shape(DomFixture *f)
         "|^(valueAsNumber|valueAsDate|stepUp|stepDown)$"
         "|^(text|link|vLink|aLink|bgColor|background|onpopstate|onhashchange|ononline|onoffline|onlanguagechange"
         "|onmessage|onmessageerror|onunhandledrejection|onrejectionhandled)$"
+        "|^on(pointerdown|pointerup|pointermove|pointerover|pointerout|pointerenter|pointerleave|pointercancel|gotpointercapture|lostpointercapture|mouseenter|mouseleave|auxclick)$"
+        "|^(setPointerCapture|releasePointerCapture|hasPointerCapture)$"
         "|^onerror$|^getRootNode$|^normalize$|^isSameNode$|^isEqualNode$|^compareDocumentPosition$"
         "|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
         "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"

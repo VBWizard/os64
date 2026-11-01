@@ -134,3 +134,17 @@ os64_ui_status_code_t os64_icon_theme_destroy(os64_icon_theme_t *theme)
     (void)theme;
     return OS64_UI_OK;
 }
+
+/* Settings are a separate native window. Input-route tests retain its caller
+ * but do not construct that window. */
+#include <os64/ui_settings.h>
+bool os64_ui_settings_open(os64_ui_settings_t *s, int64_t parent, const char *title,
+    unsigned rows, bool (*arrange)(os64_ui_settings_t *,os64_gui_rect_t,int32_t,bool),
+    void (*apply)(os64_ui_settings_t *,bool),void *user)
+{
+    (void)s;(void)parent;(void)title;(void)rows;(void)arrange;(void)apply;(void)user;
+    return false;
+}
+void os64_ui_settings_ready(os64_ui_settings_t *s) { (void)s; }
+bool os64_ui_settings_attach(os64_ui_settings_t *s,os64_ui_dispatcher_t *d) { (void)s;(void)d;return false; }
+void os64_ui_settings_close(os64_ui_settings_t *s) { (void)s; }

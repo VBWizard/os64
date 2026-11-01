@@ -136,3 +136,20 @@ Re-read the named kernel, toolkit, browser and DOM paths; checked pointer
 ordering, targeting and stationary boundaries against the primary specification.
 Checked local Markdown links, whitespace, the retirement-reference report and
 shell syntax of the changed WPT fetch script. Runtime code is unchanged.
+
+
+## Implementation follow-through
+
+The implemented ingress uses a synchronous packet on the `window_event`
+call stack. It completes before polling another native record, so the
+reserved admission slot needs no separate queue allocation. Ancestor paths
+expand inside the packet's task. The deep-path 32-move regression passes on
+both engine builds. Window-level drain state survives document replacement
+and script-runtime retirement; document-owned capture does not.
+
+The stationary-boundary mechanism is implemented and exercised by a
+self-moving target that would loop without the rendering-opportunity bound.
+The gallery includes the same behavior visibly. See
+[PE1 evidence](POINTER_EVENTS_PE1.md) for the implementation checks and
+hardware acceptance status; the earlier revision checks above describe the
+design-only commit.
