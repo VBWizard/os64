@@ -149,12 +149,23 @@ static draw2d_status_t paint_mask(const draw2d_surface_t *s,const uint8_t *cover
     uint64_t count=(uint64_t)s->width*s->height;
     if(count>length || count>max_pixels)return DRAW2D_LIMIT;
     if(count && !coverage)return DRAW2D_BAD_ARGUMENT;
+    /* With these operators zero shape coverage preserves the destination.
+     * Other operators must still clear pixels outside the shape, within the
+     * clip. Avoid both shading and writing the sparse path's empty coverage. */
+    bool bounded=op.operation==DRAW2D_SOURCE_OVER || op.operation==DRAW2D_CLEAR ||
+        op.operation==DRAW2D_DESTINATION_OUT || op.operation==DRAW2D_SOURCE_ATOP ||
+        op.operation==DRAW2D_DESTINATION_OVER || op.operation==DRAW2D_XOR || op.operation==DRAW2D_LIGHTER;
+    draw2d_damage_t touched={s->width,s->height,0,0};
     for(uint32_t y=0;y<s->height;++y) {
         unsigned char *row=(unsigned char *)s->pixels+(size_t)y*s->stride;
         for(uint32_t x=0;x<s->width;++x) {
             size_t at=(size_t)y*s->width+x;
             uint16_t cv=(uint16_t)coverage[at]*257,cl=clip?(uint16_t)clip[at]*257:65535;
-            if(!cl)continue;
+            if(!cl || (bounded && !cv))continue;
+            if(x<touched.x0)touched.x0=x;
+            if(y<touched.y0)touched.y0=y;
+            if(x+1>touched.x1)touched.x1=x+1;
+            if(y+1>touched.y1)touched.y1=y+1;
             draw2d_pixel_t d=s->format==DRAW2D_ARGB16_PREMULTIPLIED?((draw2d_pixel_t *)row)[x]:draw2d_unpack(((uint32_t *)row)[x]);
             draw2d_pixel_t r=op.operation==DRAW2D_CLEAR?draw2d_scale(d,65535-cv):
                 composite_pixel(image ? draw2d_scale(draw2d_scale(sample(image,x+.5,y+.5),op.opacity),cv) :
@@ -164,7 +175,7 @@ static draw2d_status_t paint_mask(const draw2d_surface_t *s,const uint8_t *cover
             else ((uint32_t *)row)[x]=draw2d_pack(r);
         }
     }
-    if(damage && count)*damage=(draw2d_damage_t){0,0,s->width,s->height};
+    if(damage && touched.x1)*damage=touched;
     return DRAW2D_OK;
 }
 

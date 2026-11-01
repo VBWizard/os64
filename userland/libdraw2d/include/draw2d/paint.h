@@ -104,7 +104,10 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *, double x, double y,
  * still participates in operators such as COPY and DESTINATION_IN.
  * Clip coverage interpolates the completed composite with the old pixel.
  * CLEAR ignores source/opacity and removes shape coverage inside the clip.
- * Validates inputs/work before any write; output damage is conservative. */
+ * Zero coverage is skipped when the operator preserves the destination for
+ * transparent source. Damage encloses processed pixels inside the clip;
+ * clearing operators may damage pixels outside the shape. Validates the
+ * full bitmap work cap before any write; output damage is conservative. */
 draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *coverage,
     const uint8_t *clip, size_t length, draw2d_solid_t, draw2d_composite_t,
     uint64_t max_pixels, draw2d_damage_t *);

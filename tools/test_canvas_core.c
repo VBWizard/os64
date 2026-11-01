@@ -283,9 +283,57 @@ static void pixels(void)
     CHECK(canvas_read_pixels(c, 0, 0, &dst) == CANVAS_LIMIT);
     OK(canvas_destroy(c)); CHECK(!o.live);
 }
+/* Sparse paths must not shade or dirty uncovered pixels when transparent
+ * source leaves the destination alone. COPY and the other clearing operators
+ * still process the clip outside the path. */
+static uint32_t counted_paint(void *opaque, double x, double y)
+{
+    size_t *calls = opaque;
+    CHECK(x >= 0 && x < 4 && y >= 0 && y < 3);
+    ++*calls;
+    return 0xff804020;
+}
+static void sparse_paint(void)
+{
+    for (unsigned op = DRAW2D_SOURCE_OVER; op <= DRAW2D_LIGHTER; ++op)
+        for (unsigned wide = 0; wide < 2; ++wide) {
+            bool clears = op == DRAW2D_SOURCE_IN || op == DRAW2D_SOURCE_OUT ||
+                op == DRAW2D_DESTINATION_IN || op == DRAW2D_DESTINATION_ATOP || op == DRAW2D_COPY;
+            uint32_t narrow[12]; draw2d_pixel_t pixels[12];
+            uint8_t coverage[12] = {0}, clip[12];
+            coverage[6] = 255;
+            for (size_t i = 0; i < 12; ++i) {
+                narrow[i] = 0x80402010; pixels[i] = draw2d_unpack(narrow[i]); clip[i] = 255;
+            }
+            clip[0] = 0;
+            draw2d_surface_t surface = {wide ? (void *)pixels : (void *)narrow, 4, 3,
+                wide ? 4 * sizeof(*pixels) : 4 * sizeof(*narrow),
+                wide ? sizeof(pixels) : sizeof(narrow),
+                wide ? DRAW2D_ARGB16_PREMULTIPLIED : DRAW2D_ARGB8_PREMULTIPLIED};
+            size_t calls = 0;
+            draw2d_shader_t shader = {&calls, counted_paint};
+            draw2d_damage_t damage;
+            CHECK(draw2d_paint_shader(&surface, coverage, clip, 12, &shader,
+                (draw2d_composite_t){op, 65535}, 12, &damage) == DRAW2D_OK);
+            CHECK(calls == (op == DRAW2D_CLEAR ? 0 : clears ? 11 : 1));
+            for (size_t i = 0; i < 12; ++i) if (i != 6) {
+                uint32_t expected = clears && i != 0 ? 0 : 0x80402010;
+                if (wide) {
+                    draw2d_pixel_t want = draw2d_unpack(expected);
+                    CHECK(!memcmp(&pixels[i], &want, sizeof(want)));
+                } else CHECK(narrow[i] == expected);
+            }
+            CHECK(damage.x0 == (clears ? 0u : 2u) && damage.y0 == (clears ? 0u : 1u));
+            CHECK(damage.x1 == (clears ? 4u : 3u) && damage.y1 == (clears ? 3u : 2u));
+            memset(clip, 0, sizeof(clip)); calls = 0;
+            CHECK(draw2d_paint_shader(&surface, coverage, clip, 12, &shader,
+                (draw2d_composite_t){op, 65535}, 12, &damage) == DRAW2D_OK);
+            CHECK(!calls && !damage.x1 && !damage.y1);
+        }
+}
 int main(void)
 {
-    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels();
+    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels(); sparse_paint();
     printf("Canvas core: %zu assertions passed (pixels, rounding, bounds, state, reset, refusal, ownership)\n", checks);
     return 0;
 }

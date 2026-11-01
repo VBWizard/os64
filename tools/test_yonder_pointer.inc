@@ -73,7 +73,12 @@ static void pointer_window_cases(void)
     check(probe_text_is("out","pointerdown:pad:1|pointermove:pad:1|pointerup:pad:0|lostpointercapture:pad:0|click:pad:0"),
           "pointer: native captured release and click survive release over the question bar");
     pointer_window(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,10,10,0,1);
+    g.page.diag=yonder_diag_new("https://fixture.test/pointer",1,0);
+    check(g.page.diag!=NULL,"pointer: input-loss diagnostic allocated");
     os64_gui_event_t lost={.type=OS64_GUI_EVENT_INPUT_LOST}; window_event(NULL,&lost);
+    check(os64_streq(yonder_diag_fact_value(g.page.diag,"pointer input"),
+          "native input queue lost events; active gesture canceled"),
+          "pointer: input loss records why an active stroke was canceled");
     pointer_window(OS64_GUI_EVENT_MOUSE_BUTTON_UP,10,10,0,0);
     check(strstr(probe_text_of("out"),"pointercancel:pad:")!=NULL,
           "pointer: input loss cancels capture through window ingress");

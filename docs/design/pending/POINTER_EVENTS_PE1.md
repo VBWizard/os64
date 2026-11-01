@@ -125,5 +125,39 @@ click delivery, navigation provenance, script-navigation precedence and a
 same-document fragment source. The complete browser suite passes **16,376
 checks**, zero failures, with ASan/UBSan/LeakSanitizer enabled. Native Yonder
 build passed. This correction changes the Yonder executable; the previously
-accepted gallery bundle is retained, and the corrected P5 cohort awaits the
-reported page's hardware recheck.
+accepted gallery bundle is retained. Chris confirmed the corrected P5 cohort
+opens the reported frame source on 2026-11-01.
+
+
+## Sparse drawing follow-up
+
+The external `draw-pointermove` demo logs “saving points” and “drawing points”
+from its own script. On hardware it drew slowly at modest input rates and
+stopped strokes at higher rates while the pointer stayed inside the canvas.
+A saved reading contained a 2,518.7 ms script task, versus 23.4 ms for the
+longest screen paint. It does not identify which callback consumed that time
+or record whether native input overflowed.
+
+The shared painter blended every bitmap pixel for each small dot, including
+zero coverage, and reported the entire bitmap as damaged. It now skips zero
+coverage for operators that leave those pixels unchanged and encloses the
+processed pixels in the reported damage. COPY, SOURCE_IN, SOURCE_OUT,
+DESTINATION_IN and DESTINATION_ATOP retain their effect outside the shape.
+The full-mask allocation and scan, clip semantics, and whole-bitmap work
+admission remain in place.
+
+A focused 1,387 × 789 host benchmark, 32 radius-five solid dots with fresh
+full-size masks, took 749.225 ms before and 45.431 ms after this change. The
+pixel hashes matched. These are single host measurements of mask painting,
+not hardware frame-rate measurements or the complete demo callback.
+
+The new regression fails before the fix. It checks shader work, untouched
+pixels and damage for all twelve operators in 8-bit and 16-bit surfaces,
+including empty clips. Canvas core passes 166,774 assertions; the complete
+production-geometry Canvas suite passes 415,042; the browser suite passes
+16,378. ASan, UBSan and LeakSanitizer are enabled. Native build passed.
+
+Native input loss during an active pointer stream now leaves a diagnostic
+fact in the saved page record. The existing cancellation and tail-drain
+behavior is unchanged. A hardware recheck is still needed to establish the
+remaining drawing latency and whether queue loss explains the stopped strokes.

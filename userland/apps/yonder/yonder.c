@@ -10980,6 +10980,8 @@ static void inputs_run(void)
 
 static void input_lost(void)
 {
+    if (g.modern && scripts_live() && yonder_scripts_pointer_active(g.page.scripts))
+        yonder_diag_fact(g.page.diag, "pointer input", "native input queue lost events; active gesture canceled");
     yonder_scripts_pointer_cancel(g.page.scripts);
     s_pointer_cancel_owed = true;
     g.seq = g.key_seq = 0;
