@@ -61,8 +61,9 @@ casting into a clipped window, transparent canvas-to-canvas stamps, and
 filled/stroked text. Its animation reuses its gradient and sprite drawing
 reuses one source canvas.
 
-P5 acceptance is pending for the frozen C6b delivery. Enable Scripts and
-Modern Web, exercise the controls and animation, and inspect 25%–400% zoom.
+Chris accepted the frozen C6b delivery from `5da49857` on the P5: all four
+gallery examples worked as expected, including the moving-light animation.
+This is functional hardware acceptance, not a timed performance measurement.
 Full signature-wall, scratch-game and selected cursor-effect acceptance
 remain C6 work; this slice does not claim those sites work end to end.
 
