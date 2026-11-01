@@ -1,0 +1,17 @@
+# WPT's streams/transferable in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh streams/transferable --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+reason.html	reason with a type of 'function' should be rejected and error the stream
+reason.html	reason with a type of 'symbol' should be rejected and error the stream
+transform-stream-members.any.html	Transferring [object ReadableStream],[object TransformStream] should fail
+transform-stream-members.any.html	Transferring [object TransformStream],[object ReadableStream] should fail
+transform-stream-members.any.html	Transferring [object TransformStream],[object WritableStream] should fail
+transform-stream-members.any.html	Transferring [object WritableStream],[object TransformStream] should fail
+transform-stream.html	a TransformStream with a locked readable should not be transferable
+transform-stream.html	a TransformStream with a locked writable should not be transferable
+transform-stream.html	a TransformStream with both sides locked should not be transferable
+writable-stream.html	a locked WritableStream should not be transferable
