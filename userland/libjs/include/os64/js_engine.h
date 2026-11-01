@@ -134,6 +134,16 @@ os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, const char *
                                         const void *source, size_t length, const char *name,
                                         const char *url, os64_js_module_t **module,
                                         os64_js_outcome_t *outcome);
+/* os64_js_module_compile through `bytecode` (os64/js.h; BYTECODE_CACHE.md
+ * § 9): the module read from its blob when the blob was written for a module
+ * of this same `name` — the name is a module's identity, and a read cannot
+ * give it another — else compiled, its blob kept when asked (a read keeps
+ * none: nothing was compiled). The source is always required: a refused
+ * blob means the source is compiled. A NULL `bytecode` is BAD_ARGUMENT. */
+os64_js_status_t os64_js_module_compile_bytecode(os64_js_runtime_t *runtime, const char *caller_abi,
+                                                 const void *source, size_t length, const char *name,
+                                                 const char *url, os64_js_bytecode_t *bytecode,
+                                                 os64_js_module_t **module, os64_js_outcome_t *outcome);
 /* Each static import specifier of `module` as written, in source order, to
  * `each` (the string borrowed for the call; `each` may not enter the
  * runtime). Outside a call. */

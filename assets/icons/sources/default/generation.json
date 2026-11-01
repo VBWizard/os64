@@ -33,6 +33,13 @@
       "prompt": "Production Os64 desktop icon, ONE object: the blue floppy disk SAVE icon with a small diagonal amber pencil overlapping its bottom right corner. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
     },
     {
+      "key": "download",
+      "source": "download.png",
+      "generated_sha256": "1c2c89398edcff485beee116e89a204405d6c4d3915e1e85f16532f421c4867b",
+      "master_sha256": "f9d5f55212b1a85da93ebea7cc36416edcca675bc54ee85b976f71f7a3920100",
+      "prompt": "COMPOSED, NOT GENERATED: the set's own go-up master flipped to point down, over a tray drawn in the set's navy outline (6,28,49) at its 10 px weight with flat lit planes, by ~/os64-opus-kit/icons/compose_download.py for yonder's Downloads button (YONDER_HONEY_DO.md 6)."
+    },
+    {
       "key": "drive",
       "source": "drive.png",
       "generated_sha256": "4146ded651e4942070d2c6ead6bf259e70fd7693ea551171505cb80ef460770b",

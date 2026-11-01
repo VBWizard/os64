@@ -125,7 +125,11 @@ bool elf_is_dynamic(const char *path);
 // unloadable path (a typo, or a file that exists but isn't a program) fails
 // cheaply and cleanly instead of PANICKING the kernel — which is what it used
 // to do, meaning ring 3 could take the OS down with a fat-fingered filename.
-bool elf_can_load(const char *path);
+// `*declared_stack` (when not NULL) is the main thread's stack size the
+// program asks for in its PT_GNU_STACK header, 0 when it asks none
+// (SCRIPT_STACK.md); createThread decides what it gets.
+#define ELF_STACK_PHDRS_MAX 64      // program headers looked through for it
+bool elf_can_load(const char *path, uint64_t *declared_stack);
 
 // ── #! — the other kind of executable (2026-08-22) ──────────────────────────
 // A file whose first two bytes are "#!" is not a program; it NAMES one. Line

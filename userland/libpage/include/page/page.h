@@ -274,7 +274,8 @@ typedef struct {
 // listed, and `os64_page_image_for` answers -1.
 typedef struct {
     const os64_html_node_t *node;   // the `img` or `input type=image`
-    os64_page_ref_t src;            // resolved against the base; refused says why
+    os64_page_ref_t src;            // resolved against the base; refused says why. A data:
+                                    // address is kept at any length (it IS the picture)
     // As written, or NULL when the page wrote none: an ABSENT alt and an
     // EMPTY one differ, because `alt=""` says the picture is decoration and
     // its absence says nothing at all.
@@ -394,6 +395,14 @@ bool os64_page_url_absolute(const char *base, const char *reference, char *out, 
 // URL`): no `<base href>`, and a query in UTF-8.
 bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_url,
                           const char *reference, char *out, size_t cap);
+// os64_page_resolve_in's answer in memory of its own (os64_malloc'd), and
+// an opaque data: URL (one whose scheme is not followed by `/`) at any
+// length: a data: URL carries its document in itself, so it may be longer
+// than an address is held to, and it needs no base. It is spelled by the
+// same rule. NULL when the reference will not resolve, when an address
+// other than a data: URL is longer than OS64_URL_REF_MAX, or on no memory.
+char *os64_page_resolve_in_alloc(const os64_html_document_t *doc, const char *document_url,
+                                 const char *reference);
 // Where the page came from, canonical. Never NULL.
 const char *os64_page_document_url(const os64_page_t *page);
 
@@ -441,7 +450,7 @@ int32_t os64_page_image_for(const os64_page_t *page, const os64_html_node_t *nod
 // attribute names nothing and is not listed, as an empty `src` is not.
 typedef struct {
     const os64_html_node_t *node;   // the element the picture is behind
-    os64_page_ref_t src;            // resolved against the base; refused says why
+    os64_page_ref_t src;            // resolved as an image's `src` is, a data: address whole
 } os64_page_background_t;
 
 int32_t os64_page_nbackgrounds(const os64_page_t *page);

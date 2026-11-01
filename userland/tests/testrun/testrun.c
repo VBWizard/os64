@@ -120,6 +120,14 @@ static const fixture_t kFixtures[] = {
     { "/tests/fpfault",         argv_fpfault_mf, 216, 0,       "an unmasked x87 exception (#MF) kills the program, not the OS" },
     { "/tests/fpfault",         argv_fpfault_de, 200, 0,       "an integer divide by zero (#DE) kills the program, not the OS" },
     { "/tests/fpfault",         argv_fpfault_ud, 206, 0,       "an AVX instruction with XSAVE off (#UD) kills the program, not the OS" },
+    // The guard below a thread's stack catches a runaway recursion
+    // (-fstack-clash-protection keeps a big frame from leaping it), and the
+    // kernel heads the death "Stack overflow". 139 is what testrun can see;
+    // the headline is on the wire.
+    { "/tests/stackprobe",      NULL, 139, 0,                  "a runaway recursion dies in the stack guard as a stack overflow, not the OS" },
+    // And a program may ask for more: its PT_GNU_STACK size is its main
+    // thread's (SCRIPT_STACK.md), and a thread it spawns keeps the default.
+    { "/tests/stacktest",       NULL, 0x57AC600D, 0,           "a program's declared stack is its main thread's, deep as declared; a thread's is the default" },
     { "/tests/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
     { "/tests/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
     // synctest reports 0x05CC0001 when the boot has no writable /home. That

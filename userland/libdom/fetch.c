@@ -1562,6 +1562,7 @@ static const char *const kPolicies[] = {
     "strict-origin", "origin-when-cross-origin", "unsafe-url",
 };                                                                                /* way_policy_t */
 static const char *const kCaches[] = {"default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached"};
+                                                                                /* way_cache_mode_t */
 static const char *const kPriorities[] = {"auto", "high", "low"};
 
 /* A WebIDL enum value: its index, or -1 with a TypeError. */
@@ -2491,7 +2492,7 @@ static void host_request(const DReq *q, const char *headers, size_t headers_leng
         .body = q->body.has ? (const void *)(q->body.bytes != NULL ? q->body.bytes : (const uint8_t *)"") : NULL,
         .body_length = q->body.has ? q->body.length : 0,
         .mode = q->mode, .credentials = q->credentials, .redirect = q->redirect, .policy = q->policy,
-        .preflight = false, .referrer = referrer,
+        .preflight = false, .referrer = referrer, .cache = (uint8_t)q->cache,
     };
 }
 

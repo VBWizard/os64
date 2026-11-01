@@ -18,6 +18,7 @@
 #include "flow/flow.h"
 #include "garb/cascade.h"
 #include "way/way.h"
+#include "image/icon_theme.h"
 #include "image/image.h"
 #include "os64/os64.h"
 #include "os64/clip.h"
@@ -38,6 +39,7 @@
 #include "os64/ui_dispatcher.h"
 #include "os64/ui_menu.h"
 #include "os64/ui_file_dialog.h"
+#include "os64/ui_icon.h"
 #include "os64/work.h"
 #include "agent.h"
 #include "bar.h"
@@ -54,6 +56,7 @@
 #include "diag.h"
 #include "script_job.h"
 #include "fetch_job.h"
+#include "modules.h"
 #include "geometry.h"
 #include "events.h"
 #include "ticker.h"
@@ -115,13 +118,14 @@ static yonder_cookies_mode_t s_cookies_asked;
 // thread's, DOM_D4.md), so what it declares is one connection's worth of
 // libfetch and libtls — a few hundred KiB — with room to spare; a picture
 // declares PICTURE_RESERVE and a sheet SHEET_RESERVE, each its worst case.
-// The budget admits twelve sheets at once beside a page's fetch: a page
-// with twenty-eight linked sheets, none cached, was spending five seconds
-// fetching them four at a time (Chris, 2026-10-05, on a twelve-core
-// machine that was asked to use its cores and its memory).
+// The budget counts those declarations, not memory held: what yonder uses
+// is what its jobs allocate. Twelve workers each running the largest job
+// (a picture, 512 MiB) declare 6 GiB, so 8 GiB admits any twelve at once
+// with room for answers not yet reaped, and a page waits on its workers,
+// never on worst cases that do not happen.
 #define POOL_WORKERS 12
 #define TRIP_RESERVE (4u << 20)
-#define POOL_BUDGET  ((size_t)2u << 30)
+#define POOL_BUDGET  ((size_t)8u << 30)
 
 // THE STREAM (DOM_D4.md): how much of an arriving page is fed to its parser
 // per turn of the loop before the window goes back to its events. A byte
@@ -132,7 +136,9 @@ static yonder_cookies_mode_t s_cookies_asked;
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
 // one's whole sequence, or an SVG's document/styles; past it a picture draws as its frame.
-#define PICTURES_KEPT_MAX ((size_t)256u << 20)
+// A picture is kept at its own size, not the size it is drawn (DEBTS.md),
+// so a page of 4K wallpapers costs 33 MiB a picture.
+#define PICTURES_KEPT_MAX ((size_t)1u << 30)
 
 // A page's pictures in the pool at once: half its workers. The pool admits
 // in the order it was given work, so a navigation submitted after a page's
@@ -524,6 +530,19 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len, bool s
 // arriving page cost to parse.
 static bool s_script_audit;
 
+// `--exit-when-loaded`: a measuring run, started from a shell (an ssh
+// session, a script) that wants the page's record and then yonder gone.
+// yonder leaves once the shown page has been settled — streamed, its
+// pictures and fonts in, its record not owed, no script waiting — and no
+// job has come back for EXIT_QUIET_MS; or, for a page that never goes
+// quiet (one that polls), after EXIT_GIVE_UP_MS whatever it is doing.
+// Leaving is the ordinary way out, so the page's departure record is
+// written as it always is.
+#define EXIT_QUIET_MS 3000
+#define EXIT_GIVE_UP_MS 120000
+static bool s_exit_when_loaded;
+static uint64_t s_exit_started, s_exit_quiet_from;
+
 // THE PAGE FILES (YONDER_DIAGNOSTICS.md): the directory yonder.conf's
 // `diagnostics` names, empty when it names none or the directory could not
 // be made (said once, at the start); the sequence the next load's claim
@@ -549,6 +568,7 @@ typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } Pi
 
 typedef struct {
     const char *url;
+    size_t url_len;                 // a data: address may be kilobytes: kept, not measured per probe
     PictureState state;
     yonder_picture_kind_t kind;
     unsigned canvas_request;
@@ -2511,11 +2531,11 @@ static const char *const kPaintStage[PS_COUNT] = {
 // clock's next tick when the loop meets it itself (pictures_schedule), so a
 // source counted often here is rings that may do no work.
 typedef enum {
-    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_FRAMES, PAST_COUNT
+    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_FRAMES, PAST_DOWNLOADS, PAST_COUNT
 } PastDeadline;
 
 static const char *const kPastDeadline[PAST_COUNT] = {
-    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures", "frames",
+    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures", "frames", "downloads",
 };
 
 static const char *const kWholeBy[WHOLE_COUNT] = {
@@ -2716,6 +2736,37 @@ static void diag_observe(Page *p, const char *when)
         diag_paint(p);
 }
 
+// Where an arrival's time went, from performance.timing's milestones,
+// each after the navigation began: the document's first byte and its last,
+// its parse done, DOMContentLoaded (after the deferred scripts and the
+// module graphs have run), and load's end. "-" for one not reached.
+static void diag_navigation(Page *p)
+{
+    static const struct {
+        os64_dom_milestone_t which;
+        const char *name;
+    } kMarks[] = {{OS64_DOM_TIMING_RESPONSE_START, "first byte"}, {OS64_DOM_TIMING_RESPONSE_END, "last byte"},
+                  {OS64_DOM_TIMING_DOM_INTERACTIVE, "parsed"},
+                  {OS64_DOM_TIMING_DOM_CONTENT_LOADED_START, "DOMContentLoaded"},
+                  {OS64_DOM_TIMING_LOAD_END, "load"}};
+    const os64_dom_timing_t *t = yonder_scripts_timing(p->scripts);
+    if (t == NULL)
+        return;
+    char v[256];
+    size_t at = 0;
+    for (size_t i = 0; i < sizeof(kMarks) / sizeof(kMarks[0]) && at < sizeof(v); i++) {
+        uint64_t us = t->at[kMarks[i].which];
+        int n = us == OS64_DOM_TIMING_NOT_YET
+                    ? os64_snprintf(v + at, sizeof(v) - at, "%s%s -", i ? ", " : "", kMarks[i].name)
+                    : os64_snprintf(v + at, sizeof(v) - at, "%s%s %lu ms", i ? ", " : "", kMarks[i].name,
+                                    (unsigned long)(us / 1000));
+        if (n < 0)
+            return;
+        at += (size_t)n;
+    }
+    yonder_diag_fact(p->diag, "navigation", v);
+}
+
 // The page has arrived: what it is now is written, and the badge is its.
 static void diag_arrived(Page *p, uint64_t laid_ms)
 {
@@ -2729,6 +2780,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
                   (unsigned long)laid_ms);
     yonder_diag_head_fact(p->diag, "laid out at", v);
@@ -2925,8 +2977,11 @@ static void scroll_to_node(const os64_html_node_t *node)
     }
     if (b != NULL) {
         flow_scroll_reveal(t, b);
+        // A scroller a pseudo-element made is not kept: it names its
+        // element, whose own scroller the position belongs to.
         for (int32_t i = flow_box_scroller(b); i >= 0; i = flow_box_scroller(flow_scroller(t, i)))
-            page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, flow_scroll_at(t, i));
+            if (flow_scroller(t, i)->pseudo == 0)
+                page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, flow_scroll_at(t, i));
     }
     // A target in a fixed box is on the glass wherever the page is: no
     // scroll of the page brings it nearer, so none is made (as Chrome
@@ -3039,8 +3094,12 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
 {
     if (g.page.tree == NULL)
         return NULL;
+    // A box that names an element it is not the box of — a pseudo-element's,
+    // or generated text's — is climbed past: the anchor is put back through
+    // the element's own box (flow_box_for).
     const flow_box_t *b = flow_hit_in_flow(g.page.tree, g.sx + 1, g.sy + 1);
-    while (b != NULL && b->node == NULL)
+    while (b != NULL && (b->node == NULL || b->pseudo != 0 ||
+                         (b->kind == FLOW_BOX_TEXT && b->node->kind == OS64_HTML_ELEMENT)))
         b = b->parent;
     if (b == NULL)
         return NULL;
@@ -3201,6 +3260,8 @@ static void download_ask(const char *url, const char *referrer, const char *disp
 static void download_arrived(os64_work_id_t id, yonder_download_job_t *job);
 static void downloads_follow(void);
 static void downloads_orphaned(void);
+static void downloads_heard(void);
+static uint64_t downloads_due(void);
 static bool script_rebuild(void);
 static void stream_drop(void);
 static void stream_sheets(void);
@@ -3212,7 +3273,7 @@ static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, co
 static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, bool (*stop)(void *stop_ctx),
                        void *stop_ctx, os64_dom_response_t *response);
 static void script_release(void *opaque, os64_dom_response_t *response);
-static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got);
+static void request_arrived(const yonder_fetch_job_t *job, yonder_fetched_t *got);
 static bool scripts_live(void);
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
                         int32_t x, int32_t y, uint8_t was);
@@ -4124,6 +4185,29 @@ static char *copy_text(const char *text)
     return out;
 }
 
+// Whether the `n` bytes at `text` are a data: address, its scheme in any
+// case, as the URL grammar reads a scheme. The catalog's key for one spells
+// the scheme in lower case, as libpage does.
+static bool data_address(const char *text, size_t n)
+{
+    return n >= 5 && (text[0] | 0x20) == 'd' && (text[1] | 0x20) == 'a' &&
+           (text[2] | 0x20) == 't' && (text[3] | 0x20) == 'a' && text[4] == ':';
+}
+
+// How the page's record names a picture: by its address, except that a
+// long data: address IS the picture, often kilobytes of base64, and may be
+// longer than the line it is written into, so it is named by its opening
+// and its length and the line keeps its reason. The record shortens a long
+// data: run itself (diag.c), but only a line that arrives whole.
+static const char *picture_name(const char *url, char *buf, size_t cap)
+{
+    size_t n = os64_strlen(url);
+    if (!data_address(url, n) || n <= 200)
+        return url;
+    os64_snprintf(buf, cap, "%.64s...(%lu bytes)", url, (unsigned long)n);
+    return buf;
+}
+
 // Whether an arrival can move the page: libflow's rule, asked of the box
 // the element was laid out in. A picture with no box has nothing fixed.
 static bool picture_sized(const Page *p, const os64_html_node_t *node)
@@ -4175,11 +4259,19 @@ static void pictures_feed(Page *p)
         job->svg_enabled = p->modern;
         job->dark = s_dark;
         job->reduced_motion = s_reduce_motion;
-        os64_strcopy(job->url, sizeof(job->url), pic->url);
-        job->canvas_request=pic->canvas_request;
-        if((os64_strlen(pic->url)>=5&&!os64_memcmp(pic->url,"data:",5))) {
-            job->data_url=(char *)copy_text(pic->url);
-            if(!job->data_url){os64_free(job);picture_failed(p,pic->url,NULL,"no memory for image URL");refused=true;continue;}
+        job->canvas_request = pic->canvas_request;
+        // A data: address is the picture itself, which job->url may not
+        // hold, and the catalog's copy dies with the page: the job keeps its own.
+        if (data_address(pic->url, pic->url_len)) {
+            job->data_url = copy_text(pic->url);
+            if (job->data_url == NULL) {
+                yonder_picture_release(job, NULL);
+                picture_failed(p, pic->url, NULL, "no memory for its address");
+                refused = true;
+                continue;
+            }
+        } else {
+            os64_strcopy(job->url, sizeof(job->url), pic->url);
         }
         job->hooks.jar = g.way.jar;
         job->hooks.cache = g.cache;
@@ -4188,8 +4280,7 @@ static void pictures_feed(Page *p)
         os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
         pic->id = os64_work_submit(g.pool, &work);
         if (pic->id == 0) {
-            os64_free(job->data_url);
-            os64_free(job);
+            yonder_picture_release(job, NULL);
             picture_failed(p, pic->url, NULL, "the workers would not take it");
             refused = true;
             continue;
@@ -4202,56 +4293,67 @@ static void pictures_feed(Page *p)
         diag_pictures_in(p);
 }
 
-static size_t url_hash(const char *url)
+static size_t url_hash(const char *url, size_t n)
 {
     uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
-    for (const char *c = url; *c != '\0'; c++)
-        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ (uint8_t)url[i]) * 1099511628211ull;
     return (size_t)h;
 }
 
-// The table's slot for URL and request mode: its entry, or the empty slot where it
-// would go. The index is never full (picture_for keeps it half empty).
-static size_t picture_slot(const Page *p, const char *url,unsigned mode)
+// The table's index slot for request mode and `n` bytes at `url`, which need not end
+// there: where it is, or the empty slot where it would go. The index is
+// never full (picture_for keeps it half empty).
+static size_t picture_slot(const Page *p, const char *url, size_t n, unsigned mode)
 {
-    size_t at = (url_hash(url) ^ mode) & (p->pic_slot_cap - 1);
-    while (p->pic_slot[at] >= 0 && (p->pics[p->pic_slot[at]].canvas_request!=mode || !os64_streq(p->pics[p->pic_slot[at]].url, url)))
+    size_t at = (url_hash(url, n) ^ mode) & (p->pic_slot_cap - 1);
+    while (p->pic_slot[at] >= 0) {
+        const Picture *pic = &p->pics[p->pic_slot[at]];
+        if (pic->canvas_request == mode && pic->url_len == n && os64_memcmp(pic->url, url, n) == 0)
+            break;
         at = (at + 1) & (p->pic_slot_cap - 1);
+    }
     return at;
 }
 
-// The display picture at `url`, or -1: found through the index,
-// never by a walk of the table — a page names every picture it likes, and a
-// walk per picture is quadratic in them.
-static int32_t picture_find(const Page *p, const char *url)
+// The display picture at the `n` bytes at `url` in the page's table, or -1: found
+// through the index, never by a walk of the table — a page names every
+// picture it likes, and a walk per picture is quadratic in them.
+static int32_t picture_find_span(const Page *p, const char *url, size_t n)
 {
     if (p->pic_slot == NULL || url == NULL)
         return -1;
-    return p->pic_slot[picture_slot(p, url,0)];
+    return p->pic_slot[picture_slot(p, url, n, 0)];
+}
+
+static int32_t picture_find(const Page *p, const char *url)
+{
+    return url != NULL ? picture_find_span(p, url, os64_strlen(url)) : -1;
 }
 
 // The picture for URL and request mode, gathered once per key: its index
 // in the page's table, QUEUED for pictures_feed
 // when it is new, or -1 for an address nothing here fetches (or no memory).
-// The catalog owns each address. The index grows with the table, so pictures found
-// after a layout join the same one.
-static int32_t picture_for_mode(Page *p, const char *url,unsigned mode)
+// A data: address is taken as the others are, the picture inside it
+// decoded by the worker. The catalog owns each address. The index grows
+// with the table, so pictures found after a layout join the same one.
+static int32_t picture_for_mode(Page *p, const char *url, unsigned mode)
 {
     if (url == NULL)
         return -1;
-    bool fetchable = os64_strlen(url) > 7 &&
-                     (os64_memcmp(url, "http://", 7) == 0 ||
-                      (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
-                      os64_memcmp(url, "file://", 7) == 0);
-    fetchable |= (os64_strlen(url)>=5&&!os64_memcmp(url,"data:",5));
+    size_t len = os64_strlen(url);
+    bool fetchable = (len > 7 && (os64_memcmp(url, "http://", 7) == 0 ||
+                                  (len > 8 && os64_memcmp(url, "https://", 8) == 0) ||
+                                  os64_memcmp(url, "file://", 7) == 0)) ||
+                     data_address(url, len);
     if (!fetchable)
         return -1;
-    int32_t found = p->pic_slot?p->pic_slot[picture_slot(p,url,mode)]:-1;
+    int32_t found = p->pic_slot ? p->pic_slot[picture_slot(p, url, len, mode)] : -1;
     if (found >= 0)
         return found;
     // Script-driven source changes may revisit many URLs between rebuilds.
     // Keep the native catalog bounded as well as its decoded pixel storage.
-    size_t bytes = os64_strlen(url) + 1;
+    size_t bytes = len + 1;
     if (p->npics >= 4096 || bytes > 4u * 1024u * 1024u - p->picture_url_bytes)
         return -1;
     if ((size_t)(p->npics + 1) * 2 > p->pic_slot_cap) {
@@ -4267,7 +4369,7 @@ static int32_t picture_for_mode(Page *p, const char *url,unsigned mode)
         p->pic_slot = slot;
         p->pic_slot_cap = cap;
         for (int32_t k = 0; k < p->npics; k++)
-            p->pic_slot[picture_slot(p, p->pics[k].url,p->pics[k].canvas_request)] = k;
+            p->pic_slot[picture_slot(p, p->pics[k].url, p->pics[k].url_len, p->pics[k].canvas_request)] = k;
     }
     if (p->npics == p->cap_pics) {
         int32_t cap = p->cap_pics > 0 ? p->cap_pics * 2 : 8;
@@ -4281,10 +4383,11 @@ static int32_t picture_for_mode(Page *p, const char *url,unsigned mode)
     const char *kept = copy_text(url);
     if (kept == NULL)
         return -1;
-    p->pic_slot[picture_slot(p, kept,mode)] = p->npics;
+    p->pic_slot[picture_slot(p, kept, len, mode)] = p->npics;
     Picture *pic = &p->pics[p->npics];
     pic->url = kept;
-    pic->canvas_request=mode;
+    pic->url_len = len;
+    pic->canvas_request = mode;
     p->picture_url_bytes += bytes;
     pic->state = PIC_QUEUED;
     p->waiting++;
@@ -4661,13 +4764,64 @@ static bool css_url(const Page *p, const flow_layer_t *l, char *out, size_t cap)
     return os64_page_url_absolute(base, written, out, cap);
 }
 
+// A background layer's data: address, which resolves against nothing and
+// is held to no address's length: where it starts in the url() and how
+// long it is, without the spaces around it that the URL parser strips and
+// without its fragment, which Fetch's data: processor drops — so the
+// markup's spelling of one address is the sheet's, and they share a
+// picture. (A byte libpage escapes in the markup's, a control or one past
+// ASCII, is kept as written here; that costs a second entry, not a wrong
+// one.) False for any other address.
+static bool css_data_span(const flow_layer_t *l, const char **at, size_t *n)
+{
+    const char *s = l->image;
+    size_t len = l->image_len;
+    while (len > 0 && (uint8_t)s[0] <= 0x20) {
+        s++;
+        len--;
+    }
+    while (len > 0 && (uint8_t)s[len - 1] <= 0x20)
+        len--;
+    if (!data_address(s, len))
+        return false;
+    const char *hash = os64_memchr(s, '#', len);
+    *at = s;
+    *n = hash != NULL ? (size_t)(hash - s) : len;
+    return true;
+}
+
+// That span as the catalog keys it, its scheme in lower case
+// (os64_malloc'd), or NULL for no memory.
+static char *css_data_key(const char *at, size_t n)
+{
+    char *key = os64_malloc(n + 1);
+    if (key == NULL)
+        return NULL;
+    os64_memcpy(key, at, n);
+    key[n] = '\0';
+    os64_memcpy(key, "data", 4);
+    return key;
+}
+
 // The picture a background layer names, in the page's table, or -1.
 // Asked for every layer with a picture on every paint: a copy, a resolve
-// and one index probe, small beside drawing the box. The layout-time walk
-// has the same answer; keeping it per box would mean a field on libflow's
-// tree for yonder's table, and one to keep true across relayouts.
+// and one index probe, small beside drawing the box — and a data: address
+// is probed where the sheet holds it, copied only when its scheme is not
+// written in lower case. The layout-time walk has the same answer; keeping
+// it per box would mean a field on libflow's tree for yonder's table, and
+// one to keep true across relayouts.
 static int32_t css_picture(const Page *p, const flow_layer_t *l)
 {
+    const char *at;
+    size_t n;
+    if (css_data_span(l, &at, &n)) {
+        if (os64_memcmp(at, "data", 4) == 0)
+            return picture_find_span(p, at, n);
+        char *key = css_data_key(at, n);
+        int32_t k = picture_find(p, key);
+        os64_free(key);
+        return k;
+    }
     char url[OS64_FETCH_URL_MAX];
     if (!css_url(p, l, url, sizeof(url)))
         return -1;
@@ -4689,28 +4843,54 @@ static bool picture_unasked(Page *p, const char *url, const char *written,
                             os64_page_reason_t refused);
 static const char *written_attr(const os64_html_node_t *node, const char *attr);
 
-// After a layout: every picture the laid-out boxes' sheets put behind them
-// is sent for, once — a resize whose media query brings a new one fetches
-// it then.
-static bool css_pictures_under(Page *p, const flow_box_t *b)
+// The pictures one box's layers put behind it, each sent for once.
+// NOT inlined into the walk below: the address buffer is 16KB, and the
+// walk recurses once per level of box nesting on a 1MB stack — with the
+// buffer in the walk's own frame, a page sixty boxes deep walked the stack
+// off its end (the P5, 2026-10-30). Here it lives in a frame that is popped
+// before the walk descends.
+static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t *b)
 {
     bool fresh = false;             // a refusal the record had not met
-    for (; b != NULL; b = b->next) {
-        for (int32_t i = 0; b->node != NULL && i < flow_background_layers(b->style); i++) {
-            flow_layer_t l = flow_background_layer(b->style, i);
-            char url[OS64_FETCH_URL_MAX];
-            if (l.image == NULL)
-                continue;
-            if (!css_url(p, &l, url, sizeof(url))) {
-                // Unresolved: the address as the sheet wrote it.
-                size_t len = l.image_len < sizeof(url) - 1 ? l.image_len : sizeof(url) - 1;
-                os64_memcpy(url, l.image, len);
-                url[len] = '\0';
-                fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);
-            } else if (picture_for(p, url) < 0) {
+    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
+        flow_layer_t l = flow_background_layer(b->style, i);
+        char url[OS64_FETCH_URL_MAX];
+        if (l.image == NULL)
+            continue;
+        const char *at;
+        size_t n;
+        if (css_data_span(&l, &at, &n)) {
+            char *key = css_data_key(at, n);
+            if (key == NULL) {
+                // No memory for its key: on the record by its opening.
+                os64_snprintf(url, sizeof(url), "%.*s", (int)(n < 64 ? n : 64), at);
                 fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
+            } else if (picture_for(p, key) < 0) {
+                fresh |= picture_unasked(p, key, NULL, OS64_PAGE_REASON_OK);
             }
+            os64_free(key);
+        } else if (!css_url(p, &l, url, sizeof(url))) {
+            // Unresolved: the address as the sheet wrote it.
+            size_t len = l.image_len < sizeof(url) - 1 ? l.image_len : sizeof(url) - 1;
+            os64_memcpy(url, l.image, len);
+            url[len] = '\0';
+            fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);
+        } else if (picture_for(p, url) < 0) {
+            fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
         }
+    }
+    return fresh;
+}
+
+// After a layout: every picture the laid-out boxes' sheets put behind them
+// is sent for, once — a resize whose media query brings a new one fetches
+// it then. The frame here must stay small (css_pictures_of says why).
+static bool css_pictures_under(Page *p, const flow_box_t *b)
+{
+    bool fresh = false;
+    for (; b != NULL; b = b->next) {
+        if (b->node != NULL)
+            fresh |= css_pictures_of(p, b);
         fresh |= css_pictures_under(p, b->first);
     }
     return fresh;
@@ -4826,38 +5006,39 @@ static bool unasked_first(Page *p, const char *key)
 }
 
 // A picture the page names that never reaches the table, on the record
-// once (unasked_first): one in a scheme nothing here fetches (a `data:`
-// picture, which the resolver does not even take) is MISSING
-// picture-scheme, counted, since its address is the picture itself; an
-// address that was refused (`url` NULL) is FAILED picture, `written` as
-// the page wrote it, with the refusal when there is one; one past what a
-// page may name, or with no memory to hold it, is FAILED picture by its
-// address. True when it was new, and the record changed.
+// once (unasked_first): one in a scheme nothing here fetches (`blob:`, say)
+// is MISSING picture-scheme, counted by its scheme; an address that was refused
+// (`url` NULL) is FAILED picture, `written` as the page wrote it (named
+// short when it is a long data: address), with the refusal when there is
+// one; one past what a page may name, or with no
+// memory to hold it, is FAILED picture by its address (picture_name). True
+// when it was new, and the record changed.
 static bool picture_unasked(Page *p, const char *url, const char *written,
                             os64_page_reason_t refused)
 {
     const char *addr = url != NULL ? url : written != NULL ? written : "";
     if (p->diag == NULL || !unasked_first(p, addr))
         return false;
-    // The scheme as written, by the URL grammar (os64_url_scheme_of): a
-    // `data:` address is no URL the parser takes, and is the case most
-    // worth counting.
+    // The scheme as written, by the URL grammar (os64_url_scheme_of), which
+    // names one even where the rest is no URL the parser takes.
     char scheme[OS64_URL_SCHEME_MAX];
     bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme));
     bool fetched = named && (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
-                             os64_streq(scheme, "file"));
-    char line[OS64_FETCH_URL_MAX + 96];
+                             os64_streq(scheme, "file") || os64_streq(scheme, "data"));
+    char line[OS64_FETCH_URL_MAX + 96], name[128];
     if (named && !fetched) {
         yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);
     } else if (url == NULL) {
+        const char *named_as = picture_name(addr, name, sizeof(name));
         if (refused != OS64_PAGE_REASON_OK)
-            os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)", addr,
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)", named_as,
                           os64_page_reason_name(refused));
         else
-            os64_snprintf(line, sizeof(line), "%.256s: the address was refused", addr);
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused", named_as);
         yonder_diag_failed(p->diag, "picture", line);
     } else {
-        os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory", url);
+        os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory",
+                      picture_name(url, name, sizeof(name)));
         yonder_diag_failed(p->diag, "picture", line);
     }
     if (p == &g.page)
@@ -4899,17 +5080,19 @@ static bool picture_moves_page(const Page *p, int32_t pic)
     return p->pics[pic].moves;
 }
 
-// A picture that will not be shown, on the page's record by its address:
-// an unsupported format or variant is asked for and not had, MISSING image
-// <format>, with the address on a plain line; one that could not be asked
-// for (`asked`, the reason) is FAILED picture; one whose fetch decided it
-// (it would not fetch, came with an error the server answered, or would
-// not decode) is FAILED picture-fetch, a kind of its own because a replay,
+// A picture that will not be shown, on the page's record by its address
+// (picture_name): an unsupported format or variant is asked for and not
+// had, MISSING image <format>, with the address on a plain line; one that
+// could not be asked for (`asked`, the reason) is FAILED picture; one the
+// worker decided (it would not fetch, came with an error the server
+// answered, its data: address would not decode as one, or the picture
+// would not) is FAILED picture-fetch, a kind of its own because a replay,
 // which fetches no picture, cannot reproduce it (MISSING image is one too).
 static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
                            const char *asked)
 {
-    char why[64];
+    char why[64], name[128];
+    url = picture_name(url, name, sizeof(name));
     if (product != NULL && product->format != NULL) {
         yonder_diag_missing(p->diag, "image", product->format, 1);
         char key[OS64_FETCH_URL_MAX + 16];
@@ -4950,8 +5133,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         // all the same, so every picture not shown is on the record.
         pic->state = PIC_NOT_KEPT;
         g.page.not_kept++;
-        char key[OS64_FETCH_URL_MAX + 16];
-        os64_snprintf(key, sizeof(key), "picture %s", pic->url);
+        char key[OS64_FETCH_URL_MAX + 16], name[128];
+        os64_snprintf(key, sizeof(key), "picture %s", picture_name(pic->url, name, sizeof(name)));
         yonder_diag_fact(g.page.diag, key, "past the memory kept for the page's pictures");
         return;
     }
@@ -6486,10 +6669,12 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
                            const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
                            int32_t oy, os64_gui_rect_t clip);
 
-// A `background` attribute's picture behind a box, or -1.
+// A `background` attribute's picture behind a box, or -1: its element's
+// own box's, never a box its ::before or ::after made, which names the
+// element too.
 static int32_t attribute_picture(const Page *p, const flow_box_t *b)
 {
-    int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
+    int32_t i = b->node != NULL && b->pseudo == 0 ? os64_page_background_for(page_model(p), b->node) : -1;
     return i >= 0 && i < p->nbackground_map && p->bg_of != NULL ? p->bg_of[i] : -1;
 }
 
@@ -6824,9 +7009,53 @@ typedef struct {
 // and the stream's and the arriving page's turns), a storage commit
 // (storage_turn), a cookie file's write (cookies_turn, offered as a timer
 // is), the settle (pictures_settle) and the stream's wait for its
-// sheets (stream_turn) itself, after the events; the bell meets pictures_tick and
-// coming_show. Motion and script frames run after tasks. Two at one moment
-// are common — the clock steps by the tick — and the moment is the bell's if either is.
+// sheets (stream_turn) itself, after the events; the bell meets pictures_tick,
+// coming_show and downloads_heard. Motion and script frames run after tasks.
+// Two deadlines at one moment are common — the clock steps by the tick —
+// and the moment is the bell's if either is.
+static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
+
+// The shown page has nothing more coming of its own accord: it has
+// streamed and arrived, its pictures and fonts are in and its record is
+// not owed, and no script of its is waiting to run or still being fetched
+// (a `src` script, or a module script's graph: one slower than the quiet
+// would otherwise be cut off). What a running script fetches for itself
+// is not waited for, since a page that polls would never settle; its
+// answer comes back as a job, which restarts the quiet.
+static bool exit_settled(void)
+{
+    return g.page.tree != NULL && !g.stream.active && !g.coming.active && g.page.waiting == 0 &&
+           !g.page.record_owed && s_web.waiting == 0 && !yonder_scripts_pending(g.page.scripts) &&
+           !yonder_scripts_fetching(g.page.scripts);
+}
+
+// When an `--exit-when-loaded` run next looks at whether to leave.
+static uint64_t exit_due(void)
+{
+    if (!s_exit_when_loaded)
+        return YONDER_NEVER;
+    uint64_t quiet = s_exit_quiet_from + EXIT_QUIET_MS, give_up = s_exit_started + EXIT_GIVE_UP_MS;
+    return quiet < give_up ? quiet : give_up;
+}
+
+// An `--exit-when-loaded` run leaves once its page is settled and quiet,
+// or once it has waited as long as it will; it says which on its way out.
+// A page not settled now starts the quiet again.
+static void exit_follow(void)
+{
+    if (!s_exit_when_loaded || !g.running)
+        return;
+    uint64_t now = yonder_now_ms();
+    if (!exit_settled())
+        s_exit_quiet_from = now;
+    bool quiet = exit_settled() && now >= s_exit_quiet_from + EXIT_QUIET_MS;
+    if (!quiet && now < s_exit_started + EXIT_GIVE_UP_MS)
+        return;
+    os64_printf("yonder: %s, leaving\n",
+                quiet ? "the page is loaded and quiet" : "the page never went quiet in two minutes");
+    g.running = false;
+}
+
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
 {
     bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM &&
@@ -6864,6 +7093,9 @@ static void pictures_schedule(void)
     }
     // The cookie file's next write, which the loop makes (cookies_turn).
     deadline_offer(&d, yonder_cookies_due(s_cookies), PAST_TIMERS);
+    // An `--exit-when-loaded` run's next look at whether to leave, which the
+    // loop makes (exit_follow).
+    deadline_offer(&d, exit_due(), PAST_TIMERS);
     // The shown page's next idle period, when only an idle callback that
     // asked for another waits for it (script_turn runs it).
     uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
@@ -6885,6 +7117,7 @@ static void pictures_schedule(void)
     }
     if (seen != NULL)
         picture_flags_free(seen, small);
+    deadline_offer(&d, downloads_due(), PAST_DOWNLOADS);
     uint64_t next = d.next, now = yonder_now_ms();
     if (next != YONDER_NEVER && next <= now) {
         s_cost.past[d.from]++;
@@ -8415,6 +8648,8 @@ static os64_font_status_t canvas_text_layout(void *opaque,const os64_font_family
     os64_text_layout_t options={.fonts=fonts,.font_count=count,.tab_interval=64};
     return os64_text_layout(s_env.text,text,length,&options,out);
 }
+static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
@@ -8424,8 +8659,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
-        .fetch = script_fetch, .cancel = script_cancel, .activate = script_activate,
-        .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
+        .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
@@ -8441,7 +8676,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     return host;
 }
 
-static void script_arrived(const yonder_script_job_t *job, const yonder_script_t *got)
+static void script_arrived(const yonder_script_job_t *job, yonder_script_t *got)
 {
     yonder_scripts_t *host = scripts_for(job->page);
     // Kept as the host is handed it, decoded, a fetch that failed as a
@@ -8452,9 +8687,51 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
     if (host != NULL)
         diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
                   came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
+    // Its compiled form, if the cache holds its body, is the host's now.
+    yonder_bytecode_t *bytecode = came ? got->bytecode : NULL;
+    if (came)
+        got->bytecode = NULL;
     if (host != NULL)
         yonder_scripts_fetched(host, job->token, came ? got->source : NULL, got != NULL ? got->length : 0,
-                               came ? got->url : NULL);
+                               came ? got->url : NULL, bytecode);
+    else
+        yonder_bytecode_free(bytecode);
+}
+
+// The compiled forms on their way to the disk, in bytes: a page compiling
+// a megabyte of script a second must not queue more than this behind the
+// workers, and one that would is not kept, which costs the next visit a
+// compile and nothing else.
+#define BYTECODE_QUEUED_MAX ((size_t)64 << 20)
+static size_t s_bytecode_queued;
+
+// A script or a module compiled from a body the cache holds (scripts.h
+// keep_bytecode): its blob is written beside the entry on a job of its own.
+static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length)
+{
+    (void)opaque;
+    yonder_bytecode_job_t *job = g.pool != NULL && g.cache != NULL && length <= SCRIPT_BYTECODE_MAX &&
+                                         s_bytecode_queued + length <= BYTECODE_QUEUED_MAX
+                                     ? os64_calloc(1, sizeof(*job))
+                                     : NULL;
+    if (job == NULL) {
+        os64_free(blob);
+        return;
+    }
+    job->kind = YONDER_JOB_BYTECODE;
+    job->cache = g.cache;
+    job->blob = blob;
+    job->length = length;
+    os64_strcopy(job->partition, sizeof(job->partition), where->partition);
+    job->credentials = where->credentials;
+    os64_strcopy(job->url, sizeof(job->url), where->url);
+    os64_strcopy(job->tag, sizeof(job->tag), where->tag);
+    os64_work_t work = {yonder_bytecode_keep_run, yonder_bytecode_keep_release, job, BYTECODE_KEEP_RESERVE};
+    if (os64_work_submit(g.pool, &work) == 0) {
+        yonder_bytecode_keep_release(job, NULL);
+        return;
+    }
+    s_bytecode_queued += length;
 }
 
 // When the task running began (task_begin), for its cost (task_cost). A
@@ -8521,12 +8798,15 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     char key[OS64_DOM_URL_MAX + 16];
     os64_snprintf(key, sizeof(key), "script %s", address != NULL ? address : name);
     // How long the engine took over it, compiling included, when the task
-    // evaluated a script: `ran in 1520 us`.
+    // evaluated a script: `ran in 1520 us`, and `ran in 80 us from its
+    // bytecode` when the compile was its kept bytecode's read instead
+    // (BYTECODE_CACHE.md), which is the before and after.
     int64_t us = yonder_scripts_task_us(host);
-    char ran[48] = "ran", died[48] = "failed";
+    const char *from = yonder_scripts_task_from_bytecode(host) ? " from its bytecode" : "";
+    char ran[64] = "ran", died[64] = "failed";
     if (us >= 0) {
-        os64_snprintf(ran, sizeof(ran), "ran in %ld us", (long)us);
-        os64_snprintf(died, sizeof(died), "failed in %ld us", (long)us);
+        os64_snprintf(ran, sizeof(ran), "ran in %ld us%s", (long)us, from);
+        os64_snprintf(died, sizeof(died), "failed in %ld us%s", (long)us, from);
     }
     // A task with a script's name is a script's, and the record lists it;
     // an event or a timer with none is listed only by a failure.
@@ -8635,6 +8915,11 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
                  os64_strlen(referrer) < sizeof(job->referrer) ? referrer : "");
     job->jar = g.way.jar;
     job->preflight = s_preflight;
+    // The browser's cache, as the request's cache mode says to use it
+    // (SCRIPT_CACHE.md § 5); a mode past the list is a request's default.
+    job->cache = g.cache;
+    job->cache_mode = q->cache <= WAY_CACHE_ONLY_IF_CACHED ? (way_cache_mode_t)q->cache : WAY_CACHE_DEFAULT;
+    job->module = (token & YONDER_MODULE_TOKEN) != 0;
     return job;
 }
 
@@ -8644,7 +8929,9 @@ static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, co
     yonder_fetch_job_t *job = g.pool != NULL ? request_job(serial, token, q) : NULL;
     if (job == NULL)
         return 0;
-    os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job, YONDER_FETCH_RESERVE};
+    os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job,
+                        job->module ? YONDER_FETCH_MODULE_RESERVE : YONDER_FETCH_RESERVE};
+    job->submitted_us = os64_micros();
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
         yonder_fetch_release(job, NULL);
@@ -8668,9 +8955,10 @@ static void request_response(const yonder_fetched_t *got, os64_dom_response_t *o
     };
 }
 
-// The page's record of a request: a line per address with what came back
-// and how many redirects it took (each was a dial), and a failure said as
-// one. A synchronous one says so: it stopped the page while it ran.
+// The page's record of a request: a line per address with what came back,
+// how many redirects it took (each was a dial), and what it cost — the
+// body's bytes and the fetch's time — and a failure said as one. A
+// synchronous one says so: it stopped the page while it ran.
 static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job, const yonder_fetched_t *got,
                            bool sync)
 {
@@ -8687,10 +8975,27 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
         return;
     }
     char key[OS64_FETCH_URL_MAX + 48];
-    char value[96];
+    char value[160];
+    char took[96] = "";
+    if (got->elapsed_us >= 0)
+        os64_snprintf(took, sizeof(took), " in %ld ms", (long)(got->elapsed_us / 1000));
+    // A wait for a worker, or for the window to hear the answer, a
+    // millisecond or more: time the request spent not being fetched.
+    int64_t heard = got->finished_us >= 0 ? os64_micros() - got->finished_us : -1;
+    size_t at = os64_strlen(took);
+    if (got->queued_us >= 1000 && at < sizeof(took))
+        at += (size_t)os64_snprintf(took + at, sizeof(took) - at, ", queued %ld ms", (long)(got->queued_us / 1000));
+    if (heard >= 1000 && at < sizeof(took))
+        os64_snprintf(took + at, sizeof(took) - at, ", heard %ld ms later", (long)(heard / 1000));
     os64_snprintf(key, sizeof(key), "request %s %s", job->request.method, job->url);
-    os64_snprintf(value, sizeof(value), "%d %s, %u hops%s", (int)got->status, way_type_name(got->type),
-                  (unsigned)got->hops, sync ? ", synchronous" : "");
+    // An answer the cache gave says so (SCRIPT_CACHE.md § 9): kept, served
+    // without asking; confirmed, served after a 304.
+    const char *from = got->served == WAY_SERVED_KEPT        ? ", kept"
+                       : got->served == WAY_SERVED_CONFIRMED ? ", confirmed"
+                                                             : "";
+    os64_snprintf(value, sizeof(value), "%d %s, %u hops, %lu bytes%s%s%s", (int)got->status,
+                  way_type_name(got->type), (unsigned)got->hops, (unsigned long)got->body_len, took, from,
+                  sync ? ", synchronous" : "");
     yonder_diag_fact(diag, key, value);
 }
 
@@ -8709,8 +9014,9 @@ static const os64_html_document_t *scripts_doc(const yonder_scripts_t *host)
 }
 
 // A request's job was reaped: its answer is the page's task, as a timer's
-// is, and what the task asked of the widgets is performed after it.
-static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got)
+// is, and what the task asked of the widgets is performed after it. A
+// module's compiled form is the page's module map's now.
+static void request_arrived(const yonder_fetch_job_t *job, yonder_fetched_t *got)
 {
     yonder_scripts_t *host = scripts_for(job->page);
     if (host == NULL)
@@ -8718,9 +9024,12 @@ static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_
     request_record(host, job, got, false);
     os64_dom_response_t response;
     request_response(got, &response);
+    yonder_bytecode_t *bytecode = got != NULL ? got->bytecode : NULL;
+    if (got != NULL)
+        got->bytecode = NULL;
     os64_js_outcome_t out;
     int64_t began = task_begin(host);
-    if (!yonder_scripts_answered(host, job->token, &response, &out))
+    if (!yonder_scripts_answered(host, job->token, &response, bytecode, &out))
         return;
     task_said(host, true, "request", &out, began);
     const os64_html_document_t *doc = scripts_doc(host);
@@ -10714,6 +11023,8 @@ static bool coming_turn(void)
 // finished before its cancel was noticed is let go the same way.
 static void reaped(os64_work_id_t id, void *job, void *product)
 {
+    // Work came back: an `--exit-when-loaded` run's quiet starts again.
+    s_exit_quiet_from = yonder_now_ms();
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
         int32_t waiting = g.page.waiting;
         picture_arrived(job, product);
@@ -10750,6 +11061,12 @@ static void reaped(os64_work_id_t id, void *job, void *product)
     if (*(const uint32_t *)job == YONDER_JOB_DOWNLOAD) {
         download_arrived(id, job);
         yonder_download_release(job, product);
+        return;
+    }
+    // A compiled form written, or not: either way nothing waits on it.
+    if (*(const uint32_t *)job == YONDER_JOB_BYTECODE) {
+        s_bytecode_queued -= ((const yonder_bytecode_job_t *)job)->length;
+        yonder_bytecode_keep_release(job, product);
         return;
     }
     // A fetch is done. Everything it had to say went down the mailbox
@@ -11535,8 +11852,8 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         // The head, the body and the verdict are the stream's: the loop
         // feeds a slice after the events (stream_turn, in main).
     }
-    if (mask & BELL_DOWNLOAD)
-        downloads_follow();
+    if ((mask & BELL_DOWNLOAD) || ((mask & BELL_TICK) && downloads_due() <= yonder_now_ms()))
+        downloads_heard();
     if (mask & BELL_TICK) {
         s_cost.bells++;
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
@@ -11872,7 +12189,7 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         for (int32_t i = 0; i < flow_background_layers(b->style); i++)
             if (flow_background_layer(b->style, i).image != NULL)
                 return true;
-        return b->node != NULL && os64_page_background_for(page_model(p), b->node) >= 0;
+        return b->node != NULL && b->pseudo == 0 && os64_page_background_for(page_model(p), b->node) >= 0;
     }
     if (layer >= 0) {
         l = flow_background_layer(b->style, layer);
@@ -13071,7 +13388,8 @@ static bool wheel_box(int32_t x, int32_t y, int32_t dx, int32_t dy)
                            was.y + (person_scrolls(s->overflow_y) ? dy : 0)};
         flow_point_t now = flow_scroll_set(t, i, to);
         if (now.x != was.x || now.y != was.y) {
-            page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, now);
+            if (flow_scroller(t, i)->pseudo == 0)
+                page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, now);
             mark_whole(WHOLE_SCROLL, false);
             forms_place();
             pictures_schedule();
@@ -13190,6 +13508,10 @@ typedef struct {
     // before the cancel).
     yonder_download_job_t *job;
     uint64_t got, total;        // the last the job said; a finished one's size
+    // Its recent pace, noted as the bytes arrive, for the list's speed and
+    // time left; when it began running and when it finished, for its average.
+    yonder_download_pace_t pace;
+    uint64_t began, ended;
     char why[160];
 } Download;
 
@@ -13198,12 +13520,29 @@ static int32_t s_ndownloads;
 static uint32_t s_download_serial;
 static uint32_t s_download_chosen;              // the row the row menu acts on
 static bool s_download_failed_unseen;           // a failure the list has not shown yet
-// The button's class, with the meter painted over what the button's own
-// paint draws. Both are taken from the widget os64_ui_button made, never by
-// the library's name for the class: an executable that names a library's
-// data gets a copy relocation, which the kernel's linker does not perform.
+// The button's class, with the meter painted over its face (head_paint),
+// and the stock button paint a face without a picture falls back to. Both
+// are taken from the widget os64_ui_button made, never by the library's
+// name for the class: an executable that names a library's data gets a copy
+// relocation, which the kernel's linker does not perform.
 static os64_ui_class_t s_downloads_class;
 static void (*s_button_paint)(os64_ui_widget_t *, os64_draw_ctx_t *, const os64_ui_theme_t *);
+// The list while it is open: said again when a download changes state, as
+// the bytes arrive at most every DOWNLOADS_RELIST_MS, and every
+// DOWNLOADS_STALL_MS while one runs, so a stall shows as one rather than as
+// the last speed seen. Its address is the list's owner for the menu session.
+#define DOWNLOADS_RELIST_MS 500
+#define DOWNLOADS_STALL_MS 1000
+static bool s_downloads_listed;
+static uint64_t s_downloads_listed_at;
+// A download just finished: the meter's lane blinks green, on and off
+// every DOWNLOAD_FLASH_STEP_MS for DOWNLOAD_FLASH_MS from s_download_flash_from.
+// s_download_flash_seen is when it was last stepped: the next step is owed
+// from there, not from whenever the clock is asked.
+#define DOWNLOAD_FLASH_STEP_MS 250
+#define DOWNLOAD_FLASH_MS 1500
+static bool s_download_flashing;
+static uint64_t s_download_flash_from, s_download_flash_seen;
 
 // The question the Save dialog is asked, one at a time: `url` NULL when
 // nothing is asked. The dialog opens between turns (downloads_turn).
@@ -13275,10 +13614,13 @@ static int32_t downloads_running(void)
     return n;
 }
 
+static void downloads_relist(bool now);
+
 static void downloads_follow(void)
 {
     os64_ui_set_enabled(&g.ui, &g.downloads, s_ndownloads > 0);
     os64_ui_mark_dirty(&g.ui, &g.downloads);
+    downloads_relist(true);
 }
 
 static void download_failed(Download *d, const char *why)
@@ -13329,6 +13671,8 @@ static void downloads_feed(void)
         }
         d->job = job;
         d->state = DL_RUNNING;
+        d->began = yonder_now_ms();
+        yonder_download_pace_note(&d->pace, d->began, 0);
         running++;
     }
     downloads_follow();
@@ -13429,10 +13773,14 @@ static void download_arrived(os64_work_id_t id, yonder_download_job_t *job)
         d->job = NULL;
         d->got = job->got;
         d->total = job->total;
-        if (job->whole)
+        d->ended = yonder_now_ms();
+        if (job->whole) {
             d->state = DL_DONE;
-        else
+            s_download_flashing = true;
+            s_download_flash_from = s_download_flash_seen = d->ended;
+        } else {
             download_failed(d, job->why[0] != '\0' ? job->why : "it stopped");
+        }
         break;
     }
     downloads_feed();
@@ -13487,17 +13835,64 @@ static void downloads_progress(uint64_t *got, uint64_t *total, bool *unknown)
     }
 }
 
-// The button, and its meter along its foot: the share that has arrived
-// while every running download's size is known, a band that moves with the
-// bytes while one's is not, red across after a failure the list has not
-// shown yet.
+// Bytes arrived, or a moment came (downloads_due): each running download's
+// pace noted, the meter moved or its flash stepped, and the open list said
+// again.
+static void downloads_heard(void)
+{
+    uint64_t got, total, now = yonder_now_ms();
+    bool unknown;
+    if (s_download_flashing) {
+        s_download_flash_seen = now;
+        s_download_flashing = now - s_download_flash_from < DOWNLOAD_FLASH_MS;
+    }
+    downloads_progress(&got, &total, &unknown);
+    for (int32_t i = 0; i < s_ndownloads; i++)
+        if (s_downloads[i].state == DL_RUNNING)
+            yonder_download_pace_note(&s_downloads[i].pace, now, s_downloads[i].got);
+    os64_ui_mark_dirty(&g.ui, &g.downloads);
+    downloads_relist(false);
+}
+
+// When the meter's flash next steps, or the open list is next said again
+// though no bytes arrive: YONDER_NEVER when neither is owed.
+static uint64_t downloads_due(void)
+{
+    uint64_t due = s_downloads_listed && downloads_running() > 0 ? s_downloads_listed_at + DOWNLOADS_STALL_MS
+                                                                  : YONDER_NEVER;
+    if (s_download_flashing) {
+        uint64_t steps = (s_download_flash_seen - s_download_flash_from) / DOWNLOAD_FLASH_STEP_MS + 1;
+        uint64_t step = s_download_flash_from + steps * DOWNLOAD_FLASH_STEP_MS;
+        if (step < due)
+            due = step;
+    }
+    return due;
+}
+
+// The flash's lit half: the even steps of its run.
+static bool download_flash_lit(void)
+{
+    uint64_t since = yonder_now_ms() - s_download_flash_from;
+    return s_download_flashing && since < DOWNLOAD_FLASH_MS && (since / DOWNLOAD_FLASH_STEP_MS) % 2 == 0;
+}
+
+static void head_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t);
+
+// The button, and its meter along its foot: green across, blinking, as a
+// download finishes; the share that has arrived while every running
+// download's size is known, a band that moves with the bytes while one's is
+// not; red across after a failure the list has not shown yet.
 static void downloads_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
-    s_button_paint(w, ctx, t);
+    head_paint(w, ctx, t);
     os64_gui_rect_t b = w->bounds;
     os64_gui_rect_t lane = {b.x + 3, b.y + b.h - 5, b.w - 6, 3};
     if (lane.w <= 0)
         return;
+    if (download_flash_lit()) {
+        os64_draw_fill_rect(&ctx->surf, lane, 0xff46b03cu);
+        return;
+    }
     uint64_t got, total;
     bool unknown;
     downloads_progress(&got, &total, &unknown);
@@ -13517,61 +13912,164 @@ static void downloads_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os6
     }
 }
 
-// One row of the list: the file's name, and how far it got or why not.
-static void download_row(const Download *d, char *out, size_t cap)
+// A row's name for the file: cut, at a character's start, to leave the
+// row's news room inside the 127 bytes the list keeps of a row.
+#define DOWNLOAD_ROW_NAME 40
+
+static void download_row_name(const Download *d, char *out, size_t cap)
 {
     const char *slash = os64_strrchr(d->path, '/');
     const char *name = slash != NULL ? slash + 1 : d->path;
-    char got[32], total[32];
+    size_t n = os64_strlen(name);
+    if (n <= DOWNLOAD_ROW_NAME || cap < DOWNLOAD_ROW_NAME + 4) {
+        os64_strcopy(out, cap, name);
+        return;
+    }
+    n = DOWNLOAD_ROW_NAME;
+    while (n > 0 && ((unsigned char)name[n] & 0xC0) == 0x80)
+        n--;
+    os64_memcpy(out, name, n);
+    os64_memcpy(out + n, "\xe2\x80\xa6", 4);
+}
+
+// One row of the list at `now`: the file's name, and how far it got and how
+// fast (the last few seconds' speed and the time that leaves while it runs,
+// its average once it is done), or why not.
+static void download_row(const Download *d, uint64_t now, char *out, size_t cap)
+{
+    char name[DOWNLOAD_ROW_NAME + 4], got[32], total[32], speed[32], left[32];
+    download_row_name(d, name, sizeof(name));
     yonder_download_size(d->got, got, sizeof(got));
     yonder_download_size(d->total, total, sizeof(total));
+    uint64_t rate = 0;
     switch (d->state) {
     case DL_WAITING: os64_snprintf(out, cap, "%s - waiting", name); break;
     case DL_RUNNING:
+        if (!yonder_download_pace_rate(&d->pace, now, d->got, &rate))
+            speed[0] = '\0';
+        else if (rate == 0)
+            os64_strcopy(speed, sizeof(speed), ", stalled");
+        else {
+            char size[32];
+            yonder_download_size(rate, size, sizeof(size));
+            os64_snprintf(speed, sizeof(speed), ", %s/s", size);
+        }
+        left[0] = '\0';
+        if (d->total > d->got && rate != 0 && yonder_download_left(d->total - d->got, rate, left + 2, sizeof(left) - 2))
+            os64_memcpy(left, ", ", 2);
         if (d->total != 0)
-            os64_snprintf(out, cap, "%s - %s of %s", name, got, total);
+            os64_snprintf(out, cap, "%s - %s of %s%s%s", name, got, total, speed, left);
         else
-            os64_snprintf(out, cap, "%s - %s", name, got);
+            os64_snprintf(out, cap, "%s - %s%s", name, got, speed);
         break;
-    case DL_DONE: os64_snprintf(out, cap, "%s - %s, done", name, got); break;
-    case DL_FAILED: os64_snprintf(out, cap, "%s - failed: %s", name, d->why); break;
+    case DL_DONE:
+        if (d->ended - d->began >= 1000) {
+            yonder_download_size(d->got * 1000 / (d->ended - d->began), speed, sizeof(speed));
+            os64_snprintf(out, cap, "%s - %s, done (%s/s average)", name, got, speed);
+        } else {
+            os64_snprintf(out, cap, "%s - %s, done", name, got);
+        }
+        break;
+    case DL_FAILED:
+        if (d->got != 0)
+            os64_snprintf(out, cap, "%s - failed at %s: %s", name, got, d->why);
+        else
+            os64_snprintf(out, cap, "%s - failed: %s", name, d->why);
+        break;
     case DL_CANCELLED: os64_snprintf(out, cap, "%s - cancelled", name); break;
     }
 }
 
-static void downloads_picked(void *user, size_t row);
-
-// The list, newest first, and "Clear finished" at its foot. Read afresh
-// each time it opens: it shows what was true then.
-static void click_downloads(os64_ui_widget_t *w, void *user)
+// The list's rows, newest first, and "Clear finished" at its foot, into
+// `labels` and `enabled` (DOWNLOADS_MAX + 1 of each): how many.
+static size_t downloads_rows(const char **labels, bool *enabled)
 {
-    (void)user;
-    if (g.menus == NULL || s_ndownloads == 0)
-        return;
     static char rows[DOWNLOADS_MAX + 1][224];
-    const char *labels[DOWNLOADS_MAX + 1];
-    bool enabled[DOWNLOADS_MAX + 1];
-    uint64_t got, total;
+    uint64_t got, total, now = yonder_now_ms();
     bool unknown;
     downloads_progress(&got, &total, &unknown);
     bool finished = false;
     for (int32_t i = 0; i < s_ndownloads; i++) {
         const Download *d = &s_downloads[s_ndownloads - 1 - i];
-        download_row(d, rows[i], sizeof(rows[i]));
+        download_row(d, now, rows[i], sizeof(rows[i]));
         labels[i] = rows[i];
         enabled[i] = true;
         finished |= download_finished(d);
     }
     labels[s_ndownloads] = "Clear finished";
     enabled[s_ndownloads] = finished;
-    s_download_failed_unseen = false;
-    os64_ui_mark_dirty(&g.ui, w);
+    return (size_t)s_ndownloads + 1;
+}
+
+// The rows went to a list that shows them: a failure among them is seen,
+// and the button's red goes. Rows built for a list found shut were not.
+static void downloads_seen(void)
+{
+    if (s_download_failed_unseen) {
+        s_download_failed_unseen = false;
+        os64_ui_mark_dirty(&g.ui, &g.downloads);
+    }
+}
+
+// The open list said again (s_downloads_listed): now, or, unless `now`, once
+// DOWNLOADS_RELIST_MS has passed since it last was. A list the person shut
+// is found shut here, and not said again.
+static void downloads_relist(bool now)
+{
+    uint64_t at = yonder_now_ms();
+    if (!s_downloads_listed || (!now && at - s_downloads_listed_at < DOWNLOADS_RELIST_MS))
+        return;
+    const char *labels[DOWNLOADS_MAX + 1];
+    bool enabled[DOWNLOADS_MAX + 1];
+    size_t count = downloads_rows(labels, enabled);
+    s_downloads_listed = g.menus != NULL &&
+                         os64_ui_menu_list_relabel(g.menus, &s_downloads_listed, labels, enabled, count) == OS64_UI_OK;
+    s_downloads_listed_at = at;
+    if (s_downloads_listed)
+        downloads_seen();
+}
+
+static void downloads_picked(void *user, size_t row);
+
+// The list, said again while it is open (downloads_relist).
+static void click_downloads(os64_ui_widget_t *w, void *user)
+{
+    (void)user;
+    if (g.menus == NULL || s_ndownloads == 0)
+        return;
+    const char *labels[DOWNLOADS_MAX + 1];
+    bool enabled[DOWNLOADS_MAX + 1];
+    size_t count = downloads_rows(labels, enabled);
+    // A list keeps the width it opened at, so it opens wide enough for the
+    // longest a waiting or running row's news grows to: its speed and the
+    // time left are not cut when they come. The room around a label is the
+    // list's mark and margins, with some to spare.
+    int32_t width = w->bounds.w;
+    for (int32_t i = 0; i < s_ndownloads; i++) {
+        const Download *d = &s_downloads[i];
+        if (d->state != DL_WAITING && d->state != DL_RUNNING)
+            continue;
+        char name[DOWNLOAD_ROW_NAME + 4], widest[224];
+        download_row_name(d, name, sizeof(name));
+        os64_snprintf(widest, sizeof(widest), "%s - 999.9 MB of 999.9 MB, 999.9 MB/s, 99 h 59 min left", name);
+        int32_t px = 0;
+        if (os64_ui_text_measure(&g.ui, OS64_FONT_ROLE_UI, widest, os64_strlen(widest), &px) == OS64_FONT_OK &&
+            px + 48 > width)
+            width = px + 48;
+    }
     os64_ui_menu_list_t list = {
-        .labels = labels, .enabled = enabled, .count = (size_t)s_ndownloads + 1,
-        .selected = (size_t)s_ndownloads + 1, .min_width = w->bounds.w, .widget = w,
-        .pick = downloads_picked, .user = NULL,
+        .labels = labels, .enabled = enabled, .count = count,
+        .selected = count, .min_width = width, .widget = w,
+        .pick = downloads_picked, .user = &s_downloads_listed,
     };
-    if (os64_ui_menu_open_list(g.menus, &list, w->bounds) != OS64_UI_OK)
+    // BUSY: it opens once a menu just shut has gone, and is said again
+    // meanwhile like an open one.
+    os64_ui_status_code_t rc = os64_ui_menu_open_list(g.menus, &list, w->bounds);
+    s_downloads_listed = rc == OS64_UI_OK || rc == OS64_UI_BUSY;
+    s_downloads_listed_at = yonder_now_ms();
+    if (s_downloads_listed)
+        downloads_seen();
+    else
         status_rest("The downloads list would not open.");
 }
 
@@ -13664,8 +14162,10 @@ static bool context_link_address(const os64_html_node_t *node, char *out, size_t
 }
 
 // The address the picture was fetched from, `srcset`'s choice included: the
-// page's catalog entry the painter draws it from, so a picture not fetched
-// (a data: address, one the catalog had no room for) offers no address.
+// page's catalog entry the painter draws it from, so a picture the catalog
+// had no room for offers no address, and nor does a data: address too long
+// for `out`. One that fits is offered whole, for Copy and Open; Save takes
+// only what downloadable() does.
 static bool context_picture_address(const os64_html_node_t *node, char *out, size_t cap)
 {
     const Page *p = &g.page;
@@ -14028,6 +14528,112 @@ static int32_t button_width(const char *caption)
     return tw + 4 * g.ui.theme.pad;
 }
 
+// ── The head row's pictures ─────────────────────────────────────────────
+//
+// Back, Forward, Reload, Stop and Downloads wear the icon set's pictures
+// beside their labels (icons.conf on the config ladder, the shipped set
+// beneath it), at the size the row's height holds, so the row is no taller
+// for them. A button whose picture is not there (no theme, a set without
+// that icon, a lease refused) is the plain captioned button.
+
+typedef struct {
+    os64_ui_widget_t *w;
+    const char *key;
+    os64_ui_icon_lease_t icon;          // pixels NULL: none
+} HeadFace;
+
+static HeadFace s_head_faces[] = {
+    {&g.back, "go-back", {0}},       {&g.forward, "go-forward", {0}}, {&g.reload, "view-refresh", {0}},
+    {&g.stop, "window-close", {0}},  {&g.downloads, "download", {0}},
+};
+static os64_icon_theme_t *s_icons;
+static uint32_t s_face_size;            // the size the pictures were taken at; 0 before
+static os64_ui_class_t s_head_class;    // the button's, painted with its picture
+
+// The pictures' size for a row `bh` high: 24 where it leaves the face a
+// margin, else 16.
+static uint32_t head_icon_size(int32_t bh)
+{
+    return bh >= 32 ? 24 : 16;
+}
+
+static HeadFace *head_face(const os64_ui_widget_t *w)
+{
+    for (size_t i = 0; i < sizeof(s_head_faces) / sizeof(s_head_faces[0]); i++)
+        if (s_head_faces[i].w == w)
+            return &s_head_faces[i];
+    return NULL;
+}
+
+// The pictures taken at the size a row `bh` high holds, when it is not the
+// size they have; one not to be had at it keeps the picture it has.
+static void head_faces_take(int32_t bh)
+{
+    uint32_t size = head_icon_size(bh);
+    if (s_icons == NULL || size == s_face_size)
+        return;
+    const os64_ui_icon_provider_t *provider = os64_icon_theme_provider(s_icons);
+    for (size_t i = 0; i < sizeof(s_head_faces) / sizeof(s_head_faces[0]); i++) {
+        os64_ui_icon_lease_t lease;
+        if (os64_ui_icon_acquire(provider, s_head_faces[i].key, size, &lease) != OS64_UI_ICON_OK)
+            continue;
+        os64_ui_icon_release(provider, &s_head_faces[i].icon);
+        s_head_faces[i].icon = lease;
+        os64_ui_mark_dirty(&g.ui, s_head_faces[i].w);
+    }
+    s_face_size = size;
+}
+
+// As yonder leaves: the pictures go back before the theme that lent them.
+static void head_faces_drop(void)
+{
+    if (s_icons == NULL)
+        return;
+    const os64_ui_icon_provider_t *provider = os64_icon_theme_provider(s_icons);
+    for (size_t i = 0; i < sizeof(s_head_faces) / sizeof(s_head_faces[0]); i++)
+        os64_ui_icon_release(provider, &s_head_faces[i].icon);
+    if (os64_icon_theme_destroy(s_icons) == OS64_UI_OK)
+        s_icons = NULL;
+}
+
+// The width a head button takes in a row `bh` high: its caption's, and its
+// picture's beside it.
+static int32_t head_width(os64_ui_widget_t *w, int32_t bh)
+{
+    const HeadFace *f = head_face(w);
+    int32_t width = button_width(w->text);
+    if (f != NULL && f->icon.pixels != NULL)
+        width += (int32_t)head_icon_size(bh) + g.ui.theme.gap;
+    return width;
+}
+
+// The button's face, its picture at the left and its caption centred in
+// what is left; the stock paint when it has no picture. The caption is the
+// run the button stages, measured and drawn as the stock paint does.
+static void head_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
+{
+    const HeadFace *f = head_face(w);
+    if (f == NULL || f->icon.pixels == NULL) {
+        s_button_paint(w, ctx, t);
+        return;
+    }
+    os64_ui_button_face(w, ctx, t);
+    os64_gui_rect_t b = w->bounds;
+    os64_gui_rect_t slot = {b.x + 2 * t->pad, b.y, (int32_t)s_face_size, b.h};
+    os64_ui_icon_draw(&ctx->surf, slot, &f->icon, !os64_ui_widget_enabled(w));
+    os64_ui_t *ui = os64_ui_of(w);
+    const char *text = w->text != NULL ? w->text : "";
+    size_t len = os64_strlen(text);
+    int32_t tw = 0;
+    if (os64_ui_run_width(ui, &w->run, OS64_FONT_ROLE_UI, text, len, &tw) != OS64_FONT_OK)
+        return;
+    int32_t left = slot.x + slot.w + t->gap, right = b.x + b.w - 2 * t->pad;
+    int32_t tx = left + (right - left - tw) / 2;
+    int32_t ty = b.y + (b.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
+    uint32_t face = w->pressed ? t->button_face_pressed : w->hovered ? t->button_face_hover : t->button_face;
+    os64_ui_draw_run(ui, w->run, OS64_FONT_ROLE_UI, &ctx->surf, b, tx, ty, text, len, t->button_fg, face);
+}
+
 // Font adoption measures candidate metrics before replacing the live face.
 // Stage the same geometry used for ordinary resizes so a refused adoption
 // leaves the current window intact.
@@ -14045,14 +14651,16 @@ static os64_font_status_t layout_window(bool staged)
     os64_gui_rect_t area = os64_ui_widget_planned_bounds(&g.root);
     int32_t pad = t->pad, gap = t->gap, bh = os64_ui_control_min_height(&g.ui), sw = t->scroll_w;
     int32_t x = pad;
+    if (!staged)
+        head_faces_take(bh);
     os64_ui_widget_t *tools[] = {&g.back, &g.forward, &g.reload, &g.stop};
     for (size_t i = 0; i < sizeof(tools) / sizeof(tools[0]); i++) {
-        int32_t bw = button_width(tools[i]->text);
+        int32_t bw = head_width(tools[i], bh);
         layout_place(tools[i], (os64_gui_rect_t){x, pad, bw, bh}, staged);
         x += bw + gap;
     }
     // The downloads button takes the row's right end; the field has the rest.
-    int32_t dw = button_width(g.downloads.text);
+    int32_t dw = head_width(&g.downloads, bh);
     layout_place(&g.downloads, (os64_gui_rect_t){area.w - pad - dw, pad, dw, bh}, staged);
     layout_place(&g.field.w, (os64_gui_rect_t){x, pad, area.w - pad - dw - gap - x, bh}, staged);
     int32_t top = pad + bh + pad;
@@ -14448,12 +15056,19 @@ int main(int argc, char **argv)
     // The window is named after the page (title_follow). A FILE given on
     // the command line is read before the window exists, so the window is
     // born with that page's name rather than taking it a moment later.
+    // The switches come before the address, in any order.
     int address_arg = 1;
-    for (; address_arg < argc; ++address_arg) {
-        if (os64_streq(argv[address_arg], "--script-audit")) s_script_audit = true;
-        else if (os64_streq(argv[address_arg], "--layout-profile")) s_layout_profile = true;
-        else break;
+    for (; address_arg < argc && argv[address_arg][0] == '-' && argv[address_arg][1] == '-'; address_arg++) {
+        if (os64_streq(argv[address_arg], "--script-audit"))
+            s_script_audit = true;
+        else if (os64_streq(argv[address_arg], "--layout-profile"))
+            s_layout_profile = true;
+        else if (os64_streq(argv[address_arg], "--exit-when-loaded"))
+            s_exit_when_loaded = true;
+        else
+            break;
     }
+    s_exit_started = s_exit_quiet_from = yonder_now_ms();
     g.scripts_on = yonder_settings_saved_scripts();
     s_dark = yonder_settings_saved_dark();
     s_animations = yonder_settings_saved_animations();
@@ -14531,9 +15146,14 @@ int main(int argc, char **argv)
     os64_ui_button(&g.downloads, "Downloads", click_downloads, NULL);
     s_downloads_class = *g.downloads.cls;
     s_button_paint = s_downloads_class.paint;
+    s_head_class = s_downloads_class;
+    s_head_class.name = "head-button";
+    s_head_class.paint = head_paint;
     s_downloads_class.name = "downloads";
     s_downloads_class.paint = downloads_paint;
     g.downloads.cls = &s_downloads_class;
+    g.back.cls = g.forward.cls = g.reload.cls = g.stop.cls = &s_head_class;
+    (void)os64_icon_theme_create(&s_icons);     // NULL: the buttons are captions alone
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf), field_submit, field_cancel, NULL);
     os64_ui_label(&g.status, g.status_text);
     os64_ui_label(&g.badge, g.badge_text);
@@ -14688,6 +15308,7 @@ int main(int argc, char **argv)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (coming_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        exit_follow();
         // A task may have set or cleared a timer, and a frame for an
         // animation has its whole cost now: the ticker hears of both.
         pictures_schedule();
@@ -14712,6 +15333,7 @@ int main(int argc, char **argv)
     os64_work_pool_destroy(g.pool);
     g.pool = NULL;                      // and no teardown below cancels through it
     downloads_drop();
+    head_faces_drop();
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
     page_departs();

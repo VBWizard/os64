@@ -125,6 +125,25 @@ static void graft_cases(void)
     }
     flow_free(old);sheeted_close(&p);
 
+    // Generated content is rebuilt with the new counter/quote state, even
+    // when the originating element's ordinary style is unchanged.
+    sheeted_open(&p,"<!doctype html><style>body{counter-reset:n}"
+        ".count{counter-increment:n}.count::before{content:counter(n) attr(title);color:var(--ink,red)}"
+        ".on{--ink:blue}.on::after{content:'tail'}</style>"
+        "<div id=grow class=count title=A></div><section><p id=kept class=count title=B></p>"
+        "<q>quote <q>inner</q></q></section><p>stable tail</p>",800,600);
+    old=graft_layout(&p,NULL,NULL,NULL);
+    for(int round=0;round<4;++round) {
+        if(round==0)os64_html_set_attr(p.doc,graft_node(&p,"grow"),"class","off",3);
+        if(round==1)os64_html_set_attr(p.doc,graft_node(&p,"kept"),"class","count on",8);
+        if(round==2)os64_html_set_attr(p.doc,graft_node(&p,"kept"),"title","changed",7);
+        if(round==3)os64_html_set_attr(p.doc,graft_node(&p,"kept"),"class","off",3);
+        graft_update(&p);
+        flow_tree_t *next=graft_layout(&p,old,&profile,NULL);
+        flow_free(old);graft_oracle(&p,next);old=next;
+    }
+    flow_free(old);sheeted_close(&p);
+
     const char *fixtures[]={
         "<!doctype html><div id=grow style='height:10px;margin-bottom:20px'></div>"
         "<div id=empty style='margin-top:-10px'></div><p style='margin-top:25px'>margin proof</p><p>tail</p><p>end</p>",

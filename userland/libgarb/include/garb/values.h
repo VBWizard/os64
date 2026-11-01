@@ -140,6 +140,27 @@ typedef enum {
     GARB_STROKE_DASHOFFSET,
     GARB_CLIP_PATH, GARB_CLIP_RULE,
     GARB_STOP_COLOR, GARB_STOP_OPACITY,
+    // Generated Content 3 § 1.1 (GENERATED_CONTENT.md): the KEYWORD normal
+    // or none, or the items a pseudo-element's content is made of, in
+    // `items`, the value's own kind a STRING: each item a STRING, a
+    // FUNCTION attr (its one item the attribute's name, a STRING), a
+    // KEYWORD (open-quote, close-quote, no-open-quote, no-close-quote), a
+    // FUNCTION counter (its items the counter's name, then the style's
+    // KEYWORD, lowercased, when one other than decimal is written) or
+    // counters (the name, the joiner, a STRING, then the style), a URL or
+    // an IMAGE. A counter's name is a KEYWORD as written, its `text` and
+    // `len` the same bytes. The alternative text after a `/` is read and
+    // not kept.
+    GARB_CONTENT,
+    // Lists 3 § 4 (GENERATED_CONTENT.md § 8): the KEYWORD none, or pairs in
+    // `items`, the value's own kind a STRING: a counter's name (as in
+    // content's counter()), then its NUMBER, an integer (0 for a reset or a set written without
+    // one, 1 for an increment).
+    GARB_COUNTER_RESET, GARB_COUNTER_INCREMENT, GARB_COUNTER_SET,
+    // Content 3 § 4.1: the KEYWORD auto or none, or the marks in `items`,
+    // STRINGs, an open and a close for each depth; the value's own kind a
+    // STRING.
+    GARB_QUOTES,
     GARB_NPROPS
 } garb_prop_t;
 

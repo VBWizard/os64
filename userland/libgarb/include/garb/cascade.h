@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "garb/garb.h"
+#include "garb/select.h"
 #include "garb/values.h"
 #include "html/html.h"
 
@@ -171,6 +172,10 @@ bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *n
 garb_env_t garb_cascade_env(const garb_cascade_t *c);
 // `element`'s winners; an element no author rule reached has none.
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element);
+// The winners of `element`'s ::before or ::after (GENERATED_CONTENT.md §
+// 3), from that pseudo-element's rules alone: none when no rule for it
+// matched, and for any other pseudo-element.
+garb_style_t garb_style_for_pseudo(const garb_cascade_t *c, const os64_html_node_t *element, garb_pseudo_t pseudo);
 /* True when a matched non-custom declaration needs var()/env() substitution,
  * including declarations superseded later in the cascade. Such source styles
  * cannot be reused under different inheritance without substituting again. */
@@ -311,8 +316,9 @@ typedef void *(*garb_grow_t)(void *ctx, void *old, size_t old_size, size_t new_s
 // buffer, with nothing left held.
 char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t grow, void *ctx);
 
-// Every element's winners as text, in document order: `tag#id.class:
-// prop: value; ...`, for the harness and a probe. Like snprintf.
+// Every element's winners as text, in document order: `tag#id: prop:
+// value; ...`, its ::before's and ::after's after it (`tag#id::before:
+// ...`), for the harness and a probe. Like snprintf.
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,
                          size_t cap);
 

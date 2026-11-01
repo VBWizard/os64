@@ -43,6 +43,8 @@ LIBDOM_SRCS += libdom/sheets.c libdom/image_data.c libdom/canvas.c libdom/canvas
 LIBDOM_SRCS += libdom/importmap.c
 # Custom elements: the registry, upgrades and their reactions.
 LIBDOM_SRCS += libdom/custom.c
+# MutationObserver, fed by the same listener.
+LIBDOM_SRCS += libdom/observer.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
@@ -75,7 +77,7 @@ $(LIBDOM_GEOMETRY_TEST_OBJ): libdom/tests/geometry.c libdom/include/dom/dom.h \
 $(LIBDOM_GEOMETRY_TEST_ELF): $(LIBDOM_GEOMETRY_TEST_OBJ) $(OBJ)/apps/yonder/geometry.c.o \
     $(LAUNCH_OBJS) $(LIBDOM_SO) $(LIBJS_SO) $(LIBFLOW_SO) $(LIBGARB_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(BIN)/libfreetype.so $(LIBOS64_SO)
 	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
-	    $(LDFLAGS) -o $@ $^
+	    $(LDFLAGS) $(BIG_STACK_LDFLAGS) -o $@ $^
 .PHONY: dom-geometry-test
 dom-geometry-test: $(LIBDOM_GEOMETRY_TEST_ELF)
 -include $(LIBDOM_GEOMETRY_TEST_OBJ:.o=.d)

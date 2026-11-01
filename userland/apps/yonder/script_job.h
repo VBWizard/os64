@@ -9,16 +9,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "bytecode.h"
 #include "fetch/fetch.h"
 #include "jobs.h"
+#include "way/cache.h"
 #include "way/way.h"
 
-// The longest script source yonder runs, the libjs source limit a page's
-// runtime is created with. A longer one is refused, as a too-big sheet is.
-#define SCRIPT_SOURCE_MAX ((size_t)4 * 1024 * 1024)
 // A job's peak: the body, and the decoded text (up to three bytes a byte
-// for windows-1252), with a connection's worth of room beside them.
-#define SCRIPT_RESERVE (SCRIPT_SOURCE_MAX * 4 + ((size_t)4 << 20))
+// for windows-1252), with a connection's worth of room beside them, and
+// the compiled form read beside its entry.
+#define SCRIPT_RESERVE (SCRIPT_SOURCE_MAX * 4 + ((size_t)4 << 20) + SCRIPT_BYTECODE_MAX)
 
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_SCRIPT
@@ -38,6 +38,7 @@ typedef struct {
     char *source;                   // UTF-8, NUL-terminated
     size_t length;
     char url[OS64_FETCH_URL_MAX];   // after its redirects
+    yonder_bytecode_t *bytecode;    // NULL when the cache does not hold the body
 } yonder_script_t;
 
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);

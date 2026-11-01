@@ -1,8 +1,8 @@
 // picture.c — a picture fetched and decoded on a worker (picture.h).
 
 #include "picture.h"
-#include "fetch_job.h"
 #include "diag.h"
+#include "fetch_job.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
@@ -116,14 +116,25 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         p->status = svg_failure(SVG_CANCELLED, p);
         return 0;
     }
-    const char *url=j->data_url?j->data_url:j->url;
-    if((os64_strlen(url)>=5&&!os64_memcmp(url,"data:",5))) {
-        uint8_t *bytes=NULL;size_t length=0;char type[HTTP_TYPE_MAX];
-        if(!yonder_fetch_data_url(url,OS64_IMAGE_CAP_DEFAULT,&bytes,&length,type,sizeof(type))) {
-            p->status=OS64_IMAGE_MALFORMED;return 0;
+    // A data: picture is its own address, decoded here as Fetch decodes
+    // one (fetch_job.h): nothing is fetched or read. Its type is what the
+    // address says, which picks SVG as a server's Content-Type would.
+    if (j->data_url != NULL) {
+        uint8_t *bytes = NULL;
+        size_t len = 0;
+        char type[WAY_MIME_SERIALIZED_MAX];
+        if (!yonder_fetch_data_url(j->data_url, OS64_IMAGE_CAP_DEFAULT, &bytes, &len, type, sizeof(type))) {
+            p->status = OS64_IMAGE_MALFORMED;
+            os64_strcopy(p->why, sizeof(p->why), "its data: address is malformed, too big, or no memory");
+        } else if (len == 0) {
+            p->status = OS64_IMAGE_NO_FILE;
+            os64_strcopy(p->why, sizeof(p->why), "its data: address is empty");
+        } else {
+            p->status = decode(bytes, len, type, j, cancelled, ctx, p);
+            p->origin_clean = true;
         }
-        p->status=decode(bytes,length,type,j,cancelled,ctx,p);p->origin_clean=true;
-        os64_free(bytes);return p->status==OS64_IMAGE_OK?1:0;
+        os64_free(bytes);
+        return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
     // A picture on a page read from disk is a file beside it.
     if (os64_strlen(j->url) > 7 && os64_memcmp(j->url, "file://", 7) == 0) {
@@ -201,6 +212,7 @@ void yonder_picture_release(void *job, void *product)
         os64_image_sequence_free(p->sequence);
         os64_free(p);
     }
-    if(job)os64_free(((yonder_picture_job_t *)job)->data_url);
+    if (job != NULL)
+        os64_free(((yonder_picture_job_t *)job)->data_url);
     os64_free(job);
 }

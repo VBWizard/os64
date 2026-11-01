@@ -28,6 +28,7 @@
 #include <dom/dom.h>
 #include "os64/js_engine.h"
 
+#include "bytecode.h"
 #include "diag.h"
 #include "importmap.h"
 
@@ -64,6 +65,10 @@ typedef struct {
     // against; NULL for an inline one, which resolves against the
     // document's base URL (`base`).
     const char *(*script_base)(void *opaque, const char *name);
+    // A module compiled from the source whose body the cache holds: its
+    // blob (libjs's, taken) to be kept where `where` says (BYTECODE_CACHE.md
+    // § 9). NULL keeps nothing.
+    void (*keep)(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
 } yonder_modules_net_t;
 
 // A map for a page, its record `diag` (borrowed; NULL keeps none). NULL on
@@ -100,7 +105,11 @@ yonder_graph_t yonder_modules_graph(yonder_modules_t *m, int32_t entry, const ch
 
 // The answer to module fetch `token` (YONDER_MODULE_TOKEN set), borrowed:
 // the module is compiled, and its imports fetched. Runs no script.
-void yonder_modules_answered(yonder_modules_t *m, uint32_t token, const os64_dom_response_t *response);
+// `bytecode`, its compiled form when the cache holds its body, is TAKEN:
+// the module is read from its blob when the blob is for this module, and a
+// compile of it kept where it says.
+void yonder_modules_answered(yonder_modules_t *m, uint32_t token, const os64_dom_response_t *response,
+                             yonder_bytecode_t *bytecode);
 
 // A module whose source arrived while a script ran (an inline module a
 // script connected, or document.write wrote) cannot be compiled until the

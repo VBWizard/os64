@@ -34,6 +34,11 @@ yonder_host_build() {
         -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iuserland/libos64
         -Iabi/include -Itools -Itools/fonts
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
+    # JS_ROUND_TRIP=1 builds libjs's round trip (BYTECODE_CACHE.md § 8):
+    # every classic script compiled under a name of its own, written, read
+    # back under its own and run from what was read, so the suite proves
+    # through the bytecode everything it proves.
+    if [ "${JS_ROUND_TRIP:-0}" = 1 ]; then host_flags+=(-DOS64_JS_BYTECODE_ROUND_TRIP); fi
     # Match the production SVG library membership as geometry modules grow.
     local svg_sources=()
     mapfile -t svg_sources < <(python3 -c '
@@ -46,8 +51,8 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
-        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,animation,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,image_data,canvas,canvas_path,canvas_text,canvas_image,mutation,custom}.c \
-        userland/apps/yonder/{scripts,modules,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
+        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,animation,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,image_data,canvas,canvas_path,canvas_text,canvas_image,mutation,custom,observer}.c \
+        userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
         "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
@@ -55,9 +60,9 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libpage/upstream/ryu/ryu/d2s.c \
         userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow,computed}.c \
         userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
-        userland/libway/session.c userland/libway/origin.c userland/libway/jar.c \
-        userland/apps/yonder/fetch_job.c tools/yonder_host_menus.c \
-        userland/libos64/{str,fmt,bidi,url,arena,ui,ui_controls,ui_list,ui_dropdown,ui_text,ui_font,ui_theme,font_config,font_family,font_provider,font_adopt,text,text_cache,text_decode,text_bitmap,text_draw,draw}.c \
+        userland/libway/session.c userland/libway/origin.c userland/libway/jar.c userland/libway/cache.c \
+        userland/apps/yonder/fetch_job.c tools/yonder_host_menus.c tools/yonder_host_console.c \
+        userland/libos64/{str,fmt,bidi,url,arena,ui,ui_controls,ui_list,ui_dropdown,ui_icon,ui_text,ui_font,ui_theme,font_config,font_family,font_provider,font_adopt,text,text_cache,text_decode,text_bitmap,text_draw,draw}.c \
         shared/damage.c; do
         object="$work/${source//\//_}.o"
         private=()

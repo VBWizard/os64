@@ -51,8 +51,53 @@ static void request_same_origin_case(void) {
     check(nfake_requests==1 && !strcmp(fake_requests[0].method,"GET") &&
           fake_field(0,"Origin",origin,sizeof(origin))[0]=='\0',
           "requests: a same-origin GET carries no Origin");
-    check(strstr(request_record_text(),"request GET http://fixture.test/data.json: 200 basic, 0 hops")!=NULL,
-          "requests: the page's record has the request's line, with its hops");
+    check(strstr(request_record_text(),"request GET http://fixture.test/data.json: 200 basic, 0 hops, 11 bytes in 0 ms\n")!=NULL,
+          "requests: the page's record has the request's line, with its hops, its bytes and its time");
+    request_drop();
+}
+
+/* With the clock moving, a request's line says how long it waited for a
+ * worker and how long its answer waited for the window. */
+static void request_waits_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/w.json",200,"Content-Type: application/json\r\n","{}");
+    loop_page("<script>fetch('/w.json')</script>");
+    check(loop_settle() && nrequest_jobs==1,"requests: the fetch is out");
+    clock_step=1000;
+    bool landed=request_land("/w.json");
+    clock_step=0;
+    const char *text=request_record_text();
+    const char *line=strstr(text,"request GET http://fixture.test/w.json: ");
+    check(landed && line!=NULL && strstr(line,", queued ")!=NULL && strstr(line," ms later")!=NULL &&
+          strstr(line,", queued ")<strchr(line,'\n') && strstr(line," ms later")<strchr(line,'\n'),
+          "requests: the line says the wait for a worker and the wait to be heard");
+    request_drop();
+}
+
+/* A request's cache mode (SCRIPT_CACHE.md § 5) reaches its job, and one
+ * that names none is the default; a module's fetch is said to be one. */
+static void request_cache_mode_case(void) {
+    fake_fetch_reset();
+    loop_page("<script>fetch('/a',{cache:'no-store'});fetch('/b',{cache:'force-cache'});fetch('/c');</script>");
+    check(loop_settle() && nrequest_jobs==3,"requests: three fetches are out");
+    way_cache_mode_t a=WAY_CACHE_DEFAULT, b=WAY_CACHE_DEFAULT, c=WAY_CACHE_NO_STORE;
+    bool module=false;
+    for(int i=0;i<nrequest_jobs;i++) {
+        const char *url=request_jobs[i].job->url;
+        size_t n=strlen(url);
+        if(url[n-1]=='a') a=request_jobs[i].job->cache_mode;
+        if(url[n-1]=='b') b=request_jobs[i].job->cache_mode;
+        if(url[n-1]=='c') c=request_jobs[i].job->cache_mode;
+        module|=request_jobs[i].job->module;
+    }
+    check(a==WAY_CACHE_NO_STORE && b==WAY_CACHE_FORCE_CACHE && c==WAY_CACHE_DEFAULT && !module,
+          "requests: each fetch's job carries its cache mode, and none is a module's");
+    request_drop();
+    fake_fetch_reset();
+    loop_page("<script type=module src=/m.js></script>");
+    check(loop_settle() && nrequest_jobs==1 && request_jobs[0].job->module &&
+          request_jobs[0].job->cache_mode==WAY_CACHE_DEFAULT,
+          "requests: a module's fetch is a module's, in the default mode");
     request_drop();
 }
 
@@ -105,7 +150,7 @@ static void request_xhr_case(void) {
     check(request_land("/a.txt") && loop_settle() && script_rebuild() && probe_text_is("a","234 async"),
           "requests: an asynchronous one fires its events as its answer's task");
     const char *record=request_record_text();
-    check(strstr(record,"request GET http://fixture.test/s.txt: 200 basic, 0 hops, synchronous")!=NULL,
+    check(strstr(record,"request GET http://fixture.test/s.txt: 200 basic, 0 hops, 4 bytes in 0 ms, synchronous")!=NULL,
           "requests: the record says a synchronous request stopped the page");
     request_drop();
 }
@@ -199,8 +244,8 @@ static void request_redirected_page_case(void) {
         check(i>=0 && origin[0]=='\0' && os64_streq(referer,"https://fixture.test/"),what);
     }
     const char *record=request_record_text();
-    check(strstr(record,"request GET https://fixture.test/ready.json: 200 basic, 0 hops")!=NULL &&
-          strstr(record,"request GET https://fixture.test/sync.json: 200 basic, 0 hops, synchronous")!=NULL &&
+    check(strstr(record,"request GET https://fixture.test/ready.json: 200 basic, 0 hops, 2 bytes in 0 ms\n")!=NULL &&
+          strstr(record,"request GET https://fixture.test/sync.json: 200 basic, 0 hops, 2 bytes in 0 ms, synchronous")!=NULL &&
           strstr(record,"FAILED request")==NULL,
           "requests: the page's record has them as basic, the synchronous one included");
     /* A serial no page has is a page gone: what it asks for is refused,
@@ -366,6 +411,8 @@ static void request_cases(void) {
     navigation_cases();
     request_redirected_page_case();
     request_same_origin_case();
+    request_cache_mode_case();
+    request_waits_case();
     request_cors_case();
     request_xhr_case();
     request_cancel_case();

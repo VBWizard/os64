@@ -82,6 +82,11 @@ an exact deepest-instruction bound. A 256 KiB engine profile left only 71231
 sampled bytes in the block fixture; the browser's 128 KiB selection retains more
 than the tested 128 KiB native headroom threshold. Standalone libjs is unchanged.
 
+*2026-10-31:* yonder's window thread now declares 4 MiB, and the engine has
+2 MiB of it (SCRIPT_STACK.md). The same probe, rerun at that size, reaches a
+depth of 3,040 with at least 1,026,399 bytes of headroom; its table is in
+SCRIPT_STACK.md § 10. The figures above are the 1 MiB thread's.
+
 D7c's row drives the blocks shape from a listener the host dispatches to,
 which dispatches to a second listener: `os64_dom_dispatch`, `invoke`,
 `run_record`, `JS_Call` and a nested `dispatchEvent` under the recursion,

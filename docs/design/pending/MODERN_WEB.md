@@ -354,12 +354,29 @@ and a run-from-bytes pair over the engine's own `JS_WriteObject` and
 `JS_ReadObject`, tied to the engine's build so a cache written by one
 build is never read by another. The timing instrument (compile time per
 script, in the page file) lands in slice 0b so this slice's
-before-and-after is a number on the P5. Opus.
+before-and-after is a number on the P5. Opus. *As built (7a, classic
+`src` scripts; [BYTECODE_CACHE.md](BYTECODE_CACHE.md)):* a companion
+file beside the script's cache entry, keyed by the decoded source's
+digest rather than the validators, so a blob is only ever offered for
+the text it came from; read only for a body the cache holds and removed
+with its entry; one verb, `os64_js_run_bytecode`, not a pair; the
+script's per-page name given at the read (patch 0015), since libdom reads
+it back to mute another site's errors; and NOT compressed — libgzip
+inflates at 68 MB/s against the engine's 600 MB/s read, so the inflate
+would have cost more than it saved. 7b, modules, followed on its own path
+(SCRIPT_CACHE.md).
 
 **Slice 8: generated content and the rest of the census's CSS.**
 `::before`/`::after` with `content` (144 asks, the icon fonts' whole
 mechanism), `filter` and `clip-path` basics, `mix-blend-mode`, the
-`will-change` values yonder draws nothing of (read, no effect). Opus.
+`will-change` values yonder draws nothing of (read, no effect). Opus. *8a
+built 2026-10-31 ([GENERATED_CONTENT.md](GENERATED_CONTENT.md)):
+`::before`/`::after` with strings, `attr()` and the quote words, any
+display. The census of that day put `content` first among the CSS
+properties yonder lacked (555 of 740 loads, 70 of 91 sites). 8b, built
+the same day (GENERATED_CONTENT.md § 8), is counters and `quotes`, in
+tree order. 8c will be `filter` and `backdrop-filter`, and 8d
+`mix-blend-mode`.*
 
 **Tier 1 slices**, designed when Tier 0 is done and the P5 has been used
 on it for a week: `iframe` and `postMessage` (**Fable design**, its own
@@ -381,6 +398,30 @@ malloc). The measurement: a 22,415-rule page spent 8 of its 11.7 s of
 layout in the heap's first-fit walk, one walk per rule, and the window's
 thread holds 7% of a core idle on the same walk. Order: the scratch first,
 the bins when heap.c is opened; neither makes the other optional.
+
+**Two slices the P5's pages promoted, and where they wait (Chris,
+2026-10-29).** Each is a surface a real page died on, and each waits
+behind what is left of Tier 0 rather than in front of it: the scratch and
+the bins above, slice 5, slice 7, slice 8, then these two in this order.
+A surface a page finds after this goes to the end of the list too, unless
+Chris promotes it by name.
+
+- **Range.** `Range`, `StaticRange` and `document.createRange` (DOM § 5),
+  live boundary points that follow the tree on the document's listener
+  (`os64_html_observe`, which MutationObserver already reads),
+  `createContextualFragment`, and a range's `getBoundingClientRect` and
+  `getClientRects` over 1b's geometry. Google's search box throws
+  `'createRange' is not a function` as a query is typed, WPT's
+  MutationObserver tests stop at it, and WINDOW_DOCUMENT.md counts it on
+  91 pages. Selection stays class (d), for the window's selection model
+  (YONDER_HONEY_DO.md's selection model). Oracle: WPT `dom/ranges/`.
+  Opus.
+- **Streams.** A `ReadableStream` a page builds itself, and bodies that
+  stream, the Streams standard whole (DEBTS.md's row; a body is read whole
+  today, `response.body` a one-chunk stream). A social site's sign-in
+  pages die on `'ReadableStream' is not defined` before they draw, and
+  GitHub's bundles name it after `MutationObserver`. A design pass before
+  code, since it is the Streams standard. Oracle: WPT `streams/`. Opus.
 
 ## How the slices run side by side (2026-10-21)
 
@@ -436,7 +477,7 @@ rebase order below resolves them rather than a merge fight.
 | 2 | `libdom/fetch.c`, `libdom/xhr.c`, `yonder/fetch_job.c`, `libway/origin.c` (origins, CORS) | `scripts.h` (the job hook), `modern.c` (rows), the WPT runner (two origins) |
 | 3 | the module entry in `libjs` (`runtime.c`, `js.h`), `yonder/modules.c` (the graph) | `yonder/scripts.c` (the loader hook), `libdom/window.c` (script kind) |
 | 4 | `libgarb/props.c`, `values.c` and `libflow` for the named properties | `yonder/paint.c` (`outline`, `text-overflow`) |
-| 7 | the bytes pair in `libjs`, `libway/cache.c` (a bytecode entry beside a script's) | `yonder/script_job.c` |
+| 7 | `os64_js_run_bytecode` in `libjs`, `libway/cache.c` (a companion beside a script's entry) | `yonder/script_job.c`, `scripts.c`, `yonder.c` (the write job) |
 
 Landing order, a lean Chris moves: 0a, 0b, 1a, 1b, 4, 2, 3, 7. A later
 slice rebases onto what landed before it; `settings.c` and `modern.c`
@@ -467,7 +508,7 @@ From 2026-10-07, so they are not re-argued from scratch:
 | D13 (incremental relayout) before `requestAnimationFrame` | ruled; slice 5 |
 | The runtime's memory limit (D5b's profile) | becomes a per-page policy before Tier 1; the recon's 33 MB bytecode for one bundle says the limit is per PAGE, not per runtime |
 | The 5 s per-task budget | measured after slice 0's instrument; the recon says compile of the largest bundle alone is 4 to 5 s on the P5, so the budget cannot include compile |
-| The 128 KiB script stack | remeasured in D7c; unchanged until a WPT directory says otherwise |
+| The script stack | 128 KiB until 2026-10-31; since then 2 MiB of a declared 4 MiB window thread, because real pages overflowed 160 calls (SCRIPT_STACK.md) |
 | Scripts on by default | Chris's, after the gates; the kill switch does not change it |
 | Not reopened | the engine, D4's worker/window split, the cookie jar, HTTP/1.1 |
 
@@ -1930,8 +1971,8 @@ Opus after the build, and the findings fixed one commit each.
   templates, and answers a fetch job's request as wptserve answers a
   static file, its `.headers` sidecars included; a `.py` handler is a
   network error. The page record has a line per request
-  (`request GET <address>: 200 cors, 0 hops`, or a FAILED line with the
-  reason).
+  (`request GET <address>: 200 cors, 0 hops`, with its bytes and time
+  since 2026-10-30, or a FAILED line with the reason).
 
 **The seams, as they ended.**
 
@@ -3464,7 +3505,10 @@ Integrity at all (DEBTS.md).
   libos64's grammar, so one module spelled two ways was two modules: that
   DEBTS row is paid. What the grammar still does not do is what the map
   cannot (the URL grammar's row in DEBTS.md: `https:host`, extra slashes, a
-  percent-encoded host, a backslash).
+  percent-encoded host, a backslash). An opaque `data:` URL is spelled by
+  the same rule at any length (`os64_page_resolve_in_alloc`), since it
+  carries its module in itself: a page's inline module written as one, past
+  the 8 KiB an address is held to, was taken for a bare name.
 - **A script's base URL is fixed when it is prepared**: an import map's,
   for its addresses, and an inline module's, which is its base for
   imports, its scope match and its `import.meta.url`. Both read the tree

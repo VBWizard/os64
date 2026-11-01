@@ -97,6 +97,7 @@ const char *menu_label(const os64_ui_popup_t *,size_t);
 char menu_mnemonic(const os64_ui_popup_t *,size_t);
 os64_ui_status_code_t menu_popup_create_list(os64_ui_t *,const menu_list *,int32_t max_w,int32_t max_h,
     os64_ui_popup_t **);
+void menu_popup_relist(os64_ui_popup_t *,const menu_list *);
 bool menu_bar_enabled(os64_ui_menubar_t *,size_t);
 bool menu_bar_enabled_view(os64_ui_menubar_t *,size_t,os64_ui_action_view_t *);
 size_t menu_bar_visible(os64_ui_menubar_t *);

@@ -183,7 +183,7 @@ mutants = [
     ('a-picture-refused-before-the-table-is-unnamed', YONDER,
      '        if (k < 0)\n            fresh |= picture_unasked(p, img->src.url, written_attr(img->node, "src"), img->src.refused);',
      '        (void)0;', WINDOW),
-    ('a-data-picture-is-not-counted', YONDER,
+    ('an-unfetched-scheme-is-not-counted', YONDER,
      '        yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);',
      '            (void)scheme;', WINDOW),
     ('pictures-still-coming-are-not-counted', YONDER,
@@ -257,6 +257,30 @@ mutants = [
     ('claim-placeholder-left-behind', DIAG,
      '    if (!whole)\n        (void)os64_unlink(path);',
      '', WINDOW),
+    # A data: address is shortened as a line is kept (diag.h), in a line's
+    # fields and a fact's value, at a word's start, and a lookup by the
+    # whole key finds it.
+    ('data-kept-whole', DIAG, '        if (run <= DATA_RUN_MAX)\n            return s;',
+     '        if (run <= DATA_RUN_MAX || true)\n            return s;', WINDOW),
+    ('data-inside-a-word', DIAG, "        if (!word || at[1] != 'a'", "        if ((void)word, at[1] != 'a'", WINDOW),
+    ('data-value-whole', DIAG, '    value = shown(value, &made_value);\n', '    made_value = NULL;\n', WINDOW),
+    ('data-lookup-whole', DIAG, '    char *made;\n    key = shown(key, &made);',
+     '    char *made = NULL;', WINDOW),
+    # A failure on the console, and a stack overflow's callers (2026-10-31).
+    ('an-overflow-names-no-callers', SCRIPTS, '    if (ml < ol || !os64_streq(message + ml - ol, kOverflow))',
+     '    if (true || !os64_streq(message + ml - ol, kOverflow))', WINDOW),
+    ('the-console-hears-it-every-time', DIAG, '    if (l == NULL || l->count != 0)\n        return;\n    char w[512]',
+     '    if (l == NULL)\n        return;\n    char w[512]', WINDOW),
+    ('the-console-hears-nothing', DIAG,
+     '    said_on_console(l, what, message);\n    if (l != NULL)\n        l->count = saturating(l->count, 1);',
+     '    if (l != NULL)\n        l->count = saturating(l->count, 1);', WINDOW),
+    ('a-long-address-is-not-cut', DIAG, '        if (length <= CONSOLE_ADDRESS_MAX) {', '        if (length > 0) {', WINDOW),
+    ('a-trailing-comma-is-the-address', DIAG, "        while (end > at && (end[-1] == ',' || end[-1] == ';'))\n            end--;\n", '', WINDOW),
+    ('the-console-is-not-escaped', DIAG, "        if (c < 0x20 || c >= 0x7f || c == '\\\\') {", '        if (false) {', WINDOW),
+    ('a-caller-keeps-the-engines-name', SCRIPTS, '            break;\n        frame_file(s, own, &frame, &file, &file_length);',
+     '            break;\n        file = frame.file;\n        file_length = frame.file_length;', WINDOW),
+    ('a-query-slash-names-the-file', DIAG, '            const char *last = last_end;', '            const char *last = core_end;', WINDOW),
+    ('the-line-outgrows-the-complaint', DIAG, '    console_short(message, m, CONSOLE_LINE_MAX - used);', '    console_short(message, m, sizeof(m) + 0 * used);', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

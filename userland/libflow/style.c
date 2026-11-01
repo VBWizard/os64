@@ -93,7 +93,30 @@ typedef struct {
     // the longhands whose lists were: its mix leaves them as they were.
     bool spent;
     FProps *refused;
+    // Tree-order state (GENERATED_CONTENT.md § 8.2): the live counters,
+    // innermost last, the quote depth, and whether room for a counter
+    // could not be had.
+    struct FCounter *counters;
+    int32_t ncounters, cap_counters;
+    int32_t quote_depth;
+    bool counters_failed;
+    // The replaced element whose subtree the walk is in (a canvas's
+    // fallback), which counts and quotes for nothing: none of it is drawn.
+    const os64_html_node_t *inert;
 } Ctx;
+
+// A live counter: its name (the sheet's bytes), its value, and the element
+// whose end ends its scope.
+typedef struct FCounter {
+    const char *name;
+    size_t len;
+    int32_t value;
+    const os64_html_node_t *scope;
+} FCounter;
+
+// How many counters may be live at once (GENERATED_CONTENT.md § 8.2):
+// past it a reset makes none, and a use reads 0.
+#define F_COUNTERS_MAX 1024
 
 // `n` CSS pixels in the tree's units, which are device pixels' (zoomed).
 static flow_unit_t css(const Ctx *c, double n)
@@ -1796,7 +1819,9 @@ static void author_font_weight(Author *a, Spec *sp, const garb_val_t *v)
                                                              : v->number + 0.5);
 }
 
-static void author_list_type(Spec *sp, const garb_val_t *v)
+// The counter style a keyword names, or false for one this browser does
+// not define.
+static bool list_type_named(const garb_val_t *v, flow_list_style_type_t *out)
 {
     static const char *const words[] = {
         "disc", "circle", "square", "decimal", "lower-alpha", "upper-alpha", "lower-roman",
@@ -1811,8 +1836,15 @@ static void author_list_type(Spec *sp, const garb_val_t *v)
     };
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i >= 0)
-        sp->s.list_style_type = as[i];
-    else if (v->kind == GARB_V_KEYWORD)
+        *out = as[i];
+    return i >= 0;
+}
+
+static void author_list_type(Spec *sp, const garb_val_t *v)
+{
+    if (list_type_named(v, &sp->s.list_style_type))
+        return;
+    if (v->kind == GARB_V_KEYWORD)
         // A counter style this browser does not define is decimal (Counter
         // Styles 3 § 2); a string marker is booked with the markers.
         sp->s.list_style_type = FLOW_LIST_DECIMAL;
@@ -3606,6 +3638,8 @@ static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *paren
     return true;
 }
 
+static void medium_widths(Ctx *c, Spec *sp, garb_style_t st);
+
 static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
                    const flow_style_t *parent)
 {
@@ -3616,12 +3650,18 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         return true;
     if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, -1, st.n, NULL))
         return false;
-    // A border style the author drew with no width from any origin has the
-    // initial width, medium. The Spec's declared width starts at 0, not
-    // medium, because the chapter always declares the width it draws — so a
-    // 0 there means NO origin declared one, which is also what `revert`
-    // leaves where the chapter declared none: a width reverted is not a
-    // width declared.
+    medium_widths(c, sp, st);
+    return true;
+}
+
+// A border style the author drew with no width from any origin has the
+// initial width, medium. The Spec's declared width starts at 0, not
+// medium, because the chapter always declares the width it draws — so a
+// 0 there means NO origin declared one, which is also what `revert`
+// leaves where the chapter declared none: a width reverted is not a
+// width declared.
+static void medium_widths(Ctx *c, Spec *sp, garb_style_t st)
+{
     for (int i = 0; i < 4; i++)
         if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
             !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
@@ -3631,7 +3671,6 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (sp->outline_px == 0 && author_sets(st, GARB_OUTLINE_STYLE) &&
         !author_declares(st, GARB_OUTLINE_WIDTH))
         sp->outline_px = css(c, 3);
-    return true;
 }
 
 // ── Resolving ───────────────────────────────────────────────────────────
@@ -4269,6 +4308,32 @@ static bool decoration_edge(const os64_html_node_t *n, const flow_style_t *s, bo
            (quirks && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_TABLE);
 }
 
+static const garb_val_t *winner(garb_style_t st, garb_prop_t prop);
+
+// `quotes` as an element or pseudo-element has it: its own winner, else the
+// value it inherits; NULL for auto, initial's value too. It is inherited
+// and the chapter's sheet declares none, so every CSS-wide keyword but
+// `initial` (`revert` and `revert-layer` too) takes the inherited value.
+static const garb_val_t *own_quotes(const garb_val_t *v, const garb_val_t *inherited)
+{
+    if (v == NULL)
+        return inherited;
+    if (v->kind == GARB_V_WIDE)
+        return os64_streq(v->keyword, "initial") ? NULL : inherited;
+    return v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, "auto") ? NULL : v;
+}
+
+// What a child takes by keyword moves only when it is laid out, so a
+// parent whose animation it takes moves by layouts too.
+static void taken_from(const FStyled *up, const FProps *taken)
+{
+    if (up != NULL && up->motion != NULL && up->motion->ticks)
+        for (int32_t a = 0; a < up->motion->nanims; a++)
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                if (up->motion->anims[a].props.w[w] & taken->w[w])
+                    up->motion->ticks = false;
+}
+
 static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
 {
     const FStyled *up = f_map_get(&c->out->map, n->parent);
@@ -4390,7 +4455,9 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
     out->items = (up != NULL ? up->items : 0) + is_li(n);
     out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
-    out->quotes = (up != NULL ? up->quotes : 0) + is(n, OS64_HTML_TAG_Q);
+    out->quotes = own_quotes(c->env->cascade != NULL
+                                 ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
+                             up != NULL ? up->quotes : NULL);
     out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
     out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? n
                       : up != NULL ? up->fixed_anchor : NULL;
@@ -4399,13 +4466,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
                        (up != NULL && up->transparent);
     out->taken = sp.taken;
-    // What a child takes by keyword moves only when it is laid out, so a
-    // parent whose animation it takes moves by layouts too.
-    if (up != NULL && up->motion != NULL && up->motion->ticks)
-        for (int32_t a = 0; a < up->motion->nanims; a++)
-            for (int w = 0; w < F_PROP_WORDS; w++)
-                if (up->motion->anims[a].props.w[w] & sp.taken.w[w])
-                    up->motion->ticks = false;
+    taken_from(up, &sp.taken);
     FStyled *holder = f_map_get(&c->out->map, n->parent);
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))
         holder->has_rp = true;
@@ -4436,6 +4497,426 @@ static bool contributes_block(const FStyled *child)
     default:
         return true;
     }
+}
+
+// ── ::before and ::after (GENERATED_CONTENT.md § 4) ─────────────────────
+
+// The names a synthetic node carries, compared by address: no document's
+// node can hold them.
+static const char kBeforeName[] = "::before", kAfterName[] = "::after";
+
+garb_pseudo_t f_pseudo_of(const os64_html_node_t *n)
+{
+    if (n != NULL && n->kind == OS64_HTML_TEXT)
+        n = n->parent;
+    if (n == NULL || n->kind != OS64_HTML_ELEMENT)
+        return GARB_PSEUDO_NONE;
+    return n->name == kBeforeName ? GARB_PSEUDO_BEFORE : n->name == kAfterName ? GARB_PSEUDO_AFTER : GARB_PSEUDO_NONE;
+}
+
+const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n)
+{
+    if (n != NULL && n->kind == OS64_HTML_TEXT)
+        n = n->parent;
+    return f_pseudo_of(n) != GARB_PSEUDO_NONE ? n->parent : NULL;
+}
+
+// The winner `prop` in `st`, or NULL.
+static const garb_val_t *winner(garb_style_t st, garb_prop_t prop)
+{
+    for (int32_t k = 0; k < st.n; k++)
+        if (st.sets[k].prop == prop)
+            return &st.sets[k].value;
+    return NULL;
+}
+
+// The innermost live counter named `name`, or NULL.
+static FCounter *innermost(Ctx *c, const garb_val_t *name)
+{
+    for (int32_t i = c->ncounters - 1; i >= 0; i--)
+        if (c->counters[i].len == name->len && os64_memcmp(c->counters[i].name, name->text, name->len) == 0)
+            return &c->counters[i];
+    return NULL;
+}
+
+// A counter made (Lists 3 § 4.4.2), its scope ending with `scope`: when
+// the innermost of its name has that scope, a previous sibling made it,
+// and the new one replaces it, since siblings replace rather than nest.
+// NULL past F_COUNTERS_MAX, or, marked, when there is no room.
+static FCounter *instantiate(Ctx *c, const garb_val_t *name, int32_t value, const os64_html_node_t *scope)
+{
+    c->out->ordered = true;
+    FCounter *in = innermost(c, name);
+    if (in != NULL && in->scope == scope) {
+        in->value = value;
+        return in;
+    }
+    if (c->ncounters == c->cap_counters) {
+        if (c->cap_counters == F_COUNTERS_MAX)
+            return NULL;
+        int32_t cap = c->cap_counters == 0 ? 16 : c->cap_counters * 2;
+        FCounter *grown = os64_realloc(c->counters, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) {
+            c->counters_failed = true;
+            return NULL;
+        }
+        c->counters = grown;
+        c->cap_counters = cap;
+    }
+    FCounter *made = &c->counters[c->ncounters++];
+    *made = (FCounter){name->text, name->len, value, scope};
+    return made;
+}
+
+static int32_t counter_clamp(double v)
+{
+    return v >= (double)INT32_MAX ? INT32_MAX : v <= (double)INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
+// A counter property's list as an element or pseudo-element has it: its
+// own winner, `inherit` taking `from`'s (the parent's, or the originating
+// element's), and that one's parent's when it inherits too; NULL for none
+// or any other CSS-wide keyword.
+static const garb_val_t *counter_list(Ctx *c, garb_style_t st, garb_prop_t prop, const os64_html_node_t *from)
+{
+    const garb_val_t *v = winner(st, prop);
+    while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit") && from != NULL) {
+        v = winner(garb_style_for(c->env->cascade, from), prop);
+        from = from->parent != NULL && from->parent->kind == OS64_HTML_ELEMENT ? from->parent : NULL;
+    }
+    return v != NULL && v->kind == GARB_V_STRING ? v : NULL;
+}
+
+// An element's or a pseudo-element's counter properties, in Lists 3 § 4's
+// order: reset, increment, set. A counter one makes has its scope end with
+// `scope`; an increment or a set of a name with no counter makes one, as a
+// reset would.
+static void count_on(Ctx *c, garb_style_t st, const os64_html_node_t *from, const os64_html_node_t *scope)
+{
+    static const garb_prop_t kOrder[] = {GARB_COUNTER_RESET, GARB_COUNTER_INCREMENT, GARB_COUNTER_SET};
+    for (int k = 0; k < 3; k++) {
+        const garb_val_t *v = counter_list(c, st, kOrder[k], from);
+        for (int32_t i = 0; v != NULL && i + 1 < v->nitems; i += 2) {
+            const garb_val_t *name = &v->items[i];
+            int32_t n = counter_clamp(v->items[i + 1].number);
+            if (kOrder[k] == GARB_COUNTER_RESET) {
+                (void)instantiate(c, name, n, scope);
+                continue;
+            }
+            FCounter *f = innermost(c, name);
+            if (f == NULL)
+                f = instantiate(c, name, 0, scope);
+            if (f != NULL)
+                f->value = kOrder[k] == GARB_COUNTER_SET ? n : counter_clamp((double)f->value + n);
+        }
+    }
+}
+
+// An open or a close quote mark (Content 3 § 4.2): an open takes the pair
+// at the depth and deepens it, a close shallows it and takes the pair
+// there, and a close at depth 0 is nothing and stays at 0. Past the pairs
+// the last is taken; auto's are English's. `drawn` false for the `no-`
+// words, which only move the depth.
+static void quote_mark(Ctx *c, const garb_val_t *quotes, bool open, bool drawn, const char **text, size_t *len)
+{
+    static const char *const kAuto[4] = {"\xe2\x80\x9c", "\xe2\x80\x9d", "\xe2\x80\x98", "\xe2\x80\x99"};
+    c->out->ordered = true;
+    *text = NULL;
+    *len = 0;
+    int32_t depth;
+    if (open) {
+        depth = c->quote_depth;
+        if (c->quote_depth < INT32_MAX)
+            c->quote_depth++;
+    } else {
+        if (c->quote_depth == 0)
+            return;
+        depth = --c->quote_depth;
+    }
+    if (!drawn)
+        return;
+    if (quotes == NULL) {
+        *text = kAuto[(depth < 1 ? 0 : 2) + !open];
+        *len = 3;
+        return;
+    }
+    if (quotes->kind != GARB_V_STRING || quotes->nitems < 2)
+        return;                 // none
+    int32_t pairs = quotes->nitems / 2;
+    const garb_val_t *mark = &quotes->items[2 * (depth < pairs ? depth : pairs - 1) + !open];
+    *text = mark->text;
+    *len = mark->len;
+}
+
+// One item's text, as content_text resolves it.
+typedef struct {
+    const char *text;
+    size_t len;
+    char *owned;                            // counters()'s, freed once copied
+    char spelled[F_COUNTER_SPELL_MAX];      // counter()'s
+} Piece;
+
+// counter() or counters() (Lists 3 § 4.7) into `p`: the innermost counter
+// of the name, or every one from the outermost in, joined, in the style
+// given or decimal. A name with no counter is given one, at 0, scoped to
+// `el`, the pseudo-element's originating element. `counters()`' spelling is
+// made only when it fits in `room`, what is left of the lists' budget, and
+// *spent says it did not. False when memory ran out.
+static bool counter_text(Ctx *c, const os64_html_node_t *el, const garb_val_t *it, size_t room, Piece *p,
+                         bool *spent)
+{
+    bool all = os64_streq(it->keyword, "counters");
+    const garb_val_t *name = &it->items[0];
+    flow_list_style_type_t type = FLOW_LIST_DECIMAL;
+    if (it->nitems > (all ? 2 : 1) && !list_type_named(&it->items[it->nitems - 1], &type))
+        type = FLOW_LIST_DECIMAL;
+    if (innermost(c, name) == NULL)
+        (void)instantiate(c, name, 0, el);
+    int32_t n = 0;
+    for (int32_t i = 0; all && i < c->ncounters; i++)
+        n += c->counters[i].len == name->len && os64_memcmp(c->counters[i].name, name->text, name->len) == 0;
+    if (n <= 1) {
+        const FCounter *f = innermost(c, name);
+        p->len = f_counter_spell(type, f != NULL ? f->value : 0, p->spelled);
+        p->text = p->spelled;
+        return true;
+    }
+    const garb_val_t *joiner = &it->items[1];
+    size_t need = (size_t)n * (F_COUNTER_SPELL_MAX + joiner->len);
+    if (need > room) {
+        *spent = true;
+        return true;
+    }
+    p->owned = os64_malloc(need);
+    if (p->owned == NULL)
+        return false;
+    size_t at = 0;
+    for (int32_t i = 0, k = 0; i < c->ncounters; i++) {
+        const FCounter *f = &c->counters[i];
+        if (f->len != name->len || os64_memcmp(f->name, name->text, name->len) != 0)
+            continue;
+        if (k++ > 0) {
+            os64_memcpy(p->owned + at, joiner->text, joiner->len);
+            at += joiner->len;
+        }
+        at += f_counter_spell(type, f->value, p->owned + at);
+    }
+    p->text = p->owned;
+    p->len = at;
+    return true;
+}
+
+// The text `content` makes for a pseudo-element of `el`, into the arena:
+// its strings, `attr()`s, quote marks (in `quotes`) and counters,
+// concatenated. Each item is resolved once and in order, since quote words
+// and counters move the pass's tree-order state. An item drawn as nothing
+// adds nothing. NULL when the lists' budget is spent, and out of memory,
+// *failed.
+static char *content_text(Ctx *c, const os64_html_node_t *el, const garb_val_t *v, const garb_val_t *quotes,
+                          size_t *len, bool *failed)
+{
+    *len = 0;
+    Piece *pieces = os64_calloc((size_t)(v->nitems > 0 ? v->nitems : 1), sizeof(*pieces));
+    if (pieces == NULL) {
+        *failed = true;
+        return NULL;
+    }
+    size_t total = 0;
+    bool spent = false;
+    for (int32_t k = 0; k < v->nitems && !*failed && !spent; k++) {
+        const garb_val_t *it = &v->items[k];
+        Piece *p = &pieces[k];
+        if (it->kind == GARB_V_STRING) {
+            p->text = it->text;
+            p->len = it->len;
+        } else if (it->kind == GARB_V_FUNCTION && os64_streq(it->keyword, "attr") && it->nitems == 1) {
+            char name[64];
+            size_t nl = it->items[0].len < sizeof(name) - 1 ? it->items[0].len : sizeof(name) - 1;
+            for (size_t i = 0; i < nl; i++) {
+                char ch = it->items[0].text[i];
+                name[i] = ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;
+            }
+            name[nl] = '\0';
+            const os64_html_attr_t *a = os64_html_attr(el, name);
+            if (a != NULL && a->value != NULL) {
+                p->text = a->value;
+                p->len = os64_strlen(a->value);
+            }
+        } else if (it->kind == GARB_V_KEYWORD) {
+            bool open = os64_streq(it->keyword, "open-quote") || os64_streq(it->keyword, "no-open-quote");
+            bool drawn = os64_streq(it->keyword, "open-quote") || os64_streq(it->keyword, "close-quote");
+            quote_mark(c, quotes, open, drawn, &p->text, &p->len);
+        } else if (it->kind == GARB_V_FUNCTION && it->nitems >= 1 &&
+                   (os64_streq(it->keyword, "counter") || os64_streq(it->keyword, "counters"))) {
+            size_t left = c->out->lists_left;
+            *failed = !counter_text(c, el, it, left > total ? left - total : 0, p, &spent);
+        }
+        total += p->len;
+    }
+    *failed = *failed || c->counters_failed;
+    char *out = NULL;
+    if (!*failed && !spent) {
+        // Charged to the lists' budget: one sheet's string copied into
+        // every element its rule reaches is what a page can multiply.
+        // Past it the content is lost, and the pseudo-element with it.
+        out = list_alloc(c, total + 1, &spent);
+        *failed = out == NULL && !spent;
+    }
+    size_t at = 0;
+    for (int32_t k = 0; k < v->nitems; k++) {
+        if (out != NULL && pieces[k].len > 0)
+            os64_memcpy(out + at, pieces[k].text, pieces[k].len);
+        at += pieces[k].len;
+        os64_free(pieces[k].owned);
+    }
+    os64_free(pieces);
+    if (out == NULL)
+        return NULL;
+    out[total] = '\0';
+    *len = total;
+    return out;
+}
+
+// `el`'s ::before or ::after (`which`), when the author's rules give it
+// content (GARB_CONTENT) it draws as something: a synthetic element under
+// `el`, holding the content's text, styled as `el`'s child is, from the
+// pseudo-element's own winners (garb_style_for_pseudo). False only when
+// memory ran out. Called at its place in the document: the ::before before
+// `el`'s children, the ::after once they are done.
+static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_pseudo_t which)
+{
+    // The chapter's sheet gives a `q` its marks (HTML § 15.3.6): `q::before
+    // { content: open-quote }`, `q::after { content: close-quote }`, which
+    // an author's `content` replaces.
+    static const garb_val_t kOpen = {.kind = GARB_V_KEYWORD, .keyword = "open-quote"};
+    static const garb_val_t kClose = {.kind = GARB_V_KEYWORD, .keyword = "close-quote"};
+    static const garb_val_t kQuoted[2] = {{.kind = GARB_V_STRING, .items = &kOpen, .nitems = 1},
+                                          {.kind = GARB_V_STRING, .items = &kClose, .nitems = 1}};
+    garb_style_t st = {0};
+    if (c->env->cascade != NULL)
+        st = garb_style_for_pseudo(c->env->cascade, el, which);
+    bool q = is(el, OS64_HTML_TAG_Q);
+    if (st.n == 0 && !q)
+        return true;
+    const garb_val_t *content = winner(st, GARB_CONTENT);
+    int bit = which == GARB_PSEUDO_BEFORE ? 0 : 1;
+    if (content != NULL)
+        of->pseudo_declared |= (uint8_t)(1u << bit);
+    else if (q)
+        content = &kQuoted[bit];
+    if (content == NULL || content->kind == GARB_V_WIDE || content->kind == GARB_V_KEYWORD)
+        return true;
+    Spec sp;
+    os64_memset(&sp, 0, sizeof(sp));
+    sp.s = inherit(c, &of->style);
+    Spec ua = sp;
+    if (!lay_sets(c, &sp, &ua, &of->style, st.sets, st.sheet, -1, st.n, NULL))
+        return false;
+    medium_widths(c, &sp, st);
+    if (sp.s.display == FLOW_DISPLAY_NONE)
+        return true;
+    // It exists: its own counters, then its content, at its place in the
+    // document (GENERATED_CONTENT.md § 8.2).
+    count_on(c, st, el, el);
+    const garb_val_t *quotes = own_quotes(winner(st, GARB_QUOTES), of->quotes);
+    bool failed = false;
+    size_t len = 0;
+    char *text = content_text(c, el, content, quotes, &len, &failed);
+    if (text == NULL)
+        return !failed;
+    os64_html_node_t *node = f_arena_alloc(&c->out->arena, sizeof(*node));
+    os64_html_node_t *words = f_arena_alloc(&c->out->arena, sizeof(*words));
+    FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
+    if (node == NULL || words == NULL || out == NULL)
+        return false;
+    node->kind = OS64_HTML_ELEMENT;
+    node->ns = OS64_HTML_NS_HTML;
+    node->tag = OS64_HTML_TAG_UNKNOWN;
+    node->document_id = el->document_id;
+    node->name = which == GARB_PSEUDO_BEFORE ? kBeforeName : kAfterName;
+    node->parent = (os64_html_node_t *)el;
+    words->kind = OS64_HTML_TEXT;
+    words->document_id = el->document_id;
+    words->text = text;
+    words->text_len = len;
+    words->parent = node;
+    node->first_child = node->last_child = len > 0 ? words : NULL;
+    finish(c, &sp, &of->style, of->lays_out_items, false);
+    out->style = sp.s;
+    out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display);
+    out->link = of->link;
+    out->lists = of->lists;
+    out->lists_or_dls = of->lists_or_dls;
+    out->items = of->items;
+    out->in_nobr = of->in_nobr;
+    out->quotes = quotes;
+    out->anchor = f_contains_absolute(&sp.s) ? node : of->anchor;
+    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? node : of->fixed_anchor;
+    out->transparent = sp.s.opacity == 0 || of->transparent;
+    out->taken = sp.taken;
+    taken_from(of, &sp.taken);
+    out->decoration = sp.s.text_decoration;
+    out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
+    if (!decoration_edge(node, &sp.s, c->quirks))
+        f_decoration_inherit(&out->decoration, &out->decoration_colors, of->decoration,
+                             of->decoration_colors);
+    if (!f_map_put(&c->out->map, node, out))
+        return false;
+    of->pseudo[bit] = node;
+    if (contributes_block(out))
+        of->holds_block = true;
+    // The ::after comes last among the children: the walk of box
+    // generation reaches it from the last child (boxes.c, kids), so the
+    // ::before's sibling is the element's first child, or the ::after.
+    return true;
+}
+
+// Whether `el`, whose display is `display`, has pseudo-elements: only when
+// pass 2 draws what is inside it (f_draws_inside), and not outside HTML.
+static bool generates(const Ctx *c, const os64_html_node_t *el, flow_display_t display)
+{
+    return el->ns == OS64_HTML_NS_HTML && f_draws_inside(c->env, el, display);
+}
+
+// Steps 1 and 2 of GENERATED_CONTENT.md § 8.2, once `el` is styled: its
+// counters, then its ::before (a `q`'s open mark too). An element whose
+// display is none counts for nothing and generates nothing, and nor does
+// an element that makes no box (f_boxless), or anything inside an element
+// pass 2 draws nothing inside (f_draws_inside: a replaced element's
+// fallback). False when memory ran out.
+static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
+{
+    if (of->style.display == FLOW_DISPLAY_NONE || c->inert != NULL)
+        return true;
+    if (f_boxless(el)) {
+        c->inert = el;
+        return true;
+    }
+    if (c->env->cascade != NULL) {
+        const os64_html_node_t *up = el->parent != NULL && el->parent->kind == OS64_HTML_ELEMENT
+                                         ? el->parent : NULL;
+        count_on(c, garb_style_for(c->env->cascade, el), up, el->parent);
+    }
+    if (!f_draws_inside(c->env, el, of->style.display))
+        c->inert = el;
+    else if (generates(c, el, of->style.display) && !style_pseudo(c, el, of, GARB_PSEUDO_BEFORE))
+        return false;
+    return !c->counters_failed;
+}
+
+// Steps 4 and 5, once everything under `el` is styled: its ::after (a `q`'s
+// close mark too), then the end of the counters scoped to it.
+static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
+{
+    if (c->inert != NULL && c->inert != el)
+        return true;
+    c->inert = NULL;
+    if (of != NULL && of->style.display != FLOW_DISPLAY_NONE && generates(c, el, of->style.display) &&
+        !style_pseudo(c, el, of, GARB_PSEUDO_AFTER))
+        return false;
+    while (c->ncounters > 0 && c->counters[c->ncounters - 1].scope == el)
+        c->ncounters--;
+    return !c->counters_failed;
 }
 
 static const os64_html_node_t *next_element(const os64_html_node_t *n)
@@ -4502,9 +4983,12 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
     const os64_html_node_t *cur = top != NULL ? next_element(top->first_child) : doc->html;
     while (cur != NULL) {
         FStyled *styled = style_element(&c, cur);
+        if (styled != NULL && !open_element(&c, cur, styled))
+            styled = NULL;
         if (styled == NULL) {
             bool retry = c.copies.budget && previous;
             f_map_free(&c.copies.slices);
+            os64_free(c.counters);
             f_style_free(out);
             return retry ? f_style_build(doc, model, env) : NULL;
         }
@@ -4516,6 +5000,19 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
         }
         while (cur != NULL) {
             FStyled *done = f_map_get(&out->map, cur);
+            if (!close_element(&c, cur, done)) {
+                f_map_free(&c.copies.slices);
+                os64_free(c.counters);
+                f_style_free(out);
+                return NULL;
+            }
+            const FStyled *old = previous ? f_style_of(previous, cur) : NULL;
+            // Generated text depends on tree-order counters and quote depth,
+            // and its synthetic nodes belong to this style pass. Rebuild the
+            // containing layout subtree when either pass has generated nodes.
+            if (done && (done->pseudo[0] || done->pseudo[1] ||
+                         (old && (old->pseudo[0] || old->pseudo[1]))))
+                done->subtree_steady = false;
             FStyled *parent = f_map_get(&out->map, cur->parent);
             if (parent != NULL && done != NULL) {
                 if (contributes_block(done)) parent->holds_block = true;
@@ -4538,6 +5035,7 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
         }
     }
     f_map_free(&c.copies.slices);
+    os64_free(c.counters);
     return out;
 }
 

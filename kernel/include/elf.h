@@ -81,6 +81,9 @@ typedef struct {
 #define PT_NOTE 4
 #define PT_PHDR 6
 #define PT_TLS 7
+// GNU's: the stack's permissions, and, in p_memsz, the main thread's stack
+// size the program asks for (`ld -z stack-size=N`; 0 when it asks none).
+#define PT_GNU_STACK 0x6474e551
 
 // Segment flags
 #define PF_X 0x1

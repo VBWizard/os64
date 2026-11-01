@@ -379,13 +379,6 @@ typedef struct {
 
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt);
 
-// Where a whole body came from.
-typedef enum {
-    WAY_SERVED_NETWORK = 0,
-    WAY_SERVED_KEPT,            // the cache, fresh: nothing went out
-    WAY_SERVED_CONFIRMED,       // the cache, after the server answered 304
-    WAY_SERVED_STALE,           // the cache, stale, because the server could not be reached
-} way_served_t;
 
 // A body read whole, and what came with it. `bytes` is os64_malloc'd and
 // the caller's to free.
@@ -397,6 +390,10 @@ typedef struct {
     char charset[HTTP_CHARSET_MAX];
     char url[OS64_FETCH_URL_MAX];           // where it came from: a base for what it names
     way_served_t served;
+    // The cache holds this body now: it was served from there, or stored
+    // by this fetch. What a face keeps beside it (a companion, cache.h) is
+    // asked for only then.
+    bool kept;
     os64_fetch_status_t fetch;              // the fetch's verdict, when there was one
 } way_whole_t;
 

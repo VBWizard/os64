@@ -258,13 +258,20 @@ named in review:**
   These are shared wake hints, not tokens assigned to particular
   workers. One worker may read a byte while another is the next eligible
   job; the timeout is a required part of progress for that other worker.
-  **Admission is FIFO** across accepted, unadmitted jobs, including
-  QUEUED jobs and claimed jobs whose worker has not run again. Claiming
-  a job records that state under the table lock. A younger job cannot
-  admit until its predecessors admit or are cancelled. Removing a
-  predecessor from that order also notifies space waiters, even if it
-  releases no bytes. This intentionally accepts head-of-line blocking
-  to prevent a stream of small jobs from starving a large one.
+  **Admission keeps older jobs first** across accepted, unadmitted
+  jobs, including QUEUED jobs and claimed jobs whose worker has not run
+  again; claiming a job records that state under the table lock. A job
+  is admitted when its reserve fits AND what is left still holds every
+  older one of them (revised 2026-10-30): a younger job goes ahead only
+  with budget no older job needs, so a stream of small jobs cannot
+  starve a large one, and none waits on order alone. Strict FIFO, the
+  first rule, made a burst of jobs that all fit admit one at a time,
+  each worker parked until the one before it was admitted and woke it:
+  on the P5 a GitHub pull request's 207 module fetches waited a median
+  2–4 s for free workers, and DOMContentLoaded came 4–8 s after the
+  parse; under this rule it comes 0.2 s after. Removing a predecessor
+  from that order also notifies space waiters, even if it releases no
+  bytes.
 - **Job notification credits retain their slots through handoff.**
   Submit initializes and appends a QUEUED slot under the table lock,
   reserving its notification before unlocking and writing ONE byte.
@@ -390,9 +397,10 @@ in the same change.
   completions with the UI not
   reaping stalls admission and exceeds nothing), and released at reap; a
   worker asleep for space woken by a reap on the main thread, by a
-  cancel, and by destroy, each with the read backstop exercised; FIFO
-  admission holding a small job behind a big one, including a pause
-  between claiming the older job and its admission attempt;
+  cancel, and by destroy, each with the read backstop exercised;
+  admission holding a small job behind a big one whose room it would
+  take, and letting through at once one that leaves the room, each with
+  a pause between claiming the older job and its admission attempt;
   `release` calls plus reaps equal to accepted submits at the end;
   destroy with ten in flight joining all workers and releasing every
   uncollected job (the heap's

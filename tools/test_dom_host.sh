@@ -10,7 +10,7 @@ trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle animation options selection importmap controls elements tables \
-    forms validity compare custom \
+    forms validity compare custom observer \
     sheets image_data canvas canvas_path canvas_text canvas_image mutation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
@@ -60,7 +60,7 @@ done
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle animation options selection importmap controls elements tables \
-    forms validity compare custom \
+    forms validity compare custom observer \
     sheets image_data canvas canvas_path canvas_text canvas_image mutation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \

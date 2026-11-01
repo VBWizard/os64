@@ -221,13 +221,24 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     bool plain = opt->method == OS64_FETCH_METHOD_GET && opt->body == NULL &&
                  (opt->extra_headers == NULL || opt->extra_headers[0] == '\0');
     bool caching = plain && way_cache_enabled(cache);
+    // Kept under the page's site (SCRIPT_CACHE.md § 3) and as a credentialed
+    // request: a picture, a sheet and a classic script go with the page's
+    // cookies (way_hop_headers).
+    char partition[WAY_PARTITION_MAX];
+    way_partition_of(&asked_for.origin, partition, sizeof(partition));
+    const way_cache_key_t key = {partition, true, url};
     way_entry_t *e = caching ? os64_malloc(sizeof(*e)) : NULL;
     uint8_t *kept = NULL;
     size_t kept_len = 0;
-    bool have = e != NULL && way_cache_find(cache, url, e, &kept, &kept_len, cap);
+    // A reply a script's request kept may vary on what it sent (its
+    // recorded Vary values, SCRIPT_CACHE.md § 4), which these requests do
+    // not say: such an entry is another request's, and a miss here.
+    way_blocks_t blocks;
+    bool have = e != NULL && way_cache_find(cache, &key, e, &kept, &kept_len, &blocks, cap) && blocks.vary_len == 0;
     int64_t now = now_utc();
     if (have && way_keep_fresh(&e->keep, now)) {
         serve(out, e, kept, kept_len, WAY_SERVED_KEPT);
+        out->kept = true;
         way_cache_count(cache, WAY_SERVED_KEPT);
         os64_free(e);
         return true;
@@ -268,6 +279,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         bool unreachable = out->fetch == OS64_FETCH_DIAL_FAILED || out->fetch == OS64_FETCH_SILENT;
         if (have && unreachable && way_keep_stale_ok(&e->keep)) {
             served = serve(out, e, kept, kept_len, WAY_SERVED_STALE);
+            out->kept = true;
             way_cache_count(cache, WAY_SERVED_STALE);
             kept = NULL;
         }
@@ -280,10 +292,13 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         bool keep = !hooks->passing_hop && way_keep_confirm(&e->keep, &head->keep, now_utc()) &&
                     way_chain_apply(&hooks->chain, &e->keep, now_utc());
         if (keep)
-            (void)way_cache_put(cache, e, kept, kept_len);
+            (void)way_cache_put(cache, e, NULL, kept, kept_len);
         else
-            way_cache_drop(cache, url);
+            way_cache_drop(cache, &key);
         served = serve(out, e, kept, kept_len, WAY_SERVED_CONFIRMED);
+        // Held either way while it is kept: a rewrite that failed leaves
+        // the entry it would have replaced, which holds this same body.
+        out->kept = keep;
         way_cache_count(cache, WAY_SERVED_CONFIRMED);
         kept = NULL;
     } else {
@@ -308,16 +323,18 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
             if (e != NULL && head->status == 200 && !hooks->passing_hop &&
                 way_keep_read(&head->keep, now_utc(), &e->keep) &&
                 way_chain_apply(&hooks->chain, &e->keep, now_utc())) {
+                os64_strcopy(e->partition, sizeof(e->partition), partition);
+                e->credentials = true;
                 os64_strcopy(e->url, sizeof(e->url), url);
                 os64_strcopy(e->final, sizeof(e->final), head->url_text);
                 e->status = head->status;
                 os64_strcopy(e->content_type, sizeof(e->content_type), head->content_type);
                 os64_strcopy(e->charset, sizeof(e->charset), head->charset);
-                (void)way_cache_put(cache, e, bytes, len);
+                out->kept = way_cache_put(cache, e, NULL, bytes, len);
             } else if (have) {
                 // A new answer that is not kept is still newer than the
                 // kept one, which must not come back as stale.
-                way_cache_drop(cache, url);
+                way_cache_drop(cache, &key);
             }
         }
     }

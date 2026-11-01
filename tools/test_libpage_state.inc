@@ -519,6 +519,44 @@ static void state_images(void)
     os64_html_document_free(doc);
 }
 
+// A picture's data: address past OS64_URL_REF_MAX is kept whole, spelled as
+// a short one is (scheme in lower case, fragment apart); the same address
+// as a link is still refused, and so is a long address of any other scheme.
+static void state_long_data_pictures(void)
+{
+    size_t body = OS64_URL_REF_MAX + 512;
+    char *data = malloc(body + 64), *html = malloc(4 * body + 512), *want = malloc(body + 64);
+    int n = snprintf(data, body + 64, "DaTa:image/png;base64,");
+    while ((size_t)n < body) data[n++] = 'A';
+    data[n] = '\0';
+    snprintf(want, body + 64, "data%s", data + 4);
+    snprintf(html, 4 * body + 512,
+             "<body background='%s'><img src=' %s#frag '><a href='%s'>x</a>"
+             "<img src='http://host/%s'></body>", data, data, data, data + 5);
+    os64_html_document_t *doc = parse(html, "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    const os64_page_image_t *image = os64_page_image(page, 0);
+    state_expect("long data: an image's data: address past the limit is kept whole",
+                 image != NULL && image->src.url != NULL && strcmp(image->src.url, want) == 0 &&
+                 image->src.has_fragment && image->src.fragment != NULL &&
+                 strcmp(image->src.fragment, "frag") == 0);
+    const os64_page_background_t *b = os64_page_background(page, 0);
+    state_expect("long data: and so is a background's",
+                 b != NULL && b->src.url != NULL && strcmp(b->src.url, want) == 0);
+    const os64_page_link_t *l = os64_page_link(page, 0);
+    state_expect("long data: the same address as a link is still too long",
+                 l != NULL && l->href.url == NULL && l->href.refused == OS64_PAGE_REASON_TOO_LONG);
+    image = os64_page_image(page, 1);
+    state_expect("long data: a long address of another scheme is still too long",
+                 image != NULL && image->src.url == NULL &&
+                 image->src.refused == OS64_PAGE_REASON_TOO_LONG);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(data);
+    free(html);
+    free(want);
+}
+
 // The pictures a page puts behind things: the `background` attribute of
 // the body and the table elements, resolved against the base; an empty one
 // names nothing, and the attribute on any other element is not the
@@ -1267,6 +1305,7 @@ static void state_cases(void)
     state_frames();
     state_iframes();
     state_images();
+    state_long_data_pictures();
     state_backgrounds();
     state_sheets();
     state_reference_bytes();

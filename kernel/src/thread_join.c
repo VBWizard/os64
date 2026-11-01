@@ -61,7 +61,9 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// part is why this feature needed no address-space work — whoever wrote
 	// task_alloc_guarded_stack solved the multi-thread case years before
 	// there were multiple threads.
-	thread_t* t = createThread(task, false);
+	// A spawned thread gets the default stack; only a program's main thread
+	// takes the size it declares (SCRIPT_STACK.md § 8).
+	thread_t* t = createThread(task, false, 0);
 	if (t == NULL)
 	{
 		kfree(j);

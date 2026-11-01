@@ -1445,6 +1445,46 @@ static void download_cases(void)
            !yonder_download_free_name("abcde.z", download_taken, (const char *[]){"abcde.z", NULL}, tiny,
                                       sizeof(tiny)),
            NULL);
+
+    yonder_download_pace_t pace = {0};
+    uint64_t rate = 0;
+    expect("download: no notes, no speed", !yonder_download_pace_rate(&pace, 1000, 0, &rate), NULL);
+    yonder_download_pace_note(&pace, 1000, 0);
+    expect("download: under a second, no speed yet", !yonder_download_pace_rate(&pace, 1900, 900, &rate), NULL);
+    expect("download: a second at a kilobyte a millisecond",
+           yonder_download_pace_rate(&pace, 2000, 1000000, &rate) && rate == 1000000, NULL);
+    for (uint64_t t = 1100; t <= 2000; t += 100)
+        yonder_download_pace_note(&pace, t, (t - 1000) * 1000);
+    expect("download: notes closer than a quarter second are not kept", pace.count == 4, NULL);
+    // A steady megabyte a second for ten seconds, then twice that for five:
+    // the window has forgotten the first pace.
+    yonder_download_pace_t steady = {0};
+    for (uint64_t t = 0; t <= 10000; t += 250)
+        yonder_download_pace_note(&steady, t, t * 1000);
+    for (uint64_t t = 10250; t <= 15000; t += 250)
+        yonder_download_pace_note(&steady, t, 10000000 + (t - 10000) * 2000);
+    expect("download: the speed is the last five seconds'",
+           yonder_download_pace_rate(&steady, 15000, 20000000, &rate) && rate == 2000000, NULL);
+    expect("download: a stall falls to nothing once the window has passed it",
+           yonder_download_pace_rate(&steady, 21000, 20000000, &rate) && rate == 0, NULL);
+    yonder_download_pace_note(&steady, 30000, 20000000);
+    expect("download: one note in the window reaches back to the one before it",
+           yonder_download_pace_rate(&steady, 30500, 20500000, &rate) && rate == 500000 * 1000 / 15500, NULL);
+
+    char left[32];
+    expect("download: no speed, no time left", !yonder_download_left(10, 0, left, sizeof(left)), NULL);
+    yonder_download_left(41, 1, left, sizeof(left));
+    expect_text("download: seconds", left, "41 s left");
+    yonder_download_left(61, 1, left, sizeof(left));
+    expect_text("download: minutes, rounded up", left, "2 min left");
+    yonder_download_left(60 * 60 - 1, 1, left, sizeof(left));
+    expect_text("download: an hour less a second is an hour", left, "1 h left");
+    yonder_download_left(12 * 60, 1, left, sizeof(left));
+    expect_text("download: whole minutes", left, "12 min left");
+    yonder_download_left((uint64_t)6 << 30, 8 << 20, left, sizeof(left));
+    expect_text("download: six gigabytes at eight megabytes a second", left, "13 min left");
+    yonder_download_left(2 * 3600 + 5 * 60, 1, left, sizeof(left));
+    expect_text("download: hours and minutes", left, "2 h 5 min left");
 }
 
 // ── The question bar: no click made before a question may answer it ─────

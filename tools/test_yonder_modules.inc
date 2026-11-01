@@ -36,6 +36,8 @@ static void module_graph_case(void) {
     check(loop_settle() && g.page.tree!=NULL && script_rebuild() && probe_text_is("out","c|b|aB"),
           "modules: the graph runs once it is all in, each module once, its imports first");
     check(strstr(request_record_text(),"MISSING script module")==NULL,"modules: a module that ran is not missing");
+    check(strstr(request_record_text(),"\nmodules compiled: 3 in 0 us, 108 bytes\n")!=NULL,
+          "modules: the record says what the page's compiles cost, all of them on one line");
     request_drop();
 }
 
@@ -322,7 +324,50 @@ static void module_place_case(void) {
     request_drop();
 }
 
+/* A data: module carries its source in its address, so it may be longer
+ * than any other address yonder resolves: imported statically, imported
+ * dynamically, as a module script's src, and as one that does not compile,
+ * whose entry's rethrow imports it by its whole name (its error follows a
+ * comment longer than the rethrow's old buffer). Each is decoded by the
+ * real fetch job, from no network. */
+static void module_data_case(void) {
+    fake_fetch_reset();
+    enum { PAD = 9000, LONG = 17000 };
+    static char pad[PAD + 1], comment[LONG + 1], page[8 * PAD];
+    memset(pad,'x',PAD);
+    pad[PAD]='\0';
+    memset(comment,'x',LONG);
+    comment[LONG]='\0';
+    snprintf(page,sizeof(page),
+        "<p id=out></p><script>var order=[];function note(n){order.push(n);"
+        "document.getElementById('out').textContent=order.join('|')}"
+        "addEventListener('error',e=>note('error '+e.message))</script>"
+        "<script type=module>import s from 'data:text/javascript,export default 7;//%sstatic-end';note('static '+s);"
+        "import('DATA:text/javascript,export default 8;//%sdynamic-end').then(m=>note('dynamic '+m.default),"
+        "e=>note('dynamic failed '+e.message.slice(0,30)))</script>"
+        "<script type=module src=\"data:text/javascript,note(%%27src%%27);//%ssrc-end\"></script>"
+        "<script type=module src=\"data:text/javascript,/*%s*/note(;\"></script>",pad,pad,pad,comment);
+    loop_page(page);
+    check(loop_settle() && request_land("static-end") && request_land("src-end") && request_land("*/note(;") &&
+          loop_settle() && g.page.tree!=NULL && script_rebuild(),
+          "modules: a page of long data: modules settles, each fetched once");
+    check(probe_text_is("out","static 7|dynamic 8|src|error Uncaught SyntaxError: unexpected token in expression: ';'"),
+          "modules: a long data: module runs imported statically, dynamically and as a src, and one that does not "
+          "compile throws its own SyntaxError, past the comment a cut name would leave unclosed");
+    const char *record=request_record_text();
+    check(strstr(record,"cannot resolve")==NULL && strstr(record,"bare name")==NULL &&
+          strstr(record,"FAILED script data:text/javascript,/*xxx")!=NULL,
+          "modules: no long data: URL is taken for a name no module has, and the one that does not compile is "
+          "on the record");
+    check(strstr(record,"request GET data:text/javascript,export default 7;//xxx")!=NULL &&
+              strstr(record,"...(8910 more bytes)...xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxstatic-end: 200")!=NULL &&
+              strlen(record)<6000,
+          "modules: the record holds each long data: address by its start and its end");
+    request_drop();
+}
+
 static void module_cases(void) {
+    module_data_case();
     module_place_case();
     module_graph_case();
     module_order_case();

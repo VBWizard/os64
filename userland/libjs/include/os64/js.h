@@ -124,6 +124,30 @@ os64_js_status_t os64_js_run(os64_js_runtime_t *runtime,
 os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
                                   const char *path,
                                   os64_js_outcome_t *outcome);
+/* A classic script's BYTECODE, which a host may keep and run from instead
+ * of compiling the source again (BYTECODE_CACHE.md § 4). A blob is libjs's
+ * own framing round the engine's bytes: tied to this engine's build, its
+ * payload digested, so one from another build, cut short or rotted is
+ * refused before the engine reads it. The source is always required: a
+ * refused blob means the source is compiled, as if none had been given. */
+typedef struct {
+    const void *blob;       /* in: a blob to run from, or NULL */
+    size_t blob_length;
+    bool keep;              /* in: hand back the blob of a compile */
+    uint8_t *kept;          /* out: os64_malloc'd, the caller's; NULL when none */
+    size_t kept_length;
+    bool from_blob;         /* out: what ran was read from `blob` */
+} os64_js_bytecode_t;
+/* os64_js_run, through `bytecode`: the blob read under `source_name` (the
+ * name a script's errors carry is the run's, never the one it was compiled
+ * under) and run, or the source compiled and run, its blob kept when asked.
+ * A compile that throws keeps nothing, and neither does a blob that would
+ * not fit in the runtime's memory: keeping is never the script's failure. */
+os64_js_status_t os64_js_run_bytecode(os64_js_runtime_t *runtime,
+                                      const void *source, size_t length,
+                                      const char *source_name,
+                                      os64_js_bytecode_t *bytecode,
+                                      os64_js_outcome_t *outcome);
 /* A slice yields MORE_JOBS without resetting the turn's deadline or job cap.
  * An empty runnable queue is OK; unresolved promises are not external work. */
 os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
