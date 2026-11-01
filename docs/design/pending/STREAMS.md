@@ -58,7 +58,9 @@ yonder would carry `streams.js`:
   `'ReadableStream' in window` truthfully. The INTRINSICS are captured at
   the realm's start either way, by C, and handed to the code when it is
   read: captured on first use, they would be whatever the page had patched
-  them to by then.
+  them to by then. The JS asserts at load that every capture it uses is
+  present, and the host fixture fails on a missing one, so the C list and
+  the JS list cannot drift apart unseen.
 - Size: a few thousand lines of JS for S1 and S2 together, to be measured
   as it is written; the standard's own reference implementation is the
   yardstick.
@@ -123,9 +125,9 @@ a first.
      "Progressive `open`" is for a loop with no thread, which this is not).
    - Chunks are delivered on the page's own thread, between tasks, in
      order, the way `os64_dom_fetched` is delivered today.
-   - **Backpressure.** The job stops reading the socket while the stream's
-     queue is full (the standard's `desiredSize`), and reads again when the
-     stream pulls. Without that, a page that opens a large body and never
+   - **Backpressure.** The job holds off its next read until the page's
+     thread says the stream's queue has room (the standard's
+     `desiredSize`). Without that, a page that opens a large body and never
      reads it grows the queue without bound.
    - **Caps.** A streamed body is not held by the job, so
      `YONDER_FETCH_BODY_MAX` does not cap it; the realm's allocation limit
