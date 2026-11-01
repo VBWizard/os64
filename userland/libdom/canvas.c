@@ -77,6 +77,7 @@ static void changed(os64_dom_t *dom, const os64_html_change_t *c)
 }
 void d_canvas_free(DValue *e)
 {
+    d_path2d_free(e);
     if (e->canvas) canvas_destroy(e->canvas);
     e->canvas = NULL;
     canvas_gradient_release(e->canvas_gradient);
@@ -378,6 +379,7 @@ int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_canvas_paths_install(dom, ctx, prototype) < 0 ||
         d_canvas_images_install(dom,ctx,prototype) < 0 ||
         gradients_install(dom,ctx,global,prototype) < 0 ||
+        d_path2d_install(dom,ctx,global) < 0 ||
         d_canvas_text_install(dom,ctx,global,prototype) < 0) return -1;
     const struct { const char *name; int magic, length; } methods[] = {
         {"save", C_SAVE, 0}, {"restore", C_RESTORE, 0}, {"fillRect", C_FILL_RECT, 4},

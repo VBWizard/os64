@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — Paths Worth Keeping</title>
+<style>
+body{margin:0;background:#eaf1ee;color:#29413d;font:18px sans-serif}
+main{max-width:960px;margin:32px auto;padding:0 24px}h1{font-size:42px;margin:8px 0 12px}h2{font-size:23px;margin:0 0 12px}
+p{line-height:1.5}.eyebrow{color:#678b80;font-size:14px;letter-spacing:3px}.cards{display:flex;flex-wrap:wrap;gap:20px}
+.card{width:400px;flex-shrink:0;padding:20px;border:1px solid #bdd1c9;background:#fffdf5;border-radius:12px}
+canvas{width:100%;height:180px;display:block;background:#e4ece4;border:1px solid #a4bcae}
+button{margin-top:12px;padding:10px 16px;background:#386d61;color:white;border:0;border-radius:6px;font-size:16px}
+.caption{font-size:15px;min-height:66px}
+.ticket{position:relative;width:400px;height:180px;background:#ead5a4}.prize{position:absolute;top:65px;left:90px;font-size:26px;color:#386d61}#ticket{position:relative;background:transparent;touch-action:none}</style>
+<main><p class="eyebrow">YONDER / CANVAS 2D / C6C</p><h1>Paths Worth Keeping</h1>
+<p>A drawing made from a string can travel a surprisingly long way.</p>
+<p id="status">Enable Scripts and Modern Web, then reload.</p>
+<div class="cards">
+<section class="card"><h2>1. Two of a kind</h2><canvas id="medals" width="400" height="180"></canvas>
+<p class="caption">One star and its copy, drawn at different sizes. Turn the left star; its cousin stays put. The blue bar uses the separate current path.</p><button id="turn">Turn one star</button></section>
+<section class="card"><h2>2. A change of rules</h2><canvas id="rings" width="400" height="180"></canvas>
+<p class="caption">Two nested rectangles share one path. Switching the fill rule opens or closes the window in the middle.</p><button id="rule">Change the fill rule</button></section>
+<section class="card"><h2>3. Around the bend</h2><canvas id="curve" width="400" height="180"></canvas>
+<p class="caption">These curves began as SVG arc commands. Their shape follows the drawing transform; their shadow stays offset on the canvas.</p><button id="stretch">Reshape the loop</button></section>
+<section class="card"><h2>4. Scratch a little joy</h2><div class="ticket"><div class="prize">YOU FOUND JOY</div><canvas id="ticket" width="400" height="180"></canvas></div>
+<p class="caption">Drag across the foil to reveal the message. A retained path clips the drawing and erasing to the rounded ticket.</p><button id="foil">Fresh foil</button></section>
+</div><p>Try 25%–400% zoom. No coins required for the scratch ticket.</p></main>
+<script>
+(function(){
+ function context(id){return document.getElementById(id).getContext('2d');}
+ var medals=context('medals'),rings=context('rings'),curve=context('curve'),ticket=context('ticket');
+ var star=new Path2D('M0 -50L12 -16L48 -15L20 6L29 43L0 22L-29 43L-20 6L-48 -15L-12 -16Z');
+ var cousin=new Path2D(star),windowPath=new Path2D('M40 25H360V155H40Z M120 55H280V125H120Z');
+ var loop=new Path2D('M-110 0A110 54 0 1 0 110 0A110 54 0 1 0 -110 0Z');
+ var foilPath=new Path2D('M60 20H340Q360 20 360 40V140Q360 160 340 160H60Q40 160 40 140V40Q40 20 60 20Z');
+ var angle=0,evenodd=true,flat=false,drawing=false,lastX=0,lastY=0;
+ var foilInk=ticket.createLinearGradient(40,20,360,160);foilInk.addColorStop(0,'#cad1cd');foilInk.addColorStop(.45,'#8eaaa1');foilInk.addColorStop(1,'#c9d4ce');
+ function stars(){
+  medals.clearRect(0,0,400,180);medals.beginPath();medals.rect(15,155,65,8);
+  medals.save();medals.translate(120,85);medals.rotate(angle);medals.fillStyle='#d79a36';medals.fill(star);medals.restore();
+  medals.save();medals.translate(285,85);medals.scale(.7,.7);medals.fillStyle='#386d61';medals.fill(cousin);medals.restore();
+  medals.fillStyle='#527bac';medals.fill();
+ }
+ function rule(){rings.clearRect(0,0,400,180);rings.fillStyle='#628e7b';rings.fill(windowPath,evenodd?'evenodd':'nonzero');}
+ function bend(){
+  curve.clearRect(0,0,400,180);curve.save();curve.translate(200,90);curve.rotate(flat?-.28:.15);curve.scale(flat?1.3:1,flat?.6:1);
+  curve.shadowColor='rgba(78,99,137,.6)';curve.shadowOffsetX=12;curve.shadowOffsetY=12;curve.shadowBlur=7;
+  curve.strokeStyle='#b37452';curve.lineWidth=8;curve.stroke(loop);curve.restore();
+ }
+ function foil(){
+  drawing=false;ticket.clearRect(0,0,400,180);ticket.save();ticket.clip(foilPath);ticket.fillStyle=foilInk;ticket.fillRect(0,0,400,180);
+  ticket.fillStyle='rgba(255,255,255,.25)';for(var y=25;y<180;y+=16)ticket.fillRect(0,y,400,3);ticket.restore();
+ }
+ function point(e){var r=e.currentTarget.getBoundingClientRect();return {x:(e.clientX-r.left)*400/r.width,y:(e.clientY-r.top)*180/r.height};}
+ function erase(p){
+  ticket.save();ticket.clip(foilPath);ticket.globalCompositeOperation='destination-out';ticket.lineWidth=24;ticket.lineCap='round';
+  ticket.beginPath();ticket.moveTo(lastX,lastY);ticket.lineTo(p.x,p.y);ticket.stroke();ticket.restore();lastX=p.x;lastY=p.y;
+ }
+ var surface=document.getElementById('ticket');
+ surface.onpointerdown=function(e){if(e.button!==0)return;var p=point(e);lastX=p.x;lastY=p.y;drawing=true;this.setPointerCapture(e.pointerId);e.preventDefault();};
+ surface.onpointermove=function(e){if(drawing)erase(point(e));};
+ surface.onpointerup=function(e){drawing=false;if(this.hasPointerCapture(e.pointerId))this.releasePointerCapture(e.pointerId);};
+ surface.onpointercancel=surface.onlostpointercapture=function(){drawing=false;};
+ document.getElementById('turn').onclick=function(){angle+=Math.PI/10;stars();};
+ document.getElementById('rule').onclick=function(){evenodd=!evenodd;rule();};
+ document.getElementById('stretch').onclick=function(){flat=!flat;bend();};
+ document.getElementById('foil').onclick=foil;
+ stars();rule();bend();foil();document.getElementById('status').textContent='Four experiments, ready to turn, transform, and uncover.';
+})();
+</script>
