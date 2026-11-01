@@ -102,3 +102,28 @@ and its SHA-256 manifest remain unchanged.
 C6 follows with the saved signature and scratch flows and their remaining
 fidelity work. PE1's gallery acceptance does not claim those full applications
 already pass.
+
+
+## Frame-source regression correction
+
+A post-acceptance report found that clicking an iframe placeholder no longer
+opened its source. PE1 moved native click activation into libdom, whose
+standard HTML activation rules do not include Yonder's frame-source shortcut.
+The browser callback treated the click as complete and omitted that default.
+
+The browser now retains the clicked FRAME/IFRAME as an optional held fallback
+until the pointer task finishes. It rebuilds the model, gives a script's own
+navigation priority, and otherwise follows the current frame source as a
+user-initiated navigation. Canceled clicks, detached frames, absent/empty
+sources and failed runtimes do not open it. No extra click is dispatched and
+no navigation task is nested inside the pointer task.
+
+The regression produced two failures before the fix: an ordinary source click
+and a click whose listener changes the source. The expanded tests cover both
+frame tags, Modern Web off, cancellation/removal, absent/empty sources, one
+click delivery, navigation provenance, script-navigation precedence and a
+same-document fragment source. The complete browser suite passes **16,376
+checks**, zero failures, with ASan/UBSan/LeakSanitizer enabled. Native Yonder
+build passed. This correction changes the Yonder executable; the previously
+accepted gallery bundle is retained, and the corrected P5 cohort awaits the
+reported page's hardware recheck.

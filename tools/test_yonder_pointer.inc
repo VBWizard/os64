@@ -12,6 +12,50 @@ static void pointer_move(int x, int y, unsigned buttons)
 {
     pointer_window(OS64_GUI_EVENT_MOUSE_MOVE,x,y,0,buttons);
 }
+static void pointer_frame_cases(void)
+{
+    const char *handlers[] = {
+        "", "e.preventDefault()", "e.target.remove()",
+        "e.target.setAttribute('src','/changed')", "location.href='/chosen'",
+        "e.target.removeAttribute('src')", "e.target.setAttribute('src','')"
+    };
+    const char *destinations[] = {"/frame-source",NULL,NULL,"/changed","/chosen",NULL,NULL};
+    for (unsigned i=0;i<sizeof(handlers)/sizeof(handlers[0]);i++) {
+        char html[1024];
+        snprintf(html,sizeof(html),"<iframe id=f width=200 height=100 src=/frame-source></iframe>"
+            "<p id=out>0</p><script>var n=0;document.getElementById('f').onclick=e=>{"
+            "document.getElementById('out').textContent=String(++n);%s};</script>",handlers[i]);
+        loop_page(html);
+        check(loop_settle() && g.page.tree!=NULL,"pointer frame: fixture arrives");
+        input_click_at("f");
+        check(probe_text_is("out","1"),"pointer frame: exactly one DOM click");
+        if(destinations[i]) {
+            char expected[128];snprintf(expected,sizeof(expected),"http://fixture.test%s",destinations[i]);
+            const yonder_trip_t *trip=pool_work.job;
+            check(g.stream.active && trip && os64_streq(trip->url,expected),
+                  "pointer frame: source follows after click, with mutation and script-navigation precedence");
+            if(i==0 && trip) check(trip->metadata.activation,"pointer frame: source navigation is user initiated");
+        } else check(!g.stream.active,"pointer frame: cancellation/removal prevents source navigation");
+        loop_drop();
+    }
+    for (int off=0;off<2;off++) {
+        loop_modern_off=off;
+        loop_page("<frameset><frame id=f src=/legacy-frame></frameset>");
+        check(loop_settle() && g.page.tree!=NULL,"pointer frame: frameset arrives");
+        input_click_at("f");
+        const yonder_trip_t *trip=pool_work.job;
+        check(g.stream.active && trip && os64_streq(trip->url,"http://fixture.test/legacy-frame"),
+              "pointer frame: FRAME source opens with Modern Web on and off");
+        loop_drop();
+    }
+    loop_modern_off=false;
+    loop_page("<iframe id=f src=#destination></iframe><p id=destination>here</p>");
+    check(loop_settle() && g.page.tree!=NULL,"pointer frame: same-document source arrives");
+    input_click_at("f");
+    check(!g.stream.active && strstr(g.page.way.url,"#destination") && scripts_live(),
+          "pointer frame: fragment source runs outside the completed input task");
+    loop_drop();
+}
 static void pointer_window_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0}#pad{width:100px;height:80px;background:green}</style>"
@@ -149,5 +193,7 @@ static void pointer_window_cases(void)
     pointer_window(OS64_GUI_EVENT_MOUSE_BUTTON_UP,10,10,0,0);
     check(!s_pointer_draining && g.ui.grab==NULL,"pointer: failed-runtime release drains without a native activation");
     probe_drop();
+
+    pointer_frame_cases();
 
 }

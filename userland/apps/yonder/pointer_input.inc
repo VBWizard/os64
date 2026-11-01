@@ -19,6 +19,7 @@ typedef struct {
     os64_gui_event_t native;
     uint64_t serial;
     bool replayed;
+    const os64_html_node_t *frame; // held until the task's navigation/default is chosen
 } PointerDefault;
 
 static bool pointer_default(void *opaque, const os64_html_node_t *node,
@@ -26,10 +27,20 @@ static bool pointer_default(void *opaque, const os64_html_node_t *node,
 {
     PointerDefault *p = opaque;
     if (p->serial != g.page_serial || !scripts_live()) return false;
-    // Click activation belongs to libdom. Native replay supplies focus,
-    // editor selection and widget pressed state, with activation callbacks
+    // Standard click activation belongs to libdom. Frame placeholders are
+    // Yonder's own source-opening affordance, deferred until the task ends.
+    // Native replay supplies focus, editor selection and widget pressed
+    // state, with activation callbacks
     // suppressed so checkboxes and forms cannot act twice.
-    if (os64_streq(event->type, "click") || os64_streq(event->type, "auxclick")) return true;
+    if (os64_streq(event->type, "click")) {
+        if (!prevented && node && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
+            (node->tag == OS64_HTML_TAG_FRAME || node->tag == OS64_HTML_TAG_IFRAME)) {
+            os64_html_hold(page_doc(&g.page), node);
+            p->frame = node;
+        }
+        return true;
+    }
+    if (os64_streq(event->type, "auxclick")) return true;
     if (prevented) {
         if (os64_streq(event->type, "mouseup")) pointer_native_release();
         return true;
@@ -87,7 +98,14 @@ static void pointer_packet(const os64_dom_pointer_sample_t *sample, PointerDefau
     // Keep native editors consistent even if a click changes no DOM version.
     forms_sync_from_model(false);
     if (sample->hit) os64_html_release(doc, sample->hit);
-    if (script_rebuild()) asks_perform(host, doc, true);
+    const os64_html_node_t *frame = action ? action->frame : NULL;
+    if (action) action->frame = NULL;
+    if (frame && !scripts_live()) {
+        os64_html_release(doc, frame);
+        frame = NULL;
+    }
+    if (script_rebuild()) asks_perform_with_fallback(host, doc, true, frame);
+    else if (frame) os64_html_release(doc, frame);
 }
 
 static void pointer_cancel_run(void)
@@ -183,7 +201,7 @@ static bool pointer_route(const os64_gui_event_t *ev)
         if (has_link || has_picture) menu = g.context_menus[has_link && has_picture ? CONTEXT_BOTH :
                                                           has_link ? CONTEXT_LINK : CONTEXT_PICTURE];
     }
-    PointerDefault action = {*ev, serial, false};
+    PointerDefault action = {.native = *ev, .serial = serial};
     pointer_packet(&sample, presence ? NULL : &action);
     if (serial != g.page_serial) return true;
     if (up && ev->mouse.button == OS64_GUI_MOUSE_LEFT && !action.replayed) pointer_native_release();

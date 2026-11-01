@@ -9412,10 +9412,12 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
     }
 }
 
-// After a task: what it asked of the widgets, then the navigation it asked
-// for. The ask's nodes are let go before it is performed, since going
-// somewhere may free the very page they belong to.
-static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
+// After a task: widget asks, then navigation, using the rebuilt model.
+// Consumes the optional held frame fallback; a script navigation takes priority.
+// Shown-page nodes remain held while navigation reads them. An unshown-page
+// request releases its nodes before navigation, which may free its document.
+static void asks_perform_with_fallback(yonder_scripts_t *host, const os64_html_document_t *doc,
+                                       bool shown, const os64_html_node_t *fallback)
 {
     for (int32_t i = 0; i < g.nasks; i++) {
         if (shown && g.asks[i].doc == page_doc(&g.page)) {
@@ -9443,8 +9445,19 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
     }
     g.nasks = 0;
     os64_dom_navigation_t ask;
-    if (!yonder_scripts_take_navigation(host, &ask))
-        return;
+    if (yonder_scripts_take_navigation(host, &ask)) {
+        if (fallback) os64_html_release(doc, fallback);
+    } else {
+        if (!fallback) return;
+        const os64_html_node_t *root = fallback;
+        while (root->parent) root = root->parent;
+        if (!shown || doc != page_doc(&g.page) || root != doc->document) {
+            os64_html_release(doc, fallback);
+            return;
+        }
+        ask = (os64_dom_navigation_t){.kind = OS64_DOM_NAVIGATE_FOLLOW,
+            .node = fallback, .user_activated = true};
+    }
     os64_dom_navigation_t held = ask;
     if (!shown) {
         if (ask.node != NULL)
@@ -9464,6 +9477,11 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
         if (ask.submitter != NULL)
             os64_html_release(doc, ask.submitter);
     }
+}
+
+static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
+{
+    asks_perform_with_fallback(host, doc, shown, NULL);
 }
 
 // One task of a page's: script, image event, message or timer. True when one
