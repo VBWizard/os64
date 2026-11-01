@@ -11230,6 +11230,7 @@ static void exit_when_loaded_cases(void) {
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
  * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
+#include "test_yonder_svg_hit.inc"
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -11315,6 +11316,7 @@ int main(void)
     hover_batch_cases();
     classic_hover_profile();
     geometry_cases();
+    svg_fill_hit_cases();
     geometry_pseudo_cases();
     geometry_body_cases();
     geometry_publish_cases();

@@ -999,9 +999,11 @@ static void geometric_bounds(void)
     CHECK(svg_path_release(c, p) == SVG_OK);
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
+#include "test_svg_hit.inc"
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
+    fill_hit_tests();
     geometric_bounds();
     shapes();
     grammar();

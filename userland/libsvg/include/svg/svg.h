@@ -315,6 +315,13 @@ svg_status_t svg_path_release(svg_context_t *, svg_path_t *);
  * Failure leaves out empty. Non-finite arithmetic returns LIMIT, not clamped coordinates. */
 svg_status_t svg_path_bounds(svg_context_t *, const svg_path_t *, const os64_geometry_map_t *,
                              svg_bounds_t *out);
+/* User-space fill membership, including the boundary and implicit subpath
+ * closure. Curves and endpoint arcs are evaluated without rasterization or
+ * allocation. Binary64 boundary allowance is 64 epsilons of segment/query
+ * magnitude. Work/cancellation limits apply; failure clears out. Nonfinite
+ * queries are outside. Paint, transforms and clipping belong to the caller. */
+svg_status_t svg_path_contains(svg_context_t *, const svg_path_t *,
+    os64_geometry_point_t, bool even_odd, bool *out);
 /* Lower arcs to cubic Hermite pieces using a per-axis device-space positional
  * error budget. This is separate from backend quantization, stroke-boundary
  * error and raster coverage. Lowering retains user-space coordinates and adds

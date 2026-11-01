@@ -67,7 +67,8 @@ typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DA
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
  * HTML_ELEMENT, or one of the HTML kinds when it has one of its own; an
- * element in the SVG namespace is an SVG; an element of another namespace
+ * element in the SVG namespace has the SVG family, with graphics/geometry
+ * prototypes refined by svg_geometry.c; an element of another namespace
  * is an ELEMENT. A text node is a TEXT and a comment a COMMENT, each under
  * CHARACTER_DATA, which no node is itself. ATTR is Attr's, which is a Node
  * and no tree node: no Node member is installed on it, and it shadows
@@ -93,7 +94,7 @@ enum {
  * need another representation. */
 _Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
 #define D_KIND(kind) ((uint64_t)1 << (kind))
-/* The kind of `node`'s wrapper: its prototype's (node.c). */
+/* The wrapper's base family; SVG graphics refine its prototype separately. */
 int d_node_kind(const os64_html_node_t *node);
 /* A content attribute reflected as an IDL attribute (HTML § 2.6.1), by
  * one of HTML's rules: a string (null as "null", or as "" for WebIDL's
@@ -341,6 +342,9 @@ struct os64_dom {
     os64_dom_text_provider_t canvas_text;
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;
+    os64_dom_svg_hit_provider_t svg_hit;
+    void *svg_hit_opaque;
+    DValue *svg_graphics_proto, *svg_geometry_proto;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
     /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
@@ -668,6 +672,12 @@ JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node
  * tree. */
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
+int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
+int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
+bool d_svg_geometry_node(const os64_html_node_t *);
+JSValueConst d_svg_prototype(os64_dom_t *, const os64_html_node_t *);
+int d_svg_geometry_prototypes(os64_dom_t *, JSContext *);
+int d_svg_geometry_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_geometry_install(os64_dom_t *dom, JSContext *ctx);
 int d_node_install(os64_dom_t *dom, JSContext *ctx);
 int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

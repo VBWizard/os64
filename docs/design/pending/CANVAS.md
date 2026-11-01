@@ -633,10 +633,44 @@ Limits are 64 KiB of input, 4096 parsed/lowered commands and 16,777,216 shared S
 work units per SVG operation, in addition to the page allocation ledger.
 See [C6c validation](../../canvas-evidence/c6c-validation.md).
 
+C6d adds collectible `DOMPointReadOnly` and `DOMPoint` values and SVG
+`isPointInFill()`. Points support construction, copying from dictionaries,
+coordinate access, JSON output and matrix-dictionary transformation. Native
+storage follows engine collection rather than the document registry; the
+scratch progress loop creates many temporary points. SVG graphics/geometry
+prototype levels exist with either Modern Web setting; their interface names
+and the query method are exposed through the Modern Web table.
+
+`svg_path_contains` is the reusable native predicate. It evaluates the retained
+SVG path directly, sharing the derivative-extrema solver with geometric bounds
+and the endpoint-arc conversion with lowering/bounds. Monotone curve intervals
+use bounded bisection for ray crossings, preserving nonzero/even-odd winding,
+implicit closure and boundary membership without rasterization or allocation.
+The binary64 boundary allowance is 64 epsilons of segment/query magnitude;
+this is a numeric classification, not an exact-arithmetic predicate. Context
+work/cancellation limits apply and failures clear the result.
+
+The DOM converts the entire point dictionary before the provider resolves
+geometry. Yonder obtains current layout/cascade state, uses the SVG shape and
+viewport resolvers, and supplies only local geometry and inherited fill-rule.
+Fill paint, visibility, opacity, transforms and clipping do not affect this
+query. Connected hidden geometry remains testable. Detached elements are
+refused because the current cascade has no resolved style for them; missing
+style must not silently become initial geometry or fill-rule. Percentage shapes use their
+SVG viewport's user dimensions, with the outer rendered content box supplying
+its CSS viewport. Percentage geometry without an SVG viewport is refused
+rather than assigned a guessed basis. Provider allocations use the page Canvas ledger and are
+released before returning. No parsed-path cache retains a mutable DOM node.
+The existing SVG limits apply (1 MiB path input, 32768 path commands,
+4,000,000 work units per native operation); the script deadline is polled too.
+
+The captured CD-ROM replay now exercises native pointer scratching, all four
+sector reveals and the completion callback. Its fixture omits external page
+styling and symbol images and performs no remote submission. See
+[C6d validation](../../canvas-evidence/c6d-validation.md).
+
 Remaining C6 work includes complete captured/live signature-wall and
-scratch-game acceptance. The CD-ROM module also uses `DOMPoint` and SVG
-`isPointInFill()` in its scratch-progress checks; successful foil painting
-alone does not establish that reveal flow.
+scratch-game acceptance.
 The signature editor has a narrower successful replay: its unchanged public
 script draws, undoes, redoes, erases and clears through native pointer input
 against captured markup. That diagnostic omits external CSS and images and

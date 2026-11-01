@@ -8648,6 +8648,8 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
 
 static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
+static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
+    const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
 static bool history_update(void *opaque, const char *url, const char *state, size_t length, bool push);
 static bool history_fragment(void *opaque, const char *url, bool replace);
@@ -8710,7 +8712,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
-        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .opaque = doc,
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
@@ -10336,6 +10338,26 @@ static bool computed_url(void *ctx, const char *written, uint32_t len, int32_t s
     layer.image_len = len;
     layer.sheet = sheet;
     return css_url(ctx, &layer, out, cap);
+}
+
+static os64_geometry_status_t script_svg_hit(void *opaque,const os64_html_node_t *node,
+    double x,double y,const os64_geometry_memory_t *memory,bool (*cancelled)(void *),
+    void *cancel_context,bool *inside,os64_dom_geometry_stats_t *cost)
+{
+    const os64_html_document_t *doc=opaque;*inside=false;
+    if(!os64_html_owns_node(doc,node))return OS64_GEOMETRY_BAD_ARGUMENT;
+    flow_env_t env;
+    const flow_tree_t *tree=layout_current(doc,&env,&cost->layouts,&cost->elapsed_us);
+    if(!tree)return OS64_GEOMETRY_ENGINE_ERROR;
+    svg_status_t status=yonder_svg_contains(doc,env.cascade,tree,node,env.zoom,
+        memory,cancelled,cancel_context,x,y,inside);
+    switch(status) {
+    case SVG_OK:return OS64_GEOMETRY_OK;
+    case SVG_LIMIT:return OS64_GEOMETRY_LIMIT;
+    case SVG_NO_MEMORY:return OS64_GEOMETRY_NO_MEMORY;
+    case SVG_CANCELLED:return OS64_GEOMETRY_CANCELLED;
+    default:return OS64_GEOMETRY_ENGINE_ERROR;
+    }
 }
 
 // getComputedStyle's provider: the element's resolved style read from the

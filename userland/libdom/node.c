@@ -89,7 +89,7 @@ static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
     DValue *entry = d_alloc(dom, sizeof(*entry));
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
     JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
-        dom->prototypes[d_node_kind(node)]->value, dom->node_class);
+        d_svg_prototype(dom, node), dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
     entry->value = value;
     entry->next = dom->values;
@@ -725,5 +725,6 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
             if ((method_prototypes(methods[i].magic) & D_KIND(kind)) != 0 &&
                 d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
     }
+    if(d_svg_geometry_prototypes(dom,ctx)<0)return -1;
     return d_geometry_install(dom, ctx);
 }

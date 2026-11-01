@@ -1,4 +1,5 @@
 #include "test_dom_path2d.inc"
+#include "test_dom_svg_hit.inc"
 static void *canvas_font_alloc(void *opaque,size_t bytes){(void)opaque;return malloc(bytes);}
 static void canvas_font_free(void *opaque,void *p,size_t bytes){(void)opaque;(void)bytes;free(p);}
 typedef struct { os64_text_context_t *context;uint8_t *bytes;size_t length; } CanvasFonts;
@@ -15,7 +16,7 @@ static os64_font_status_t canvas_font_layout(void *opaque,const os64_font_family
 #include "test_dom_canvas_shadows.inc"
 static void dom_canvas_paint_cases(void)
 {
-    dom_canvas_shadow_cases();dom_path2d_cases();
+    dom_canvas_shadow_cases();dom_path2d_cases();dom_svg_hit_cases();
     DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
     dom_script(&f,STORAGE_ASSERT
         "var c=document.createElement('canvas');c.width=32;c.height=32;var x=c.getContext('2d');"
