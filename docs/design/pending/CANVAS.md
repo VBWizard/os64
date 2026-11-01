@@ -582,3 +582,27 @@ captured signature and scratch applications work end to end.
 The post-5d [userland reconciliation](../../canvas-evidence/userland-reconciliation.md)
 combines the data-picture backport, observers, generated content, caches and
 stack/budget changes with the retained Canvas and frame-loop interfaces.
+
+## C6 fidelity work
+
+C6a extracts Yonder's CSS-shadow coverage blur into `libdraw2d`. The shared
+operation takes a strided uint16 coverage mask, an integer box radius, an
+exterior value and caller-owned row/column scratch. It performs three
+separable box blurs without allocation, preserving the painter's rounding and
+edge treatment. Storage, scratch aliasing and pixel-budget checks precede
+writes. Large radii use an analytical exterior contribution, so work stays
+proportional to the mask area. Yonder retains mask geometry, allocation,
+clipping, caching and emission; Canvas will supply its own source alpha,
+offsets and compositing through this numeric boundary.
+
+This extraction does not expose Canvas shadow properties. Remaining C6 work
+includes Canvas shadow state and painting, the CD-ROM ticket's Path2D input,
+and complete captured/live signature-wall and scratch-game acceptance.
+The signature editor has a narrower successful replay: its unchanged public
+script draws, undoes, redoes, erases and clears through native pointer input
+against captured markup. That diagnostic omits external CSS and images and
+does not establish wall rendering or whole-site compatibility. Cursor effects
+still need their selected-effect inventory. These are acceptance tasks, not a
+fixed count of remaining PRs.
+
+See [C6a validation and target checkpoint](../../canvas-evidence/c6a-validation.md).

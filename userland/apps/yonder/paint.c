@@ -7,6 +7,7 @@
 
 #include "paint.h"
 #include "paint_cache.h"
+#include <draw2d/blur.h>
 #include "html/html.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -748,41 +749,26 @@ static void mask_times(Mask *m, const Round *s, bool leaves)
     }
 }
 
-// One box blur of radius `r` along rows (or columns), past the edges
-// reading `edge`.
-static void blur_pass(Mask *m, uint16_t *tmp, int64_t r, bool rows, uint16_t edge)
-{
-    int64_t lines = rows ? m->h : m->w, len = rows ? m->w : m->h;
-    int64_t step = rows ? 1 : m->w, span = 2 * r + 1;
-    for (int64_t l = 0; l < lines; l++) {
-        uint16_t *v = m->a + (rows ? l * m->w : l);
-        int64_t sum = 0;
-        for (int64_t i = -r; i <= r; i++)
-            sum += i < 0 || i >= len ? edge : v[i * step];
-        for (int64_t i = 0; i < len; i++) {
-            tmp[i] = (uint16_t)((sum + span / 2) / span);
-            int64_t out = i - r, in = i + r + 1;
-            sum += (in >= len ? edge : v[in * step]) - (out < 0 ? edge : v[out * step]);
-        }
-        for (int64_t i = 0; i < len; i++)
-            v[i * step] = tmp[i];
-    }
-}
-
+// Keep mask ownership in the painter; libdraw2d owns the numeric blur used
+// by CSS shadows and available to other surface callers.
 static bool mask_blur(Mask *m, int64_t blur, uint16_t edge)
 {
     int64_t r = blur / 2;
-    if (r <= 0)
+    if (r <= 0 || !m->w || !m->h)
         return true;
-    uint16_t *tmp = os64_malloc((size_t)max64(m->w, m->h) * sizeof(*tmp));
+    if (r > UINT32_MAX || m->w < 0 || m->h < 0 || m->w > UINT32_MAX || m->h > UINT32_MAX ||
+        (uint64_t)m->w * (uint64_t)m->h > SIZE_MAX / sizeof(uint16_t))
+        return false;
+    size_t pixels = (size_t)m->w * (size_t)m->h;
+    size_t bytes = (size_t)max64(m->w, m->h) * sizeof(uint16_t);
+    uint16_t *tmp = os64_malloc(bytes);
     if (tmp == NULL)
         return false;
-    for (int k = 0; k < 3; k++) {
-        blur_pass(m, tmp, r, true, edge);
-        blur_pass(m, tmp, r, false, edge);
-    }
+    draw2d_mask16_t mask = {m->a, (uint32_t)m->w, (uint32_t)m->h,
+                            (size_t)m->w * sizeof(uint16_t), pixels * sizeof(uint16_t)};
+    bool ok = draw2d_blur_mask16(&mask, (uint32_t)r, edge, tmp, bytes, pixels) == DRAW2D_OK;
     os64_free(tmp);
-    return true;
+    return ok;
 }
 
 // The view's part of the mask, in `colour` at its alpha times each pixel's.
