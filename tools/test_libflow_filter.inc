@@ -297,6 +297,43 @@ static void filter_backdrop_damage_cases(void)
     sheeted_close(&q);
 }
 
+// mix-blend-mode and isolation (MIX_BLEND.md): a blended block is a
+// stacking context and a group; an isolated one a stacking context and no
+// group; a plain inline's blend does nothing; both are read back.
+static void blend_mode_cases(void)
+{
+    GroupLog g = filter_walk("<!doctype html><style>body{margin:0}"
+                             ".b{mix-blend-mode:multiply;height:20px}</style><div class=b>a</div>", 400);
+    expect("blend: a blended block is one group", g.opens == 1 && strcmp(g.log, "( a ) ") == 0, g.log);
+    g = filter_walk("<!doctype html><style>body{margin:0}"
+                    ".i{isolation:isolate;height:20px}</style><div class=i>a</div>", 400);
+    expect("blend: an isolated block opens no group", g.opens == 0, g.log);
+    g = filter_walk("<!doctype html><p><span style=\"mix-blend-mode:screen\">t</span>", 400);
+    expect("blend: a plain inline's blend opens no group", g.opens == 0, g.log);
+    Sheeted q;
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} div{height:10px}"
+                     ".b{mix-blend-mode:difference} .i{isolation:isolate}</style>"
+                     "<div id=b class=b></div><div id=i class=i></div><div id=n></div>",
+                 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *b = box_with_id(t, q.doc->document, "b");
+    const flow_box_t *i = box_with_id(t, q.doc->document, "i");
+    const flow_box_t *n = box_with_id(t, q.doc->document, "n");
+    expect("blend: blended and isolated blocks are stacked, a plain one is not",
+           b != NULL && i != NULL && n != NULL && b->stacked && i->stacked && !n->stacked, NULL);
+    const os64_html_node_t *root = q.doc->document;
+    flow_computed_t *c = t != NULL ? flow_computed_new(t, &q.env, computed_find(root, "b"), NULL) : NULL;
+    computed_is(c, "computed: mix-blend-mode", GARB_MIX_BLEND_MODE, "difference");
+    computed_is(c, "computed: isolation auto", GARB_ISOLATION, "auto");
+    flow_computed_free(c);
+    c = t != NULL ? flow_computed_new(t, &q.env, computed_find(root, "i"), NULL) : NULL;
+    computed_is(c, "computed: isolation isolate", GARB_ISOLATION, "isolate");
+    computed_is(c, "computed: mix-blend-mode normal", GARB_MIX_BLEND_MODE, "normal");
+    flow_computed_free(c);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void filter_cases(void)
 {
     filter_group_cases();
@@ -305,5 +342,6 @@ static void filter_cases(void)
     filter_computed_cases();
     filter_mark_cases();
     filter_seen_cases();
+    blend_mode_cases();
     filter_backdrop_damage_cases();
 }

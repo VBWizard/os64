@@ -1622,14 +1622,15 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
-    // Below full opacity (f_opacity_context) or filtered (f_filtered), a
-    // box its block-level parent's walks would reach is a stacking context
-    // of its own, painted whole; and so is one transformed. The root is the
-    // first context already, and an inline-block's content is painted where
-    // its atom is.
+    // Below full opacity (f_opacity_context), filtered (f_filtered),
+    // blended (f_blended) or isolated (f_isolated), a box its block-level
+    // parent's walks would reach is a stacking context of its own, painted
+    // whole; and so is one transformed. The root is the first context
+    // already, and an inline-block's content is painted where its atom is.
     b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||
-                 ((f_opacity_context(src->style) || f_filtered(src->style)) && parent != NULL &&
-                  parent->kind <= FLOW_BOX_CELL);
+                 ((f_opacity_context(src->style) || f_filtered(src->style) ||
+                   f_blended(src->style) || f_isolated(src->style)) &&
+                  parent != NULL && parent->kind <= FLOW_BOX_CELL);
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
         return b;
@@ -1791,6 +1792,7 @@ static bool makes_context(const flow_box_t *b)
     const flow_style_t *s = b->style;
     return s->has_z_index || s->position == FLOW_POSITION_FIXED ||
            s->position == FLOW_POSITION_STICKY || f_opacity_context(s) || f_filtered(s) ||
+           f_blended(s) || f_isolated(s) ||
            (b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM);
 }
 
@@ -1807,15 +1809,16 @@ static bool own_through(const flow_box_t *b)
            b->frame->through;
 }
 
-// Composited whole: below full opacity, drawn through its matrix, or
-// filtered (`filter`, not `backdrop-filter`, which needs no layer), and
+// Composited whole: below full opacity, drawn through its matrix,
+// filtered (`filter`, not `backdrop-filter`, which needs no layer), or
+// blended by a mode other than normal (`isolation` needs no layer), and
 // painted at all — and for the life of an animation of its opacity or its
 // transform, whatever their values, so a frame that fades or turns it is
 // painted as one (PILE3.md § Animations).
 static bool is_group(const flow_box_t *b)
 {
     return (b->style->opacity < 1000 || own_through(b) || b->style->animating != 0 ||
-            f_group_filter(b->style)) &&
+            f_group_filter(b->style) || f_blended(b->style)) &&
            !b->unpainted;
 }
 

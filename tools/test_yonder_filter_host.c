@@ -111,7 +111,7 @@ static void recover_cases(void)
     uint32_t white[3] = {0x336699, 0xff7f7f, 0xffffff};
     yonder_sheets_t s = {black, white, 3, 1};
     uint32_t out[3];
-    yonder_filter_recover(&s, out);
+    yonder_layer_recover(&s, out);
     expect("recover: an opaque pixel is itself", out[0] == 0xff336699u, NULL);
     expect("recover: a half-covered red", out[1] == 0x80800000u, NULL);
     expect("recover: an untouched pixel is nothing", out[2] == 0, NULL);
@@ -129,9 +129,9 @@ static void round_trip_cases(void)
                 uint32_t bl = b << 16 | b << 8 | b, wh = w << 16 | w << 8 | w;
                 yonder_sheets_t s = {&bl, &wh, 1, 1};
                 uint32_t layer;
-                yonder_filter_recover(&s, &layer);
+                yonder_layer_recover(&s, &layer);
                 uint32_t dst = 0xff000000u | d << 16 | d << 8 | d;
-                yonder_filter_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &layer, 1, 1, 0, 0, 255);
+                yonder_layer_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &layer, 1, 1, 0, 0, 255, FLOW_BLEND_NORMAL);
                 int want = (int)((c * a + d * (255 - a) + 127) / 255);
                 int off = abs((int)(dst & 0xff) - want);
                 worst = off > worst ? off : worst;
@@ -147,10 +147,10 @@ static void lay_cases(void)
     // Half red over white at full opacity, and at half.
     uint32_t layer = 0x80800000u;
     uint32_t dst = 0xffffffffu;
-    yonder_filter_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &layer, 1, 1, 0, 0, 255);
+    yonder_layer_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &layer, 1, 1, 0, 0, 255, FLOW_BLEND_NORMAL);
     expect("lay: half red over white", dst == 0xffff7f7fu, NULL);
     dst = 0xffffffffu;
-    yonder_filter_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &layer, 1, 1, 0, 0, 128);
+    yonder_layer_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &layer, 1, 1, 0, 0, 128, FLOW_BLEND_NORMAL);
     // c alpha + d (1 - a alpha): red 128 * 128/255 + 255 (1 - 128/255 *
     // 128/255) = 64.25 + 190.75; green 0 + 190.75.
     char detail[32];
@@ -159,8 +159,8 @@ static void lay_cases(void)
     // Only inside the clip, moved by the offset, the top byte kept.
     uint32_t grid[4] = {0x01000000u, 0x02000000u, 0x03000000u, 0x04000000u};
     uint32_t opaque = 0xff00ff00u;
-    yonder_filter_lay(grid, 2, (os64_gui_rect_t){1, 0, 1, 2}, &opaque, 1, 1, 1, 1, 255);
-    yonder_filter_lay(grid, 2, (os64_gui_rect_t){1, 0, 1, 2}, &opaque, 1, 1, 0, 1, 255);
+    yonder_layer_lay(grid, 2, (os64_gui_rect_t){1, 0, 1, 2}, &opaque, 1, 1, 1, 1, 255, FLOW_BLEND_NORMAL);
+    yonder_layer_lay(grid, 2, (os64_gui_rect_t){1, 0, 1, 2}, &opaque, 1, 1, 0, 1, 255, FLOW_BLEND_NORMAL);
     expect("lay: inside the clip, at the offset, the top byte kept",
            grid[0] == 0x01000000u && grid[1] == 0x02000000u && grid[2] == 0x03000000u &&
                grid[3] == 0x0400ff00u, NULL);
@@ -271,6 +271,67 @@ static void backdrop_cases(void)
                dst[3] == 0xffffffffu, detail);
 }
 
+// Blend modes (Compositing and Blending 1 § 9-10; MIX_BLEND.md): an opaque
+// source laid on an opaque backdrop by each mode. `difference` is WPT's
+// mix-blend-mode-simple (#F00 over #FF0 is #0F0); the rest are worked by
+// a reference written from the spec apart from filter.c
+// (~/os64-opus-kit/tools/blend_ref.py).
+static uint32_t rgb(uint32_t r, uint32_t g, uint32_t b)
+{
+    return r << 16 | g << 8 | b;
+}
+
+static void blend_cases(void)
+{
+    static const struct {
+        flow_blend_t mode;
+        const char *name;
+        uint32_t dst, src, want;
+    } kCases[] = {
+        {FLOW_BLEND_MULTIPLY, "multiply", 0xff8000, 0x808080, 0x804000},
+        {FLOW_BLEND_SCREEN, "screen", 0x0080ff, 0x808080, 0x80c0ff},
+        {FLOW_BLEND_OVERLAY, "overlay", 0x33cc80, 0x999999, 0x3dd699},
+        {FLOW_BLEND_DARKEN, "darken", 0xc81e78, 0x646464, 0x641e64},
+        {FLOW_BLEND_LIGHTEN, "lighten", 0xc81e78, 0x646464, 0xc86478},
+        {FLOW_BLEND_COLOR_DODGE, "color-dodge", 0x6600c8, 0x80ff40, 0xcd00ff},
+        {FLOW_BLEND_COLOR_BURN, "color-burn", 0x66ffc8, 0x800040, 0x00ff24},
+        {FLOW_BLEND_HARD_LIGHT, "hard-light", 0x33cc80, 0x9933c8, 0x5c52c8},
+        {FLOW_BLEND_SOFT_LIGHT, "soft-light", 0x33cc28, 0x9933c8, 0x40b44a},
+        {FLOW_BLEND_DIFFERENCE, "difference (WPT mix-blend-mode-simple)", 0xffff00, 0xff0000, 0x00ff00},
+        {FLOW_BLEND_EXCLUSION, "exclusion", 0xc86432, 0x6496fa, 0x8f84ca},
+        {FLOW_BLEND_HUE, "hue", 0xc86432, 0x3264c8, 0x4f81e5},
+        {FLOW_BLEND_SATURATION, "saturation", 0xc86432, 0x32b45a, 0xbe673c},
+        {FLOW_BLEND_COLOR, "color", 0xc86432, 0x3264c8, 0x4f81e4},
+        {FLOW_BLEND_LUMINOSITY, "luminosity", 0xc86432, 0x3264c8, 0xac4816},
+        {FLOW_BLEND_PLUS_LIGHTER, "plus-lighter", 0x000064, 0x006400, 0x006464},
+    };
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        uint32_t dst = 0xff000000u | kCases[i].dst, layer = 0xff000000u | kCases[i].src;
+        yonder_layer_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &layer, 1, 1, 0, 0, 255, kCases[i].mode);
+        char what[96], detail[64];
+        snprintf(what, sizeof(what), "blend: %s", kCases[i].name);
+        snprintf(detail, sizeof(detail), "got %06x, want %06x", dst & 0xffffffu, kCases[i].want);
+        expect(what, dst == (0xff000000u | kCases[i].want), detail);
+    }
+    // Half covered (a = 128 of 255): (1 - a) Cb + a B.
+    uint32_t dst = 0xff000000u | rgb(255, 128, 0), half = 0x80404040u;
+    yonder_layer_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &half, 1, 1, 0, 0, 255, FLOW_BLEND_MULTIPLY);
+    char detail[64];
+    snprintf(detail, sizeof(detail), "got %06x", dst & 0xffffffu);
+    expect("blend: coverage scales the blend", dst == (0xff000000u | rgb(191, 96, 0)), detail);
+    // The group's opacity scales it the same way: opaque grey at 128.
+    dst = 0xff000000u | rgb(255, 128, 0);
+    uint32_t grey = 0xff808080u;
+    yonder_layer_lay(&dst, 1, (os64_gui_rect_t){0, 0, 1, 1}, &grey, 1, 1, 0, 0, 128, FLOW_BLEND_MULTIPLY);
+    snprintf(detail, sizeof(detail), "got %06x", dst & 0xffffffu);
+    expect("blend: opacity scales the blend", dst == (0xff000000u | rgb(191, 96, 0)), detail);
+    // plus-darker is laid as normal (MIX_BLEND.md § 2).
+    uint32_t a = 0xff336699u, b = 0xff336699u, red = 0xffff0000u;
+    yonder_layer_lay(&a, 1, (os64_gui_rect_t){0, 0, 1, 1}, &red, 1, 1, 0, 0, 255, FLOW_BLEND_PLUS_DARKER);
+    yonder_layer_lay(&b, 1, (os64_gui_rect_t){0, 0, 1, 1}, &red, 1, 1, 0, 0, 255, FLOW_BLEND_NORMAL);
+    expect("blend: plus-darker is laid as normal", a == b, NULL);
+}
+
 int main(void)
 {
     colour_cases();
@@ -280,6 +341,7 @@ int main(void)
     blur_cases();
     shadow_cases();
     backdrop_cases();
+    blend_cases();
     printf("yonder filter: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

@@ -170,6 +170,10 @@ typedef enum {
     // then two or three LENGTHs: x, y, blur); or a URL, an SVG filter
     // reference.
     GARB_FILTER, GARB_BACKDROP_FILTER,
+    // Compositing and Blending 1 § 3.2, 2 for the plus- modes
+    // (MIX_BLEND.md): the KEYWORD normal, one of the sixteen blend modes,
+    // plus-lighter or plus-darker; and § 3.3's auto or isolate.
+    GARB_MIX_BLEND_MODE, GARB_ISOLATION,
     GARB_NPROPS
 } garb_prop_t;
 

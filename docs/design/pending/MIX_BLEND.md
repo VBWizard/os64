@@ -51,7 +51,7 @@ clipping, masking, opacity, then blending, so an element with both a filter
 and a blend mode opens one layer: the filter runs on it, and the close
 blends it at its opacity. The verbs that open and close a filtered group's
 layer become the verbs of any LAYER (`layer_open`, `layer_close` with the
-filter list and the mode), and the painter's `filter_try` becomes
+filter list and the mode), and the painter's `layer_try` becomes
 `layer_try`; a layer is opened when a filter is drawn or the mode is not
 `normal`.
 
@@ -72,8 +72,8 @@ group, a text clip — the backdrop is the group's black and white sheets,
 and a blend is not linear in its backdrop, so the two sheets would no longer
 recover the group: there, and for an element that is itself drawn through
 its matrix, the layer is laid with `normal`, counted
-(`yonder_paint_filters_refused`, the record's `filter: drawn unfiltered`
-becoming `layer: drawn unblended or unfiltered`), and booked.
+(`yonder_paint_layers_refused`, which the record names `layer: drawn
+plain`, filters' refusals as well), and booked.
 
 ## 5. Not in 8d (DEBTS rows)
 
@@ -115,3 +115,26 @@ becoming `layer: drawn unblended or unfiltered`), and booked.
   `css/cssom`, `css/cssom-view` and `css/filter-effects/parsing`.
 - **QEMU**: a page of every mode over a photo-like gradient, a
   `difference` heading over stripes, a filtered and blended card.
+
+## 8. As built
+
+- **libgarb** reads both properties (`kBlendModes`, `kIsolation`) and
+  names `plus-darker` approximated.
+- **libflow** keeps `flow_style_t.mix_blend` and `.isolate`; `f_blended`
+  and `f_isolated` make the stacking context (and `f_blended` the group);
+  `getComputedStyle` writes both back.
+- **yonder**: the filter layer became the LAYER (`layer_open`,
+  `layer_close` with the mode; `layer_try`, `blend_of` in the painter;
+  `yonder_layer_recover`, `yonder_layer_lay`; the counter
+  `yonder_paint_layers_refused`, named `layer: drawn plain` in the record).
+  `yonder_layer_lay` keeps `normal`'s integer source-over and blends every
+  other mode in doubles by § 10's functions. The pane lays a blend `normal`
+  and counts it when the targets outside are sheets; the painter gives the
+  root and `plus-darker` no blend.
+- **Proved**: each mode against a reference written from the spec apart
+  from the code (`~/os64-opus-kit/tools/blend_ref.py`) and WPT's
+  `difference` case; coverage and opacity scaling a blend; the painter's
+  layer, its mode, a filter and blend sharing one layer, the root and
+  `plus-darker`; WPT `css/compositing/parsing` 25 passes, nothing lost in
+  `css/filter-effects/parsing`, `css/cssom` or `css/cssom-view`.
+

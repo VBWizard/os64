@@ -482,6 +482,17 @@ typedef struct {
     size_t url_len;
 } flow_filter_t;
 
+// A blend mode (Compositing and Blending 1 § 5, 2 for the plus- modes;
+// MIX_BLEND.md), in libgarb's spelling's order.
+typedef enum {
+    FLOW_BLEND_NORMAL = 0,
+    FLOW_BLEND_MULTIPLY, FLOW_BLEND_SCREEN, FLOW_BLEND_OVERLAY, FLOW_BLEND_DARKEN,
+    FLOW_BLEND_LIGHTEN, FLOW_BLEND_COLOR_DODGE, FLOW_BLEND_COLOR_BURN, FLOW_BLEND_HARD_LIGHT,
+    FLOW_BLEND_SOFT_LIGHT, FLOW_BLEND_DIFFERENCE, FLOW_BLEND_EXCLUSION,
+    FLOW_BLEND_HUE, FLOW_BLEND_SATURATION, FLOW_BLEND_COLOR, FLOW_BLEND_LUMINOSITY,
+    FLOW_BLEND_PLUS_LIGHTER, FLOW_BLEND_PLUS_DARKER,
+} flow_blend_t;
+
 // The largest standard deviation a filter's blur is drawn with, in px: a
 // larger one is drawn at this one (FILTER.md § 6), and its reach
 // (flow_filter_reach) is this one's.
@@ -724,6 +735,13 @@ typedef struct {
     // their opacity is (FILTER.md § 10).
     const flow_filter_t *filter, *backdrop_filter;
     int32_t nfilter, nbackdrop_filter;
+    // `mix-blend-mode` and `isolation: isolate` (MIX_BLEND.md): a mode
+    // other than normal makes a box a stacking context and a group laid
+    // onto what is under it by that mode; `isolate` makes a stacking
+    // context. Neither does anything on a plain inline, as its opacity is
+    // painted opaque there. Neither inherited.
+    flow_blend_t mix_blend;
+    bool isolate;
     // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
     // stretched to it, scaled to fit inside or to cover it, at its own
     // size, or the smaller of those two, placed by `object_position` — x
@@ -1559,8 +1577,9 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 
 // The same walk, told where each GROUP is: a stacking context painted below
 // full opacity (flow_style_t.opacity), drawn through its matrix
-// (flow_box_through), or filtered (flow_style_t.filter), the root's
-// included — one group when it is more than one.
+// (flow_box_through), filtered (flow_style_t.filter), or blended by a
+// mode other than normal (flow_style_t.mix_blend), the root's included —
+// one group when it is more than one.
 // `open` comes before the group's first box and `close` after its last,
 // groups nesting; `bounds` holds at least everything the group paints
 // (the bounds contract, PILE3.md § Transforms, the painter, Booked), in the coordinates it is painted in at

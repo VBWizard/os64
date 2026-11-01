@@ -1,11 +1,12 @@
 #ifndef YONDER_FILTER_H
 #define YONDER_FILTER_H
 
-// A filtered group (FILTER.md): painted onto black and onto white, as a
-// group laid through its matrix is (warp.h), its pixels and how much of
-// each it covers recovered from the two, the filter list run over them in
-// order, and the result laid over what is under it. Pure over pixels, so
-// the host harness checks it pixel by pixel.
+// A filtered or blended group (FILTER.md, MIX_BLEND.md): painted onto
+// black and onto white, as a group laid through its matrix is (warp.h),
+// its pixels and how much of each it covers recovered from the two, the
+// filter list run over them in order, and the result laid onto what is
+// under it by its blend mode. Pure over pixels, so the host harness checks
+// it pixel by pixel.
 //
 // A LAYER is `w` by `h` pixels of premultiplied 0xAARRGGBB, `w` a row:
 // AA how much of the pixel the group covers, each colour channel at most
@@ -24,7 +25,7 @@
 // from green, the channel with the most precision, and the premultiplied
 // colour is B itself, held at most a. `out` may be s->black: each pixel
 // is read before it is written.
-void yonder_filter_recover(const yonder_sheets_t *s, uint32_t *out);
+void yonder_layer_recover(const yonder_sheets_t *s, uint32_t *out);
 
 // The bytes of work yonder_filter_run needs for a `w` by `h` layer and
 // list `f` of `n`.
@@ -45,10 +46,16 @@ void yonder_filter_run(uint32_t *px, int32_t w, int32_t h, const flow_filter_t *
 
 // The layer laid over `dst` (`pitch` pixels a row, 0x..RRGGBB, opaque):
 // layer pixel (i, j) onto dst's (i + dx, j + dy), only inside `clip`
-// (dst's coordinates), at `alpha` of 255 — each channel c alpha + d (1 -
-// a alpha), the top byte of dst kept.
-void yonder_filter_lay(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const uint32_t *px,
-                       int32_t w, int32_t h, int32_t dx, int32_t dy, uint8_t alpha);
+// (dst's coordinates), at `alpha` of 255, by `mode` (Compositing and
+// Blending 1 § 9, the backdrop opaque): NORMAL is source-over, each
+// channel c alpha + d (1 - a alpha); another mode d (1 - a') + a' B(d, c /
+// a), a' = a alpha, B the mode's function (§ 10, the non-separable ones
+// through Lum, Sat and ClipColor); PLUS_LIGHTER min(1, d + c alpha);
+// PLUS_DARKER is laid as NORMAL (MIX_BLEND.md § 2). The top byte of dst
+// kept.
+void yonder_layer_lay(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const uint32_t *px,
+                      int32_t w, int32_t h, int32_t dx, int32_t dy, uint8_t alpha,
+                      flow_blend_t mode);
 
 // A BACKDROP (FILTER.md § 7), all in `src`'s pixels (`pitch` a row):
 // `out`, `w` by `h`, is the window's pixels from (x0, y0) on, each opaque

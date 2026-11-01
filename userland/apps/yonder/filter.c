@@ -14,7 +14,7 @@ static uint32_t pack(uint32_t a, uint32_t r, uint32_t g, uint32_t b)
     return a << 24 | r << 16 | g << 8 | b;
 }
 
-void yonder_filter_recover(const yonder_sheets_t *s, uint32_t *out)
+void yonder_layer_recover(const yonder_sheets_t *s, uint32_t *out)
 {
     size_t n = (size_t)s->w * (size_t)s->h;
     for (size_t i = 0; i < n; i++) {
@@ -239,9 +239,132 @@ void yonder_filter_run(uint32_t *px, int32_t w, int32_t h, const flow_filter_t *
     }
 }
 
-void yonder_filter_lay(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const uint32_t *px,
-                       int32_t w, int32_t h, int32_t dx, int32_t dy, uint8_t alpha)
+// ── Blending (Compositing and Blending 1 § 10) ──────────────────────────
+
+static double lum(const double c[3])
 {
+    return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+}
+
+static void clip_colour(double c[3])
+{
+    double l = lum(c), n = c[0], x = c[0];
+    for (int k = 1; k < 3; k++) {
+        n = c[k] < n ? c[k] : n;
+        x = c[k] > x ? c[k] : x;
+    }
+    for (int k = 0; k < 3; k++) {
+        if (n < 0)
+            c[k] = l + (c[k] - l) * l / (l - n);
+        if (x > 1)
+            c[k] = l + (c[k] - l) * (1 - l) / (x - l);
+    }
+}
+
+static void set_lum(double c[3], double l)
+{
+    double d = l - lum(c);
+    for (int k = 0; k < 3; k++)
+        c[k] += d;
+    clip_colour(c);
+}
+
+static double sat(const double c[3])
+{
+    double n = c[0], x = c[0];
+    for (int k = 1; k < 3; k++) {
+        n = c[k] < n ? c[k] : n;
+        x = c[k] > x ? c[k] : x;
+    }
+    return x - n;
+}
+
+// The largest channel to `s`, the smallest to 0, the middle in proportion.
+static void set_sat(double c[3], double s)
+{
+    int lo = 0, hi = 0;
+    for (int k = 1; k < 3; k++) {
+        lo = c[k] < c[lo] ? k : lo;
+        hi = c[k] > c[hi] ? k : hi;
+    }
+    if (lo == hi) {
+        c[0] = c[1] = c[2] = 0;
+        return;
+    }
+    int mid = 3 - lo - hi;
+    c[mid] = (c[mid] - c[lo]) * s / (c[hi] - c[lo]);
+    c[hi] = s;
+    c[lo] = 0;
+}
+
+static double hard_light(double b, double s)
+{
+    return s <= 0.5 ? b * 2 * s : b + (2 * s - 1) - b * (2 * s - 1);
+}
+
+static double soft_light(double b, double s)
+{
+    if (s <= 0.5)
+        return b - (1 - 2 * s) * b * (1 - b);
+    double d = b <= 0.25 ? ((16 * b - 12) * b + 4) * b : sqrt(b);
+    return b + (2 * s - 1) * (d - b);
+}
+
+static double separable(flow_blend_t mode, double b, double s)
+{
+    switch (mode) {
+    case FLOW_BLEND_MULTIPLY: return b * s;
+    case FLOW_BLEND_SCREEN: return b + s - b * s;
+    case FLOW_BLEND_OVERLAY: return hard_light(s, b);
+    case FLOW_BLEND_DARKEN: return b < s ? b : s;
+    case FLOW_BLEND_LIGHTEN: return b > s ? b : s;
+    case FLOW_BLEND_COLOR_DODGE:
+        return b == 0 ? 0 : s >= 1 ? 1 : (b / (1 - s) < 1 ? b / (1 - s) : 1);
+    case FLOW_BLEND_COLOR_BURN:
+        return b >= 1 ? 1 : s <= 0 ? 0 : 1 - ((1 - b) / s < 1 ? (1 - b) / s : 1);
+    case FLOW_BLEND_HARD_LIGHT: return hard_light(b, s);
+    case FLOW_BLEND_SOFT_LIGHT: return soft_light(b, s);
+    case FLOW_BLEND_DIFFERENCE: return b > s ? b - s : s - b;
+    case FLOW_BLEND_EXCLUSION: return b + s - 2 * b * s;
+    default: return s;
+    }
+}
+
+// B(Cb, Cs) for every mode but NORMAL and the plus- ones, into `out`.
+static void blend_fn(flow_blend_t mode, const double b[3], const double s[3], double out[3])
+{
+    for (int k = 0; k < 3; k++)
+        out[k] = s[k];
+    switch (mode) {
+    case FLOW_BLEND_HUE:
+        set_sat(out, sat(b));
+        set_lum(out, lum(b));
+        return;
+    case FLOW_BLEND_SATURATION:
+        for (int k = 0; k < 3; k++)
+            out[k] = b[k];
+        set_sat(out, sat(s));
+        set_lum(out, lum(b));
+        return;
+    case FLOW_BLEND_COLOR: set_lum(out, lum(b)); return;
+    case FLOW_BLEND_LUMINOSITY:
+        for (int k = 0; k < 3; k++)
+            out[k] = b[k];
+        set_lum(out, lum(s));
+        return;
+    default:
+        for (int k = 0; k < 3; k++)
+            out[k] = separable(mode, b[k], s[k]);
+        return;
+    }
+}
+
+void yonder_layer_lay(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const uint32_t *px,
+                      int32_t w, int32_t h, int32_t dx, int32_t dy, uint8_t alpha,
+                      flow_blend_t mode)
+{
+    if (mode == FLOW_BLEND_PLUS_DARKER)
+        mode = FLOW_BLEND_NORMAL;
     int64_t x0 = dx > clip.x ? dx : clip.x, y0 = dy > clip.y ? dy : clip.y;
     int64_t x1 = (int64_t)dx + w, y1 = (int64_t)dy + h;
     if (x1 > (int64_t)clip.x + clip.w)
@@ -256,11 +379,37 @@ void yonder_filter_lay(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, cons
                 continue;
             uint32_t *d = &dst[(size_t)y * pitch + (size_t)x];
             uint32_t keep = 255 * 255 - sa, out = *d & 0xff000000u;
-            for (int c = 0; c < 3; c++) {
-                uint32_t v = (chan(s, 8 * c) * alpha * 255 + chan(*d, 8 * c) * keep + 255 * 255 / 2) /
-                             (255 * 255);
-                out |= (v > 255 ? 255 : v) << (8 * c);
+            if (mode == FLOW_BLEND_NORMAL) {
+                for (int c = 0; c < 3; c++) {
+                    uint32_t v = (chan(s, 8 * c) * alpha * 255 + chan(*d, 8 * c) * keep + 255 * 255 / 2) /
+                                 (255 * 255);
+                    out |= (v > 255 ? 255 : v) << (8 * c);
+                }
+                *d = out;
+                continue;
             }
+            // Blue, green, red: a channel's place is 8 * c, as above.
+            double a = sa / (255.0 * 255.0), cs[3], cb[3], bl[3];
+            for (int c = 0; c < 3; c++) {
+                cs[c] = chan(s, 8 * c) / (double)chan(s, 24);
+                cs[c] = cs[c] > 1 ? 1 : cs[c];
+                cb[c] = chan(*d, 8 * c) / 255.0;
+            }
+            if (mode == FLOW_BLEND_PLUS_LIGHTER) {
+                for (int c = 0; c < 3; c++)
+                    bl[c] = cb[c] + cs[c] * a;
+            } else {
+                // Lum's weights are red's, green's and blue's: hand them over
+                // in that order and back.
+                const double rb[3] = {cb[2], cb[1], cb[0]}, rs[3] = {cs[2], cs[1], cs[0]};
+                double mixed[3];
+                blend_fn(mode, rb, rs, mixed);
+                const double m[3] = {mixed[2], mixed[1], mixed[0]};
+                for (int c = 0; c < 3; c++)
+                    bl[c] = (1 - a) * cb[c] + a * m[c];
+            }
+            for (int c = 0; c < 3; c++)
+                out |= byte(bl[c]) << (8 * c);
             *d = out;
         }
 }
