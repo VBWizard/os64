@@ -145,8 +145,7 @@ canvas_status_t c_shadow_paint(canvas_context_t *c,os64_geometry_context_t *geom
         draw2d_damage_t damage={c->surface.width,c->surface.height,0,0};
         uint16_t opacity=(uint16_t)(c->state.shadow_alpha*65535+.5);
         for(uint32_t y=0;y<c->surface.height;y++)for(uint32_t x=0;x<c->surface.width;x++) {
-            size_t at=(size_t)y*c->surface.width+x;
-            uint16_t clip=c->clip?c->clip->pixels[at]*257:65535;if(!clip)continue;
+            uint16_t clip=c_clip_at(c->clip,x,y)*257;if(!clip)continue;
             uint32_t *pixel=(uint32_t *)((uint8_t *)c->surface.pixels+(size_t)y*c->surface.stride)+x;
             draw2d_pixel_t shadow=draw2d_color(0xff000000|(c->state.shadow_argb&0xffffff),opacity,
                 shifted_alpha(mask,behind,x-dx,y-dy));

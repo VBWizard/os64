@@ -432,7 +432,9 @@ join semantics.
 Drawing state contains the transform, solid stroke style, line width/cap/join,
 miter limit, normalized dash list/offset, composite operator and a reference to
 an immutable clip mask. Save/restore retains that mask; a new clip intersects it
-without changing saved masks. Reset discards paths, clips and the save stack.
+without changing saved masks. Clip coverage is packed inside conservative
+bitmap-clamped device bounds; an empty retained clip still rejects all pixels.
+Reset discards paths, clips and the save stack.
 Geometry and coverage are prepared before a draw touches retained pixels. An
 allocation or work refusal leaves the prior pixels and clip intact. Appends
 reserve their command storage before changing the current path.
@@ -707,3 +709,9 @@ The first two Phoria Canvas 2D demos extend live-site acceptance. The textured
 cube exposed missing natural-size fallback in `HTMLImageElement.width` and
 `height`; [the Phoria checkpoint](../../canvas-evidence/phoria-images.md) records
 the focused fix and the separate basic-cube timing investigation.
+
+The Phoria UV scene exposed full-canvas work per small textured triangle.
+Clip creation and bounded image draws now rasterize their intersecting bounds;
+`draw2d_paint_image_at` preserves device-space sampling for destination
+sub-surfaces. Gradient and destination-clearing composite paths retain their
+full-target coverage. See [UV validation](../../canvas-evidence/phoria-uv.md).

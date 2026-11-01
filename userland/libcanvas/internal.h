@@ -2,7 +2,20 @@
 #define CANVAS_INTERNAL_H
 #include <canvas/canvas.h>
 #include <math.h>
-typedef struct Clip { size_t references,bytes; uint8_t pixels[]; } Clip;
+/* Coverage is tightly packed inside device-space bounds. A retained empty
+ * clip differs from NULL, which admits the whole bitmap. */
+typedef struct Clip {
+    size_t references,bytes;
+    draw2d_damage_t bounds;
+    uint8_t pixels[];
+} Clip;
+static inline uint8_t c_clip_at(const Clip *clip,uint32_t x,uint32_t y)
+{
+    if(!clip)return 255;
+    draw2d_damage_t b=clip->bounds;
+    return x>=b.x0&&x<b.x1&&y>=b.y0&&y<b.y1?
+        clip->pixels[(size_t)(y-b.y0)*(b.x1-b.x0)+x-b.x0]:0;
+}
 typedef struct Path { os64_geometry_command_t *commands; size_t count,capacity; } Path;
 typedef struct Saved {
     struct Saved *next;

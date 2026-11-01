@@ -126,6 +126,12 @@ draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *cover
 draw2d_status_t draw2d_paint_image(const draw2d_surface_t *, const uint8_t *coverage,
     const uint8_t *clip, size_t length, const draw2d_image_t *, draw2d_composite_t,
     uint64_t max_pixels, draw2d_damage_t *);
+/* Paint a destination sub-surface whose top-left is (origin_x, origin_y)
+ * in the image map's device space. Coverage and returned damage stay local
+ * to the sub-surface. Sampling keeps the original map and evaluation order. */
+draw2d_status_t draw2d_paint_image_at(const draw2d_surface_t *,const uint8_t *coverage,
+    const uint8_t *clip,size_t length,const draw2d_image_t *,uint32_t origin_x,uint32_t origin_y,
+    draw2d_composite_t,uint64_t max_pixels,draw2d_damage_t *);
 draw2d_status_t draw2d_paint_shader(const draw2d_surface_t *,const uint8_t *,const uint8_t *,size_t,
     const draw2d_shader_t *,draw2d_composite_t,uint64_t,draw2d_damage_t *);
 #pragma GCC visibility pop
