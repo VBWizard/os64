@@ -403,6 +403,18 @@ bool os64_dom_canvas_dirty(os64_dom_t *dom, bool (*visible)(void *, const os64_h
     }
     return false;
 }
+void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visit,void *opaque)
+{
+    if(!dom || dom->closed || !visit)return;
+    for(DValue *e=dom->values;e;e=e->next) {
+        if(!e->canvas_object || !d_in_window_tree(dom,e->node))continue;
+        if(e->canvas_reset_pending){visit(opaque,e->node,0,0,NULL);continue;}
+        draw2d_damage_t damage;canvas_bitmap_t bitmap;
+        if(e->canvas && canvas_damage(e->canvas,&damage)==CANVAS_OK &&
+           damage.x0<damage.x1 && damage.y0<damage.y1 && canvas_bitmap(e->canvas,&bitmap)==CANVAS_OK)
+            visit(opaque,e->node,bitmap.width,bitmap.height,&damage);
+    }
+}
 void os64_dom_canvas_painted(os64_dom_t *dom, const os64_html_node_t *node)
 {
     if (!dom || dom->closed) return;

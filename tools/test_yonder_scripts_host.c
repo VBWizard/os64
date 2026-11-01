@@ -5,6 +5,12 @@
 #include "test_js_port_host.c"
 #undef os64_write
 #undef main
+#include <os64/gui.h>
+static int64_t pointer_host_rect(int64_t handle, os64_gui_rect_t *rect)
+{
+    (void)handle; *rect = (os64_gui_rect_t){60,80,800,600}; return 0;
+}
+#define os64_gui_window_get_content_rect pointer_host_rect
 #define main yonder_fixture_main
 #include "../userland/apps/yonder/yonder.c"
 #include "paint_cache.h"
@@ -2419,14 +2425,18 @@ static void bounded_resources(void) {
 /* ── INPUT EVENTS (docs/design/pending/DOM_D7.md § Input events) ────────
  * The window's real input sites — view_event, hover, the widgets' own
  * callbacks, key_event — with the queue run as the loop runs it. */
+static void pointer_window(uint8_t, int, int, int, unsigned);
+static void pointer_move(int, int, unsigned);
 static void input_click_at(const char *id) {
     const flow_box_t *b=flow_box_for(g.page.tree,probe_id(id));
     int32_t x=g.view.bounds.x+b->rect.x+2-g.sx, y=g.view.bounds.y+b->rect.y+2-g.sy;
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
     ev.mouse.x=x; ev.mouse.y=y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { view_event(&g.view,&g.ui,&ev); inputs_run(); }
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { view_event(&g.view,&g.ui,&ev); inputs_run(); }
 }
 /* A press and a release on a control's own widget, through libui, as a
  * person's click on it arrives. */
@@ -2435,9 +2445,11 @@ static void ui_click_on(const char *id) {
     g.root.bounds=g.view.bounds;        /* the fixture's root has no size of its own */
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
     ev.mouse.x=fw->w->bounds.x+2; ev.mouse.y=fw->w->bounds.y+2; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
-    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { os64_ui_dispatch(&g.ui,&ev); inputs_run(); }
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
-    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { os64_ui_dispatch(&g.ui,&ev); inputs_run(); }
 }
 static void ui_key_space(void) {
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' '}};
@@ -2586,7 +2598,7 @@ static void input_hover(void) {
     uint64_t tasks=yonder_scripts_tasks(g.page.scripts);
     size_t before=attempts;
     const flow_box_t *b=flow_box_for(g.page.tree,probe_id("quiet"));
-    for(int i=0;i<20;i++) { hover(b->rect.x+2+i,b->rect.y+2); inputs_run(); }
+    for(int i=0;i<20;i++) pointer_move(b->rect.x+2+i,b->rect.y+2,0);
     check(yonder_scripts_tasks(g.page.scripts)==tasks && attempts-before<200,
         "input: pointer moves over a page that listens to nothing run no task");
     probe_drop();
@@ -2598,9 +2610,9 @@ static void input_hover(void) {
     script_turn();
     /* A listener's change relays the page out: each box is found again. */
     #define AT(id,dx) flow_box_for(g.page.tree,probe_id(id))->rect.x+(dx),flow_box_for(g.page.tree,probe_id(id))->rect.y+2
-    hover(AT("a",2)); inputs_run();
-    hover(AT("a",3)); inputs_run();
-    hover(AT("b",2)); inputs_run();
+    pointer_move(AT("a",2),0);
+    pointer_move(AT("a",3),0);
+    pointer_move(AT("b",2),0);
     #undef AT
     check(probe_text_is("log","over a from none|out a to b|over b"),
         "input: mouseover and mouseout follow the element under the pointer, with relatedTarget");
@@ -2675,17 +2687,17 @@ static void input_ui_events(void) {
         "(e.submitter?e.submitter.id:'none'));e.preventDefault()});</script>",true);
     script_turn();
     input_click_at("a");
-    check(probe_text_is("log","mousedown MouseEvent 1 1 true|mouseup MouseEvent 1 0 true|click MouseEvent 1 0 true"),
+    check(probe_text_is("log","mousedown MouseEvent 1 1 true|mouseup MouseEvent 1 0 true|click PointerEvent 1 0 true"),
         "input: a press, a release and a click are MouseEvents of one click, the button held only while pressed");
     const flow_box_t *b=flow_box_for(g.page.tree,probe_id("a"));
     int32_t x=g.view.bounds.x+b->rect.x+2-g.sx, y=g.view.bounds.y+b->rect.y+2-g.sy;
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
     ev.mouse.x=x; ev.mouse.y=y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
-    hover(x+1,y); inputs_run();
+    pointer_window(ev.type,x,y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    pointer_move(x+1,y,1);
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
-    hover(x+2,y); inputs_run();
+    pointer_window(ev.type,x,y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    pointer_move(x+2,y,0);
     check(strstr(probe_text_of("log"),"|move 1|")!=NULL && strstr(probe_text_of("log"),"|move 0")!=NULL,
         "input: a move while the button is down says so, and one after it is let go does not");
     FormWidget *first=probe_field("one"), *second=probe_field("two");
@@ -5664,7 +5676,7 @@ static void join_every_kind_counts(void) {
           audit_forced("script http://fixture.test/a.js",1),
         "join: blocking, connected and ready scripts each count their own layout");
     check(audit_forced("DOMContentLoaded",1) && audit_forced("load",1) && audit_forced("timer",1) &&
-          audit_forced("click",1),
+          audit_forced("pointer",1),
         "join: DOMContentLoaded, load, a timer and an event each count their own layout");
     audit_keep=false;
     s_script_audit=false;
@@ -5672,8 +5684,8 @@ static void join_every_kind_counts(void) {
 }
 
 /* A click listener that runs out its time inside a forced layout: the
- * overrun sentence after the count, the runtime retired, and the link it
- * was on still followed by its default action. */
+ * overrun sentence after the count and the runtime retired. A failed packet
+ * cancels its activation; a fresh click still follows the ordinary link. */
 static void join_click_overrun(void) {
     loop_page("<a id=go href=next.html>go</a><div id=box></div><script>"
         "document.getElementById('go').addEventListener('click',function(){"
@@ -5688,13 +5700,15 @@ static void join_click_overrun(void) {
      * page keeps what its scripts said. */
     const char *said=yonder_scripts_note(g.page.scripts);
     check(said!=NULL && strstr(said,"Script forced 1 layouts in")==said &&
-          strstr(said,"; Script click event: execution stopped after 5 s (this page runs without script)")!=NULL,
+          strstr(said,"; Script pointer input: execution stopped after 5 s (this page runs without script)")!=NULL,
         "join: the overrun inside a forced layout gets the count and the overrun sentence");
     check(!yonder_scripts_alive(g.page.scripts) && os64_html_attr(probe_id("box"),"data-after")==NULL,
         "join: the runtime is retired and the listener stops where it was");
+    check(!g.stream.active,"join: a failed pointer packet cannot activate its link");
+    input_click_at("go");
     check(g.stream.active && pool_work.job!=NULL &&
           os64_streq(((yonder_trip_t *)pool_work.job)->url,"http://fixture.test/next.html"),
-        "join: the link still navigates by its default action");
+        "join: a fresh click with scripts retired still follows the link");
     if(pool_work.job!=NULL) {
         const yonder_trip_t *t=pool_work.job;
         check(t->metadata.site==WAY_SITE_SAME_ORIGIN && t->metadata.activation &&
@@ -6412,7 +6426,7 @@ static void hover_batch_cases(void)
         YonderEventBatch batch={0};os64_gui_event_t event;
         while(yonder_event_batch_next(&batch,&event,hover_poll,&queue)) {
             dispatched++;
-            hover(event.mouse.x,event.mouse.y);inputs_run();
+            pointer_move(event.mouse.x,event.mouse.y,0);
         }
         turns++;
         check(batch.consumed<=YONDER_EVENT_BATCH_MAX,"hover burst: turn has bounded input work");
@@ -11210,6 +11224,8 @@ static void exit_when_loaded_cases(void) {
     check(exit_due()==YONDER_NEVER,"exit: without the switch, never");
 }
 
+#include "test_yonder_pointer.inc"
+
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
  * its own main. */
@@ -11220,6 +11236,22 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if(getenv("YONDER_POINTER_ONLY")) {
+        pointer_window_cases(); input_links(); input_hover(); input_ui_events(); hover_batch_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"pointer: text released");
+        check(live==0,"pointer: heap empty");
+        printf("yonder pointer: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_CANVAS_ONLY")) {
+        canvas_window_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"canvas: text released");
+        check(live==0,"canvas: heap empty");
+        printf("yonder canvas: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_ANIMATION_ONLY")) {
         animation_window_cases();
         os64_text_font_release(probe_font);
@@ -11254,6 +11286,7 @@ int main(void)
         printf("yonder profile: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    pointer_window_cases();
     animation_window_cases();
     classic_browser_cases();
     address_key_cases();

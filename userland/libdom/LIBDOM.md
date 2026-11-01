@@ -1515,23 +1515,36 @@ asking only that it be consistent.
 
 **The UI events row** (`event.c`; MODERN_WEB.md § 0f's P8, as built).
 UIEvent, and MouseEvent, KeyboardEvent, FocusEvent, InputEvent and
-CompositionEvent over it, and SubmitEvent over Event, each with its
-constructor, its dictionary read in WebIDL's order, and its legacy init.
+CompositionEvent over it, PointerEvent over MouseEvent, and SubmitEvent
+over Event. Each constructor reads its dictionary in WebIDL order; the UI
+Events interfaces retain their legacy initialization methods.
 An event's attributes are its Event record's (`DEvent.ui` says which
 interface it is; its view, relatedTarget or submitter and two strings in
 `detail[]`, traced with it), and each getter checks its interface. A host
 event's kind (`os64_dom_event_t`) names its interface: MOUSE, KEY, FOCUS,
-INPUT and SUBMIT, each trusted, its view the window (a SubmitEvent, no UIEvent,
-has none), its other node its relatedTarget or submitter; a plain one is an Event. `element.click()` is a
-MouseEvent, a script's submission a SubmitEvent. **A click's activation**
-(DOM § 2.9) is the dispatch's: a MouseEvent click a script dispatches at a
-node activates the node, or for one that bubbles the nearest ancestor with
-an activation behaviour (`window.c`'s `d_activation_has`), its first half
-before the listeners and its second once the dispatch is over; a host's
-click is the host's to act on, and a plain Event named click activates
-nothing. PointerEvent is absent on purpose (WINDOW_DOCUMENT.md § The handler
-hazard), and so are WheelEvent, DragEvent and TextEvent, which nothing here
-fires.
+INPUT, SUBMIT and POINTER, each trusted, its view the window (a SubmitEvent, no UIEvent,
+has none), its other node its relatedTarget or submitter; a plain one is an
+Event. `element.click()` is a PointerEvent with no native pointer identity;
+a script's submission is a SubmitEvent. **A click's activation** (DOM § 2.9)
+is the dispatch's: MouseEvent and PointerEvent clicks activate the node or,
+for a bubbling click, its nearest ancestor with activation behavior
+(`window.c`'s `d_activation_has`). Preactivation runs before listeners and
+activation or cancellation rollback after dispatch. Native pointer packets
+opt into this same path; legacy host clicks retain browser-owned defaults.
+A plain Event named click activates nothing. WheelEvent, DragEvent and
+TextEvent remain absent.
+
+**Pointer input** (`pointer.c`, `dom/pointer.h`; POINTER_EVENTS.md).
+Modern Web exposes the constructor, handlers, capture methods and native
+route together. A document-owned controller holds physical/effective targets,
+pending/current capture, per-button down targets and compatibility suppression.
+One normalized sample expands inside one script task; synthetic events cannot
+change that native state. Capture removal is observed through the shared
+mutation consumer. The browser supplies physical hits and native control
+defaults, and retains abandoned-gesture tail draining across document changes.
+Constructor orientation conversion is supported; coalesced/predicted methods
+and touch/pen hardware are outside the mouse profile.
+
 
 **The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
 window, and nothing else). `collection.c`'s: a form's `elements` is an

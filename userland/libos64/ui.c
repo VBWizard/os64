@@ -159,6 +159,7 @@ static bool belongs_to(os64_ui_t *ui, os64_ui_widget_t *w)
 static void cancel_widget(os64_ui_t *ui, os64_ui_widget_t *w)
 {
 	if (!w) return;
+	if (ui->grab == w) ui_gesture_canceled(ui, w);
 	w->pressed = false;
 	w->activation_key = 0;
 	if (w->cls->cancel) w->cls->cancel(w);
@@ -174,8 +175,8 @@ void os64_ui_set_focus(os64_ui_t *ui, os64_ui_widget_t *w)
 	// Both ends repaint: the old widget's caret has to DISAPPEAR, which no
 	// amount of painting the new one can accomplish.
 	if (ui->focus) {
-		if (ui->grab == ui->focus) ui->grab = NULL;
 		cancel_widget(ui, ui->focus);
+		if (ui->grab == ui->focus) ui->grab = NULL;
 		ui->focus->focused = false;
 		os64_ui_mark_dirty(ui, ui->focus);
 	}

@@ -1,15 +1,17 @@
 #define DOM_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let caught=false;try{f()}catch(e){caught=true;assert(e.name===n,'wanted '+n+' got '+e.name)}assert(caught,'no '+n);}"
-static bool fixture_ready(DomFixture *fixture)
+static bool fixture_ready_at(DomFixture *fixture, const char *file, int line)
 {
     check(fixture->binding != NULL, "DOM binding construction");
     if (!fixture->binding) {
+        fprintf(stderr, "DOM fixture failed at %s:%d\n", file, line);
         fixture_free(fixture);
         return false;
     }
     check(os64_dom_registry_count(fixture->binding) > 0, "binding retains an explicit registry");
     return true;
 }
+#define fixture_ready(f) fixture_ready_at((f), __FILE__, __LINE__)
 static void dom_surface_cases(void)
 {
     os64_dom_options_t options = os64_dom_default_options();
@@ -538,7 +540,9 @@ static void dom_budget_cases(void)
         check(!strcmp(before,after)&&version==os64_html_version(f.document),"native quota preserves visible tree/version");
         free(before);free(after);fixture_free(&f);
     }
-    DomFixture f=fixture_base(0,0,1024*1024);os64_js_outcome_t outcome;
+    /* Allow interface installation in both engine builds, then exhaust the
+     * runtime with retained nodes rather than failing during setup. */
+    DomFixture f=fixture_base(0,0,2*1024*1024);os64_js_outcome_t outcome;
     f.binding=os64_dom_create(f.runtime,f.document,f.state,NULL,&outcome);
     if(!fixture_ready(&f))return;
     const char *source="try { let list=[];for(let i=0;i<100000;i++)list.push(document.createElement('div')); } catch(e) {}";

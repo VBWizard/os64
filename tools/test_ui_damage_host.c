@@ -427,8 +427,41 @@ static void clipped_release(void)
     CHECK(choices == 1 && list.selected == 0);
 }
 
+static unsigned cancellation_calls;
+static void cancellation_observer(os64_ui_t *ui, os64_ui_widget_t *widget)
+{
+    CHECK(ui->grab == widget && widget->pressed);
+    cancellation_calls++;
+}
+static void cancellation_hook(void)
+{
+    current = "gesture observer precedes cancellation and keeps the public UI record";
+    os64_ui_t ui; os64_ui_widget_t root, button;
+    memset(&ui, 0, sizeof(ui));
+    os64_ui_panel(&root); os64_ui_button(&button, "test", NULL, NULL);
+    root.bounds = button.bounds = (os64_gui_rect_t){0,0,100,40};
+    os64_ui_add_child(&root, &button); os64_ui_set_root(&ui, &root);
+    CHECK(os64_ui_on_gesture_cancel(&ui, cancellation_observer));
+    os64_ui_set_focus(&ui, &button);
+    ui.grab = &button; button.pressed = true;
+    os64_ui_set_focus(&ui, NULL);
+    CHECK(cancellation_calls == 1 && !ui.grab && !button.pressed);
+    os64_ui_cancel_gestures(&ui);
+    CHECK(cancellation_calls == 1);
+    ui.grab = &button; button.pressed = true;
+    os64_ui_set_enabled(&ui, &button, false);
+    CHECK(cancellation_calls == 2 && !ui.grab && !button.pressed);
+    CHECK(os64_ui_on_gesture_cancel(&ui, NULL));
+    os64_ui_set_enabled(&ui, &button, true);
+    ui.grab = &button; button.pressed = true;
+    os64_ui_cancel_gestures(&ui);
+    CHECK(cancellation_calls == 2 && !ui.grab);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+}
+
 int main(void)
 {
+    cancellation_hook();
     clipped();
     clipped_release();
     far_apart();

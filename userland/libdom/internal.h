@@ -14,6 +14,7 @@
 #define D_CLONE_HELD 34
 #include <canvas/canvas.h>
 #include <dom/canvas.h>
+#include <dom/pointer.h>
 
 /* Embedded consumers of libdom's document listener. Registration happens
  * during binding construction; callbacks borrow records and never enter JS. */
@@ -151,7 +152,10 @@ enum {
     D_EVENT_LANGUAGECHANGE, D_EVENT_ERROR, D_EVENT_UNHANDLEDREJECTION,
     D_EVENT_REJECTIONHANDLED, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
     D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED, D_EVENT_MESSAGE, D_EVENT_MESSAGEERROR,
-    D_EVENT_INVALID, D_EVENT_COUNT
+    D_EVENT_INVALID, D_EVENT_POINTERDOWN, D_EVENT_POINTERUP, D_EVENT_POINTERMOVE,
+    D_EVENT_POINTEROVER, D_EVENT_POINTEROUT, D_EVENT_POINTERENTER, D_EVENT_POINTERLEAVE,
+    D_EVENT_POINTERCANCEL, D_EVENT_GOTPOINTERCAPTURE, D_EVENT_LOSTPOINTERCAPTURE,
+    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
  * five that inherit it, then HTML's SubmitEvent, which inherits Event. An
@@ -159,7 +163,7 @@ enum {
  * has a prototype on the binding with the Modern Web switch on. */
 enum {
     D_UI_NONE, D_UI_EVENT, D_UI_MOUSE, D_UI_KEYBOARD, D_UI_FOCUS, D_UI_INPUT, D_UI_COMPOSITION,
-    D_UI_SUBMIT, D_UI_KINDS
+    D_UI_SUBMIT, D_UI_POINTER, D_UI_KINDS
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
@@ -300,8 +304,22 @@ typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
     int32_t delta;
+    bool user_activated;
     char url[OS64_DOM_URL_MAX];
 } DNavigation;
+/* Native mouse state is held by the document, not by synthetic Event objects. */
+typedef struct {
+    const os64_html_node_t *physical, *effective, *legacy, *pending, *capture, *down[3];
+    os64_dom_event_t last;
+    uint16_t buttons;
+    bool available, running, cancel_owed, canceling, draining, suppress, over_owed, mouse_over_owed;
+    DMutationConsumer mutations;
+} DPointer;
+int d_pointer_install(os64_dom_t *, JSContext *, JSValueConst);
+void d_pointer_drain(os64_dom_t *);
+int d_event_in_task(os64_dom_t *, JSContext *, const os64_html_node_t *, const os64_dom_event_t *,
+                    bool *, os64_js_outcome_t *);
+
 struct os64_dom {
     os64_js_runtime_t *runtime;
     JSRuntime *engine;
@@ -310,6 +328,7 @@ struct os64_dom {
     os64_dom_options_t options;
     size_t bytes, retained;
     bool closed;
+    DPointer pointer;
     DMutationConsumer *mutation_consumers, canvas_mutations;
     bool mutation_installed;
     size_t canvas_bytes;
@@ -1399,7 +1418,7 @@ JSValue d_submit_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node
  * an element has activation behaviour, and the halves before and after the
  * click's listeners, the second told whether the click was cancelled and
  * given what the first kept. Each -1 with an exception pending. */
-typedef struct { bool checkable, checkbox, was, was_indeterminate; } DActivation;
+typedef struct { bool checkable, checkbox, was, was_indeterminate, native; } DActivation;
 bool d_activation_has(const os64_html_node_t *node);
 int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, DActivation *saved);
 int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool canceled,

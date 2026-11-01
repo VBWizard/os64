@@ -448,6 +448,12 @@ struct os64_ui
     int64_t (*menu_turn)(os64_ui_t *);
 };
 
+// Observe abandonment of an owned native mouse gesture. Called before the
+// widget is reset; the observer must not dispatch events or mutate widgets.
+// NULL unregisters. False means private window storage could not be allocated.
+// The registration lasts until os64_ui_font_release; the public UI ABI is unchanged.
+bool os64_ui_on_gesture_cancel(os64_ui_t *, void (*notify)(os64_ui_t *, os64_ui_widget_t *));
+
 // ── the window's fonts (F4; FONT_PROVIDER.md is the contract) ───────────────
 // A window measures and paints text through an immutable role set: UI for
 // labels, buttons, list rows and fields; DOCUMENT for textviews — and, for

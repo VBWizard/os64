@@ -137,8 +137,11 @@ static const DModernRow kModern[] = {
     {(const char *const[]){NULL}, d_import_map_install},
     /* 0f's P8: the UI event interfaces, which inherit Event. */
     {(const char *const[]){"UIEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "InputEvent", "CompositionEvent",
-                           "SubmitEvent", NULL},
+                           "SubmitEvent", "PointerEvent", NULL},
      d_ui_events_install},
+    {(const char *const[]){"onpointerdown", "onpointerup", "onpointermove", "onpointerover", "onpointerout",
+        "onpointerenter", "onpointerleave", "onpointercancel", "ongotpointercapture", "onlostpointercapture",
+        "onmouseenter", "onmouseleave", "onauxclick", NULL}, d_pointer_install},
     /* 0f's P1b: last, since every interface whose prototype inherits
      * EventTarget.prototype is made to inherit EventTarget. */
     {(const char *const[]){"EventTarget", "Window", NULL}, d_targets_install},

@@ -1,6 +1,7 @@
 #ifndef YONDER_SCRIPTS_H
 #define YONDER_SCRIPTS_H
 #include <dom/canvas.h>
+#include <dom/pointer.h>
 
 // A page's SCRIPT HOST (DOM_D7.md § The script host of a page): its runtime
 // and binding, made at the first script that runs, and the lists HTML's
@@ -16,6 +17,7 @@
 // retires the runtime, and the page goes on without script.
 
 #include <dom/dom.h>
+#include <dom/pointer.h>
 
 #include "diag.h"
 #include "script_job.h"
@@ -26,6 +28,7 @@ bool yonder_scripts_images_pending(const yonder_scripts_t *);
 bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
 bool yonder_scripts_canvas_bitmap(yonder_scripts_t *, const os64_html_node_t *, canvas_bitmap_t *);
 bool yonder_scripts_canvas_dirty(yonder_scripts_t *, bool (*visible)(void *, const os64_html_node_t *), void *);
+void yonder_scripts_canvas_visit_damage(yonder_scripts_t *,os64_dom_canvas_damage_fn,void *);
 void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
 
 typedef struct {
@@ -208,6 +211,12 @@ void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const cha
 // whose script never ran makes its runtime here if an element carries an
 // on<type> attribute for this event (a page may be all handlers); otherwise
 // nothing hears.
+// One native pointer sample is one script task, including compatibility events.
+os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *, const os64_dom_pointer_sample_t *,
+                                        os64_dom_pointer_default_t, void *, bool *ran, os64_js_outcome_t *);
+void yonder_scripts_pointer_cancel(yonder_scripts_t *);
+bool yonder_scripts_pointer_active(const yonder_scripts_t *);
+
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *scripts, const os64_html_node_t *node,
                                          const os64_dom_event_t *event, bool *prevented,
                                          os64_js_outcome_t *outcome);

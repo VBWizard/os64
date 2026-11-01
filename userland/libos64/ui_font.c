@@ -52,6 +52,9 @@ typedef struct ui_font_plan
 
 typedef struct ui_font_binding
 {
+    // Private per-window storage also carries the optional gesture observer,
+    // so installing it does not enlarge application-owned os64_ui_t records.
+    void (*gesture_cancel)(os64_ui_t *, os64_ui_widget_t *);
 	os64_text_context_t *text;
 	// Whose context it is. libui destroys only what libui built; a borrowed
 	// one belongs to the application, which outlives every window using it.
@@ -132,6 +135,19 @@ static ui_font_binding_t *binding_ensure(os64_ui_t *ui)
 	}
 	ui->font = b;
 	return b;
+}
+
+bool os64_ui_on_gesture_cancel(os64_ui_t *ui, void (*notify)(os64_ui_t *, os64_ui_widget_t *))
+{
+    if (!ui) return false;
+    ui_font_binding_t *b = notify ? binding_ensure(ui) : binding_of(ui);
+    if (b) b->gesture_cancel = notify;
+    return b || !notify;
+}
+void ui_gesture_canceled(os64_ui_t *ui, os64_ui_widget_t *widget)
+{
+    ui_font_binding_t *b = binding_of(ui);
+    if (b && b->gesture_cancel) b->gesture_cancel(ui, widget);
 }
 
 // Resolve a set into the faces the widgets ask for. It CAN FAIL, and the

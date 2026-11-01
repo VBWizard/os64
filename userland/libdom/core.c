@@ -474,6 +474,7 @@ void os64_dom_drain(os64_dom_t *dom)
     d_message_drain(dom);
     d_idle_drain(dom);
     d_animation_drain(dom);
+    d_pointer_drain(dom);
     d_observers_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);

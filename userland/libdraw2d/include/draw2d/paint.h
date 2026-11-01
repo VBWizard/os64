@@ -66,6 +66,13 @@ typedef enum {
     DRAW2D_DESTINATION_OVER, DRAW2D_DESTINATION_IN, DRAW2D_DESTINATION_ATOP,
     DRAW2D_COPY, DRAW2D_XOR, DRAW2D_LIGHTER
 } draw2d_operator_t;
+/* Whether zero shape coverage leaves destination pixels unchanged. CLEAR
+ * uses coverage directly; the others in this set composite transparent source. */
+static inline bool draw2d_zero_coverage_preserves_destination(draw2d_operator_t op)
+{
+    return op == DRAW2D_SOURCE_OVER || op == DRAW2D_CLEAR || op == DRAW2D_DESTINATION_OUT ||
+        op == DRAW2D_SOURCE_ATOP || op == DRAW2D_DESTINATION_OVER || op == DRAW2D_XOR || op == DRAW2D_LIGHTER;
+}
 typedef struct {
     draw2d_operator_t operation;
     uint16_t opacity;
@@ -104,7 +111,10 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *, double x, double y,
  * still participates in operators such as COPY and DESTINATION_IN.
  * Clip coverage interpolates the completed composite with the old pixel.
  * CLEAR ignores source/opacity and removes shape coverage inside the clip.
- * Validates inputs/work before any write; output damage is conservative. */
+ * Zero coverage is skipped when the operator preserves the destination for
+ * transparent source. Damage encloses processed pixels inside the clip;
+ * clearing operators may damage pixels outside the shape. Validates the
+ * full bitmap work cap before any write; output damage is conservative. */
 draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *coverage,
     const uint8_t *clip, size_t length, draw2d_solid_t, draw2d_composite_t,
     uint64_t max_pixels, draw2d_damage_t *);

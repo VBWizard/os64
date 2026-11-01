@@ -43,6 +43,14 @@ bool os64_dom_canvas_bitmap(os64_dom_t *, const os64_html_node_t *, canvas_bitma
 /* Pending pixels/resets need presentation, not layout. The host may dirty a
  * conservative viewport; hidden pixels will be sampled when exposed. */
 bool os64_dom_canvas_dirty(os64_dom_t *, bool (*visible)(void *, const os64_html_node_t *), void *);
+/* Visit connected canvases with pending presentation damage. No script runs;
+ * the callback must not mutate the DOM or Canvas. A NULL damage pointer means
+ * a pending reset and requires conservative invalidation. Otherwise width,
+ * height and damage use bitmap coordinates; the record is borrowed for this
+ * callback. Visiting does not acknowledge damage or apply pending resets. */
+typedef void (*os64_dom_canvas_damage_fn)(void *,const os64_html_node_t *,uint32_t,uint32_t,
+                                         const draw2d_damage_t *);
+void os64_dom_canvas_visit_damage(os64_dom_t *,os64_dom_canvas_damage_fn,void *);
 /* After synchronous successful consumption of this canvas, with no script
  * or DOM mutation between the bitmap lookup and acknowledgement. Failure
  * leaves damage pending. */

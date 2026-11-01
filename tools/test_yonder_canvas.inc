@@ -1,6 +1,55 @@
 /* Real script, layout and window painter: pixel-only changes reuse the tree. */
+static void canvas_partial_repaint(uint32_t *pixels)
+{
+    os64_draw_ctx_t partial={0};
+    partial.surf.width=partial.surf.pitch_px=800;partial.surf.height=600;partial.surf.pixels=pixels;
+    view_paint(&g.view,&partial,NULL);
+    yonder_paint_cache_free(g.paint_cache);g.paint_cache=NULL;
+    yonder_scratch_free(g.paint_scratch);g.paint_scratch=NULL;
+}
+static void canvas_damage_cases(void)
+{
+    const char *styles[]={"","object-fit:contain;object-position:20% 70%", "transform:rotate(8deg)","opacity:0.6"};
+    for(unsigned i=0;i<4;++i) {
+        char html[1200];snprintf(html,sizeof(html),
+            "<!doctype html><style>body{margin:0;background:white}canvas{display:block;width:300px;height:200px;"
+            "border:2px solid black;%s}#cover{position:absolute;left:65px;top:35px;width:20px;height:20px;background:blue}</style>"
+            "<canvas id=c width=200 height=100></canvas><div id=cover></div>"
+            "<script>var x=document.getElementById('c').getContext('2d');x.fillStyle='red';x.fillRect(0,0,200,100);</script>"
+            "<script>x.clearRect(40,30,10,10);</script>",styles[i]);
+        probe_page(html,true);script_turn();g.sy=30;
+        uint32_t *before=stand_in_shot();g.ui.dirty=(os64_gui_rect_t){0};script_turn();
+        check(g.ui.dirty.w>0 && (i<2?g.ui.dirty.w<100:g.ui.dirty.w>=800),
+              "Canvas: scrolled/object-fit damage stays small; effects keep the viewport fallback");
+        canvas_partial_repaint(before);uint32_t *whole=stand_in_shot();
+        check(!memcmp(before,whole,800u*600u*sizeof(uint32_t)),
+              "Canvas: partial repaint matches full with scroll, object-fit, overlap and effects");
+        os64_free(before);os64_free(whole);probe_drop();
+    }
+}
 static void canvas_window_cases(void)
 {
+    canvas_damage_cases();
+    probe_page("<!doctype html><style>body{margin:0;background:white}canvas{display:block;width:400px;height:200px;border:2px solid black}</style>"
+        "<canvas id=c width=200 height=100></canvas><canvas id=b width=200 height=100></canvas>"
+        "<script>var c=document.getElementById('c'),x=c.getContext('2d'),b=document.getElementById('b').getContext('2d');"
+        "x.fillRect(0,0,200,100);b.fillRect(0,0,200,100);</script>"
+        "<script>x.clearRect(50,30,4,4);b.clearRect(60,40,4,4);</script>",true);
+    script_turn();uint32_t *initial=stand_in_shot();
+    g.ui.dirty=(os64_gui_rect_t){0};script_turn();
+    check(g.ui.dirty.w>0 && g.ui.dirty.w<100 && g.ui.dirty.h<300 &&
+          g.ui.dirty.y<70 && g.ui.dirty.y+g.ui.dirty.h>280,
+          "Canvas: damage maps scaled bitmap pixels and borders for both dirty canvases");
+    canvas_partial_repaint(initial);
+    uint32_t *updated=stand_in_shot();
+    check(!memcmp(initial,updated,800u*600u*sizeof(uint32_t)),
+          "Canvas: painting only mapped damage matches repainting the whole view");
+    os64_free(initial);
+    check((updated[64*800+104]&0xffffff)==0xffffff &&
+          (updated[288*800+124]&0xffffff)==0xffffff,
+          "Canvas: scaled partial clears reach both canvas presentations");
+    os64_free(updated);probe_drop();
+
     probe_page("<!doctype html><style>body{margin:0;background:white}canvas{display:block;width:80px;height:80px}"
         "#cover{position:absolute;left:30px;top:30px;width:20px;height:20px;background:blue}</style>"
         "<canvas id=c width=4 height=4></canvas><div id=cover></div>"

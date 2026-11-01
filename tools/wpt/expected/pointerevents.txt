@@ -1,0 +1,61 @@
+# WPT's pointerevents in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh pointerevents --update
+# rewrites [passing].
+# This bounded gate covers constructor orientation. Native action tests use
+# testdriver, which this host cannot drive; tools/test_yonder_pointer.inc
+# drives the production window ingress for capture, cancellation and defaults.
+# Coalesced/predicted sample APIs and touch/pen hardware are outside PE1.
+[required]
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	If one of the values in both sets is provided, the other value in the set is initialized with the default value
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	If only one of the values (tiltX, tiltY) or (azimuthAngle, altitudeAngle) is available the other one is set to the default value
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=0 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=0 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=0 and altitude=1.5707963267948966
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=1.5707963267948966 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=1.5707963267948966 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=3.141592653589793 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=3.141592653589793 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=4.71238898038469 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=4.71238898038469 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-45 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-90 and tiltY=-90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-90 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-90 and tiltY=90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=-45
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=-90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=45
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=45 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=90 and tiltY=-90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=90 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=90 and tiltY=90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX/tiltY to azimuth/altitude when tiltX/tiltY are not populated
+[excluded]
+[passing]
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	If one of the values in both sets is provided, the other value in the set is initialized with the default value
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	If only one of the values (tiltX, tiltY) or (azimuthAngle, altitudeAngle) is available the other one is set to the default value
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=0 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=0 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=0 and altitude=1.5707963267948966
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=1.5707963267948966 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=1.5707963267948966 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=3.141592653589793 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=3.141592653589793 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=4.71238898038469 and altitude=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	azimuth/altitude to tiltX/tiltY when azimuth=4.71238898038469 and altitude=0.7853981633974483
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-45 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-90 and tiltY=-90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-90 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=-90 and tiltY=90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=-45
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=-90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=45
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=0 and tiltY=90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=45 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=90 and tiltY=-90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=90 and tiltY=0
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX,tiltY to azimuth/altitude when tiltX=90 and tiltY=90
+pointerevent_tiltX_tiltY_to_azimuth_altitude.html	tiltX/tiltY to azimuth/altitude when tiltX/tiltY are not populated
