@@ -11244,6 +11244,14 @@ int main(void)
         printf("yonder pointer: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_CANVAS_ONLY")) {
+        canvas_window_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"canvas: text released");
+        check(live==0,"canvas: heap empty");
+        printf("yonder canvas: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_ANIMATION_ONLY")) {
         animation_window_cases();
         os64_text_font_release(probe_font);

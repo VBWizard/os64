@@ -2053,6 +2053,10 @@ bool yonder_scripts_canvas_dirty(yonder_scripts_t *s, bool (*visible)(void *, co
 {
     return s && os64_dom_canvas_dirty(s->dom, visible, opaque);
 }
+void yonder_scripts_canvas_visit_damage(yonder_scripts_t *s,os64_dom_canvas_damage_fn visit,void *opaque)
+{
+    if(s)os64_dom_canvas_visit_damage(s->dom,visit,opaque);
+}
 void yonder_scripts_canvas_painted(yonder_scripts_t *s, const os64_html_node_t *node)
 {
     if (s) os64_dom_canvas_painted(s->dom, node);

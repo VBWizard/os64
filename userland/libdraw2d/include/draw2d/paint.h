@@ -66,6 +66,13 @@ typedef enum {
     DRAW2D_DESTINATION_OVER, DRAW2D_DESTINATION_IN, DRAW2D_DESTINATION_ATOP,
     DRAW2D_COPY, DRAW2D_XOR, DRAW2D_LIGHTER
 } draw2d_operator_t;
+/* Whether zero shape coverage leaves destination pixels unchanged. CLEAR
+ * uses coverage directly; the others in this set composite transparent source. */
+static inline bool draw2d_zero_coverage_preserves_destination(draw2d_operator_t op)
+{
+    return op == DRAW2D_SOURCE_OVER || op == DRAW2D_CLEAR || op == DRAW2D_DESTINATION_OUT ||
+        op == DRAW2D_SOURCE_ATOP || op == DRAW2D_DESTINATION_OVER || op == DRAW2D_XOR || op == DRAW2D_LIGHTER;
+}
 typedef struct {
     draw2d_operator_t operation;
     uint16_t opacity;

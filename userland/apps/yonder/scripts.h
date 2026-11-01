@@ -28,6 +28,7 @@ bool yonder_scripts_images_pending(const yonder_scripts_t *);
 bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
 bool yonder_scripts_canvas_bitmap(yonder_scripts_t *, const os64_html_node_t *, canvas_bitmap_t *);
 bool yonder_scripts_canvas_dirty(yonder_scripts_t *, bool (*visible)(void *, const os64_html_node_t *), void *);
+void yonder_scripts_canvas_visit_damage(yonder_scripts_t *,os64_dom_canvas_damage_fn,void *);
 void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
 
 typedef struct {

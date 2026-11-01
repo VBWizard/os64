@@ -1862,7 +1862,7 @@ static void outline(const Painter *p, const flow_box_t *b)
 // The picture or control inside an atom's borders and padding. A percentage
 // padding resolved against a width the public tree does not carry, so it
 // counts as none here; pictures and controls rarely have one.
-static os64_gui_rect_t content_of(const flow_box_t *b)
+os64_gui_rect_t yonder_content_rect(const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     int32_t e[4];
@@ -2158,13 +2158,13 @@ static void paint_box(void *ctx, const flow_box_t *b)
         if (b->style->visibility == FLOW_VISIBLE)
             frame(p, b);
         if (b->control >= 0)
-            p->v->control(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
+            p->v->control(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view));
         else if (is_picture(b) || (b->replaced && flow_svg_root(b->node)))
-            p->v->image(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
+            p->v->image(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view));
         else if (is_canvas(b) && p->v->canvas != NULL)
-            p->v->canvas(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
+            p->v->canvas(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view));
         else if ((is_frame(b) || is_canvas(b)) && p->v->stand_in != NULL)
-            p->v->stand_in(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view),
+            p->v->stand_in(p->v->ctx, b, on_page(p, yonder_content_rect(b)), on_page(p, p->view),
                            ink_of(p, is_frame(b) ? FRAME_INK : CANVAS_INK), paper_of(p, STAND_IN_PAPER));
         return;
     case FLOW_BOX_SPAN:

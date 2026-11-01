@@ -143,8 +143,8 @@ zero coverage, and reported the entire bitmap as damaged. It now skips zero
 coverage for operators that leave those pixels unchanged and encloses the
 processed pixels in the reported damage. COPY, SOURCE_IN, SOURCE_OUT,
 DESTINATION_IN and DESTINATION_ATOP retain their effect outside the shape.
-The full-mask allocation and scan, clip semantics, and whole-bitmap work
-admission remain in place.
+That initial correction retained full-mask allocation and scanning, clip
+semantics and whole-bitmap work admission.
 
 A focused 1,387 × 789 host benchmark, 32 radius-five solid dots with fresh
 full-size masks, took 749.225 ms before and 45.431 ms after this change. The
@@ -161,3 +161,48 @@ Native input loss during an active pointer stream now leaves a diagnostic
 fact in the saved page record. The existing cancellation and tail-drain
 behavior is unchanged. A hardware recheck is still needed to establish the
 remaining drawing latency and whether queue loss explains the stopped strokes.
+
+
+## Large-window drawing follow-up
+
+The next hardware reading at 2,526 × 1,271 confirmed native input queue loss
+and pointer cancellation, with a 729 ms maximum script task. It also showed
+whole-view painting: Yonder's presentation path still expanded Canvas damage
+to the viewport. Small-window drawing was accepted; large-window strokes
+remained choppy and stopped at high input rates.
+
+Solid shape rasterization now uses the geometry backend's conservative bounds
+of the expanded outline, including the two-pixel fringe used by SVG. A small
+shape allocates and scans a small coverage buffer; destination addressing keeps
+the bitmap's stride. Existing clips are cropped into scratch before any write.
+Operators that affect pixels outside the shape, clip creation, gradients,
+images and backends without bounds retain the full-target path. Admission still
+uses the full bitmap pixel limit.
+
+A new DOM damage visitor exposes pending bitmap-local damage without script,
+reset application or acknowledgement. Yonder maps plain canvases through the
+painter's shared content rectangle and object-fit geometry, scroll offsets and
+a source-texel filtering fringe. Resets and ancestor transforms, opacity and
+animated groups keep conservative viewport invalidation. Successful painting
+retains the existing acknowledgement rule. Input-loss cancellation is unchanged.
+
+A small-shape scratch-budget test fails before the change. Full-buffer and
+compact-buffer pixels match for transformed curves, dashed strokes, fractional
+clips, offscreen shapes and the compositing operators. Allocation refusal covers
+the added clip scratch without partial pixels, damage or leaks. Browser tests
+compare partial repaints with full repaints for two dirty canvases, borders,
+scaling, scrolling, object-fit, overlap and effect fallbacks.
+
+A sanitizer-enabled host benchmark drawing 32 actual FreeType circles took
+52.390 ms before / 2.687 ms after at 600 × 600, and 434.194 ms before / 1.441 ms
+after at 2,526 × 1,271. Each size's pixel hash matched. These single host
+measurements cover native circle drawing, not the demo's frame rate or P5
+acceptance. Canvas passes 461,751 assertions and focused browser presentation
+passes 39 checks. The complete browser suite passes 16,399 checks.
+ASan/UBSan/LeakSanitizer are enabled; the native build also passes.
+
+The demo's resize coordinate mismatch is also explained by its saved source:
+CSS makes the canvas follow the window, but the script initializes its bitmap
+and device-pixel-ratio transform only at load and installs no resize handler.
+Reload after resizing for comparable hardware tests. Large-window acceptance
+of this follow-up remains pending.

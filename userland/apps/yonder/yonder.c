@@ -10,6 +10,7 @@
 // how the page looks on the glass, how a person moves around it, and how
 // the window hears a fetch it never waits for.
 
+#include <math.h>
 #include <stdarg.h>
 #include <stddef.h>
 
@@ -8361,11 +8362,39 @@ static void sheets_restage(Page *p)
     p->reuse_sheets = NULL;
 }
 
-static bool canvas_visible(void *opaque, const os64_html_node_t *node)
+static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_t width,uint32_t height,
+                               const draw2d_damage_t *damage)
 {
-    Page *p = opaque;
-    const flow_box_t *box = p->tree ? flow_box_for(p->tree, node) : NULL;
-    return box && box->replaced && box->style->visibility == FLOW_VISIBLE;
+    Page *p=opaque;
+    const flow_box_t *box=p->tree?flow_box_for(p->tree,node):NULL;
+    if(!box || !box->replaced || box->style->visibility!=FLOW_VISIBLE)return;
+    os64_gui_rect_t view={g.sx,g.sy,g.view.bounds.w,g.view.bounds.h};
+    if(!damage || !width || !height){mark_part(view);return;}
+    // Groups and transformed ancestors retain conservative invalidation.
+    // Plain canvases share the painter's content and object-fit geometry.
+    for(const flow_box_t *b=box;b;b=b->parent) {
+        const flow_style_t *s=b->style;
+        if(s->opacity!=1000 || s->transform || s->translate || s->rotate || s->scale ||
+           s->will_change || s->animating){mark_part(view);return;}
+    }
+    os64_gui_rect_t content=yonder_content_rect(box);
+    flow_point_t offset=flow_box_doc_offset(box,scroll_now());
+    int64_t cx=(int64_t)content.x+offset.x,cy=(int64_t)content.y+offset.y;
+    if(cx<INT32_MIN || cx>INT32_MAX || cy<INT32_MIN || cy>INT32_MAX){mark_part(view);return;}
+    content.x=cx;content.y=cy;
+    os64_gui_rect_t at=yonder_object_rect(box->style,content,zoomed_px(width,p->laid_zoom),
+                                         zoomed_px(height,p->laid_zoom));
+    if(at.w<=0 || at.h<=0)return;
+    // Include a source texel on each edge for image reconstruction filtering.
+    double x0=floor(at.x+((double)damage->x0-1)*at.w/width);
+    double y0=floor(at.y+((double)damage->y0-1)*at.h/height);
+    double x1=ceil(at.x+((double)damage->x1+1)*at.w/width);
+    double y1=ceil(at.y+((double)damage->y1+1)*at.h/height);
+    x0=fmax(x0,fmax(content.x,view.x));y0=fmax(y0,fmax(content.y,view.y));
+    x1=fmin(x1,fmin((double)content.x+content.w,(double)view.x+view.w));
+    y1=fmin(y1,fmin((double)content.y+content.h,(double)view.y+view.h));
+    if(x0>INT32_MAX || y0>INT32_MAX){mark_part(view);return;}
+    if(x1>x0 && y1>y0)mark_part((os64_gui_rect_t){x0,y0,x1-x0,y1-y0});
 }
 
 static bool script_rebuild(void)
@@ -8480,10 +8509,9 @@ static bool script_rebuild(void)
     // A selection a script set changes no revision: it is asked of every
     // text field, after its text.
     forms_pull_selections();
-    // A full viewport is conservative for transformed canvases and effects.
-    // This invalidates paint only; unchanged DOM versions skip the layout above.
-    if (yonder_scripts_canvas_dirty(p->scripts, canvas_visible, p))
-        mark_part((os64_gui_rect_t){g.sx, g.sy, g.view.bounds.w, g.view.bounds.h});
+    // Pixel-only changes reuse layout. Plain canvases invalidate mapped pixel
+    // damage; resets and effects retain the conservative viewport fallback.
+    yonder_scripts_canvas_visit_damage(p->scripts,canvas_damage_mark,p);
     return true;
 }
 

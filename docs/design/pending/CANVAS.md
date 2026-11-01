@@ -365,15 +365,26 @@ and Canvas uses the premultiplied path. Object-fit, content clipping, CSS
 transforms and opacity use the existing painter routes. Dark-page presentation
 does not alter the retained bitmap.
 
-After a script turn, pending visible Canvas damage invalidates a conservative
-viewport through the existing paint queue. The document version does not move
-for pixel writes, so `script_rebuild` preserves the layout tree. When a DOM
-change also requires layout, it publishes fresh boxes first. Detached and
-unlaid canvases do not schedule visible damage; their pixels remain available
-when they become visible. Successful synchronous canvas sampling acknowledges
-its damage without an intervening script call; refused sampling leaves it
-pending. The initial viewport bound is deliberately conservative for transforms
-and effects. Tighter per-box damage is an optimization, not a new frame loop.
+After a script turn, the DOM damage visitor reports connected canvases needing
+presentation without applying resets or acknowledging their damage. Yonder maps
+plain-canvas pixel damage through the painter's shared content/object-fit
+geometry, including scroll and a filtering fringe, into the existing paint
+queue. Pending resets and ancestor transforms, opacity or animated groups use
+a conservative viewport. The document version does not move for pixel writes,
+so `script_rebuild` preserves the layout tree. When a DOM change also requires
+layout, it publishes fresh boxes first. Detached and unlaid canvases do not
+schedule visible damage; their pixels remain available when they become
+visible. Successful synchronous canvas sampling acknowledges its damage without
+an intervening script call; refused sampling leaves it pending.
+
+Solid fills, strokes and clears whose operator preserves zero-coverage pixels
+rasterize into conservative bounds from the expanded geometry, with the shared
+SVG raster fringe. Their clipped destination sub-surface uses the original
+bitmap stride; clip coverage is copied only for that region. Persistent clip
+creation, gradient/image sources, operators affecting pixels outside the shape,
+and backends without bounds retain the complete target. The whole-bitmap draw
+admission limit remains unchanged. Allocation/backend failure publishes neither
+pixels nor damage.
 
 The gallery is `tools/pages/canvas-pixels.html`. Its four interactions exercise
 palette repaint, ImageData undo/redo, same-value width reset, and moving one

@@ -155,10 +155,72 @@ static void clip_refusal(void)
     os64_geometry_stroke_t pen={4,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER};OK(canvas_set_line(c,&pen));
     OK(canvas_stroke(c));pixel(c,16,16,0xff000000);pixel(c,16,4,0);OK(canvas_destroy(c));CHECK(!o.live);
 }
+static void compact_reference(void)
+{
+    os64_geometry_backend_t full=*os64_freetype_geometry_v1();full.bounds=NULL;
+    for(unsigned trial=0;trial<12;++trial) {
+        Owner a={0},b={0};canvas_options_t oa=options(&a),ob=options(&b);
+        oa.geometry=os64_freetype_geometry_v1();ob.geometry=&full;
+        canvas_context_t *c[2];OK(canvas_create(&oa,96,80,&c[0]));OK(canvas_create(&ob,96,80,&c[1]));
+        for(unsigned i=0;i<2;++i) {
+            OK(canvas_set_fill(c[i],0xff208050));OK(canvas_fill_rect(c[i],0,0,96,80));
+            if(trial&1) {
+                OK(canvas_path_rect(c[i],20.3,10.7,48.2,50.4));OK(canvas_clip(c[i],false));
+            }
+            OK(canvas_begin_path(c[i]));
+            os64_geometry_map_t m={1.25,.3,-.2,.8,7.3,-3.2};OK(canvas_transform(c[i],&m,true));
+            OK(canvas_ellipse(c[i],trial==10?-100:35.25,30.4,11.3,5.7,.4,0,6.283185307179586,false));
+            OK(canvas_set_alpha(c[i],.6));OK(canvas_set_fill(c[i],0xc0804020));
+            OK(canvas_set_composite(c[i],trial==DRAW2D_CLEAR?DRAW2D_SOURCE_OVER:trial));
+            if(trial==DRAW2D_CLEAR)OK(canvas_clear_rect(c[i],20,20,16,12));
+            else if(trial%3==0) {
+                os64_geometry_stroke_t line={3.3,8,OS64_GEOMETRY_ROUND_CAP,OS64_GEOMETRY_MITER};
+                double dash[]={2.3,3.1};OK(canvas_set_line(c[i],&line));OK(canvas_set_dash(c[i],dash,2));
+                OK(canvas_stroke(c[i]));
+            } else OK(canvas_fill(c[i],trial&1));
+        }
+        canvas_bitmap_t x=bitmap(c[0]),y=bitmap(c[1]);
+        CHECK(x.capacity==y.capacity && !memcmp(x.pixels,y.pixels,x.capacity));
+        for(unsigned i=0;i<2;++i){OK(canvas_destroy(c[i]));}
+        CHECK(!a.live&&!b.live);
+    }
+}
+static void compact_clip_refusal(void)
+{
+    for(unsigned mode=0;mode<2;++mode)for(size_t cut=1;cut<128;++cut) {
+        Owner o={0};canvas_context_t *c=drawing(&o);
+        OK(canvas_fill_rect(c,0,0,32,32));
+        OK(canvas_path_rect(c,2.2,3.3,20.5,20.5));OK(canvas_clip(c,false));
+        OK(canvas_begin_path(c));OK(canvas_ellipse(c,16,16,3,3,0,0,6.283185307179586,false));
+        OK(canvas_set_fill(c,0xffff0000));OK(canvas_ack_damage(c));
+        o.limit=mode;o.fail_at=o.calls+cut;
+        canvas_status_t status=canvas_fill(c,false);o.fail_at=0;
+        CHECK(status==CANVAS_OK || status==CANVAS_NO_MEMORY || status==CANVAS_LIMIT);
+        if(status!=CANVAS_OK) {
+            canvas_bitmap_t v=bitmap(c);for(size_t i=0;i<32*32;++i)CHECK(v.pixels[i]==0xff000000);
+            draw2d_damage_t d;OK(canvas_damage(c,&d));CHECK(!d.x1);
+        } else pixel(c,16,16,0xffff0000);
+        OK(canvas_destroy(c));CHECK(!o.live);
+        if(status==CANVAS_OK)break;
+        CHECK(cut<127);
+    }
+}
+static void compact_coverage(void)
+{
+    Owner o={0};canvas_context_t *c=drawing(&o);
+    OK(canvas_reset(c,2048,1024));
+    OK(canvas_begin_path(c));
+    OK(canvas_ellipse(c,1000.25,500.5,5,5,0,0,2*3.141592653589793,false));
+    /* A small shape must fit scratch far below a full bitmap mask. */
+    o.budget=o.live+65536;
+    OK(canvas_fill(c,false));
+    pixel(c,1000,500,0xff000000);pixel(c,1000,510,0);
+    o.budget=0;OK(canvas_destroy(c));CHECK(!o.live);
+}
 #include "test_canvas_images.inc"
 #include "test_canvas_paints.inc"
 int main(void)
 {
-    canvas_baseline_main();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();paints();
+    canvas_baseline_main();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();paints();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }

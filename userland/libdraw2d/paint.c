@@ -152,9 +152,7 @@ static draw2d_status_t paint_mask(const draw2d_surface_t *s,const uint8_t *cover
     /* With these operators zero shape coverage preserves the destination.
      * Other operators must still clear pixels outside the shape, within the
      * clip. Avoid both shading and writing the sparse path's empty coverage. */
-    bool bounded=op.operation==DRAW2D_SOURCE_OVER || op.operation==DRAW2D_CLEAR ||
-        op.operation==DRAW2D_DESTINATION_OUT || op.operation==DRAW2D_SOURCE_ATOP ||
-        op.operation==DRAW2D_DESTINATION_OVER || op.operation==DRAW2D_XOR || op.operation==DRAW2D_LIGHTER;
+    bool bounded=draw2d_zero_coverage_preserves_destination(op.operation);
     draw2d_damage_t touched={s->width,s->height,0,0};
     for(uint32_t y=0;y<s->height;++y) {
         unsigned char *row=(unsigned char *)s->pixels+(size_t)y*s->stride;

@@ -332,6 +332,19 @@ static os64_geometry_status_t cut_cap(void *p,Point at,Point tangent)
     if(cut->status!=CANVAS_OK){cut->caps.count=old;return cut->status==CANVAS_LIMIT?OS64_GEOMETRY_LIMIT:OS64_GEOMETRY_NO_MEMORY;}
     Command close={.verb=OS64_GEOMETRY_CLOSE};return cut_emit(p,true,&close);
 }
+/* The expanded outline bounds include stroke joins and caps. Keep the same
+ * two-pixel fringe as SVG for quantization and the changed raster origin. */
+static canvas_status_t coverage_box(const canvas_context_t *c,os64_geometry_bounds_t b,draw2d_damage_t *box)
+{
+    *box=(draw2d_damage_t){0};
+    if(b.empty)return CANVAS_OK;
+    if(!isfinite(b.x_min)||!isfinite(b.y_min)||!isfinite(b.x_max)||!isfinite(b.y_max)||
+       b.x_min>b.x_max||b.y_min>b.y_max)return CANVAS_BAD_ARGUMENT;
+    double x0=fmax(0,floor(b.x_min-2)),y0=fmax(0,floor(b.y_min-2));
+    double x1=fmin(c->surface.width,ceil(b.x_max+2)),y1=fmin(c->surface.height,ceil(b.y_max+2));
+    if(x1>x0 && y1>y0)*box=(draw2d_damage_t){x0,y0,x1,y1};
+    return CANVAS_OK;
+}
 /* Geometry and coverage are scratch until preparation succeeds. Neither a
  * backend refusal nor a failed clip allocation can partially paint a bitmap. */
 static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool even_odd,const draw2d_image_t *image)
@@ -385,15 +398,45 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
             cut.caps.commands,cut.caps.count,&map,1.0/64,&line,&outline));
     } else if(mode!=2 && path->count)
         status=geometry_status(b->path(geometry,path->commands,path->count,&map,1.0/64,&outline));
-    uint8_t *coverage=NULL;
-    if(status==CANVAS_OK)status=c_allocate(c,pixels,(void **)&coverage);
-    if(status==CANVAS_OK) {
-        for(size_t i=0;i<pixels;++i)coverage[i]=0;
-        os64_geometry_target_t target={0,0,c->surface.width,c->surface.height,c->surface.width,pixels,coverage,even_odd};
+    draw2d_damage_t box={0,0,c->surface.width,c->surface.height};
+    draw2d_operator_t op=mode==1?DRAW2D_CLEAR:c->state.composite;
+    /* Solid paints can use a sub-surface without changing source coordinates.
+     * Clip creation and source/image shaders retain the full target; operators
+     * that clear beyond the shape must also keep that complete coverage. */
+    bool compact=mode!=3 && !gradient && !image && b->bounds &&
+        draw2d_zero_coverage_preserves_destination(op);
+    if(status==CANVAS_OK && compact) {
+        os64_geometry_bounds_t bounds={.empty=true};
+        if(outline)status=geometry_status(b->bounds(geometry,outline,&map,0,0,&bounds));
+        if(status==CANVAS_OK)status=coverage_box(c,bounds,&box);
+    }
+    uint32_t width=box.x1-box.x0,height=box.y1-box.y0;
+    size_t covered=(size_t)width*height;
+    uint8_t *coverage=NULL,*clip_copy=NULL;
+    const uint8_t *clip=c->clip?c->clip->pixels:NULL;
+    if(status==CANVAS_OK && covered)status=c_allocate(c,covered,(void **)&coverage);
+    if(status==CANVAS_OK && covered) {
+        for(size_t i=0;i<covered;++i)coverage[i]=0;
+        os64_geometry_target_t target={box.x0,box.y0,width,height,width,covered,coverage,even_odd};
         if(outline)status=geometry_status(b->raster(geometry,outline,&map,&target));
     }
     if(outline)b->release(geometry,outline);
     b->destroy(geometry);
+    if(status==CANVAS_OK && !covered)goto done;
+    if(status==CANVAS_OK && compact && clip) {
+        status=c_allocate(c,covered,(void **)&clip_copy);
+        if(status==CANVAS_OK) {
+            for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<width;++x)
+                clip_copy[(size_t)y*width+x]=clip[(size_t)(box.y0+y)*c->surface.width+box.x0+x];
+            clip=clip_copy;
+        }
+    }
+    draw2d_surface_t surface=c->surface;
+    if(status==CANVAS_OK) {
+        size_t offset=(size_t)box.y0*surface.stride+(size_t)box.x0*sizeof(uint32_t);
+        surface.pixels=(uint8_t *)surface.pixels+offset;
+        surface.capacity-=offset;surface.width=width;surface.height=height;
+    }
     if(status==CANVAS_OK && mode==3) {
         Clip *clip;
         status=c_allocate(c,sizeof(*clip)+pixels,(void **)&clip);
@@ -405,17 +448,21 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
         }
     } else if(status==CANVAS_OK) {
         draw2d_damage_t damage;
-        draw2d_status_t result=gradient?draw2d_paint_shader(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,&shader,
-            (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},c->options.max_draw_pixels,&damage):image?draw2d_paint_image(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,image,
+        draw2d_status_t result=gradient?draw2d_paint_shader(&surface,coverage,clip,covered,&shader,
+            (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},c->options.max_draw_pixels,&damage):image?draw2d_paint_image(&surface,coverage,clip,covered,image,
             (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},
-            c->options.max_draw_pixels,&damage):draw2d_paint_mask(&c->surface,coverage,c->clip?c->clip->pixels:NULL,pixels,
+            c->options.max_draw_pixels,&damage):draw2d_paint_mask(&surface,coverage,clip,covered,
             (draw2d_solid_t){mode==2?c->state.stroke_argb:c->state.fill_argb},
             (draw2d_composite_t){mode==1?DRAW2D_CLEAR:c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},
             c->options.max_draw_pixels,&damage);
         status=result==DRAW2D_OK?CANVAS_OK:CANVAS_BAD_ARGUMENT;
-        if(status==CANVAS_OK)c_damage_union(c,damage);
+        if(status==CANVAS_OK && damage.x1>damage.x0 && damage.y1>damage.y0) {
+            damage.x0+=box.x0;damage.x1+=box.x0;damage.y0+=box.y0;damage.y1+=box.y0;
+            c_damage_union(c,damage);
+        }
     }
-    c_release(c,coverage,pixels);
+    c_release(c,clip_copy,covered);
+    c_release(c,coverage,covered);
 done:
     c_path_release(c,&converted);c_path_release(c,&cut.center);c_path_release(c,&cut.caps);
     return status;
