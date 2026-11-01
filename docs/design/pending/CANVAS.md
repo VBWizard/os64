@@ -615,8 +615,28 @@ full-clip semantics of destructive operators. It reports actual changed-pixel
 bounds to the existing repaint path. This is not an exact Gaussian or a claim
 of full Canvas/filter conformance. See [C6b validation](../../canvas-evidence/c6b-validation.md).
 
-Remaining C6 work includes the CD-ROM ticket's Path2D input,
-and complete captured/live signature-wall and scratch-game acceptance.
+C6c implements the retained SVG-string Path2D profile used by the CD-ROM
+ticket: empty/string/copy constructors and `fill(path, rule)`, `stroke(path)`
+and `clip(path, rule)`. The binding calls libsvg's public parser and lowers
+arcs with the destination context's transform and a 1/128-device-pixel budget.
+It does not fork the SVG grammar or arc arithmetic. `libdom` acquires a
+`libsvg` dependency; the native Canvas painter accepts a borrowed user-space
+command stream through `canvas_draw_path`, also sharing its implementation
+with text contours. Drawing never replaces the context's current path.
+
+SVG syntax errors retain the complete prefix; memory/work refusal publishes
+no path. Retained wrappers are charged to the page ledger and DOM registry,
+and released at document teardown. Copies share immutable native geometry.
+Path2D builder methods and `addPath` are outside this profile; adding mutation
+requires independent geometry or copy-on-write, not mutation of shared copies.
+Limits are 64 KiB of input, 4096 parsed/lowered commands and 16,777,216 shared SVG
+work units per SVG operation, in addition to the page allocation ledger.
+See [C6c validation](../../canvas-evidence/c6c-validation.md).
+
+Remaining C6 work includes complete captured/live signature-wall and
+scratch-game acceptance. The CD-ROM module also uses `DOMPoint` and SVG
+`isPointInFill()` in its scratch-progress checks; successful foil painting
+alone does not establish that reveal flow.
 The signature editor has a narrower successful replay: its unchanged public
 script draws, undoes, redoes, erases and clears through native pointer input
 against captured markup. That diagnostic omits external CSS and images and

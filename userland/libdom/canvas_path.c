@@ -95,6 +95,14 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
         }
         return array;
     }
+    DValue *path=NULL;
+    if(magic==P_FILL||magic==P_CLIP||magic==P_STROKE) {
+        path=argc?JS_GetOpaque(argv[0],dom->path2d_class):NULL;
+        if(path&&path->dom!=dom)return JS_ThrowTypeError(ctx,"Path2D belongs to another document");
+        if(path)value=argc>1?argv[1]:JS_UNDEFINED;
+        if(magic==P_STROKE&&argc&&!JS_IsUndefined(argv[0])&&!path)
+            return JS_ThrowTypeError(ctx,"Expected a Path2D");
+    }
     bool even_odd=false;
     if(magic==P_FILL||magic==P_CLIP) {
         if(!JS_IsUndefined(value)) {
@@ -102,6 +110,11 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
             bool valid=equal(s,n,"nonzero")||equal(s,n,"evenodd");even_odd=equal(s,n,"evenodd");
             JS_FreeCString(ctx,s);if(!valid)return JS_ThrowTypeError(ctx,"Invalid Canvas fill rule");
         }
+    }
+    if(path) {
+        d_canvas_sync(e);
+        return e->canvas?d_path2d_draw(ctx,e,path,magic==P_FILL?CANVAS_PATH_FILL:
+            magic==P_STROKE?CANVAS_PATH_STROKE:CANVAS_PATH_CLIP,even_odd):JS_UNDEFINED;
     }
     unsigned required=magic==P_MOVE||magic==P_LINE||magic==P_TRANSLATE||magic==P_SCALE?2:
         magic==P_QUAD||magic==P_RECT||magic==P_STROKE_RECT?4:

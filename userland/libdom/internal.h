@@ -41,6 +41,9 @@ void d_image_changed(os64_dom_t *,const os64_html_change_t *);
 int d_canvas_images_install(os64_dom_t *,JSContext *,JSValueConst);
 JSValue d_canvas_result(JSContext *,canvas_status_t);
 int d_canvas_text_install(os64_dom_t *,JSContext *,JSValueConst,JSValueConst);
+int d_path2d_install(os64_dom_t *,JSContext *,JSValueConst global);
+void d_path2d_free(DValue *);
+JSValue d_path2d_draw(JSContext *,DValue *context,DValue *path,canvas_path_operation_t,bool);
 int d_canvas_paths_install(os64_dom_t *,JSContext *,JSValueConst);
 int d_double_sequence(os64_dom_t *,JSContext *,JSValueConst,size_t,JSValue **,size_t *);
 typedef struct DQuery DQuery;
@@ -183,6 +186,7 @@ struct DValue {
     canvas_context_t *canvas;
     DValue *canvas_object;
     canvas_gradient_t *canvas_gradient;
+    struct DPath2D *canvas_path2d;
     bool canvas_reset_pending;
     bool image_reported;
     DQuery *child_nodes, *children, *images, *forms, *elements;
@@ -333,7 +337,7 @@ struct os64_dom {
     bool mutation_installed;
     size_t canvas_bytes;
     os64_dom_image_provider_t image_provider;
-    JSClassID canvas_class, gradient_class, metrics_class;
+    JSClassID canvas_class, gradient_class, metrics_class, path2d_class;
     os64_dom_text_provider_t canvas_text;
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;

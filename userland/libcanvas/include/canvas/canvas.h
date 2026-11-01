@@ -122,6 +122,13 @@ void canvas_gradient_release(canvas_gradient_t *);
 canvas_status_t canvas_gradient_add_stop(canvas_gradient_t *,double,uint32_t);
 canvas_status_t canvas_set_gradient(canvas_context_t *,canvas_gradient_t *,bool stroke);
 canvas_status_t canvas_set_text_style(canvas_context_t *,const canvas_text_style_t *);
+typedef enum { CANVAS_PATH_FILL, CANVAS_PATH_STROKE, CANVAS_PATH_CLIP } canvas_path_operation_t;
+/* Borrowed user-space commands, transformed at draw time. Does not replace
+ * the current path. Open subpaths remain open for stroking; fill/clip close
+ * them implicitly. A CLOSE must be followed by MOVE or end of stream.
+ * Resource refusal leaves pixels, clipping and damage unchanged. */
+canvas_status_t canvas_draw_path(canvas_context_t *,const os64_geometry_command_t *,size_t,
+    canvas_path_operation_t,bool even_odd);
 /* Paint a separate, closed contour stream without changing the current path.
  * placement maps run coordinates to user space before the current transform.
  * Stroke widths and paints use the current transform, not placement. */

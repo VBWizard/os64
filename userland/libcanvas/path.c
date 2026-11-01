@@ -559,8 +559,8 @@ canvas_status_t canvas_draw_image(canvas_context_t *c,const draw2d_surface_t *so
     return c_leave(c,status);
 }
 
-canvas_status_t canvas_draw_contours(canvas_context_t *c,const Command *commands,size_t count,
-    const Map *placement,bool stroke)
+static canvas_status_t draw_commands(canvas_context_t *c,const Command *commands,size_t count,
+    const Map *placement,int mode,bool even_odd)
 {
     canvas_status_t s=c_enter(c);if(s!=CANVAS_OK)return s;
     if((count&&!commands)||!placement||!finite_map(placement))return c_leave(c,CANVAS_BAD_ARGUMENT);
@@ -578,6 +578,17 @@ canvas_status_t canvas_draw_contours(canvas_context_t *c,const Command *commands
         }
         path.commands[path.count++]=command;
     }
-    if(s==CANVAS_OK)s=render(c,&path,stroke?2:0,false,NULL);
+    if(s==CANVAS_OK)s=render(c,&path,mode,even_odd,NULL);
     c_path_release(c,&path);return c_leave(c,s);
+}
+
+canvas_status_t canvas_draw_contours(canvas_context_t *c,const Command *commands,size_t count,
+    const Map *placement,bool stroke)
+{ return draw_commands(c,commands,count,placement,stroke?2:0,false); }
+canvas_status_t canvas_draw_path(canvas_context_t *c,const Command *commands,size_t count,
+    canvas_path_operation_t operation,bool even_odd)
+{
+    if(operation<CANVAS_PATH_FILL||operation>CANVAS_PATH_CLIP)return CANVAS_BAD_ARGUMENT;
+    return draw_commands(c,commands,count,&identity,
+        operation==CANVAS_PATH_FILL?0:operation==CANVAS_PATH_STROKE?2:3,even_odd);
 }

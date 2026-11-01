@@ -67,6 +67,7 @@ int main(int argc,char **argv)
     char *html=malloc(n+1);if(!html)return 2;
     if(fread(html,1,n,file)!=(size_t)n)return 2;
     html[n]=0;fclose(file);
+    bool retained=strstr(html,"YONDER / CANVAS 2D / C6C")!=NULL;
     bool shadows=strstr(html,"YONDER / CANVAS 2D / C6B")!=NULL;
     bool paints=strstr(html,"YONDER / CANVAS 2D / C5")!=NULL;
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -84,14 +85,41 @@ int main(int argc,char **argv)
     }
     if(images){pool_open=true;g.pool=(os64_work_pool_t *)1;pool_submit_hook=gallery_submit;}
     gallery_pump();
-    const char *names[]={shadows?"cast":paints?"glow":images?"stamps":"route",shadows?"window":paints?"shared":images?"crop":"turn",shadows?"stamp":paints?"lettering":images?"echo":"stencil",shadows?"type":paints?"fitted":images?"returned":"scratch"};
-    const char *buttons[]={shadows?"light":paints?"light":images?"stamp":"march",shadows?"reveal":paints?"color":images?"inspect":"spin",shadows?"stamp-change":paints?"turn":images?"scoot":"slide",shadows?"words":paints?"words":images?"export":"reveal"};
-    for(unsigned i=0;i<4;++i)dump_canvas(argv[2],names[i],"");
+    if(retained)check(probe_text_is("status","Four experiments, ready to turn, transform, and uncover."),"retained-path gallery initializes completely");
+    const char *names[]={retained?"medals":shadows?"cast":paints?"glow":images?"stamps":"route",retained?"rings":shadows?"window":paints?"shared":images?"crop":"turn",retained?"curve":shadows?"stamp":paints?"lettering":images?"echo":"stencil",retained?"ticket":shadows?"type":paints?"fitted":images?"returned":"scratch"};
+    const char *buttons[]={retained?"turn":shadows?"light":paints?"light":images?"stamp":"march",retained?"rule":shadows?"reveal":paints?"color":images?"inspect":"spin",retained?"stretch":shadows?"stamp-change":paints?"turn":images?"scoot":"slide",retained?"foil":shadows?"words":paints?"words":images?"export":"reveal"};
+    for(unsigned i=0;i<4;++i) {
+        dump_canvas(argv[2],names[i],"");
+        if(retained) {
+            canvas_bitmap_t b;check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id(names[i]),&b),"retained-path bitmap exists");
+            size_t ink=0;for(uint32_t y=0;y<b.height;y++)for(uint32_t x=0;x<b.width;x++)ink+=b.pixels[(size_t)y*b.stride/4+x]>>24?1:0;
+            check(ink>100,"retained-path gallery has visible ink");
+        }
+    }
     for(unsigned i=0;i<4;++i) {
         os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};
         bool prevented=false;os64_js_outcome_t outcome;
         check(yonder_scripts_dispatch(g.page.scripts,probe_id(buttons[i]),&event,&prevented,&outcome)==OS64_JS_OK,"gallery button executes");
         gallery_pump();dump_canvas(argv[2],names[i],"-clicked");
+    }
+    if(retained) {
+        canvas_bitmap_t bitmap;check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("ticket"),&bitmap),"scratch bitmap exists");
+        size_t before=0;for(uint32_t y=0;y<bitmap.height;y++)for(uint32_t x=0;x<bitmap.width;x++)before+=bitmap.pixels[(size_t)y*bitmap.stride/4+x]>>24?1:0;
+        scroll_to_node(probe_id("ticket"));
+        const flow_box_t *box=flow_box_for(g.page.tree,probe_id("ticket"));check(box!=NULL,"scratch canvas laid out");
+        int x=g.view.bounds.x+box->rect.x+80-g.sx,y=g.view.bounds.y+box->rect.y+90-g.sy;
+        pointer_window(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,x,y,0,1);
+        for(int step=1;step<=12;step++)pointer_move(x+step*15,y,1);
+        pointer_window(OS64_GUI_EVENT_MOUSE_BUTTON_UP,x+180,y,0,0);
+        size_t after=0;for(uint32_t row=0;row<bitmap.height;row++)for(uint32_t col=0;col<bitmap.width;col++)after+=bitmap.pixels[(size_t)row*bitmap.stride/4+col]>>24?1:0;
+        check(after+1000<before&&after>1000,"native captured pointer stroke erases foil through retained clip");
+        dump_canvas(argv[2],"ticket","-scratched");
+        os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};
+        bool prevented=false;os64_js_outcome_t outcome;
+        check(yonder_scripts_dispatch(g.page.scripts,probe_id("foil"),&event,&prevented,&outcome)==OS64_JS_OK,"fresh foil handler executes");
+        gallery_pump();
+        size_t restored=0;for(uint32_t row=0;row<bitmap.height;row++)for(uint32_t col=0;col<bitmap.width;col++)restored+=bitmap.pixels[(size_t)row*bitmap.stride/4+col]>>24?1:0;
+        check(restored==before,"fresh foil restores scratched pixels");
     }
     if(shadows) {
         os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};
