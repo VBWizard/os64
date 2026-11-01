@@ -201,8 +201,8 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
-// How many filtered groups and backdrops the last yonder_paint drew
-// unfiltered: past its
+// How many filtered or blended groups and backdrops the last yonder_paint
+// drew plain: past its
 // budget for filter layers — YONDER_FILTER_AREA_VIEWS times the
 // viewport's pixels, each layer charged the pixels it shows in the
 // viewport, FILTER.md § 6 — or a layer the verbs refused or found no

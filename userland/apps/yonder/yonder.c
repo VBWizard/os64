@@ -12746,10 +12746,12 @@ static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
 // (filter.h) and laid onto each target outside at `alpha` by `mode`: a
 // sheet pixel (i, j) is the coordinates' (i + bounds.x, j + bounds.y), the
 // target's offset taking that onto its pixels, inside what the target
-// paints. Laid normal, and counted (yonder_paint_layers_refused), where
-// the targets outside are a group's sheets, which a blend would leave
-// unable to recover their group (MIX_BLEND.md § 4); with no memory for the
-// filter's work, laid unfiltered, and counted the same.
+// paints. Laid normal where the targets outside are a group's sheets,
+// which a blend would leave unable to recover their group (MIX_BLEND.md §
+// 4) — the painter drops such a blend before it opens a layer, so this is
+// the backstop for what it cannot see, a text clip's — and with no memory
+// for the filter's work, laid unfiltered; either counted once
+// (yonder_paint_layers_refused).
 static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
                              uint8_t alpha, flow_blend_t mode)
 {
@@ -12761,19 +12763,22 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
     uint32_t *layer = t->surf[0].pixels;
     yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, w, h};
     yonder_layer_recover(&s, layer);
+    bool plain = false;         // counted once, whichever half is dropped
     if (n > 0) {
         void *work = glass_take(yonder_filter_work_bytes(w, h, filter, n));
         if (work != NULL) {
             yonder_filter_run(layer, w, h, filter, n, current, work);
             glass_give(work);
         } else {
-            yonder_paint_layers_refused++;
+            plain = true;
         }
     }
     if (mode != FLOW_BLEND_NORMAL && (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)) {
         mode = FLOW_BLEND_NORMAL;
-        yonder_paint_layers_refused++;
+        plain = true;
     }
+    if (plain)
+        yonder_paint_layers_refused++;
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
         yonder_layer_lay(on->surf->pixels, on->surf->pitch_px, on->clip, layer, w, h,

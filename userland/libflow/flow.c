@@ -1811,14 +1811,17 @@ static bool own_through(const flow_box_t *b)
 
 // Composited whole: below full opacity, drawn through its matrix,
 // filtered (`filter`, not `backdrop-filter`, which needs no layer), or
-// blended by a mode other than normal (`isolation` needs no layer), and
-// painted at all — and for the life of an animation of its opacity or its
+// blended by a mode other than normal — but plus-darker, drawn as normal,
+// and the root's, which has nothing behind it (`isolation` needs no
+// layer); and painted at all — and for the life of an animation of its
+// opacity or its
 // transform, whatever their values, so a frame that fades or turns it is
 // painted as one (PILE3.md § Animations).
 static bool is_group(const flow_box_t *b)
 {
     return (b->style->opacity < 1000 || own_through(b) || b->style->animating != 0 ||
-            f_group_filter(b->style) || f_blended(b->style)) &&
+            f_group_filter(b->style) ||
+            (f_blended(b->style) && b->style->mix_blend != FLOW_BLEND_PLUS_DARKER && b->parent != NULL)) &&
            !b->unpainted;
 }
 

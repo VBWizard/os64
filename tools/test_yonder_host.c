@@ -856,12 +856,35 @@ static void blend_paint_cases(void)
     static const char kRoot[] = "<!doctype html><style>html { mix-blend-mode: multiply }"
         " body { margin: 0 }</style><p>x";
     char *got = paint_of(kRoot, strlen(kRoot), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
-    expect("blend: the root's blend opens no layer", got != NULL && strstr(got, "filter ") == NULL, got);
+    expect("blend: the root's blend opens no layer, nor a group",
+           got != NULL && strstr(got, "filter ") == NULL && strstr(got, "group ") == NULL, got);
     free(got);
     static const char kDarker[] = "<!doctype html><style>body { margin: 0 }"
         " .b { mix-blend-mode: plus-darker; height: 20px }</style><div class=b></div>";
     got = paint_of(kDarker, strlen(kDarker), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
-    expect("blend: plus-darker opens no layer", got != NULL && strstr(got, "filter ") == NULL, got);
+    expect("blend: plus-darker opens no layer, nor a group",
+           got != NULL && strstr(got, "filter ") == NULL && strstr(got, "group ") == NULL, got);
+    free(got);
+    // On sheets a blend is dropped before a layer is opened for it, and
+    // counted once (the cold read): through its own matrix, and inside a
+    // filter's layer.
+    static const char kTurned[] = "<!doctype html><style>body { margin: 0 }"
+        " .b { transform: rotate(10deg); mix-blend-mode: difference; height: 20px }</style>"
+        "<div class=b>x</div>";
+    got = paint_of(kTurned, strlen(kTurned), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("blend: through its own matrix, no layer, counted once",
+           got != NULL && strstr(got, "through ") != NULL && strstr(got, "filter ") == NULL &&
+               yonder_paint_layers_refused == 1, got);
+    free(got);
+    static const char kInside[] = "<!doctype html><style>body { margin: 0 }"
+        " .f { filter: blur(2px) } .b { mix-blend-mode: multiply; height: 20px }</style>"
+        "<div class=f><div class=b>x</div></div>";
+    got = paint_of(kInside, strlen(kInside), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    int layers = 0;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\nfilter ")) != NULL; at++)
+        layers++;
+    expect("blend: inside a filter's layer, only the filter's layer, counted once",
+           layers == 1 && yonder_paint_layers_refused == 1 && strstr(got, " mode ") == NULL, got);
     free(got);
 }
 

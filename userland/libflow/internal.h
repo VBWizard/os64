@@ -118,7 +118,8 @@ static inline bool f_group_filter(const flow_style_t *s)
 
 // Whether a `mix-blend-mode` other than normal is granted (MIX_BLEND.md):
 // a stacking context and a group laid by its mode; a plain inline's does
-// nothing, as its opacity is painted opaque.
+// nothing, and an inline-block's is not drawn (it is no stacked box), as
+// their opacity is painted opaque.
 static inline bool f_blended(const flow_style_t *s)
 {
     return s->mix_blend != FLOW_BLEND_NORMAL && s->display != FLOW_DISPLAY_INLINE;

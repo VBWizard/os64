@@ -738,8 +738,9 @@ typedef struct {
     // `mix-blend-mode` and `isolation: isolate` (MIX_BLEND.md): a mode
     // other than normal makes a box a stacking context and a group laid
     // onto what is under it by that mode; `isolate` makes a stacking
-    // context. Neither does anything on a plain inline, as its opacity is
-    // painted opaque there. Neither inherited.
+    // context. Neither does anything on a plain inline; an inline-block's
+    // blend makes a stacking context and is not drawn, its content painted
+    // where its atom is — both as their opacity is. Neither inherited.
     flow_blend_t mix_blend;
     bool isolate;
     // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):

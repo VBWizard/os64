@@ -1,4 +1,5 @@
-// filter.c — a filtered group's pixels (filter.h; FILTER.md).
+// filter.c — a filtered or blended group's pixels, and a backdrop's
+// (filter.h; FILTER.md, MIX_BLEND.md).
 
 #include "filter.h"
 

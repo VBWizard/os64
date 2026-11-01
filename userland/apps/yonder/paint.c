@@ -31,9 +31,10 @@ typedef struct {
     // Past the deepest kept, a group drawn through its matrix is not painted
     // at all: the depth it opened at, plus one, or 0.
     int32_t hidden;
-    // What is left of the paint's budget for filter layers and backdrops,
-    // in pixels (yonder_paint_layers_refused): here, where every box's
-    // painter shares it, not in the Painter each box is handed a copy of.
+    // What is left of the paint's budget for layers (filtered and blended
+    // groups') and backdrops, in pixels (yonder_paint_layers_refused):
+    // here, where every box's painter shares it, not in the Painter each
+    // box is handed a copy of.
     int64_t filter_left;
 } PaintGroups;
 
@@ -2569,16 +2570,35 @@ static bool filter_drawn(const Painter *p, const flow_box_t *box)
     return true;
 }
 
-// The mode a group is laid by (MIX_BLEND.md): its own, but normal for the
-// root, which has nothing behind it, for plus-darker (§ 2), and with no
-// verbs to lay a layer.
-static flow_blend_t blend_of(const Painter *p, const flow_box_t *box)
+// Whether the group at depth `d`'s own layer is laid onto a group's
+// sheets: its own matrix's (a group laid through it, open at `d`), or a
+// matrix's or a layer round it (below `d`). Its own layer, open at `d`,
+// is what is laid, not where.
+static bool on_sheets(const Painter *p, int32_t d)
+{
+    for (int32_t i = 0; i <= d && i < PAINT_GROUPS; i++)
+        if (p->groups->open[i].kind == G_THROUGH || (i < d && p->groups->open[i].layered))
+            return true;
+    return false;
+}
+
+// The mode the group at depth `d` asks to be laid by (MIX_BLEND.md): its
+// own, but normal for the root, which has nothing behind it, for
+// plus-darker (§ 2), and with no verbs to lay a layer.
+static flow_blend_t blend_asked(const Painter *p, const flow_box_t *box)
 {
     flow_blend_t m = box->style->mix_blend;
     if (m == FLOW_BLEND_PLUS_DARKER || box->parent == NULL || p->v->layer_open == NULL ||
         p->v->layer_close == NULL)
         return FLOW_BLEND_NORMAL;
     return m;
+}
+
+// The mode it is laid by: what it asks, but normal on a group's sheets,
+// which a blend would leave unable to recover their group (§ 4).
+static flow_blend_t blend_of(const Painter *p, const flow_box_t *box, int32_t d)
+{
+    return on_sheets(p, d) ? FLOW_BLEND_NORMAL : blend_asked(p, box);
 }
 
 // A group's LAYER opened (FILTER.md, MIX_BLEND.md), for a filter drawn or a
@@ -2595,7 +2615,11 @@ static flow_blend_t blend_of(const Painter *p, const flow_box_t *box)
 static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64_gui_rect_t outside,
                        int32_t d)
 {
-    if (!filter_drawn(p, box) && blend_of(p, box) == FLOW_BLEND_NORMAL)
+    // A blend asked for on sheets is dropped here, counted once, so no
+    // layer is opened only to be laid normal.
+    if (blend_asked(p, box) != FLOW_BLEND_NORMAL && on_sheets(p, d))
+        yonder_paint_layers_refused++;
+    if (!filter_drawn(p, box) && blend_of(p, box, d) == FLOW_BLEND_NORMAL)
         return false;
     int32_t out[4];
     flow_filter_reach(box->style, out);
@@ -2636,10 +2660,10 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
 // opacity group asks nothing of the verbs and is drawn opaque where it is,
 // and a group drawn through its matrix is not painted at all: nothing
 // remembers where to put it back, and the walk culled it for the turned
-// and the upright drawings, not this one. A FILTERED one opens a layer
-// (layer_try) inside all of that — in its own coordinates when it is laid
-// through its matrix, the matrix laying the filtered layer — or is painted
-// unfiltered as the rest of it says.
+// and the upright drawings, not this one. A FILTERED or BLENDED one opens a
+// layer (layer_try) inside all of that — in its own coordinates when it is
+// laid through its matrix, the matrix laying the layer, its blend dropped
+// there (blend_of) — or is painted plain as the rest of it says.
 static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
 {
     Painter *p = ctx;
@@ -2687,7 +2711,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
             p->view = own;
             p->shown = own;
             p->shift = (flow_point_t){0, 0};
-            // Filtered first, in its own coordinates, then laid through,
+            // Its layer first, in its own coordinates, then laid through,
             // inside what clips it from outside.
             (void)layer_try(p, box, bounds, bounds, d);
             return;
@@ -2698,13 +2722,13 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         p->shift.x = sum32(p->shift.x, upright.x);
         p->shift.y = sum32(p->shift.y, upright.y);
         if (box->style->opacity >= 1000 && !filter_drawn(p, box) &&
-            blend_of(p, box) == FLOW_BLEND_NORMAL)
+            blend_of(p, box, d) == FLOW_BLEND_NORMAL)
             return;
         outside = clip;
     } else if (box->clipped) {
         outside = shifted(flow_box_doc_clip(box, p->scroll), p->shift);
     }
-    // A filter lays its layer at the group's opacity itself.
+    // A layer is laid at the group's opacity by its own close.
     if (layer_try(p, box, shifted(bounds, p->shift), outside, d))
         return;
     if (opacity_verbs(p)) {
@@ -2714,9 +2738,9 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
 }
 
 // Closes: what it painted is laid over what was under it at the group's
-// opacity, in 255ths — filtered first, when a layer is open, and through
-// its matrix, when it was laid so — and the view and the shift are what
-// they were.
+// opacity, in 255ths — its layer first, when one is open, filtered and
+// laid by its mode, and through its matrix, when it was laid so — and the
+// view and the shift are what they were.
 static void group_close(void *ctx, const flow_box_t *box)
 {
     Painter *p = ctx;
@@ -2740,7 +2764,7 @@ static void group_close(void *ctx, const flow_box_t *box)
         bool filtered = filter_drawn(p, box);
         p->v->layer_close(p->v->ctx, filtered ? box->style->filter : NULL,
                           filtered ? box->style->nfilter : 0, box->style->color,
-                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box));
+                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box, d));
     }
     if (gs->open[d].kind == G_THROUGH)
         p->v->through_close(p->v->ctx, alpha);

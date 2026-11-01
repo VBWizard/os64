@@ -15,7 +15,7 @@ behind them (`difference`), shapes that darken or tint a photo
 ## 2. What 8d draws
 
 - **`mix-blend-mode`** (Compositing and Blending 1 § 3.2, Level 2 for the
-  `plus-` modes): `normal`, the twelve separable modes (`multiply`,
+  `plus-` modes): `normal`, the eleven separable modes besides it (`multiply`,
   `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`,
   `hard-light`, `soft-light`, `difference`, `exclusion`), the four
   non-separable ones (`hue`, `saturation`, `color`, `luminosity`), and
@@ -51,7 +51,7 @@ clipping, masking, opacity, then blending, so an element with both a filter
 and a blend mode opens one layer: the filter runs on it, and the close
 blends it at its opacity. The verbs that open and close a filtered group's
 layer become the verbs of any LAYER (`layer_open`, `layer_close` with the
-filter list and the mode), and the painter's `layer_try` becomes
+filter list and the mode), and the painter's `filter_try` becomes
 `layer_try`; a layer is opened when a filter is drawn or the mode is not
 `normal`.
 
@@ -71,7 +71,9 @@ painted onto sheets — an opacity group laid through a matrix, a filtered
 group, a text clip — the backdrop is the group's black and white sheets,
 and a blend is not linear in its backdrop, so the two sheets would no longer
 recover the group: there, and for an element that is itself drawn through
-its matrix, the layer is laid with `normal`, counted
+its matrix, the blend is dropped — before any layer is opened for it, by
+the painter, which knows the groups it has open (`on_sheets`); the pane
+drops it too where the painter cannot see (a text clip) — counted once
 (`yonder_paint_layers_refused`, which the record names `layer: drawn
 plain`, filters' refusals as well), and booked.
 
@@ -92,7 +94,7 @@ plain`, filters' refusals as well), and booked.
 | Event | Style | Layer | Damage |
 |---|---|---|---|
 | a layout | `mix_blend`, `isolation` computed (`flow_style_t`); a stacking context; a group when the mode is not `normal` | — | as any group's: no spread of its own |
-| a paint reaching the group's OPEN | read | two sheets opened, unless on sheets already or past the budget | — |
+| a paint reaching the group's OPEN | read | two sheets opened, unless past the budget, or on sheets already with nothing but a blend to lay (the blend dropped, counted) | — |
 | its CLOSE | — | recovered, filtered when it has a filter, blended onto the window at its opacity | — |
 | on sheets, through a matrix, past the budget | — | laid `normal`, counted | — |
 | something under it changes | — | the part repaints in paint order, the group with it | the changed part, as today |
@@ -128,9 +130,10 @@ plain`, filters' refusals as well), and booked.
   `yonder_layer_recover`, `yonder_layer_lay`; the counter
   `yonder_paint_layers_refused`, named `layer: drawn plain` in the record).
   `yonder_layer_lay` keeps `normal`'s integer source-over and blends every
-  other mode in doubles by § 10's functions. The pane lays a blend `normal`
-  and counts it when the targets outside are sheets; the painter gives the
-  root and `plus-darker` no blend.
+  other mode in doubles by § 10's functions. The painter drops a blend on
+  sheets before it opens a layer (`on_sheets`, `blend_of`), counted once,
+  and the pane is its backstop; the root and `plus-darker` are no group at
+  all (libflow's `is_group`), only a stacking context.
 - **Proved**: each mode against a reference written from the spec apart
   from the code (`~/os64-opus-kit/tools/blend_ref.py`) and WPT's
   `difference` case; coverage and opacity scaling a blend; the painter's
