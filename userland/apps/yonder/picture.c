@@ -58,12 +58,20 @@ static os64_image_status_t svg_failure(svg_status_t st, yonder_picture_t *p)
 // size that covers it (PICTURE_SIZES.md), and the full decode is let go
 // here. With no memory for the smaller copy, or cancelled, it stays whole:
 // a picture kept too big is still the picture, and the page's budget
-// judges it at arrival as it judges any.
+// judges it at arrival as it judges any. A resample's rectangle is already
+// a kept size (the page's need), so it is taken as it is, held to the
+// picture: worked out again, its rounding up could answer a size the page
+// judges owed another resample, and that one the same, forever.
 static void keep_smaller(const yonder_picture_job_t *job, bool (*cancelled)(void *), void *context,
                          yonder_picture_t *p)
 {
     uint32_t kw, kh;
-    yonder_picture_kept_size(p->image.width, p->image.height, job->cover_w, job->cover_h, &kw, &kh);
+    if (job->resample && job->cover_w > 0 && job->cover_h > 0) {
+        kw = job->cover_w < p->image.width ? job->cover_w : p->image.width;
+        kh = job->cover_h < p->image.height ? job->cover_h : p->image.height;
+    } else {
+        yonder_picture_kept_size(p->image.width, p->image.height, job->cover_w, job->cover_h, &kw, &kh);
+    }
     if ((kw == p->image.width && kh == p->image.height) || (cancelled && cancelled(context)))
         return;
     uint32_t *small = os64_malloc((size_t)kw * kh * sizeof(*small));

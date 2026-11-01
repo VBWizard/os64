@@ -31,8 +31,11 @@ reads the grid.
 ## The needed size
 
 After every layout, the walk that already visits every box for sheet pictures
-(`css_pictures_under`) also asks each shown still raster how big it is drawn:
-the largest, over all its uses, of
+(`css_pictures_under`) also asks each shown still raster how big it is drawn;
+and once more after pictures arrive that move nothing (a background never
+does), since no layout follows them (`pictures_judge_owed`, run by
+`pictures_settle`, once however many arrived). Its need is the largest, over
+all its uses, of
 
 - an `img`: the rectangle `object-fit` places it in, in device pixels at the
   laid zoom (the whole rectangle, cropped or not: `cover` draws past its box);
@@ -42,7 +45,9 @@ the largest, over all its uses, of
 The needed size is the natural size scaled by one factor, the largest either
 axis asks for, held to 1: a picture is never kept bigger than it is, and its
 shape never changes. A picture with no use in the layout (every use
-`display: none`) keeps what it has.
+`display: none`) keeps what it has. A use drawn `image-rendering: pixelated`
+(or `crisp-edges`) needs the picture whole: the painter keeps its pixels hard,
+and averaging would already have mixed them.
 
 ## When it changes
 
@@ -69,15 +74,20 @@ size reads four pixels of every hundred and shimmers.
 - **First request:** a box that layout has already fixed
   (`flow_replaced_fixed`, so it does not wait on the picture) with
   `object-fit` fill, contain or cover is asked for at the size that covers
-  that box, which is at least what any of the three draws. Everything else
-  is asked for whole, as today.
+  that box, which is at least what any of the three draws, unless it is
+  drawn pixelated. Everything else is asked for whole, as today.
 - **Later requests** (a resample) are the same job again, with the needed
-  size as the target. The bytes come from where they came the first time:
+  size as the target, which the worker takes exactly: it is a kept size
+  already, and worked out a second time its rounding up can answer a size
+  still twice the need, asked for again forever (7x3 drawn 2x1: need 3x1,
+  worked out again 3x2). The bytes come from where they came the first time:
   yonder's cache for `http:`/`https:` (a miss fetches again), the file for
   `file:`, the job's own copy for `data:`.
 - **Arrival** of a resample swaps the grid and corrects `kept_bytes` by the
   difference. A resample that fails leaves the picture as it was: a worse
-  copy is never traded for none.
+  copy is never traded for none. One that fails, does not fit, or comes back
+  no different from what is kept is not asked for again until the need
+  changes. An `--exit-when-loaded` run waits for resamples too.
 
 ## A picture's life
 
@@ -85,9 +95,9 @@ size reads four pixels of every hundred and shimmers.
 |---|---|---|---|
 | QUEUED | none | fed to the pool, with a target when its box is fixed | WAITING |
 | WAITING | none (the worker's) | arrives | SHOWN, FAILED, or NOT_KEPT |
-| SHOWN | the kept size (whole, or a target's) | a layout needs it at least 2x smaller, or bigger | SHOWN + resample WAITING |
+| SHOWN | the kept size (whole, or a target's) | the walk (after a layout, or after arrivals that move nothing) needs it at least 2x smaller, or bigger | SHOWN + resample WAITING |
 | SHOWN + resample WAITING | the old grid, still drawn | the resample lands (swapped) or fails (kept) | SHOWN |
-| NOT_KEPT | none, but its natural size is kept | a layout needs it at a size the budget has room for | SHOWN + resample WAITING (drawn as its frame until then) |
+| NOT_KEPT | none, but its natural size is kept | the walk needs it at a size the budget has room for | SHOWN + resample WAITING (drawn as its frame until then) |
 | FAILED | none | never | |
 
 A page left cancels every job of its own, resamples included (the existing

@@ -384,6 +384,60 @@ static void sizes_page_cases(void)
     sizes_layout(1000);
     check(sizes_held() != NULL, "sizes: the next layout asks again");
     sizes_close();
+
+    /* Codex #444 rd1: a picture behind a box arrives moving nothing, and
+     * is judged all the same, with no layout (pictures_settle); its
+     * resample, a kept size already, comes back exactly that size and is
+     * not asked for again (7x3 drawn 2x1: the need 3x1 worked out again
+     * would be 3x2, still twice it, forever); and an --exit-when-loaded
+     * run is not settled while it is out. */
+    sizes_open("<!doctype html><style>body{margin:0}div{width:2px;height:1px;"
+               "background:url(https://t.test/a.png) no-repeat;background-size:2px 1px}</style><div></div>",
+               "SIZED 7x3");
+    pictures_start(&g.page);
+    sizes_layout(1000);
+    job = sizes_held();
+    check(job && !job->resample && job->cover_w == 0, "sizes: a picture behind a box is asked for whole");
+    check(sizes_run() && g.page.pics[0].image.width == 7 && !g.pictures_moved && g.pictures_judge_owed,
+          "sizes: it arrives whole, moving nothing, owed a judgement");
+    pictures_settle();
+    job = sizes_held();
+    check(!g.pictures_judge_owed && job && job->resample && job->cover_w == 3 && job->cover_h == 1,
+          "sizes: judged with no layout, it is asked for at the size drawn");
+    check(g.page.waiting == 0 && !exit_settled(), "sizes: a run waiting to leave waits for the resample");
+    check(sizes_run() && g.page.pics[0].image.width == 3 && g.page.pics[0].image.height == 1,
+          "sizes: the resample is the kept size asked for, not worked out again");
+    check(sizes_held() == NULL && g.page.resample_owed == 0 && g.page.in_flight == 0,
+          "sizes: and nothing more is asked");
+    /* A resample that comes back no different changes nothing, and is not
+     * asked for at that need again, whatever sent it. */
+    uint32_t *kept_px = g.page.pics[0].image.pixels;
+    yonder_picture_job_t *same = sizes_job(3, 1);
+    same->resample = true;
+    void *same_out = NULL;
+    (void)yonder_picture_run(same, NULL, NULL, &same_out);
+    g.page.pics[0].resampling = true;
+    g.page.in_flight++;
+    g.page.pics[0].need_w = 3;
+    g.page.pics[0].need_h = 1;
+    picture_arrived(same, same_out);
+    yonder_picture_release(same, same_out);
+    check(g.page.pics[0].image.pixels == kept_px && g.page.pics[0].refused_w == 3 &&
+          g.page.pics[0].refused_h == 1 && g.page.resample_owed == 0 && g.page.in_flight == 0,
+          "sizes: a resample no different from what is kept is not asked for again");
+    sizes_close();
+
+    /* Drawn pixelated: its pixels kept hard by the painter, so kept whole. */
+    sizes_open("<!doctype html><style>body{margin:0}img{display:block;image-rendering:pixelated}</style>"
+               "<img id=pic src='https://t.test/a.png' width=100 height=50>", "SIZED 400x200");
+    pictures_start(&g.page);
+    job = sizes_held();
+    check(job && job->cover_w == 0 && job->cover_h == 0, "sizes: a pixelated box asks for it whole");
+    check(sizes_run() && g.page.pics[0].image.width == 400, "sizes: and it arrives whole");
+    sizes_layout(1000);
+    check(sizes_held() == NULL && g.page.resample_owed == 0 && g.page.pics[0].need_w == 400,
+          "sizes: and is never kept smaller");
+    sizes_close();
 }
 
 static void picture_sizes_cases(void)

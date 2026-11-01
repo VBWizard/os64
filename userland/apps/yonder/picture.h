@@ -44,7 +44,8 @@ typedef struct {
     bool svg_enabled, dark, reduced_motion;
     // The rectangle, in device pixels, the picture must cover where it is
     // drawn, or 0 x 0 for none known: a still raster bigger than that is
-    // kept at yonder_picture_kept_size's answer, reduced here, and the full
+    // kept at yonder_picture_kept_size's answer (a resample's rectangle, a
+    // kept size already, as it is), reduced here, and the full
     // decode never leaves the worker (PICTURE_SIZES.md). `resample` marks a
     // picture the page already has (shown, or past the memory kept) asked
     // for again at a new size, which replaces its pixels on arrival instead

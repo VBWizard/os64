@@ -96,12 +96,15 @@ mutants = [
      '        pic->id = picture_submit(p, index, 0,\n'
      '                                 0, false, &why);'),
     ('a-waiting-box-is-asked-small', YONDER,
-     '            if (c.w <= 0 || c.h <= 0 ||\n'
+     '            if (c.w <= 0 || c.h <= 0 || b->style->pixelated ||\n'
      '                (fit != FLOW_OBJECT_FILL && fit != FLOW_OBJECT_CONTAIN && fit != FLOW_OBJECT_COVER)) {\n'
      '                p->pics[k].cover_whole = true;',
-     '            if (c.w <= 0 || c.h <= 0 ||\n'
+     '            if (c.w <= 0 || c.h <= 0 || b->style->pixelated ||\n'
      '                (fit != FLOW_OBJECT_FILL && fit != FLOW_OBJECT_CONTAIN && fit != FLOW_OBJECT_COVER)) {\n'
      '                (void)0;'),
+    ('rd1-a-pixelated-box-is-asked-small', YONDER,
+     '            if (c.w <= 0 || c.h <= 0 || b->style->pixelated ||',
+     '            if (c.w <= 0 || c.h <= 0 ||'),
     ('the-first-ask-takes-the-last-box', YONDER,
      '                if ((uint32_t)c.w > p->pics[k].cover_w)\n                    p->pics[k].cover_w = (uint32_t)c.w;',
      '                p->pics[k].cover_w = (uint32_t)c.w;'),
@@ -179,6 +182,23 @@ mutants = [
      '        if (p->pics[i].resampling && g.pool != NULL)\n'
      '            os64_work_cancel(g.pool, p->pics[i].resample_id);\n',
      ''),
+    # Codex #444 round 1.
+    ('rd1-a-resample-target-is-worked-out-again', PICTURE,
+     '    if (job->resample && job->cover_w > 0 && job->cover_h > 0) {',
+     '    if (false && job->resample && job->cover_w > 0 && job->cover_h > 0) {'),
+    ('rd1-a-resample-no-different-is-asked-again', YONDER,
+     '    } else if (shown && product->image.width == pic->image.width &&\n'
+     '               product->image.height == pic->image.height) {',
+     '    } else if (false) {'),
+    ('rd1-an-arrival-moving-nothing-is-never-judged', YONDER,
+     '    if (g.pictures_judge_owed && !g.pictures_moved && !s_web.moved)\n        css_pictures(&g.page);',
+     '    (void)0;'),
+    ('rd1-a-pixelated-use-is-kept-small', YONDER,
+     '    if (!pixelated)\n        yonder_picture_kept_size(',
+     '    (void)pixelated;\n        yonder_picture_kept_size('),
+    ('rd1-leaving-does-not-wait-for-a-resample', YONDER,
+     '           g.page.in_flight == 0 && g.page.resample_owed == 0 && !g.pictures_judge_owed &&',
+     '           g.page.resample_owed == 0 && !g.pictures_judge_owed &&'),
     # The record.
     ('the-record-counts-whole-pictures', YONDER,
      '            (pic->image.width >= pic->width && pic->image.height >= pic->height))',

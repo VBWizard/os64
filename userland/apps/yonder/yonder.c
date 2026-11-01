@@ -587,7 +587,8 @@ typedef struct {
     // Asked for at first (pictures_start) to cover this rectangle, the
     // largest fixed box an `img` draws it in with object-fit fill, contain
     // or cover, or 0 x 0 for whole: whole when any use is not such a box (a
-    // box that waits on its size, another object-fit, a background).
+    // box that waits on its size, another object-fit, a background) or is
+    // drawn pixelated.
     uint32_t cover_w, cover_h;
     bool cover_whole;
     // The size the last layout draws it at, as yonder_picture_kept_size
@@ -597,9 +598,9 @@ typedef struct {
     uint32_t need_w, need_h, want_w, want_h;
     bool resample_owed, resampling;
     os64_work_id_t resample_id;
-    // A resample that came back without a picture, or one that would not
-    // fit: that size is not asked for again until the need changes, or a
-    // picture that will not come would be fetched forever.
+    // A resample that came back without a picture, one that would not fit,
+    // or one no different from what is kept: that size is not asked for
+    // again until the need changes, or the page would ask forever.
     uint32_t refused_w, refused_h;
 } Picture;
 
@@ -1641,6 +1642,11 @@ static struct {
     // last laid out (pictures_settle); cleared by any layout, whether or not
     // it fit.
     bool pictures_moved;
+    // A still raster arrived (shown, or past the memory kept) since the
+    // walk that finds how big each picture is drawn last ran (css_pictures):
+    // one that moves nothing is otherwise never judged, since only a layout
+    // runs that walk. pictures_settle runs it once for every arrival since.
+    bool pictures_judge_owed;
     // The window's clock, for moving pictures and a slow page's owed
     // layout; NULL, and nothing moves and a layout waits for an event.
     yonder_ticker_t *ticker;
@@ -4720,8 +4726,10 @@ typedef struct {
 
 // One use of picture `k` drawn `w` x `h` device pixels: its need
 // (Picture.need_w/h) is the largest of its uses', as the picture is kept. A
-// still raster only, once it has a size: nothing else is kept smaller.
-static void picture_drawn_at(Page *p, int32_t k, int64_t w, int64_t h)
+// still raster only, once it has a size: nothing else is kept smaller. A use
+// drawn `pixelated` needs it whole, whatever its size: the painter keeps its
+// pixels hard, and a picture averaged smaller has already mixed them.
+static void picture_drawn_at(Page *p, int32_t k, int64_t w, int64_t h, bool pixelated)
 {
     if (k < 0 || k >= p->npics || w <= 0 || h <= 0)
         return;
@@ -4729,9 +4737,10 @@ static void picture_drawn_at(Page *p, int32_t k, int64_t w, int64_t h)
     if (pic->kind != YONDER_PICTURE_RASTER || (pic->state != PIC_SHOWN && pic->state != PIC_NOT_KEPT) ||
         pic->width == 0 || pic->height == 0)
         return;
-    uint32_t kw, kh;
-    yonder_picture_kept_size(pic->width, pic->height, (uint32_t)(w < UINT32_MAX ? w : UINT32_MAX),
-                             (uint32_t)(h < UINT32_MAX ? h : UINT32_MAX), &kw, &kh);
+    uint32_t kw = pic->width, kh = pic->height;
+    if (!pixelated)
+        yonder_picture_kept_size(pic->width, pic->height, (uint32_t)(w < UINT32_MAX ? w : UINT32_MAX),
+                                 (uint32_t)(h < UINT32_MAX ? h : UINT32_MAX), &kw, &kh);
     if (kw > pic->need_w)
         pic->need_w = kw;
     if (kh > pic->need_h)
@@ -4754,13 +4763,13 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
     if (m >= 0 && m < p->nimage_map && p->pic_of[m] >= 0) {
         int32_t k = p->pic_of[m];
         os64_gui_rect_t at = picture_object_rect(p, &p->pics[k], b, yonder_box_edge(b, b->rect, FLOW_EDGE_CONTENT));
-        picture_drawn_at(p, k, at.w, at.h);
+        picture_drawn_at(p, k, at.w, at.h, b->style->pixelated);
     }
     m = model != NULL && p->bg_of != NULL ? os64_page_background_for(model, b->node) : -1;
     if (m >= 0 && m < p->nbackground_map && p->bg_of[m] >= 0) {
         yonder_tile_t tile;
         if (picture_tile(p, &p->pics[p->bg_of[m]], NULL, (os64_gui_rect_t){0, 0, 0, 0}, 0, 0, &tile))
-            picture_drawn_at(p, p->bg_of[m], tile.at.w, tile.at.h);
+            picture_drawn_at(p, p->bg_of[m], tile.at.w, tile.at.h, b->style->pixelated);
     }
     if (!walk->sheets)
         return false;
@@ -4795,7 +4804,7 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
         yonder_tile_t tile;
         const flow_box_t *in = b == walk->owner && walk->root != NULL ? walk->root : b;
         if (k >= 0 && picture_tile(p, &p->pics[k], &l, yonder_box_edge(in, in->rect, l.origin), 0, 0, &tile))
-            picture_drawn_at(p, k, tile.at.w, tile.at.h);
+            picture_drawn_at(p, k, tile.at.w, tile.at.h, b->style->pixelated);
     }
     return fresh;
 }
@@ -4868,9 +4877,12 @@ static void pictures_judge(Page *p)
 
 // Without workers too: pictures_feed names each one it cannot hand over.
 // The size every picture is drawn at is found afresh by the walk, and the
-// shown page's are judged against what they keep (pictures_judge).
+// shown page's are judged against what they keep (pictures_judge), which
+// pays what the shown page's arrivals were owed (pictures_judge_owed).
 static void css_pictures(Page *p)
 {
+    if (p == &g.page)
+        g.pictures_judge_owed = false;
     if (p->tree == NULL)
         return;
     const yonder_verbs_t asking = {.backdrop = glass_backdrop};
@@ -4922,7 +4934,8 @@ static void pictures_start(Page *p)
     // to the picture; a background never does, being painted, not laid out.
     // One not yet asked for is asked to cover the largest box layout has
     // already fixed for it, where fill, contain or cover draws it inside
-    // that box's cover (PICTURE_SIZES.md); any other use asks for it whole.
+    // that box's cover (PICTURE_SIZES.md); any other use, and one drawn
+    // pixelated (picture_drawn_at says why), asks for it whole.
     bool fresh = false;             // a refusal the record had not met
     for (int32_t k = 0; k < p->npics; k++)
         if (p->pics[k].state == PIC_QUEUED) {
@@ -4943,7 +4956,7 @@ static void pictures_start(Page *p)
             flow_object_fit_t fit = b != NULL ? b->style->object_fit : FLOW_OBJECT_NONE;
             os64_gui_rect_t c = b != NULL ? yonder_box_edge(b, b->rect, FLOW_EDGE_CONTENT)
                                           : (os64_gui_rect_t){0, 0, 0, 0};
-            if (c.w <= 0 || c.h <= 0 ||
+            if (c.w <= 0 || c.h <= 0 || b->style->pixelated ||
                 (fit != FLOW_OBJECT_FILL && fit != FLOW_OBJECT_CONTAIN && fit != FLOW_OBJECT_COVER)) {
                 p->pics[k].cover_whole = true;
             } else {
@@ -5137,8 +5150,11 @@ static void picture_fact(const Picture *pic, const char *what)
 // the new pixels replace the old, and kept_bytes moves by the difference.
 // One that did not come, or will not fit, leaves the picture as it was — a
 // worse copy is never traded for none — and is a fact, not a failure: the
-// picture is still shown (or still past the memory). Either way its need
-// is judged again, since it may have moved while this one was out.
+// picture is still shown (or still past the memory). One that came back the
+// size already kept changes nothing, and is not asked for at that need
+// again: asking again would answer the same, and the page would ask
+// forever. Either way its need is judged again, since it may have moved
+// while this one was out.
 static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *product)
 {
     Picture *pic = &g.page.pics[job->index];
@@ -5156,6 +5172,10 @@ static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *produ
     } else if (product->cost > PICTURES_KEPT_MAX - (g.page.kept_bytes - old)) {
         if (shown)
             picture_fact(pic, "past the memory kept at the size it is drawn; kept at the size it was");
+        pic->refused_w = job->cover_w;
+        pic->refused_h = job->cover_h;
+    } else if (shown && product->image.width == pic->image.width &&
+               product->image.height == pic->image.height) {
         pic->refused_w = job->cover_w;
         pic->refused_h = job->cover_h;
     } else {
@@ -5207,6 +5227,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         picture_fact(pic, "past the memory kept for the page's pictures");
         if (picture_moves_page(&g.page, job->index))
             g.pictures_moved = true;
+        if (pic->kind == YONDER_PICTURE_RASTER)
+            g.pictures_judge_owed = true;
         return;
     }
     pic->svg = product->svg;
@@ -5225,6 +5247,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     }
     if (picture_moves_page(&g.page, job->index))
         g.pictures_moved = true;
+    if (pic->kind == YONDER_PICTURE_RASTER)
+        g.pictures_judge_owed = true;
     mark_whole(WHOLE_PICTURE, false);
 }
 
@@ -6592,6 +6616,10 @@ static void pictures_settle(void)
         if (now_ok)
             relayout(true);
     }
+    // Pictures that arrived moving nothing are judged at the size they are
+    // drawn now; a layout still owed runs the same walk when it comes.
+    if (g.pictures_judge_owed && !g.pictures_moved && !s_web.moved)
+        css_pictures(&g.page);
     // A face the layout's own feed moved (webfonts_move) is owed the next
     // batch, not dropped with the deadline this pass started from.
     if (s_web.moved && due == YONDER_NEVER)
@@ -7006,15 +7034,18 @@ typedef struct {
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 
 // The shown page has nothing more coming of its own accord: it has
-// streamed and arrived, its pictures and fonts are in and its record is
-// not owed, and no script of its is waiting to run or still being fetched
-// (a `src` script, or a module script's graph: one slower than the quiet
-// would otherwise be cut off). What a running script fetches for itself
-// is not waited for, since a page that polls would never settle; its
-// answer comes back as a job, which restarts the quiet.
+// streamed and arrived, its pictures and fonts are in — kept at the size
+// they are drawn too, no resample out or owed (with none waiting, every
+// job in flight is a resample) — and its record is not owed, and no
+// script of its is waiting to run or still being fetched (a `src` script,
+// or a module script's graph: one slower than the quiet would otherwise
+// be cut off). What a running script fetches for itself is not waited
+// for, since a page that polls would never settle; its answer comes back
+// as a job, which restarts the quiet.
 static bool exit_settled(void)
 {
     return g.page.tree != NULL && !g.stream.active && !g.coming.active && g.page.waiting == 0 &&
+           g.page.in_flight == 0 && g.page.resample_owed == 0 && !g.pictures_judge_owed &&
            !g.page.record_owed && s_web.waiting == 0 && !yonder_scripts_pending(g.page.scripts) &&
            !yonder_scripts_fetching(g.page.scripts);
 }
