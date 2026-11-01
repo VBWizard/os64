@@ -217,13 +217,55 @@ static void compact_coverage(void)
     pixel(c,1000,500,0xff000000);pixel(c,1000,510,0);
     o.budget=0;OK(canvas_destroy(c));CHECK(!o.live);
 }
+static void outside_fills(void)
+{
+    Owner o={0};canvas_context_t *c=drawing(&o);
+    const double centers[][2]={{286000,-148000},{-1e8,16},{16,1e8},{16,-1e8},{1e8,16}};
+    for(unsigned i=0;i<5;i++) {
+        OK(canvas_begin_path(c));
+        OK(canvas_ellipse(c,centers[i][0],centers[i][1],3000,3000,0,0,2*3.141592653589793,false));
+        OK(canvas_ack_damage(c));
+        size_t calls=o.calls;
+        OK(canvas_fill(c,i%2));
+        CHECK(o.calls==calls); /* No backend allocation for the discarded fill. */
+        draw2d_damage_t damage;OK(canvas_damage(c,&damage));CHECK(!damage.x1);
+        pixel(c,16,16,0);
+    }
+    /* All endpoints outside does not prove that the fill is outside. */
+    OK(canvas_begin_path(c));OK(canvas_path_rect(c,-10,-10,52,52));
+    OK(canvas_fill(c,false));pixel(c,16,16,0xff000000);
+    OK(canvas_reset(c,32,32));OK(canvas_begin_path(c));move(c,-8,4);
+    os64_geometry_command_t curve={.verb=OS64_GEOMETRY_CUBIC,.p={{40,4},{40,28},{-8,28}}};
+    OK(canvas_path_command(c,&curve));OK(canvas_fill(c,false));pixel(c,8,16,0xff000000);
+    /* Copy and clip act on the destination even with an offscreen source. */
+    OK(canvas_begin_path(c));OK(canvas_path_rect(c,40,4,8,8));
+    OK(canvas_set_composite(c,DRAW2D_COPY));OK(canvas_fill(c,false));pixel(c,8,16,0);
+    OK(canvas_reset(c,32,32));OK(canvas_begin_path(c));OK(canvas_path_rect(c,40,4,8,8));
+    OK(canvas_clip(c,false));OK(canvas_fill_rect(c,0,0,32,32));pixel(c,8,16,0);
+    /* Offscreen geometry can still cast a visible shadow or expand a stroke. */
+    OK(canvas_reset(c,32,32));OK(canvas_begin_path(c));OK(canvas_path_rect(c,40,4,8,8));
+    OK(canvas_set_shadow_color(c,0x0000ff,1));OK(canvas_set_shadow_value(c,1,-32));
+    OK(canvas_fill(c,false));pixel(c,10,6,0xff0000ff);
+    OK(canvas_reset(c,32,32));OK(canvas_begin_path(c));move(c,36,4);line(c,36,28);
+    os64_geometry_stroke_t pen={16,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER};
+    OK(canvas_set_line(c,&pen));OK(canvas_stroke(c));pixel(c,30,16,0xff000000);
+    /* Device-space points, not the transform subsequently selected for paint. */
+    OK(canvas_reset(c,32,32));
+    os64_geometry_map_t m={1,0,0,1,1000000,0};OK(canvas_transform(c,&m,true));
+    OK(canvas_begin_path(c));OK(canvas_path_rect(c,0,0,8,8));
+    m=(os64_geometry_map_t){1,0,0,1,0,0};OK(canvas_transform(c,&m,true));
+    OK(canvas_fill(c,false));pixel(c,4,4,0);
+    OK(canvas_begin_path(c));OK(canvas_path_rect(c,2,2,8,8));
+    m.tx=1000000;OK(canvas_transform(c,&m,true));OK(canvas_fill(c,false));pixel(c,4,4,0xff000000);
+    OK(canvas_destroy(c));CHECK(!o.live);
+}
 #include "test_canvas_images.inc"
 #include "test_canvas_paints.inc"
 #include "test_canvas_shadows.inc"
 #include "test_canvas_retained_path.inc"
 int main(void)
 {
-    canvas_baseline_main();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();paints();
+    canvas_baseline_main();outside_fills();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();paints();
     shadows();retained_paths();shadow_refusal();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }

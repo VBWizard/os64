@@ -68,10 +68,10 @@ OS window presentation; they are **not P5 frame-rate measurements**.
 | 2D Wave Simulation | 1920 × 1080 | 104.00 ms | 73.50 ms | 29.3% |
 
 Both selected examples' hover-started animations run without script failures
-and reuse layout during the measured frames. Starfield reaches a pre-existing `QuotaExceededError`
-from Canvas geometry in both builds; matching its pixels is regression
-evidence, not successful acceptance. Its extreme projected geometry requires
-separate investigation under the existing bounds policy.
+and reuse layout during the measured frames. The initial Starfield replay
+reached a pre-existing geometry `QuotaExceededError` in both builds; matching
+those incomplete frames was regression evidence, not successful acceptance.
+The offscreen-fill follow-up below diagnoses and addresses that failure.
 
 A standalone optimized host benchmark also retains identical output hashes.
 At 1920 × 1080, opaque fills fall from 30.81 to 0.75 ms, clears from 16.66 to
@@ -99,7 +99,46 @@ Both final bitmap hashes match. These measurements exclude the host's frame
 waiting and native window presentation, so they do not quantify the pacing
 change or predict P5 frame rates. A separate optimized primitive benchmark
 reduces a 1920 × 1080 translucent fill from 13.59 to 2.10 ms with matching pixels;
-that is the fill alone. P5 acceptance of the revised pacing remains pending.
+that is the fill alone. The P5 browsing pass confirmed a substantial improvement
+at small and maximized sizes. The revised pacing is accepted, subject to later
+integration regressions; the user observed utilization above 50% fullscreen and
+about 30% in a smaller window.
+
+## Starfield: offscreen fills must not interrupt visible stars
+
+The next P5 report found smooth motion but repeated blinking without pointer
+movement. The captured replay on `f383a88d` reproduces geometry exceptions that
+predate the pacing change. A debugger stop identifies `bounds()` returning
+`OS64_GEOMETRY_LIMIT` while converting a projected star near (286313, -148494)
+to the raster grid. The page has already filled the canvas black; throwing from
+that star's `fill()` aborts the loop and omits subsequent stars from the frame.
+
+Before backend preparation, Canvas now checks whether the device-space control
+points of a fill lie in one common half-plane outside the bitmap, with the same
+two-pixel fringe used for coverage bounds. Lines, Bezier curves and implicit
+closing edges remain inside that hull. Such a fill is a no-op for operators
+that preserve destination pixels under zero coverage. The check does not cull
+stroke expansion, shifted/blurred shadows, clip replacement or operators such
+as copy that can affect the destination outside the shape. It does not enlarge
+backend limits or swallow a backend error; intersecting extreme geometry and
+path-construction limits remain explicit debts.
+
+Validation:
+
+- Production-geometry Canvas suite: **1,070,072 assertions**, including far-away
+  and oversized offscreen circles, curves and enclosing paths that enter the
+  bitmap, copy, clipping, visible shadows, wide strokes and device-space path
+  lifetime across transform changes. ASan, UBSan and LeakSanitizer enabled.
+- The original captured Starfield scripts run for 100 measured frames at
+  600 × 600 and 1920 × 1080. The prior replays record 24 and 63 repeated geometry
+  errors respectively, including startup; the new replays record none.
+- Each of the 100 bitmap hashes at each size matches a diagnostic reference
+  that adds a projected-circle bounding-box rejection to the page's script.
+  This reference is a private fixture variant, not a modification to the site
+  or to the delivered captured scripts. Runs release tracked allocations with
+  leak checking enabled outside the debugger.
+
+P5 confirmation of this Starfield fix remains pending.
 
 ## Native handoff
 
@@ -124,6 +163,7 @@ coordinate debt, separate from rectangle painting; the hover-started frame
 measurements do not exercise it. The guide names this limitation rather than
 promising that the grid can be edited.
 
-P5 acceptance of the follow-up is pending. Its runtime delivery changes
-`libdraw2d.so` and `yonder` and reuses the other tested binaries. The earlier Danlegt
+The pacing/performance delivery changed `libdraw2d.so` and `yonder` and passed
+its P5 browsing check. The Starfield follow-up changes `libcanvas.so`, retaining
+that accepted pacing and the remaining tested runtime files. The earlier Danlegt
 [checkpoint](c6-target-checkpoint.md) records its independent startup blockers.
