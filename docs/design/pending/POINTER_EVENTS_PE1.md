@@ -93,8 +93,12 @@ released, and enter/leave while the target moves under a stationary cursor.
 The guest uses an isolated copy of the disks and the matching runtime cohort.
 No kernel change is required.
 
-P5 acceptance is pending: try drawing outside the canvas and window, release
-and return, interrupt a held gesture, try the chord and gate, and repeat at
-25%, 100%, 200% and 400% zoom. This is interaction acceptance; no alternating
-performance campaign is required. C6 follows with the saved signature and
-scratch flows and their remaining fidelity work.
+P5 acceptance passed on 2026-11-01 using the frozen `f1428b2d` delivery.
+Chris reported that all four gallery samples worked perfectly and approved
+the slice for review. This records the reported gallery pass; individual
+interaction results were not separately logged. The accepted binary cohort
+and its SHA-256 manifest remain unchanged.
+
+C6 follows with the saved signature and scratch flows and their remaining
+fidelity work. PE1's gallery acceptance does not claim those full applications
+already pass.

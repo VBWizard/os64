@@ -1,6 +1,6 @@
 # PE1 — Mouse-backed pointer events and capture
 
-Implemented for hardware acceptance, 2026-11-01. Base: Canvas reconciliation `c1f354a4` (PR #447),
+Implemented; P5 gallery accepted 2026-11-01. Base: Canvas reconciliation `c1f354a4` (PR #447),
 stacked on `canvas-integration`. PE1 follows Modern Web 5d and precedes
 Canvas C6. It supplies the input path for drawing and scratching; C6 owns
 end-to-end acceptance of the captured Danlegt applications.
