@@ -53,6 +53,12 @@ yonder would carry `streams.js`:
   closes it and errors it.
 - Cost: one new mechanism in libdom (engine-hosted code), and that code's
   frames appear in a page's stack traces, named `os64-streams`.
+- If reading it at every realm's start costs too much (§ 7), it is read on
+  first use instead, through accessors on `window`, which still answer
+  `'ReadableStream' in window` truthfully. The INTRINSICS are captured at
+  the realm's start either way, by C, and handed to the code when it is
+  read: captured on first use, they would be whatever the page had patched
+  them to by then.
 - Size: a few thousand lines of JS for S1 and S2 together, to be measured
   as it is written; the standard's own reference implementation is the
   yardstick.
@@ -69,7 +75,29 @@ reference implementation make the code checkable line by line, and WPT
 `streams/` is the oracle either way. It is a ruling for Chris, since it is
 a first.
 
-## 4. Cuts
+## 4. Rules
+
+1. **A body's bytes have one owner: its stream.** The C door hands the
+   bytes over when they arrive and `fetch.c` keeps none. `text()`,
+   `json()`, `arrayBuffer()`, `blob()`, `formData()` and `bytes()` read
+   the stream to its end through a reader, as the standard's "fully read"
+   does, so `bodyUsed`, locked and disturbed are one state, in JS, and
+   `new Response(stream)` takes the same path as a fetched body.
+2. **The switch.** Streams is a row in libdom's Modern Web table
+   (`modern.c`), so its globals exist only with `os64_dom_options_t.modern`
+   set, like `fetch` and `XMLHttpRequest`, which are rows there already.
+3. **Memory.** A page's streams live in its runtime's heap, and that
+   runtime's allocation limit (`os64_js_default_limits`, applied with
+   `JS_SetMemoryLimit`) is their cap: an `enqueue` past it throws like any
+   allocation. The limit is per page (MODERN_WEB.md's reopened decision).
+4. **Diagnostics say where.** A failure whose innermost frame is in
+   `os64-streams` is recorded as `FAILED (in os64-streams) ...`. A FAILED
+   line is read as "the page used something yonder lacks"; a bug in
+   `streams.js` must not be filed that way. The mark says where the throw
+   happened, not whose fault it was: a page that hands a reader the wrong
+   object is also thrown at from inside.
+
+## 5. Cuts
 
 1. **S1, the standard minus byte streams.**
    - `ReadableStream`: the default controller, default reader, `tee`,
@@ -89,6 +117,24 @@ a first.
      chunks as they arrive, then the end or an error. yonder's fetch job
      sends what it has as it reads, so `response.body` grows while the page
      reads it.
+   - It needs nothing new from libfetch: the job already runs on its own
+     thread, where `os64_fetch_open` blocks until the head and
+     `os64_fetch_read` returns the body a piece at a time (DEBTS
+     "Progressive `open`" is for a loop with no thread, which this is not).
+   - Chunks are delivered on the page's own thread, between tasks, in
+     order, the way `os64_dom_fetched` is delivered today.
+   - **Backpressure.** The job stops reading the socket while the stream's
+     queue is full (the standard's `desiredSize`), and reads again when the
+     stream pulls. Without that, a page that opens a large body and never
+     reads it grows the queue without bound.
+   - **Caps.** A streamed body is not held by the job, so
+     `YONDER_FETCH_BODY_MAX` does not cap it; the realm's allocation limit
+     (rule 3) does, for whatever the page keeps. The job's cap stays for
+     the bodies yonder keeps itself.
+   - **XHR rides the same contract**: `progress` fires per chunk and
+     `responseText` grows, as XHR says. Today it fires once, at the end of
+     the body (`xhr.c`'s `end_of_body`), which is why a speed test that
+     measures from `progress` reads near zero.
    - `TextEncoderStream` and `TextDecoderStream` (the Encoding standard's,
      over the decoder libdom has).
 
@@ -96,27 +142,32 @@ a first.
 request bodies that stream (`duplex: "half"`), `CompressionStream` and
 `DecompressionStream` (libgzip could serve them; a slice of their own).
 
-## 5. Lifecycle
+## 6. Lifecycle
 
 | Event | Streams code | A body's stream |
 |---|---|---|
-| a realm starts (a document's scripts) | its bytecode read; intrinsics captured; globals defined; the C door handed back | — |
+| a realm starts (a document's scripts) | intrinsics captured; its bytecode read (or, if lazy, at first use); globals defined; the C door handed back | — |
 | a page builds a stream | the standard's operations, in JS | — |
 | a fetch answer arrives (S1, S2) | — | made through the C door, its bytes enqueued whole, closed |
 | a head arrives, then chunks (S3) | — | made at the head; each chunk enqueued as it comes; closed at the end, errored on a failure |
+| a page calls `text()` and its siblings | a reader reads the stream to its end | disturbed and locked, in JS |
 | a fetch is aborted | — | errored through the door, as the Response's abort steps say |
+| the realm is short of memory | the allocation throws, as any does | errored, if it was the host's enqueue |
 | the page leaves | — | its streams go with the realm; a pending host read is cancelled, as today |
 
-## 6. Proof
+## 7. Proof
 
-- **WPT `streams/`** (testharness `.any.js`, added to `tools/wpt_fetch.sh`),
-  the oracle: readable, writable, transform, piping, queuing strategies, and
-  in S2 the byte streams. The `patched-global` pages check the captured
-  intrinsics.
+- **WPT `streams/`** (testharness `.any.js`, added to `tools/wpt_fetch.sh`'s
+  `WPT_DIRS`), the oracle: readable, writable, transform, piping, queuing
+  strategies, and in S2 the byte streams. The byte-stream pages stay in
+  the list, expected to fail until S2, never excluded. The `patched-global`
+  pages check the captured intrinsics.
 - **No loss in WPT `fetch/api`**, whose body tests move from the C streams
   to these, and in the DOM host suite.
-- **A host fixture of a realm's start**: its cost measured (time and memory
-  per realm), since every document pays it; read lazily on first use if it
-  is too dear.
+- **A host fixture of a realm's start**: its cost measured in time and
+  memory. With `keep_pages = on` a kept page keeps its runtime, so every
+  kept page holds the cost and not only the one in front; measured with
+  three kept pages. If it is too dear, the code is read on first use
+  (§ 3).
 - **The P5**: the social site's sign-in pages draw; GitHub's bundles get
   past `ReadableStream`.
