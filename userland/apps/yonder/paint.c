@@ -1820,15 +1820,18 @@ static bool rounded(const int32_t radii[4][2])
 // border box, filtered by its `backdrop-filter` and laid back cut to the
 // box — rounded by its corners, `shape` when `round` — before anything of
 // the box is painted. Charged to the paint's filter budget (the box's part
-// in the view), and drawn unfiltered and counted past it or where the
-// verbs refuse: inside a group's sheets, what is behind is not the page. A
-// list with a reference draws nothing (FILTER.md § 2).
+// in the view), and drawn unfiltered and counted past it, with no memory
+// for its mask, or where the verbs refuse (pane_backdrop_filter says
+// when). Not drawn, and not counted: a list with a reference (FILTER.md §
+// 2), the root's — nothing is behind it (Filter Effects 2) — the canvas
+// owner's, whose background is the canvas's, and a text clip's mask.
 static os64_gui_rect_t cut(os64_gui_rect_t r, os64_gui_rect_t c);
 
 static void backdrop_filtered(const Painter *p, const flow_box_t *b, const Round *shape, bool round)
 {
     const flow_style_t *s = b->style;
-    if (s->nbackdrop_filter <= 0 || p->penned || b == p->canvas_owner || p->v->backdrop_filter == NULL)
+    if (s->nbackdrop_filter <= 0 || p->penned || b == p->canvas_owner || b->parent == NULL ||
+        p->v->backdrop_filter == NULL)
         return;
     for (int32_t i = 0; i < s->nbackdrop_filter; i++)
         if (s->backdrop_filter[i].fn == FLOW_FILTER_URL)

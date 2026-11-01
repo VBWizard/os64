@@ -109,9 +109,9 @@ typedef struct {
     // filtered by `filter` (n functions, none a URL; `current` a drop
     // shadow's currentColor) and laid back inside `rect`, at the coverage
     // `cover` gives each of its pixels (rect.w a row; NULL for all of it).
-    // False, and nothing changed, when it cannot be drawn: no memory, or
-    // nothing behind it that is the page (inside a group's sheets). NULL:
-    // no backdrop is filtered.
+    // False, and nothing changed, when it cannot be drawn: no memory, a
+    // layer past the face's limits, or nothing behind it that is the page
+    // (inside a group's sheets). NULL: no backdrop is filtered.
     bool (*backdrop_filter)(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
                             const flow_filter_t *filter, int32_t n, uint32_t current);
 } yonder_verbs_t;

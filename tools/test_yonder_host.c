@@ -857,6 +857,12 @@ static void backdrop_paint_cases(void)
     expect("backdrop: a list with a reference asks nothing",
            got != NULL && strstr(got, "backdrop ") == NULL && yonder_paint_filters_refused == 0, got);
     free(got);
+    // The root has nothing behind it (Filter Effects 2): no backdrop.
+    static const char kRoot[] = "<!doctype html><style>html { backdrop-filter: invert(1) }"
+        " body { margin: 0; background: #fff }</style><p>x";
+    got = paint_of(kRoot, strlen(kRoot), 200, (os64_gui_rect_t){0, 0, 200, 300}, &escaped, true);
+    expect("backdrop: the root's asks nothing", got != NULL && strstr(got, "backdrop ") == NULL, got);
+    free(got);
     s_backdrop_refused = true;
     static const char kPlain[] = "<!doctype html><style>body { margin: 0 }"
         " .h { backdrop-filter: blur(2px); height: 20px }</style><div class=h></div>";

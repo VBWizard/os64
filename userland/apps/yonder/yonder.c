@@ -6177,9 +6177,6 @@ static uint64_t frame_delay(const Picture *pic)
 // parts that reached across it.
 static void mark_part(os64_gui_rect_t r)
 {
-    // A backdrop blurs what lies within its reach of anything that
-    // changed, so a part it reads repaints it whole (FILTER.md § 7).
-    r = flow_backdrop_damage(g.page.tree, r, scroll_now());
     os64_ui_widget_t part = {0};
     part.bounds = (os64_gui_rect_t){g.view.bounds.x + r.x - g.sx, g.view.bounds.y + r.y - g.sy,
                                     r.w, r.h};
@@ -6910,12 +6907,43 @@ static void paint_counted(const os64_gui_rect_t *damage, uint32_t count, WholeBy
         s_cost.rects_most = count;
 }
 
+// A backdrop blurs what lies within its reach of anything that changed,
+// so before libui paints, each part of the view it will paint is joined
+// with every backdrop box that part reaches (flow_backdrop_damage;
+// FILTER.md § 7). It is done here, over libui's own list, because not
+// every part comes through mark_part: libui marks a form control's part
+// itself, when it is hovered or focused.
+static void backdrop_damage(void)
+{
+    if (g.page.tree == NULL || !g.ui.any_dirty)
+        return;
+    os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+    uint32_t n = g.ui.damage_count;
+    os64_memcpy(list, g.ui.damage, (size_t)n * sizeof(list[0]));
+    const os64_gui_rect_t v = g.view.bounds;
+    flow_point_t scroll = scroll_now();
+    for (uint32_t i = 0; i < n; i++) {
+        os64_gui_rect_t in;
+        if (!os64_rect_intersect(list[i], v, &in))
+            continue;
+        os64_gui_rect_t page = {in.x - v.x + g.sx, in.y - v.y + g.sy, in.w, in.h};
+        os64_gui_rect_t wide = flow_backdrop_damage(g.page.tree, page, scroll);
+        if (wide.x == page.x && wide.y == page.y && wide.w == page.w && wide.h == page.h)
+            continue;
+        os64_ui_widget_t part = {0};
+        os64_gui_rect_t at = {v.x + wide.x - g.sx, v.y + wide.y - g.sy, wide.w, wide.h};
+        if (os64_rect_intersect(at, v, &part.bounds))
+            os64_ui_mark_dirty(&g.ui, &part);
+    }
+}
+
 // libui's paint, timed (s_cost): its render, then each dirty rectangle
 // handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
-// again here.
+// again here. Each part is first widened to the backdrops it reaches.
 static void glass_paint(void)
 {
+    backdrop_damage();
     os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
     WholeBy by = s_whole_by;
     os64_gui_rect_t reach = s_parts_reach;
@@ -12267,7 +12295,9 @@ static void pane_filter_close(void *ctx, const flow_filter_t *filter, int32_t n,
 // round it read from the window — mirrored, as a filter's layer is cut —
 // no farther than the page view, filtered as an opaque layer, and laid
 // back inside `rect` at `cover`. Refused on a group's sheets, where what
-// is behind is not the page, and with no memory.
+// is behind is not the page; with no memory; and for a layer past
+// FILTER_SHEET_SIDE or FILTER_SHEET_PIXELS, or lying past half of what a
+// coordinate can say, or with no page view to read.
 static bool pane_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
                                  const flow_filter_t *filter, int32_t n, uint32_t current)
 {

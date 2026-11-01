@@ -147,12 +147,17 @@ paint's filter budget, as a filter's layer is.
 
 **Damage.** A backdrop blurs what lies up to its reach outside any changed
 pixel, so a change under a frosted header must repaint the whole header,
-not the changed rect: yonder's one door for a part repaint (`mark_part`)
-asks libflow (`flow_backdrop_damage`) to join every backdrop-filtered box
-whose border box, grown by its reach, meets the part. The margin read
-outside the part is the window as last painted, which is what is there.
+not the changed rect. Before libui paints (`glass_paint`), every part of
+the view it is about to paint is widened, whatever marked it — yonder's
+`mark_part`, or libui itself for a control's hover or focus — by libflow
+(`flow_backdrop_damage`), which joins all that each backdrop-filtered box
+paints (its shadows too) when its border box, grown by its reach, meets
+the part or a box already joined, until nothing more joins: a box drawn
+again is a change to the backdrop beside it. The margin read outside the
+part is the window as last painted, which is what is there.
 
-**Where it is drawn, and where not.** On the window only. Inside a group
+**Where it is drawn, and where not.** Not on the root, which has nothing
+behind it (Filter Effects 2). On the window only. Inside a group
 painted onto sheets — an opacity group laid through a matrix, a filtered
 group, a text clip, or the element's own transform — what is behind it is
 the group's black and white sheets, not the page (Filter Effects 2's
@@ -256,7 +261,9 @@ and booked.
   (`yonder_backdrop_take`), filters it as an opaque layer, and lays it back
   inside the box at its coverage (`yonder_backdrop_put`). It refuses on a
   group's sheets (§ 7), counted.
-- **Damage**: `mark_part` joins every backdrop box a part reaches
-  (`flow_backdrop_damage`, with `flow_filter_list_reach`, the reach of any
-  list).
+- **Damage**: `glass_paint` widens each part libui will paint to every
+  backdrop box it reaches (`backdrop_damage`, over `flow_backdrop_damage`
+  and `flow_filter_list_reach`, the reach of any list), transitively and
+  with each box's shadows; widening in `mark_part` alone missed the parts
+  libui marks itself (the cold read).
 - **libgarb** names a backdrop approximated only for a `url()` in it.

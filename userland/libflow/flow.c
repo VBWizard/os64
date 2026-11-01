@@ -963,18 +963,31 @@ os64_gui_rect_t flow_backdrop_damage(const flow_tree_t *tree, os64_gui_rect_t r,
 {
     if (tree == NULL || r.w <= 0 || r.h <= 0)
         return r;
+    // Until nothing more joins: a box drawn again changes what a backdrop
+    // beside it reads, so each is tested against all that is joined so far.
+    // Each pass joins one box at least or ends, so it ends.
     os64_gui_rect_t out = r;
-    for (int32_t i = 0; i < tree->nstacked; i++) {
-        const flow_box_t *b = tree->stacked[i];
-        if (b->style->nbackdrop_filter <= 0 || !f_filtered(b->style) || b->unpainted)
-            continue;
-        int32_t d[4];
-        flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
-        // Mirrored: the box draws what lies that far outside it the other way.
-        const int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
-        os64_gui_rect_t box = flow_box_doc_rect(b, scroll);
-        if (meets(grown(box, in), r))
-            out = join(out, box);
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (int32_t i = 0; i < tree->nstacked; i++) {
+            const flow_box_t *b = tree->stacked[i];
+            if (b->style->nbackdrop_filter <= 0 || !f_filtered(b->style) || b->unpainted)
+                continue;
+            int32_t d[4];
+            flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
+            // Mirrored: the box draws what lies that far outside it the
+            // other way.
+            const int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
+            if (!meets(grown(flow_box_doc_rect(b, scroll), in), out))
+                continue;
+            // All it paints, its shadows too, which lie in the margin its
+            // backdrop reads from the window.
+            flow_point_t o = flow_box_doc_offset(b, scroll);
+            os64_gui_rect_t all = grown(moved(b->overflow, o.x, o.y), b->ink);
+            os64_gui_rect_t was = out;
+            out = join(out, all);
+            grew |= out.x != was.x || out.y != was.y || out.w != was.w || out.h != was.h;
+        }
     }
     return out;
 }

@@ -1346,12 +1346,15 @@ void flow_filter_reach(const flow_style_t *s, int32_t out[4]);
 // The same for any list, `n` functions of `list` — a `backdrop-filter`'s —
 // whatever box it is on: 0 for a list holding a URL.
 void flow_filter_list_reach(const flow_filter_t *list, int32_t n, int32_t out[4]);
-// A repaint `r` (page coordinates at `scroll`) joined with the border box
-// of every box whose `backdrop-filter` reads what `r` changes — each that
-// is drawn, whose border box, grown by its list's reach mirrored, meets
-// `r` — so the box is drawn again whole (FILTER.md § 7): its backdrop
-// blurs what lies that far outside any pixel that changed. `r` itself when
-// none does.
+// A repaint `r` (page coordinates at `scroll`) joined with all that each
+// stacked box with a `backdrop-filter` paints — its overflow and its ink,
+// its shadows too — when its border box, grown by its list's reach
+// mirrored, meets `r` or anything already joined, until nothing more
+// joins: so the box is drawn again whole (FILTER.md § 7), its backdrop
+// blurring what lies that far outside any pixel that changed, a box drawn
+// again being a change too. `r` itself when none does. An inline-block's
+// backdrop is not stacked and not seen (DEBTS § Filters); the root's is
+// not drawn.
 os64_gui_rect_t flow_backdrop_damage(const flow_tree_t *tree, os64_gui_rect_t r, flow_point_t scroll);
 // Whether an outer box shadow of `box` casts anything: its shape, the
 // border box grown by its spread, is not empty. One a negative spread
