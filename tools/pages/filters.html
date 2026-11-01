@@ -1,0 +1,28 @@
+<!doctype html><html><head><title>filters</title><style>
+body{margin:10px;font:16px sans-serif;background:#fff}
+.row{display:flex;gap:16px;margin-bottom:18px}
+.c{width:120px;height:80px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:bold}
+.base{background:linear-gradient(90deg,#e33,#3a3,#33e)}
+</style></head><body>
+<div class=row>
+ <div class="c base">none</div>
+ <div class="c base" style="filter:grayscale(1)">gray</div>
+ <div class="c base" style="filter:sepia(1)">sepia</div>
+ <div class="c base" style="filter:hue-rotate(90deg)">hue 90</div>
+ <div class="c base" style="filter:invert(1)">invert</div>
+</div>
+<div class=row>
+ <div class="c base" style="filter:blur(3px)">blur 3</div>
+ <div class="c base" style="filter:brightness(.5)">bright .5</div>
+ <div class="c base" style="filter:contrast(2)">contrast 2</div>
+ <div class="c base" style="filter:saturate(3)">sat 3</div>
+ <div class="c base" style="filter:opacity(.4)">opac .4</div>
+</div>
+<div class=row>
+ <div class="c" style="background:#29f;border-radius:20px;filter:drop-shadow(6px 6px 4px rgba(0,0,0,.6))">shadow</div>
+ <div class="c" style="color:#c00;font-size:40px;filter:drop-shadow(3px 3px 0 #08f)">Aa</div>
+ <div class="c base" style="filter:blur(2px) grayscale(1);opacity:.5">blur gray .5</div>
+ <div class="c base" style="transform:rotate(10deg);filter:blur(1px)">turned</div>
+ <div class="c base" style="filter:url(#none)">url</div>
+</div>
+</body></html>
