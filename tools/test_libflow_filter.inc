@@ -242,6 +242,61 @@ static void filter_seen_cases(void)
     moving_close(&m);
 }
 
+// A backdrop reads what lies within its reach of its border box, so a
+// part repaint it reads takes it in whole (FILTER.md § 7): blur(4px)
+// reaches 12, so a change 5 below a 60-high header joins it, one 40 below
+// does not.
+static void filter_backdrop_damage_cases(void)
+{
+    Sheeted q;
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     "#h{position:fixed;top:0;width:400px;height:60px;backdrop-filter:blur(4px)}</style>"
+                     "<div id=h></div><div style=\"height:3000px\"></div>",
+                 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    flow_point_t top = {0, 0};
+    os64_gui_rect_t near = flow_backdrop_damage(t, (os64_gui_rect_t){10, 65, 20, 5}, top);
+    os64_gui_rect_t far = flow_backdrop_damage(t, (os64_gui_rect_t){10, 100, 20, 5}, top);
+    char detail[96];
+    snprintf(detail, sizeof(detail), "near %d %d %d %d far %d %d %d %d", near.x, near.y, near.w,
+             near.h, far.x, far.y, far.w, far.h);
+    expect("backdrop: a part within the reach takes the box in, one beyond does not",
+           rect_is(near, 0, 0, 400, 70) && rect_is(far, 10, 100, 20, 5), detail);
+    // Transitive: B beside A reads what A's repaint changes (the cold
+    // read's first finding). A blur(10px) reaches 30, B's blur(8px) 24; a
+    // point inside A joins A, A's repaint reaches B, so B is joined too.
+    Sheeted two;
+    sheeted_open(&two, "<!doctype html><style>body{margin:0}"
+                       "#a{position:fixed;left:0;top:0;width:100px;height:100px;backdrop-filter:blur(10px)}"
+                       "#b{position:fixed;left:80px;top:0;width:100px;height:100px;backdrop-filter:blur(8px)}"
+                       "</style><div id=a></div><div id=b></div>",
+                 400, 600);
+    flow_tree_t *t2 = flow_layout(two.doc, two.page, 400, &two.env);
+    os64_gui_rect_t both = flow_backdrop_damage(t2, (os64_gui_rect_t){50, 50, 1, 1}, top);
+    snprintf(detail, sizeof(detail), "%d %d %d %d", both.x, both.y, both.w, both.h);
+    expect("backdrop: a box drawn again joins the backdrop beside it", rect_is(both, 0, 0, 180, 100),
+           detail);
+    flow_free(t2);
+    sheeted_close(&two);
+    // A box's own shadow lies in its backdrop's margin: it is joined too.
+    Sheeted sh;
+    sheeted_open(&sh, "<!doctype html><style>body{margin:0}"
+                      "#c{position:fixed;left:100px;top:100px;width:100px;height:100px;"
+                      "backdrop-filter:blur(4px);box-shadow:0 0 0 10px black}</style><div id=c></div>",
+                 400, 600);
+    flow_tree_t *t3 = flow_layout(sh.doc, sh.page, 400, &sh.env);
+    os64_gui_rect_t shadowed = flow_backdrop_damage(t3, (os64_gui_rect_t){150, 150, 1, 1}, top);
+    snprintf(detail, sizeof(detail), "%d %d %d %d", shadowed.x, shadowed.y, shadowed.w, shadowed.h);
+    expect("backdrop: a box's own shadow is joined with it", rect_is(shadowed, 90, 90, 120, 120), detail);
+    flow_free(t3);
+    sheeted_close(&sh);
+    // Scrolled, the fixed header is where the scroll puts it.
+    os64_gui_rect_t scrolled = flow_backdrop_damage(t, (os64_gui_rect_t){10, 565, 20, 5}, (flow_point_t){0, 500});
+    expect("backdrop: a fixed box's damage at the scroll", rect_is(scrolled, 0, 500, 400, 70), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void filter_cases(void)
 {
     filter_group_cases();
@@ -250,4 +305,5 @@ static void filter_cases(void)
     filter_computed_cases();
     filter_mark_cases();
     filter_seen_cases();
+    filter_backdrop_damage_cases();
 }

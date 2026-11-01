@@ -451,6 +451,26 @@ static void rec_filter_close(void *ctx, const flow_filter_t *filter, int32_t n, 
     out(&rec->out, "end filter %d #%06x %d\n", (int)n, current, (int)alpha);
 }
 
+// A backdrop (FILTER.md § 7): its rect, its coverage (the mask's sum, or
+// none), its list's length and its currentColor. Refused when the case
+// says the face cannot draw one (s_backdrop_refused).
+static bool s_backdrop_refused;
+
+static bool rec_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
+                                const flow_filter_t *filter, int32_t n, uint32_t current)
+{
+    Rec *rec = ctx;
+    (void)filter;
+    if (s_backdrop_refused)
+        return false;
+    long sum = -1;
+    for (int32_t k = 0; cover != NULL && k < rect.w * rect.h; k++)
+        sum += cover[k] + (k == 0);
+    out(&rec->out, "backdrop %d %d %d %d cover %ld %d #%06x\n", rect.x, rect.y, rect.w, rect.h, sum,
+        (int)n, current);
+    return true;
+}
+
 // THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask and
 // a picture are recorded whole, every alpha and every pixel, so two
 // paintings of one page compare pixel for pixel (paint_of).
@@ -528,7 +548,7 @@ static yonder_verbs_t verbs_of(Rec *rec)
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
                             rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
                             rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close,
-                            rec_filter_open, rec_filter_close};
+                            rec_filter_open, rec_filter_close, rec_backdrop_filter};
 }
 
 // The oracle's caches: the suite's, which every page painted before fills,
@@ -802,6 +822,53 @@ static void filter_paint_cases(void)
     got = paint_of(kSmall, strlen(kSmall), 200, (os64_gui_rect_t){0, 0, 10, 10}, &escaped, true);
     expect("filter: a small repaint is charged what it shows, not the margin",
            got != NULL && strstr(got, "\nfilter ") != NULL && yonder_paint_filters_refused == 0, got);
+    free(got);
+}
+
+// A backdrop (FILTER.md § 7): asked before the box's own background, with
+// its border box cut to the view; a rounded box hands over its coverage
+// (-1 is none); a list with a reference asks nothing; a refusal is counted.
+static void backdrop_paint_cases(void)
+{
+    paint_page_case("backdrop: filtered before the box's background",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .h { backdrop-filter: blur(4px); height: 20px; background: #00ff00 }</style>"
+                    "<div class=h></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "backdrop 0 0 200 20 cover -1 1 #101010\n"
+                    "fill 0 0 200 20 #00ff00\n");
+    bool escaped = false;
+    static const char kRound[] = "<!doctype html><style>body { margin: 0 }"
+        " .h { backdrop-filter: grayscale(1); height: 20px; width: 20px; border-radius: 10px }"
+        "</style><div class=h></div>";
+    char *got = paint_of(kRound, strlen(kRound), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    long sum = -2;
+    const char *at = got != NULL ? strstr(got, "backdrop 0 0 20 20 cover ") : NULL;
+    if (at != NULL)
+        sum = strtol(at + strlen("backdrop 0 0 20 20 cover "), NULL, 10);
+    // A circle of radius 10 covers about pi 100 of its 400 pixels, each
+    // at 255: about 80,000.
+    expect("backdrop: a rounded box hands over its coverage", sum > 75000 && sum < 85000, got);
+    free(got);
+    static const char kUrl[] = "<!doctype html><style>body { margin: 0 }"
+        " .h { backdrop-filter: url(#x) blur(2px); height: 20px }</style><div class=h></div>";
+    got = paint_of(kUrl, strlen(kUrl), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("backdrop: a list with a reference asks nothing",
+           got != NULL && strstr(got, "backdrop ") == NULL && yonder_paint_filters_refused == 0, got);
+    free(got);
+    // The root has nothing behind it (Filter Effects 2): no backdrop.
+    static const char kRoot[] = "<!doctype html><style>html { backdrop-filter: invert(1) }"
+        " body { margin: 0; background: #fff }</style><p>x";
+    got = paint_of(kRoot, strlen(kRoot), 200, (os64_gui_rect_t){0, 0, 200, 300}, &escaped, true);
+    expect("backdrop: the root's asks nothing", got != NULL && strstr(got, "backdrop ") == NULL, got);
+    free(got);
+    s_backdrop_refused = true;
+    static const char kPlain[] = "<!doctype html><style>body { margin: 0 }"
+        " .h { backdrop-filter: blur(2px); height: 20px }</style><div class=h></div>";
+    got = paint_of(kPlain, strlen(kPlain), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    s_backdrop_refused = false;
+    expect("backdrop: a refusal is counted", yonder_paint_filters_refused == 1, got);
     free(got);
 }
 
@@ -2942,6 +3009,7 @@ int main(int argc, char **argv)
         shadow_blur_cases();
         huge_corner_case();
         filter_paint_cases();
+        backdrop_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();

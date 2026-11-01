@@ -264,3 +264,57 @@ void yonder_filter_lay(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, cons
             *d = out;
         }
 }
+
+bool yonder_backdrop_take(const uint32_t *src, uint32_t pitch, os64_gui_rect_t whole, int32_t x0,
+                          int32_t y0, int32_t w, int32_t h, uint32_t *out)
+{
+    if (whole.w <= 0 || whole.h <= 0)
+        return false;
+    int64_t last_x = (int64_t)whole.x + whole.w - 1, last_y = (int64_t)whole.y + whole.h - 1;
+    for (int32_t j = 0; j < h; j++) {
+        int64_t y = (int64_t)y0 + j;
+        y = y < whole.y ? whole.y : y > last_y ? last_y : y;
+        for (int32_t i = 0; i < w; i++) {
+            int64_t x = (int64_t)x0 + i;
+            x = x < whole.x ? whole.x : x > last_x ? last_x : x;
+            out[(size_t)j * (size_t)w + (size_t)i] = 0xff000000u | (src[(size_t)y * pitch + (size_t)x] & 0xffffffu);
+        }
+    }
+    return true;
+}
+
+void yonder_backdrop_put(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const uint32_t *layer,
+                         int32_t w, int32_t h, int32_t x0, int32_t y0, os64_gui_rect_t box,
+                         const uint8_t *cover)
+{
+    int64_t ax = box.x > clip.x ? box.x : clip.x, ay = box.y > clip.y ? box.y : clip.y;
+    int64_t bx = (int64_t)box.x + box.w, by = (int64_t)box.y + box.h;
+    if (bx > (int64_t)clip.x + clip.w)
+        bx = (int64_t)clip.x + clip.w;
+    if (by > (int64_t)clip.y + clip.h)
+        by = (int64_t)clip.y + clip.h;
+    if (ax < x0)
+        ax = x0;
+    if (ay < y0)
+        ay = y0;
+    if (bx > (int64_t)x0 + w)
+        bx = (int64_t)x0 + w;
+    if (by > (int64_t)y0 + h)
+        by = (int64_t)y0 + h;
+    for (int64_t y = ay; y < by; y++)
+        for (int64_t x = ax; x < bx; x++) {
+            uint32_t c = cover != NULL ? cover[(size_t)(y - box.y) * (size_t)box.w + (size_t)(x - box.x)] : 255;
+            if (c == 0)
+                continue;
+            uint32_t s = layer[(size_t)(y - y0) * (size_t)w + (size_t)(x - x0)];
+            uint32_t *d = &dst[(size_t)y * pitch + (size_t)x];
+            uint32_t keep = 255 - chan(s, 24), out = *d & 0xff000000u;
+            for (int k = 0; k < 3; k++) {
+                uint32_t was = chan(*d, 8 * k);
+                uint32_t over = chan(s, 8 * k) + (was * keep + 127) / 255;
+                over = over > 255 ? 255 : over;
+                out |= ((over * c + was * (255 - c) + 127) / 255) << (8 * k);
+            }
+            *d = out;
+        }
+}
