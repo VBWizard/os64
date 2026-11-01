@@ -9415,7 +9415,8 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         if (shown) {
             int32_t link = os64_page_link_for(page_model(&g.page), ask->node);
             if (link >= 0)
-                follow_link_asked(link, WAY_ASK_GO, ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE);
+                follow_link_asked(link, ask->user_activated ? WAY_ASK_NEVER : WAY_ASK_GO,
+                                  ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE);
         }
         return;
     case OS64_DOM_NAVIGATE_SUBMIT:

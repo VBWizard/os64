@@ -239,3 +239,30 @@ Validation passes: 368 focused native-pointer checks; 16,493 complete browser
 checks; 31,131 target-engine and 167,269 fully sanitized DOM checks. The DOM
 profiles include 3,845 and 26,046 allocation-failure sweeps respectively.
 ASan/UBSan/LeakSanitizer remain enabled, and the native DOM library builds.
+
+## Review corrections: capture callbacks, navigation and chrome motion
+
+Capture processing holds its pending target across lost/got listeners. A
+listener's release or transfer remains pending for the next processing pass,
+so it cannot silently replace the current capture and skip transition events.
+A target removed before got is skipped; removal during got preserves document
+fallback for the later lost event. The snapshot is released on failed dispatch
+as well as success. Regressions cover release/transfer from got, transfer from
+lost, both removal positions, and allocation refusal during capture processing.
+
+Native link and frame-source defaults use the existing no-confirmation policy,
+with person-initiated navigation metadata. Script `.click()` and `location`
+navigation retain the script confirmation policy, including a click listener
+that cancels the native default and selects its own destination.
+
+Idle movement over browser chrome runs boundary reconciliation rather than
+ordinary pointer/mouse movement. Tests check the viewport exit events, repeated
+movement above and below the viewport, reentry, and both captured and uncaptured
+active drags outside the viewport.
+
+The targeted regressions reproduced all three findings before correction.
+Validation passes: 493 focused DOM checks in each engine profile (including
+48 native allocation-refusal positions), 414 focused browser pointer checks,
+and 16,539 complete browser checks. ASan/UBSan/LeakSanitizer remain enabled;
+the native Yonder/library build and stale-reference audit pass. The previously
+accepted P5 cohort is unchanged; these corrections have host/build validation.

@@ -175,10 +175,18 @@ static bool capture_pending(Packet *q)
 {
     DPointer *p = &q->dom->pointer;
     if (p->capture == p->pending) return true;
-    if (p->capture && !emit(q, "lostpointercapture", p->capture, NULL, true, true, false, false, NULL)) return false;
-    if (p->pending && !emit(q, "gotpointercapture", p->pending, NULL, true, true, false, false, NULL)) return false;
-    hold(q->dom, &p->capture, p->pending);
-    return true;
+    // Listeners may change pending capture. Finish this transition against
+    // its held snapshot; their requests belong to the next processing pass.
+    const os64_html_node_t *next = NULL;
+    hold(q->dom, &next, p->pending);
+    bool ok = !p->capture || emit(q, "lostpointercapture", p->capture, NULL, true, true, false, false, NULL);
+    if (ok && next && !connected(q->dom, next)) hold(q->dom, &next, NULL);
+    if (ok && next) ok = emit(q, "gotpointercapture", next, NULL, true, true, false, false, NULL);
+    // Removal inside gotpointercapture happened before next became current,
+    // so apply the mutation consumer's document fallback here as well.
+    if (ok) hold(q->dom, &p->capture, next && !connected(q->dom, next) ? q->dom->document->document : next);
+    hold(q->dom, &next, NULL);
+    return ok;
 }
 static void cancel(Packet *q)
 {

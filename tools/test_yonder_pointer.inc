@@ -98,8 +98,74 @@ static void pointer_disabled_fieldsets(void)
         probe_drop();
     }
 }
+static void pointer_link_policy(void)
+{
+    for (int mode=0;mode<4;mode++) {
+        loop_asked=loop_final="https://fixture.test/page";
+        loop_encrypted=true;
+        const char *scripts[]={"", "setTimeout(()=>document.getElementById('link').click(),100)",
+            "document.getElementById('link').onclick=e=>{e.preventDefault();location.href='http://fixture.test/script'}", ""};
+        char html[600];
+        snprintf(html,sizeof(html),"%s<script>%s</script>",mode==3 ?
+            "<iframe id=link width=200 height=100 src=http://fixture.test/source></iframe>" :
+            "<a id=link href=http://fixture.test/destination>Go</a>",scripts[mode]);
+        loop_page(html);
+        check(loop_settle() && g.page.tree!=NULL,"pointer: encrypted link fixture arrives");
+        if(mode==1) { now_ms+=200;script_turn(); }
+        if(mode!=1) input_click_at("link");
+        if(mode==1 || mode==2) {
+            if(g.asker!=ASK_REQUEST || g.stream.active)
+                fprintf(stderr,"link policy mode=%d asker=%d stream=%d url=%s\n",mode,g.asker,g.stream.active,
+                        pool_work.job ? ((const yonder_trip_t *)pool_work.job)->url : "-");
+            check(g.asker==ASK_REQUEST && !g.stream.active,
+                  "pointer: script-initiated downgrade retains confirmation, including inside native click");
+        } else {
+            const yonder_trip_t *trip=pool_work.job;
+            check(g.asker!=ASK_REQUEST && g.stream.active && trip && trip->metadata.activation &&
+                  os64_streq(trip->url,mode==3 ? "http://fixture.test/source" : "http://fixture.test/destination"),
+                  "pointer: native link/frame downgrade follows without a script-navigation prompt");
+        }
+        bar_forget();
+        loop_drop();
+    }
+    loop_asked=loop_final=NULL;loop_encrypted=false;
+}
+static void pointer_chrome_motion(void)
+{
+    for (int capture=0;capture<2;capture++) {
+        char html[1000];snprintf(html,sizeof(html),"<!doctype html><style>body{margin:0}#pad{width:100px;height:80px}</style>"
+            "<div id=pad></div><p id=out></p><script>var p=document.getElementById('pad'),log=[];"
+            "function note(e){log.push(e.type+':'+(e.target.id||'window'));"
+            "document.getElementById('out').textContent=log.join('|')}"
+            "window.onpointermove=window.onmousemove=note;"
+            "p.onpointerout=p.onpointerleave=p.onmouseout=p.onmouseleave=note;"
+            "p.onpointerdown=()=>{log=[];if(%d)p.setPointerCapture(1)};</script>",capture);
+        probe_page(html,true);
+        script_turn();
+        pointer_move(10,10,0);
+        pointer_move(10,-10,0);
+        pointer_move(40,-10,0);
+        pointer_move(40,610,0);
+        check(probe_text_is("out","pointermove:pad|mousemove:pad|pointerout:pad|pointerleave:pad|mouseout:pad|mouseleave:pad"),
+              "pointer: idle chrome motion emits viewport exit boundaries without window move events");
+        pointer_move(10,10,0);
+        check(strstr(probe_text_of("out"),"mouseleave:pad|pointermove:pad|mousemove:pad")!=NULL,
+              "pointer: viewport reentry resumes movement");
+        pointer_window(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,10,10,0,1);
+        pointer_move(10,-10,1);
+        pointer_move(40,-10,1);
+        check(strstr(probe_text_of("out"),capture ?
+              "pointermove:pad|mousemove:pad|pointermove:pad|mousemove:pad" :
+              "pointermove:window|mousemove:window|pointermove:window|mousemove:window")!=NULL,
+              "pointer: active captured and uncaptured drags retain outside movement");
+        pointer_window(OS64_GUI_EVENT_MOUSE_BUTTON_UP,40,-10,0,0);
+        probe_drop();
+    }
+}
 static void pointer_window_cases(void)
 {
+    pointer_link_policy();
+    pointer_chrome_motion();
     pointer_disabled_fieldsets();
     probe_page("<!doctype html><style>body{margin:0}#pad{width:100px;height:80px;background:green}</style>"
         "<div id=pad></div><p id=out>-</p><script>var pad=document.getElementById('pad'),log=[];"

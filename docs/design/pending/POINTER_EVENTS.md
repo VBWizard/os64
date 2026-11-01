@@ -166,8 +166,11 @@ Use the specification's errors for unknown IDs and disconnected elements;
 a known hovering mouse with no pressed button does not start capture. Native
 mouse capture is explicit at the DOM level, even though the window system
 implicitly grabs the containing window. Repeated set/release calls must not
-produce spurious transition events. Changes made from capture listeners are
-handled by the defined pending-state algorithm, without recursive draining.
+produce spurious transition events. Hold a snapshot of the pending target
+across lost/got listeners; their set/release requests remain pending for the
+next processing pass, without recursive draining. If the snapshot disconnects
+before got, omit that capture; if it disconnects during got, retain document
+fallback for the subsequent lost event.
 
 Node references are held against their document. Removal of a capture target
 marks the transition through the shared C mutation consumer; dispatch at the

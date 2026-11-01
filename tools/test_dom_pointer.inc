@@ -13,8 +13,57 @@ static void pointer_send(DomFixture *f, const char *id, os64_dom_pointer_action_
     if (status!=OS64_JS_OK) fprintf(stderr,"pointer packet %d %s buttons=%u: status=%d %s\n",action,id?id:"null",buttons,status,out.message);
     check(status == OS64_JS_OK, "pointer: native packet completes");
 }
+static void pointer_capture_callbacks(void)
+{
+    for (int mode = 0; mode < 5; mode++) {
+        DomFixture f = fixture_new(NULL);
+        if (!fixture_ready(&f)) return;
+        dom_script(&f, POINTER_ASSERT
+            "document.body.innerHTML='<div id=a></div><div id=b></div><div id=c></div>';"
+            "var a=document.getElementById('a'),b=document.getElementById('b'),c=document.getElementById('c'),log=[];"
+            "for(let t of ['gotpointercapture','lostpointercapture','pointermove'])"
+            "document.addEventListener(t,e=>log.push(t+':'+(e.target.id||'doc')));"
+            "a.onpointerdown=()=>a.setPointerCapture(1);",
+            "pointer: capture-listener fixture");
+        const char *listeners[] = {
+            "a.ongotpointercapture=()=>{a.releasePointerCapture(1);assert(!a.hasPointerCapture(1))};",
+            "a.ongotpointercapture=()=>{b.setPointerCapture(1);assert(b.hasPointerCapture(1))};",
+            "a.onlostpointercapture=()=>c.setPointerCapture(1);",
+            "a.ongotpointercapture=()=>a.remove();",
+            "a.onlostpointercapture=()=>b.remove();"
+        };
+        dom_script(&f, listeners[mode], "pointer: capture callback installed");
+        pointer_send(&f, "a", OS64_DOM_POINTER_DOWN, 0, 1);
+        pointer_send(&f, "b", OS64_DOM_POINTER_MOVE, -1, 1);
+        if (mode == 2 || mode == 4) {
+            dom_script(&f, "log=[];b.setPointerCapture(1);", "pointer: explicit pending transfer");
+            pointer_send(&f, "c", OS64_DOM_POINTER_MOVE, -1, 1);
+        }
+        const char *first[] = {
+            "assert(log.join()==='gotpointercapture:a,pointermove:a',log.join());",
+            "assert(log.join()==='gotpointercapture:a,pointermove:a',log.join());",
+            "assert(log.join()==='lostpointercapture:a,gotpointercapture:b,pointermove:b',log.join());",
+            "assert(log.join()==='gotpointercapture:a,pointermove:doc',log.join());",
+            "assert(log.join()==='lostpointercapture:a,pointermove:c',log.join());"
+        };
+        dom_script(&f, first[mode], "pointer: in-flight capture transition survives callback mutation");
+        dom_script(&f, "log=[];", "pointer: clear transition log");
+        pointer_send(&f, "c", OS64_DOM_POINTER_MOVE, -1, 1);
+        const char *next[] = {
+            "assert(log.join()==='lostpointercapture:a,pointermove:c',log.join());",
+            "assert(log.join()==='lostpointercapture:a,gotpointercapture:b,pointermove:b',log.join());",
+            "assert(log.join()==='lostpointercapture:b,gotpointercapture:c,pointermove:c',log.join());",
+            "assert(log.join()==='lostpointercapture:doc,pointermove:c',log.join());",
+            "assert(log.join()==='pointermove:c',log.join());"
+        };
+        dom_script(&f, next[mode], "pointer: callback request is processed on the next packet");
+        pointer_send(&f, "c", OS64_DOM_POINTER_UP, 0, 0);
+        fixture_free(&f);
+    }
+}
 static void dom_pointer_cases(void)
 {
+    pointer_capture_callbacks();
     DomFixture f = fixture_new(NULL);
     if (!fixture_ready(&f)) return;
     dom_script(&f, POINTER_ASSERT
@@ -114,9 +163,9 @@ static void dom_pointer_cases(void)
         "assert(moves===32&&ups===1&&cancels===0&&enters>600,[moves,ups,cancels,enters].join());",
         "pointer: deep boundary expansion cannot overflow a full native batch");
     fixture_free(&f);
-    // Refuse each early native boundary/dispatch allocation. Teardown must
-    // release both persistent captures and temporary ancestor-path holds.
-    for (size_t cut=1;cut<=24;cut++) {
+    // Refuse early down and capture-transition allocations. Teardown must
+    // release persistent capture, transition snapshots and ancestor paths.
+    for (int transition=0;transition<2;transition++) for (size_t cut=1;cut<=24;cut++) {
         DomFixture failure=fixture_new(NULL);
         if (!fixture_ready(&failure)) { fixture_free(&failure); break; }
         dom_script(&failure,"document.body.innerHTML='<div id=a></div>';"
@@ -124,6 +173,10 @@ static void dom_pointer_cases(void)
         os64_dom_pointer_sample_t sample={.action=OS64_DOM_POINTER_DOWN,
             .hit=native_id(failure.document->document,"a"),.event={.button=0,.buttons=1}};
         os64_js_outcome_t out;
+        if (transition) {
+            pointer_send(&failure,"a",OS64_DOM_POINTER_DOWN,0,1);
+            sample.action=OS64_DOM_POINTER_MOVE;sample.event.button=-1;
+        }
         dom_fail_at=dom_attempts+cut;
         (void)os64_dom_pointer_dispatch(failure.binding,&sample,NULL,NULL,NULL,&out);
         dom_fail_at=0;

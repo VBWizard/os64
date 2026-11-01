@@ -163,6 +163,9 @@ static bool pointer_route(const os64_gui_event_t *ev)
     os64_gui_rect_t v = g.view.bounds;
     bool inside = x >= v.x && y >= v.y && (int64_t)x < (int64_t)v.x + v.w && (int64_t)y < (int64_t)v.y + v.h;
     bool active = yonder_scripts_pointer_active(g.page.scripts);
+    // Idle chrome motion reconciles viewport exit without exposing movement
+    // to page listeners. A page-owned drag still receives outside motion.
+    bool boundary_only = presence || (motion && !inside && !active);
     // Chrome owns a gesture it began. Presence still reconciles the page's
     // boundary when the cursor leaves the viewport.
     if (!active && !inside && !motion && !presence) return false;
@@ -183,7 +186,7 @@ static bool pointer_route(const os64_gui_event_t *ev)
     g.pointer_x = x; g.pointer_y = y;
     if (!presence) { s_pointer_buttons = ev->mouse.buttons & 7; s_pointer_modifiers = ev->mouse.modifiers; }
     os64_dom_pointer_sample_t sample = {
-        .action = presence ? OS64_DOM_POINTER_BOUNDARY : down ? OS64_DOM_POINTER_DOWN : up ? OS64_DOM_POINTER_UP : OS64_DOM_POINTER_MOVE,
+        .action = boundary_only ? OS64_DOM_POINTER_BOUNDARY : down ? OS64_DOM_POINTER_DOWN : up ? OS64_DOM_POINTER_UP : OS64_DOM_POINTER_MOVE,
         .event = pointer_coordinates(x, y, s_pointer_modifiers),
         .hit = element_at(x, y, NULL)};
     if (down || up) sample.event.button = ev->mouse.button == OS64_GUI_MOUSE_RIGHT ? 2 :
@@ -202,7 +205,7 @@ static bool pointer_route(const os64_gui_event_t *ev)
                                                           has_link ? CONTEXT_LINK : CONTEXT_PICTURE];
     }
     PointerDefault action = {.native = *ev, .serial = serial};
-    pointer_packet(&sample, presence ? NULL : &action);
+    pointer_packet(&sample, boundary_only ? NULL : &action);
     if (serial != g.page_serial) return true;
     if (up && ev->mouse.button == OS64_GUI_MOUSE_LEFT && !action.replayed) pointer_native_release();
     if (revision != s_pointer_revision) s_pointer_rehit = true;
