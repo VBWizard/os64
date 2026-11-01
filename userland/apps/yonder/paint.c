@@ -31,6 +31,10 @@ typedef struct {
     // Past the deepest kept, a group drawn through its matrix is not painted
     // at all: the depth it opened at, plus one, or 0.
     int32_t hidden;
+    // What is left of the paint's budget for filter layers and backdrops,
+    // in pixels (yonder_paint_filters_refused): here, where every box's
+    // painter shares it, not in the Painter each box is handed a copy of.
+    int64_t filter_left;
 } PaintGroups;
 
 typedef struct {
@@ -60,12 +64,10 @@ typedef struct {
     // (flow_cut_memo_t), each line worked once a paint; NULL draws no
     // line as cut.
     flow_cut_memo_t *cuts;
-    // What is left of the paint's budget for filter layers, in pixels
-    // (yonder_paint_filters_refused), and the part of the view a layer is
-    // charged for showing, in the coordinates being painted: the paint's
-    // view, or a laid group's own inside it — never a filter's layer,
-    // whose margin a filter inside it would otherwise be charged for.
-    int64_t filter_left;
+    // The part of the view a filter layer is charged for showing
+    // (PaintGroups.filter_left), in the coordinates being painted: the
+    // paint's view, or a laid group's own inside it — never a filter's
+    // layer, whose margin a filter inside it would otherwise be charged for.
     os64_gui_rect_t shown;
 } Painter;
 
@@ -1814,6 +1816,52 @@ static bool rounded(const int32_t radii[4][2])
     return false;
 }
 
+// A box's BACKDROP (FILTER.md § 7): what is already painted under its
+// border box, filtered by its `backdrop-filter` and laid back cut to the
+// box — rounded by its corners, `shape` when `round` — before anything of
+// the box is painted. Charged to the paint's filter budget (the box's part
+// in the view), and drawn unfiltered and counted past it or where the
+// verbs refuse: inside a group's sheets, what is behind is not the page. A
+// list with a reference draws nothing (FILTER.md § 2).
+static os64_gui_rect_t cut(os64_gui_rect_t r, os64_gui_rect_t c);
+
+static void backdrop_filtered(const Painter *p, const flow_box_t *b, const Round *shape, bool round)
+{
+    const flow_style_t *s = b->style;
+    if (s->nbackdrop_filter <= 0 || p->penned || b == p->canvas_owner || p->v->backdrop_filter == NULL)
+        return;
+    for (int32_t i = 0; i < s->nbackdrop_filter; i++)
+        if (s->backdrop_filter[i].fn == FLOW_FILTER_URL)
+            return;
+    os64_gui_rect_t r = cut(b->rect, p->view);
+    if (r.w <= 0 || r.h <= 0)
+        return;
+    int64_t area = (int64_t)r.w * r.h;
+    uint8_t *mask = NULL;
+    if (round) {
+        mask = yonder_scratch_take(p->scratch, (size_t)area);
+        if (mask == NULL) {
+            yonder_paint_filters_refused++;
+            return;
+        }
+        for (int32_t y = 0; y < r.h; y++) {
+            int64_t a = 0, e = 0;
+            bool row = round_row(shape, ((int64_t)r.y + y) * SUB + SUB / 2, &a, &e);
+            for (int32_t x = 0; x < r.w; x++)
+                mask[(size_t)y * (size_t)r.w + (size_t)x] =
+                    (uint8_t)(row ? cover((int64_t)r.x + x, a, e) * 255 / SUB : 0);
+        }
+    }
+    os64_gui_rect_t at = {sum32(r.x, p->off.x), sum32(r.y, p->off.y), r.w, r.h};
+    if (area > p->groups->filter_left ||
+        !p->v->backdrop_filter(p->v->ctx, at, mask, s->backdrop_filter, s->nbackdrop_filter, s->color))
+        yonder_paint_filters_refused++;
+    else
+        p->groups->filter_left -= area;
+    if (mask != NULL)
+        yonder_scratch_give(p->scratch, mask);
+}
+
 // A box's background and borders: every block-level box, and an atom. Its
 // outer shadows go under its colour, the last first so the first is on
 // top; its background's layers over its colour (layers, above); its inset
@@ -1832,6 +1880,7 @@ static void frame(const Painter *p, const flow_box_t *b)
             w[k] = px(s->border_width[k]);
         round_shapes(b, round ? radii : (const int32_t[4][2]){{0}}, w, &outer, &inner);
     }
+    backdrop_filtered(p, b, &outer, round);
     for (int32_t i = s->nbox_shadows - 1; i >= 0; i--)
         if (!s->box_shadows[i].inset)
             shadow(p, b, &outer, &inner, &s->box_shadows[i], !round);
@@ -2547,11 +2596,11 @@ static bool filter_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os6
     // group's own pixels, before the matrix.
     os64_gui_rect_t shown = cut(layer, p->shown);
     int64_t area = (int64_t)shown.w * shown.h;
-    if (area > p->filter_left || !p->v->filter_open(p->v->ctx, layer)) {
+    if (area > p->groups->filter_left || !p->v->filter_open(p->v->ctx, layer)) {
         yonder_paint_filters_refused++;
         return false;
     }
-    p->filter_left -= area;
+    p->groups->filter_left -= area;
     p->groups->open[d].filtered = true;
     p->view = layer;
     return true;
@@ -2713,12 +2762,12 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
                   yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
 {
-    PaintGroups groups = {.depth = 0};
+    PaintGroups groups = {.depth = 0,
+                          .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * viewport.w * viewport.h};
     flow_cut_memo_t cuts;
     flow_cut_memo_open(&cuts, tree);
     Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
                  .cache = cache, .scratch = scratch, .cuts = &cuts,
-                 .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * viewport.w * viewport.h,
                  .shown = viewport};
     yonder_paint_filters_refused = 0;
     if (cache != NULL)

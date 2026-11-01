@@ -241,6 +241,36 @@ static void shadow_cases(void)
     free(work);
 }
 
+// A backdrop's copy (FILTER.md § 7): read from the window, a pixel past
+// the page view read from the nearest inside it; laid back inside the box
+// and the clip, mixed by the coverage.
+static void backdrop_cases(void)
+{
+    // A 4 x 2 window whose view is columns 1..2: reading columns -1..4
+    // clamps to 1 on the left and 2 on the right.
+    uint32_t win[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    uint32_t out[12];
+    bool took = yonder_backdrop_take(win, 4, (os64_gui_rect_t){1, 0, 2, 2}, -1, 0, 6, 2, out);
+    expect("backdrop: read clamped to the view, opaque",
+           took && out[0] == 0xff000022u && out[1] == 0xff000022u && out[2] == 0xff000022u &&
+               out[3] == 0xff000033u && out[5] == 0xff000033u && out[6] == 0xff000066u &&
+               out[11] == 0xff000077u, NULL);
+    expect("backdrop: nothing read from an empty view",
+           !yonder_backdrop_take(win, 4, (os64_gui_rect_t){0, 0, 0, 0}, 0, 0, 1, 1, out), NULL);
+    // Opaque red laid over white: inside the box only, the clip cutting
+    // it, half covered where the mask says 128.
+    uint32_t dst[4] = {0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
+    uint32_t layer[4] = {0xffff0000u, 0xffff0000u, 0xffff0000u, 0xffff0000u};
+    const uint8_t cover[2] = {255, 128};
+    yonder_backdrop_put(dst, 4, (os64_gui_rect_t){0, 0, 3, 1}, layer, 4, 1, 0, 0,
+                        (os64_gui_rect_t){1, 0, 2, 1}, cover);
+    char detail[64];
+    snprintf(detail, sizeof(detail), "%08x %08x %08x %08x", dst[0], dst[1], dst[2], dst[3]);
+    expect("backdrop: laid inside the box and the clip, mixed by the coverage",
+           dst[0] == 0xffffffffu && dst[1] == 0xffff0000u && dst[2] == 0xffff7f7fu &&
+               dst[3] == 0xffffffffu, detail);
+}
+
 int main(void)
 {
     colour_cases();
@@ -249,6 +279,7 @@ int main(void)
     lay_cases();
     blur_cases();
     shadow_cases();
+    backdrop_cases();
     printf("yonder filter: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

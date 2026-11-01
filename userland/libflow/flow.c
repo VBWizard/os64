@@ -923,18 +923,17 @@ int32_t flow_shadow_blur_reach(int32_t blur)
     return (int32_t)(r < INT32_MAX ? r : INT32_MAX);
 }
 
-void flow_filter_reach(const flow_style_t *s, int32_t out[4])
+static bool meets(os64_gui_rect_t a, os64_gui_rect_t b);
+static os64_gui_rect_t grown(os64_gui_rect_t r, const int32_t d[4]);
+
+void flow_filter_list_reach(const flow_filter_t *list, int32_t n, int32_t out[4])
 {
     int64_t reach[4] = {0, 0, 0, 0};
-    if (!f_group_filter(s))
-        s = NULL;
-    for (int32_t i = 0; s != NULL && i < s->nfilter; i++)
-        if (s->filter[i].fn == FLOW_FILTER_URL) {
-            s = NULL;
-            break;
-        }
-    for (int32_t i = 0; s != NULL && i < s->nfilter; i++) {
-        const flow_filter_t *f = &s->filter[i];
+    for (int32_t i = 0; i < n; i++)
+        if (list[i].fn == FLOW_FILTER_URL)
+            n = 0;
+    for (int32_t i = 0; i < n; i++) {
+        const flow_filter_t *f = &list[i];
         if (f->fn != FLOW_FILTER_BLUR && f->fn != FLOW_FILTER_DROP_SHADOW)
             continue;
         int32_t most = 2 * FLOW_FILTER_BLUR_MAX;
@@ -953,6 +952,31 @@ void flow_filter_reach(const flow_style_t *s, int32_t out[4])
     }
     for (int k = 0; k < 4; k++)
         out[k] = (int32_t)(reach[k] < INT32_MAX / 4 ? reach[k] : INT32_MAX / 4);
+}
+
+void flow_filter_reach(const flow_style_t *s, int32_t out[4])
+{
+    flow_filter_list_reach(s->filter, f_group_filter(s) ? s->nfilter : 0, out);
+}
+
+os64_gui_rect_t flow_backdrop_damage(const flow_tree_t *tree, os64_gui_rect_t r, flow_point_t scroll)
+{
+    if (tree == NULL || r.w <= 0 || r.h <= 0)
+        return r;
+    os64_gui_rect_t out = r;
+    for (int32_t i = 0; i < tree->nstacked; i++) {
+        const flow_box_t *b = tree->stacked[i];
+        if (b->style->nbackdrop_filter <= 0 || !f_filtered(b->style) || b->unpainted)
+            continue;
+        int32_t d[4];
+        flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
+        // Mirrored: the box draws what lies that far outside it the other way.
+        const int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
+        os64_gui_rect_t box = flow_box_doc_rect(b, scroll);
+        if (meets(grown(box, in), r))
+            out = join(out, box);
+    }
+    return out;
 }
 
 bool flow_shadow_casts(const flow_box_t *box, const flow_shadow_t *sh)

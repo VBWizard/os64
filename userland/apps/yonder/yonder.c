@@ -6177,6 +6177,9 @@ static uint64_t frame_delay(const Picture *pic)
 // parts that reached across it.
 static void mark_part(os64_gui_rect_t r)
 {
+    // A backdrop blurs what lies within its reach of anything that
+    // changed, so a part it reads repaints it whole (FILTER.md § 7).
+    r = flow_backdrop_damage(g.page.tree, r, scroll_now());
     os64_ui_widget_t part = {0};
     part.bounds = (os64_gui_rect_t){g.view.bounds.x + r.x - g.sx, g.view.bounds.y + r.y - g.sy,
                                     r.w, r.h};
@@ -11395,6 +11398,9 @@ typedef struct {
     int32_t dx, dy;             // page -> window
     os64_gui_rect_t clip;       // what is being painted, in window coordinates
     GlassGroups *groups;
+    // The page view, in window coordinates, which a backdrop reads no
+    // farther than (pane_backdrop_filter); empty on a group's sheets.
+    os64_gui_rect_t whole;
 } Glass;
 
 static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
@@ -12155,7 +12161,8 @@ static GlassThrough *pane_sheets_open(GlassPane *gp, os64_gui_rect_t bounds, int
         for (size_t i = 0; i < n; i++)
             t->surf[k].pixels[i] = paper;
         t->sheet[k] = (Glass){&t->surf[k], -bounds.x, -bounds.y,
-                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &t->groups[k]};
+                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &t->groups[k],
+                              (os64_gui_rect_t){0, 0, 0, 0}};
     }
     t->bounds = bounds;
     t->was_n = gp->n;
@@ -12256,6 +12263,45 @@ static void pane_filter_close(void *ctx, const flow_filter_t *filter, int32_t n,
     through_free(t);
 }
 
+// A backdrop (FILTER.md § 7) on the window: `rect` and its list's reach
+// round it read from the window — mirrored, as a filter's layer is cut —
+// no farther than the page view, filtered as an opaque layer, and laid
+// back inside `rect` at `cover`. Refused on a group's sheets, where what
+// is behind is not the page, and with no memory.
+static bool pane_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
+                                 const flow_filter_t *filter, int32_t n, uint32_t current)
+{
+    GlassPane *gp = ctx;
+    if (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)
+        return false;
+    const Glass *on = gp->now[0];
+    int32_t d[4];
+    flow_filter_list_reach(filter, n, d);
+    // In window pixels: the box, and what it reads round it.
+    os64_gui_rect_t box = {rect.x + on->dx, rect.y + on->dy, rect.w, rect.h};
+    int64_t x0 = (int64_t)box.x - d[FLOW_RIGHT], y0 = (int64_t)box.y - d[FLOW_BOTTOM];
+    int64_t w = (int64_t)box.w + d[FLOW_LEFT] + d[FLOW_RIGHT];
+    int64_t h = (int64_t)box.h + d[FLOW_TOP] + d[FLOW_BOTTOM];
+    os64_gui_rect_t whole = {0, 0, (int32_t)on->surf->width, (int32_t)on->surf->height};
+    if (!os64_rect_intersect(whole, on->whole, &whole) || w > FILTER_SHEET_SIDE ||
+        h > FILTER_SHEET_SIDE || w * h > FILTER_SHEET_PIXELS || x0 < INT32_MIN / 2 ||
+        y0 < INT32_MIN / 2)
+        return false;
+    uint32_t *layer = glass_take((size_t)(w * h) * sizeof(uint32_t));
+    void *work = glass_take(yonder_filter_work_bytes((int32_t)w, (int32_t)h, filter, n));
+    bool drawn = layer != NULL && work != NULL &&
+                 yonder_backdrop_take(on->surf->pixels, on->surf->pitch_px, whole, (int32_t)x0,
+                                      (int32_t)y0, (int32_t)w, (int32_t)h, layer);
+    if (drawn) {
+        yonder_filter_run(layer, (int32_t)w, (int32_t)h, filter, n, current, work);
+        yonder_backdrop_put(on->surf->pixels, on->surf->pitch_px, on->clip, layer, (int32_t)w,
+                            (int32_t)h, (int32_t)x0, (int32_t)y0, box, cover);
+    }
+    glass_give(work);
+    glass_give(layer);
+    return drawn;
+}
+
 static void clip_free(GlassClip *c)
 {
     for (int k = 0; k < 3; k++)
@@ -12293,7 +12339,8 @@ static bool pane_clip_open(void *ctx, os64_gui_rect_t bounds)
         for (size_t i = 0; i < n; i++)
             c->surf[k].pixels[i] = paper;
         c->sheet[k] = (Glass){&c->surf[k], -bounds.x, -bounds.y,
-                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &c->groups[k]};
+                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &c->groups[k],
+                              (os64_gui_rect_t){0, 0, 0, 0}};
     }
     c->bounds = bounds;
     c->was_n = gp->n;
@@ -12413,6 +12460,15 @@ static void timed_filter_close(void *ctx, const flow_filter_t *filter, int32_t n
     cost_end(PS_FILTERS);
 }
 
+static bool timed_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
+                                  const flow_filter_t *filter, int32_t n, uint32_t current)
+{
+    cost_begin(PS_FILTERS);
+    bool drawn = pane_backdrop_filter(ctx, rect, cover, filter, n, current);
+    cost_end(PS_FILTERS);
+    return drawn;
+}
+
 static void timed_mask(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour)
 {
     cost_begin(PS_LAID);
@@ -12434,7 +12490,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     if (!os64_rect_intersect(w->bounds, g.ui.dirty, &part))
         return;
     GlassGroups groups = {.depth = 0};
-    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups};
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups, w->bounds};
     if (g.page.tree == NULL) {
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | (s_dark ? kDark.paper : PAGE_PAPER));
         return;
@@ -12444,7 +12500,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
                         timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close,
-                        timed_filter_open, timed_filter_close};
+                        timed_filter_open, timed_filter_close, timed_backdrop_filter};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;

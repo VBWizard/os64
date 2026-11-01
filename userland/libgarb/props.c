@@ -375,14 +375,12 @@ static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
     if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
         prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
-    // A filter list's SVG references, which draw it unfiltered; and a
-    // backdrop-filter, which yonder does not draw (FILTER.md § 7 is its
-    // design), named by its first function.
+    // A filter list's SVG references, which draw it unfiltered.
     if ((prop == GARB_FILTER || prop == GARB_BACKDROP_FILTER) && v->kind == GARB_V_FUNCTIONS) {
         for (int32_t i = 0; i < v->nitems; i++)
             if (v->items[i].kind == GARB_V_URL)
                 return "url";
-        return prop == GARB_BACKDROP_FILTER && v->nitems > 0 ? v->items[0].keyword : NULL;
+        return NULL;
     }
     // `content`'s items read and drawn as nothing (GENERATED_CONTENT.md §
     // 2): pictures.

@@ -170,19 +170,18 @@ value content: url 1
 (end)
 END
 
-# A filter list holding an SVG reference draws unfiltered, and a
-# backdrop-filter is not drawn (FILTER.md § 2, § 7): each is named as
-# approximated, a backdrop by its first function. A list of functions
-# alone is drawn, and is not counted.
+# A filter list holding an SVG reference draws unfiltered (FILTER.md § 2),
+# a backdrop's as a filter's: each is named as approximated. A list of
+# functions alone is drawn, and is not counted.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
 p { filter: url(#f) blur(1px) } div { filter: grayscale(1) blur(2px) }
-header { backdrop-filter: blur(8px) saturate(2) }
+header { backdrop-filter: blur(8px) saturate(2) } nav { backdrop-filter: url(#g) }
 </style>
-<p>x<div>y</div><header>z</header>
+<p>x<div>y</div><header>z</header><nav>w</nav>
 WANT
 value filter: url 1
-value backdrop-filter: blur 1
+value backdrop-filter: url 1
 (end)
 END

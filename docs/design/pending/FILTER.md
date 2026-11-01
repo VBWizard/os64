@@ -134,12 +134,37 @@ half-covered pixel.
 
 ## 7. `backdrop-filter` (8c's second part)
 
-It needs no coverage. Before the element paints, what is already on the
-surface inside its border box is copied, filtered (blur reading a margin of
-3r beyond the box and clamping at the surface's edge), clipped to the
-rounded box, and written back. Then the element paints over it as usual.
-The copy is the same scratch as a group's. It comes after `filter`'s part,
-since it shares the filters and the budget.
+It needs no coverage. Before the element paints its background, what is
+already on the window inside its border box is copied, with a margin of the
+list's input reach round it (`flow_filter_list_reach`, mirrored, as a
+filter's layer is cut) read from the window and clamped at the page view's
+edge, so a blur at the top of the page does not pull in the toolbar. It is
+filtered as an opaque layer (filter.c), laid back over what was there, and
+cut to the border box, rounded by `border-radius` (a coverage mask the
+painter makes from the box's shape, as a rounded background is made). Then
+the element paints over it as usual. Its border box is charged to the
+paint's filter budget, as a filter's layer is.
+
+**Damage.** A backdrop blurs what lies up to its reach outside any changed
+pixel, so a change under a frosted header must repaint the whole header,
+not the changed rect: yonder's one door for a part repaint (`mark_part`)
+asks libflow (`flow_backdrop_damage`) to join every backdrop-filtered box
+whose border box, grown by its reach, meets the part. The margin read
+outside the part is the window as last painted, which is what is there.
+
+**Where it is drawn, and where not.** On the window only. Inside a group
+painted onto sheets — an opacity group laid through a matrix, a filtered
+group, a text clip, or the element's own transform — what is behind it is
+the group's black and white sheets, not the page (Filter Effects 2's
+Backdrop Root), so it is drawn unfiltered there, counted as a refused layer,
+and booked.
+
+| Event | Read | Written | Damage |
+|---|---|---|---|
+| a paint reaching the box's background | the window inside its border box and the reach round it, clamped to the view | the filtered copy, cut to the rounded box, before the background | — |
+| a part repaint meeting the box's reach | — | — | the part joined with the box (`flow_backdrop_damage`) |
+| inside a group on sheets | — | nothing: drawn unfiltered, counted | — |
+| past the paint's budget | — | nothing: drawn unfiltered, counted | — |
 
 ## 8. Lifecycle
 
@@ -217,3 +242,21 @@ since it shares the filters and the budget.
   rotation, drawn as § 5 says, the `url()` case unfiltered and named.
   WPT `css/filter-effects/parsing`: 146 passes, nothing lost in
   `css/cssom` or `css/cssom-view`.
+
+## 12. As built (part 2, `backdrop-filter`)
+
+- **The painter** filters a box's backdrop at the head of its frame
+  (`backdrop_filtered`), before its shadows and background: its border box
+  cut to the view, a coverage mask from its rounded shape when it has
+  corners, charged to the paint's filter budget — which moved into
+  `PaintGroups`, shared by every box's painter, since each box is handed a
+  copy of the Painter.
+- **The pane** (`pane_backdrop_filter`) reads the box and its list's
+  mirrored reach from the window, clamped to the page view
+  (`yonder_backdrop_take`), filters it as an opaque layer, and lays it back
+  inside the box at its coverage (`yonder_backdrop_put`). It refuses on a
+  group's sheets (§ 7), counted.
+- **Damage**: `mark_part` joins every backdrop box a part reaches
+  (`flow_backdrop_damage`, with `flow_filter_list_reach`, the reach of any
+  list).
+- **libgarb** names a backdrop approximated only for a `url()` in it.

@@ -242,6 +242,33 @@ static void filter_seen_cases(void)
     moving_close(&m);
 }
 
+// A backdrop reads what lies within its reach of its border box, so a
+// part repaint it reads takes it in whole (FILTER.md § 7): blur(4px)
+// reaches 12, so a change 5 below a 60-high header joins it, one 40 below
+// does not.
+static void filter_backdrop_damage_cases(void)
+{
+    Sheeted q;
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     "#h{position:fixed;top:0;width:400px;height:60px;backdrop-filter:blur(4px)}</style>"
+                     "<div id=h></div><div style=\"height:3000px\"></div>",
+                 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    flow_point_t top = {0, 0};
+    os64_gui_rect_t near = flow_backdrop_damage(t, (os64_gui_rect_t){10, 65, 20, 5}, top);
+    os64_gui_rect_t far = flow_backdrop_damage(t, (os64_gui_rect_t){10, 100, 20, 5}, top);
+    char detail[96];
+    snprintf(detail, sizeof(detail), "near %d %d %d %d far %d %d %d %d", near.x, near.y, near.w,
+             near.h, far.x, far.y, far.w, far.h);
+    expect("backdrop: a part within the reach takes the box in, one beyond does not",
+           rect_is(near, 0, 0, 400, 70) && rect_is(far, 10, 100, 20, 5), detail);
+    // Scrolled, the fixed header is where the scroll puts it.
+    os64_gui_rect_t scrolled = flow_backdrop_damage(t, (os64_gui_rect_t){10, 565, 20, 5}, (flow_point_t){0, 500});
+    expect("backdrop: a fixed box's damage at the scroll", rect_is(scrolled, 0, 500, 400, 70), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void filter_cases(void)
 {
     filter_group_cases();
@@ -250,4 +277,5 @@ static void filter_cases(void)
     filter_computed_cases();
     filter_mark_cases();
     filter_seen_cases();
+    filter_backdrop_damage_cases();
 }

@@ -50,4 +50,22 @@ void yonder_filter_run(uint32_t *px, int32_t w, int32_t h, const flow_filter_t *
 void yonder_filter_lay(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const uint32_t *px,
                        int32_t w, int32_t h, int32_t dx, int32_t dy, uint8_t alpha);
 
+// A BACKDROP (FILTER.md § 7), all in `src`'s pixels (`pitch` a row):
+// `out`, `w` by `h`, is the window's pixels from (x0, y0) on, each opaque
+// and premultiplied, a pixel outside `whole` (the page view, met with the
+// surface) read from the nearest one inside it, so a blur at the view's
+// edge does not darken or pull in what is beyond it. False, and nothing
+// written, when `whole` is empty.
+bool yonder_backdrop_take(const uint32_t *src, uint32_t pitch, os64_gui_rect_t whole, int32_t x0,
+                          int32_t y0, int32_t w, int32_t h, uint32_t *out);
+
+// The filtered copy laid back: layer pixel (i, j) over dst's (i + x0, j +
+// y0), only inside `box` and `clip`, at the coverage `cover` gives dst's
+// (i, j) of `box` (box.w a row; NULL covers all of it) — each channel
+// laid over what is there, then mixed in by the coverage. The top byte of
+// dst kept.
+void yonder_backdrop_put(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const uint32_t *layer,
+                         int32_t w, int32_t h, int32_t x0, int32_t y0, os64_gui_rect_t box,
+                         const uint8_t *cover);
+
 #endif

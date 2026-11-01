@@ -103,6 +103,17 @@ typedef struct {
     bool (*filter_open)(void *ctx, os64_gui_rect_t bounds);
     void (*filter_close)(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
                          uint8_t alpha);
+    // A BACKDROP (flow_style_t.backdrop_filter; FILTER.md § 7): what is
+    // painted under `rect` (a border box cut to the view, in the
+    // coordinates being painted) — read with the list's reach round it —
+    // filtered by `filter` (n functions, none a URL; `current` a drop
+    // shadow's currentColor) and laid back inside `rect`, at the coverage
+    // `cover` gives each of its pixels (rect.w a row; NULL for all of it).
+    // False, and nothing changed, when it cannot be drawn: no memory, or
+    // nothing behind it that is the page (inside a group's sheets). NULL:
+    // no backdrop is filtered.
+    bool (*backdrop_filter)(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
+                            const flow_filter_t *filter, int32_t n, uint32_t current);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has
@@ -187,7 +198,8 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
-// How many filtered groups the last yonder_paint drew unfiltered: past its
+// How many filtered groups and backdrops the last yonder_paint drew
+// unfiltered: past its
 // budget for filter layers — YONDER_FILTER_AREA_VIEWS times the
 // viewport's pixels, each layer charged the pixels it shows in the
 // viewport, FILTER.md § 6 — or a layer the verbs refused or found no
