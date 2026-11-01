@@ -92,6 +92,17 @@ typedef struct {
     bool (*clip_open)(void *ctx, os64_gui_rect_t bounds);
     void (*clip_fill)(void *ctx);
     void (*clip_close)(void *ctx);
+    // A FILTERED group (flow_style_t.filter; FILTER.md): everything
+    // painted until its close goes into a layer, `bounds` of the
+    // coordinates being painted, which do not change; at the close the
+    // list `filter` (n functions, none a URL) is run over it (filter.h)
+    // and the result is laid over what was under it at `alpha` of 255,
+    // `current` the colour of a drop shadow in currentColor. False when it
+    // cannot be made (no memory, too large): the painter paints the group
+    // unfiltered. Either NULL: no filter is drawn.
+    bool (*filter_open)(void *ctx, os64_gui_rect_t bounds);
+    void (*filter_close)(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                         uint8_t alpha);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has
@@ -176,6 +187,12 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
+// How many filtered groups the last yonder_paint drew unfiltered: past its
+// budget for filter layers — YONDER_FILTER_AREA_VIEWS times the
+// viewport's pixels, FILTER.md § 6 — or a layer the verbs refused. The
+// caller's to name in the record.
+extern uint32_t yonder_paint_filters_refused;
+#define YONDER_FILTER_AREA_VIEWS 2
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,

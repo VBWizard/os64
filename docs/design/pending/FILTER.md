@@ -67,14 +67,17 @@ premultiplied colour is `B` itself. That recovers the group's exact pixels
 and coverage with **no change to any primitive**: every verb paints as it
 does today, onto an opaque surface. Then the filter runs on the
 premultiplied layer, and the layer is composited over the real surface.
-- Cost: the group's subtree painted twice, and only for filtered groups.
+- Cost: every verb inside a filtered group drawn twice, once on each
+  backdrop, and only for filtered groups.
 - Exact up to rounding: `W − B` is a channel difference of two 8-bit
   paints, so `a` is exact to 1/255. It is taken from the green channel, the
   one with the most precision in yonder's ARGB.
-- The painter must paint a subtree twice. `flow_visit_groups` walks the
-  layers once in order, so a filtered group's layers, from its `PART_OPEN`
-  to its `PART_CLOSE`, are visited twice by a nested walk over that range
-  (a flow API that walks a range of layers: `flow_visit_range`).
+- No second walk: yonder's pane already draws every verb into each target
+  it holds, and a group laid through its matrix already paints onto two
+  SHEETS, black and white (warp.h, PILE3.md § Transforms). A filtered group
+  opens the same pair of sheets, so the one walk paints both backdrops.
+  (Drafted as a nested walk over the group's layers, `flow_visit_range`;
+  the pane made it unnecessary.)
 
 **B. Alpha-aware primitives.** Teach every primitive Porter-Duff "over"
 onto a destination with alpha: `os64_draw_blend`, the fills, text drawing,
@@ -115,13 +118,14 @@ half-covered pixel.
   against is grown the same way, so a box the blur reaches in from outside
   the view is painted. A change to any box inside a filtered group marks
   the group's bounds (`mark_filtered`), since the filter spreads it.
-- **A budget per paint**: filtered area (layer pixels, the grown bounds cut
-  to the view) up to `FILTER_AREA_MAX` (2 × the view, both layers in the
-  painter's scratch), and a blur's standard deviation up to
-  `FLOW_FILTER_BLUR_MAX` (100 px, libflow's, so its bounds and the painter
-  agree; a larger one is drawn at it). Past the area budget a group paints unfiltered
-  and the record names it (`approximated filter: past the budget`), so a
-  page of a hundred blurred cards degrades, never stalls the window.
+- **A budget per paint**: filtered area (each layer's pixels, the grown
+  bounds cut to the view grown by the spread) up to
+  `YONDER_FILTER_AREA_VIEWS` (2) times the view's pixels, and a blur's
+  standard deviation up to `FLOW_FILTER_BLUR_MAX` (100 px, libflow's, so
+  its bounds and the painter agree; a larger one is drawn at it). Past the
+  area budget, or a layer the face cannot make, a group paints unfiltered
+  and the record names it (`css-value filter: past the budget`), so a page
+  of a hundred blurred cards degrades, never stalls the window.
 
 ## 7. `backdrop-filter` (8c's second part)
 
@@ -137,7 +141,7 @@ since it shares the filters and the budget.
 | Event | Style | Layer | Ink |
 |---|---|---|---|
 | a layout | `filter`/`backdrop-filter` computed (`flow_style_t`) | — | grown by the spread |
-| a paint reaching a filtered group's `PART_OPEN` | read | two scratch layers made, the range painted into each | — |
+| a paint reaching a filtered group's `PART_OPEN` | read | two sheets made (black, white), the targets until the close | — |
 | its `PART_CLOSE` | — | coverage recovered, filtered, composited, scratch returned | — |
 | past the budget | — | none: painted unfiltered, recorded | as grown |
 | an animation of `filter` | discrete: the first value until halfway (§ 10) | as at a paint | as the value drawn |
@@ -172,3 +176,31 @@ since it shares the filters and the budget.
 - Interpolating `filter` lists (Filter Effects 1): an animated filter
   is discrete, its first value until halfway and its second from there.
 - `mix-blend-mode` (8d) and `clip-path` on HTML.
+
+## 11. As built (part 1, `filter`)
+
+- **libgarb** reads both properties to § 2's grammar (`filter_list`),
+  names a list holding a `url()` approximated, and a `backdrop-filter` by
+  its first function while it is not drawn.
+- **libflow** computes them into `flow_filter_t` lists (`author_filter`).
+  `f_filtered`, `f_contains_fixed` and `f_group_filter` give § 2's layout
+  effects and the group; `flow_filter_reach` is § 6's spread, shared by
+  the group's bounds (`filter_grown`), the view its members are culled
+  against, `box_seen`, and the painter. A change inside a filtered group
+  marks the group's bounds (`mark_filtered`). `getComputedStyle` writes
+  the lists back (`filters`, computed.c).
+- **yonder**: `filter.c` is pure, host-tested pixel by pixel — the
+  recovery, each function (the colour ones held to WPT's reftest
+  expectations), the blur, the drop shadow, the lay. The painter opens a
+  layer per filtered group (`filter_try`), inside any matrix, at most
+  `YONDER_FILTER_AREA_VIEWS` times the view's pixels a paint; the pane makes
+  it two sheets (`pane_sheets_open`, shared with a laid group) and at the
+  close recovers, filters and lays them (`pane_filter_close`). A refused
+  layer paints the group unfiltered, and the record says
+  `css-value filter: past the budget`. The paint's cost line has a
+  `filters` stage.
+- **Measured** in QEMU: a page of every function, a blur, drop shadows on a
+  rounded box and on text, a filter under opacity and one under a
+  rotation, drawn as § 5 says, the `url()` case unfiltered and named.
+  WPT `css/filter-effects/parsing`: 146 passes, nothing lost in
+  `css/cssom` or `css/cssom-view`.

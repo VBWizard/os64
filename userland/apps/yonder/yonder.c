@@ -51,6 +51,7 @@
 #include "sheet.h"
 #include "scale.h"
 #include "warp.h"
+#include "filter.h"
 #include "settings.h"
 #include "scripts.h"
 #include "diag.h"
@@ -2290,7 +2291,8 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // The stages of a paint, and the work beside paints. RENDER is libui's
 // whole walk — the root panel and the chrome as well as the view — and
 // VIEW the page's part of it; the rest are inside VIEW but for PUBLISH,
-// handing the damage to the compositor. LAID is inside SHADOWS and
+// handing the damage to the compositor. FILTERS is a filtered group's
+// layers made, filtered and laid (FILTER.md). LAID is inside SHADOWS and
 // GRADIENTS: the part of them spent laying their pixels on the glass (the
 // mask and pixels verbs), the rest being working them out or copying them
 // out of the paint cache. TICKS is a tick's work before its
@@ -2304,12 +2306,12 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // here; the rebuild after it is a layout's alone.
 typedef enum {
     PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
-    PS_WARPS, PS_LAID, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
+    PS_WARPS, PS_FILTERS, PS_LAID, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
 } PaintStage;
 
 static const char *const kPaintStage[PS_COUNT] = {
     "render", "view", "backgrounds", "pictures", "text", "groups", "shadows", "gradients",
-    "warps", "laid", "publish", "ticks", "schedule", "tasks", "layouts",
+    "warps", "filters", "laid", "publish", "ticks", "schedule", "tasks", "layouts",
 };
 
 // The deadlines a schedule hands the ticker, by where the next came from:
@@ -5946,7 +5948,7 @@ static bool paint_lines(DiagText *t, DiagText *u)
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).
     uint64_t per = rate * 100;
     uint64_t inner = 0;
-    for (int32_t s = PS_BACKGROUNDS; s <= PS_WARPS; s++)
+    for (int32_t s = PS_BACKGROUNDS; s <= PS_FILTERS; s++)
         inner += s_cost.total[s];
     uint64_t window = s_cost.total[PS_RENDER] > s_cost.total[PS_VIEW] ? s_cost.total[PS_RENDER] - s_cost.total[PS_VIEW] : 0;
     uint64_t rest = s_cost.total[PS_VIEW] > inner ? s_cost.total[PS_VIEW] - inner : 0;
@@ -11908,14 +11910,15 @@ static void box_bars(Glass *gl, os64_gui_rect_t view)
 }
 
 // The verbs a page is painted through: each drawn into every target being
-// painted — the window, or, inside a group laid through its matrix, that
-// group's two SHEETS, the same verb on black and on white, which warp.c
-// lays onto the targets outside at the close (PILE3.md § Transforms, the
-// painter). Each target keeps its own opacity groups. A group laid so is
-// at most SHEET_SIDE a side and SHEET_PIXELS in all, at most
-// GLASS_THROUGHS nest, and it lies within half of what a 32-bit
-// coordinate can say; one past those, or that finds no memory, is
-// refused, and the painter draws it upright.
+// painted — the window, or, inside a group laid through its matrix or a
+// filtered group, that group's two SHEETS, the same verb on black and on
+// white, which warp.c (or filter.c) lays onto the targets outside at the
+// close (PILE3.md § Transforms, the painter; FILTER.md). Each target keeps
+// its own opacity groups. Sheets are at most SHEET_SIDE a side and
+// SHEET_PIXELS in all, at most GLASS_THROUGHS pairs nest, laid and
+// filtered together, and they lie within half of what a 32-bit coordinate
+// can say; sheets past those, or that find no memory, are refused, and the
+// painter draws a laid group upright and a filtered one unfiltered.
 #define GLASS_THROUGHS 16
 #define SHEET_SIDE 4096
 #define SHEET_PIXELS 2097152
@@ -11926,9 +11929,9 @@ typedef struct {
     os64_gui_surface_t surf[2];
     Glass *was[2];
     int32_t was_n;
-    double m[6];                // the sheets' page coordinates -> those painted before
-    os64_gui_rect_t clip;       // the coordinates painted before
-    os64_gui_rect_t bounds;     // the sheets' page coordinates
+    double m[6];                // a laid group's: its sheets' coordinates -> those painted before
+    os64_gui_rect_t clip;       // a laid group's: in the coordinates painted before
+    os64_gui_rect_t bounds;     // the sheets' coordinates
 } GlassThrough;
 
 // A TEXT CLIP (PILE3.md § The text clip): a mask the clip's text is drawn
@@ -12110,31 +12113,31 @@ static void through_free(GlassThrough *t)
     os64_free(t);
 }
 
-// The two sheets of a group laid through its matrix, `bounds` of its own
-// coordinates, black and white, made the targets until its close.
-static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
-                              os64_gui_rect_t clip)
+// Two sheets, `bounds` of the coordinates painted inside them, black and
+// white, made the targets until the close: a group laid through its
+// matrix's, or a filtered group's (pane_filter_open). NULL, and nothing
+// changed, when they cannot be made.
+static GlassThrough *pane_sheets_open(GlassPane *gp, os64_gui_rect_t bounds)
 {
-    GlassPane *gp = ctx;
     // A sheet's offset is its origin negated, and every verb adds it to a
     // coordinate in 32 bits: a sheet lying past half of what a coordinate
-    // can say is refused, so neither can overflow, and drawn upright.
+    // can say is refused, so neither can overflow.
     const int64_t half = INT32_MAX / 2;
     if (gp->depth >= GLASS_THROUGHS || bounds.w <= 0 || bounds.h <= 0 || bounds.w > SHEET_SIDE ||
         bounds.h > SHEET_SIDE || (int64_t)bounds.w * bounds.h > SHEET_PIXELS ||
         bounds.x < -half || bounds.y < -half || (int64_t)bounds.x + bounds.w > half ||
         (int64_t)bounds.y + bounds.h > half)
-        return false;
+        return NULL;
     GlassThrough *t = os64_malloc(sizeof(*t));
     if (t == NULL)
-        return false;
+        return NULL;
     os64_memset(t, 0, sizeof(*t));
     size_t n = (size_t)bounds.w * (size_t)bounds.h;
     for (int k = 0; k < 2; k++) {
         t->surf[k].pixels = glass_take(n * sizeof(uint32_t));
         if (t->surf[k].pixels == NULL) {
             through_free(t);
-            return false;
+            return NULL;
         }
         t->surf[k].width = t->surf[k].pitch_px = (uint32_t)bounds.w;
         t->surf[k].height = (uint32_t)bounds.h;
@@ -12144,8 +12147,6 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
         t->sheet[k] = (Glass){&t->surf[k], -bounds.x, -bounds.y,
                               (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &t->groups[k]};
     }
-    os64_memcpy(t->m, m, sizeof(t->m));
-    t->clip = clip;
     t->bounds = bounds;
     t->was_n = gp->n;
     for (int32_t k = 0; k < gp->n; k++)
@@ -12154,6 +12155,32 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
     gp->now[0] = &t->sheet[0];
     gp->now[1] = &t->sheet[1];
     gp->n = 2;
+    return t;
+}
+
+// The sheets closed: the targets outside them the targets again, and the
+// sheets handed back to be laid and freed.
+static GlassThrough *pane_sheets_close(GlassPane *gp)
+{
+    if (gp->depth <= 0)
+        return NULL;
+    GlassThrough *t = gp->open[--gp->depth];
+    gp->n = t->was_n;
+    for (int32_t k = 0; k < t->was_n; k++)
+        gp->now[k] = t->was[k];
+    return t;
+}
+
+// The two sheets of a group laid through its matrix, `bounds` of its own
+// coordinates (pane_sheets_open). Refused, the painter draws it upright.
+static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
+                              os64_gui_rect_t clip)
+{
+    GlassThrough *t = pane_sheets_open(ctx, bounds);
+    if (t == NULL)
+        return false;
+    os64_memcpy(t->m, m, sizeof(t->m));
+    t->clip = clip;
     return true;
 }
 
@@ -12164,12 +12191,9 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
 static void pane_through_close(void *ctx, uint8_t alpha)
 {
     GlassPane *gp = ctx;
-    if (gp->depth <= 0)
+    GlassThrough *t = pane_sheets_close(gp);
+    if (t == NULL)
         return;
-    GlassThrough *t = gp->open[--gp->depth];
-    gp->n = t->was_n;
-    for (int32_t k = 0; k < t->was_n; k++)
-        gp->now[k] = t->was[k];
     yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, t->bounds.w, t->bounds.h};
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
@@ -12179,6 +12203,42 @@ static void pane_through_close(void *ctx, uint8_t alpha)
         double back[6];
         if (cut.w > 0 && cut.h > 0 && flow_affine_invert(lay, back))
             (void)yonder_warp(on->surf->pixels, on->surf->pitch_px, cut, &s, lay, back, alpha);
+    }
+    through_free(t);
+}
+
+// A filtered group's two sheets (FILTER.md), `bounds` of the coordinates
+// being painted, which stay those (pane_sheets_open).
+static bool pane_filter_open(void *ctx, os64_gui_rect_t bounds)
+{
+    return pane_sheets_open(ctx, bounds) != NULL;
+}
+
+// Its pixels recovered from the two sheets, into the black one, filtered
+// (filter.h) and laid onto each target outside at `alpha`: a sheet pixel
+// (i, j) is the coordinates' (i + bounds.x, j + bounds.y), the target's
+// offset taking that onto its pixels, inside what the target paints. With
+// no memory for the filter's work, it is laid unfiltered.
+static void pane_filter_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                              uint8_t alpha)
+{
+    GlassPane *gp = ctx;
+    GlassThrough *t = pane_sheets_close(gp);
+    if (t == NULL)
+        return;
+    int32_t w = t->bounds.w, h = t->bounds.h;
+    uint32_t *layer = t->surf[0].pixels;
+    yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, w, h};
+    yonder_filter_recover(&s, layer);
+    void *work = glass_take(yonder_filter_work_bytes(w, h, filter, n));
+    if (work != NULL) {
+        yonder_filter_run(layer, w, h, filter, n, current, work);
+        glass_give(work);
+    }
+    for (int32_t k = 0; k < gp->n; k++) {
+        const Glass *on = gp->now[k];
+        yonder_filter_lay(on->surf->pixels, on->surf->pitch_px, on->clip, layer, w, h,
+                          t->bounds.x + on->dx, t->bounds.y + on->dy, alpha);
     }
     through_free(t);
 }
@@ -12324,6 +12384,22 @@ static void timed_through_close(void *ctx, uint8_t alpha)
     cost_end(PS_WARPS);
 }
 
+static bool timed_filter_open(void *ctx, os64_gui_rect_t bounds)
+{
+    cost_begin(PS_FILTERS);
+    bool open = pane_filter_open(ctx, bounds);
+    cost_end(PS_FILTERS);
+    return open;
+}
+
+static void timed_filter_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                               uint8_t alpha)
+{
+    cost_begin(PS_FILTERS);
+    pane_filter_close(ctx, filter, n, current, alpha);
+    cost_end(PS_FILTERS);
+}
+
 static void timed_mask(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour)
 {
     cost_begin(PS_LAID);
@@ -12354,7 +12430,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
-                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
+                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close,
+                        timed_filter_open, timed_filter_close};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
@@ -12371,6 +12448,11 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         g.paint_scratch = yonder_scratch_new();
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
                  g.paint_scratch, &v);
+    // Filtered groups painted unfiltered (FILTER.md § 6), the most any one
+    // paint did.
+    if (yonder_paint_filters_refused > 0 && g.page.diag != NULL)
+        yonder_diag_missing_seen(g.page.diag, "css-value", "filter: past the budget",
+                                 yonder_paint_filters_refused);
     if (pane.canvas_label.run != NULL)
         os64_text_run_release(pane.canvas_label.run);
     yonder_paint_stage = NULL;
