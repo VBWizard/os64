@@ -592,11 +592,30 @@ separable box blurs without allocation, preserving the painter's rounding and
 edge treatment. Storage, scratch aliasing and pixel-budget checks precede
 writes. Large radii use an analytical exterior contribution, so work stays
 proportional to the mask area. Yonder retains mask geometry, allocation,
-clipping, caching and emission; Canvas will supply its own source alpha,
-offsets and compositing through this numeric boundary.
+clipping, caching and emission. C6b supplies Canvas source alpha, offsets
+and compositing through this numeric boundary.
 
-This extraction does not expose Canvas shadow properties. Remaining C6 work
-includes Canvas shadow state and painting, the CD-ROM ticket's Path2D input,
+C6b adds saved `shadowColor`, `shadowBlur`, `shadowOffsetX` and `shadowOffsetY`
+state and uses the shared blur for fill, stroke, image and text operations.
+Source patches retain premultiplied 16-bit alpha before clipping, including
+geometry outside the bitmap that can cast a visible shadow. Global alpha is
+applied to the source; shadow color alpha multiplies that coverage. Offsets
+and blur use device coordinates, independently of the current transform.
+The shadow and source are then composited separately through the final clip
+with the selected Porter–Duff operator. `clearRect` and `putImageData` bypass
+shadows. Scratch allocation and rasterization finish before bitmap writes;
+resource refusal leaves pixels and damage unchanged.
+
+The blur is a bounded Gaussian approximation: interpolate adjacent integer
+three-box results to match the variance of sigma = shadowBlur / 2. Sigma is
+capped at 64 device pixels without changing the saved property. Fractional
+offsets use bilinear alpha sampling. Scratch patches are cropped and charged
+to the Canvas owner; the final composition scans the bitmap, preserving the
+full-clip semantics of destructive operators. It reports actual changed-pixel
+bounds to the existing repaint path. This is not an exact Gaussian or a claim
+of full Canvas/filter conformance. See [C6b validation](../../canvas-evidence/c6b-validation.md).
+
+Remaining C6 work includes the CD-ROM ticket's Path2D input,
 and complete captured/live signature-wall and scratch-game acceptance.
 The signature editor has a narrower successful replay: its unchanged public
 script draws, undoes, redoes, erases and clears through native pointer input

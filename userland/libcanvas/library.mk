@@ -1,5 +1,5 @@
 # Native canvas: allocation and scheduling belong to the caller.
-LIBCANVAS_SRCS := libcanvas/gradient.c libcanvas/core.c libcanvas/path.c
+LIBCANVAS_SRCS := libcanvas/gradient.c libcanvas/core.c libcanvas/path.c libcanvas/shadow.c
 LIBCANVAS_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBCANVAS_SRCS))
 LIBCANVAS_SO := $(BIN)/libcanvas.so
 LIBCANVAS_BASE = $(patsubst libcanvas.so=%,%,$(filter libcanvas.so=%,$(LIB_BASE_PAIRS)))

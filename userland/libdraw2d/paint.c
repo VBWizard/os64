@@ -111,6 +111,11 @@ static draw2d_pixel_t composite_pixel(draw2d_pixel_t s, draw2d_pixel_t d, draw2d
     }
     return sum(draw2d_scale(s,fs),draw2d_scale(d,fd));
 }
+draw2d_pixel_t draw2d_blend_pixel(draw2d_pixel_t s,draw2d_pixel_t d,draw2d_operator_t op,uint16_t clip)
+{
+    draw2d_pixel_t r=composite_pixel(s,d,op);
+    return clip==65535?r:sum(draw2d_scale(r,clip),draw2d_scale(d,65535-clip));
+}
 static draw2d_pixel_t image_pixel(const draw2d_surface_t *s, double x, double y)
 {
     uint32_t px=x<0?0:x>=s->width?s->width-1:(uint32_t)x;

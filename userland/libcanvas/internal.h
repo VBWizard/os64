@@ -39,4 +39,10 @@ void c_damage_union(canvas_context_t *,draw2d_damage_t);
 void c_clip_release(canvas_context_t *,Clip *);
 void c_path_release(canvas_context_t *,Path *);
 canvas_status_t c_rectangle(canvas_context_t *,double,double,double,double,int mode);
+canvas_status_t c_geometry_status(os64_geometry_status_t);
+static inline bool c_shadows(const canvas_context_t *c)
+{ return c->state.shadow_alpha>0 && (c->state.shadow_blur>0||c->state.shadow_x!=0||c->state.shadow_y!=0); }
+canvas_status_t c_shadow_paint(canvas_context_t *,os64_geometry_context_t *,
+    const os64_geometry_outline_t *,const os64_geometry_map_t *,bool,
+    draw2d_solid_t,const draw2d_shader_t *,const draw2d_image_t *);
 #endif

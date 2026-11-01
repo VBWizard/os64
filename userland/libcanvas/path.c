@@ -261,7 +261,7 @@ canvas_status_t canvas_arc_to(canvas_context_t *c,double x1,double y1,double x2,
         atan2(t.y-center.y,t.x-center.x),atan2(last.y-center.y,last.x-center.x),cross>0);
     return c_leave(c,s);
 }
-static canvas_status_t geometry_status(os64_geometry_status_t s)
+canvas_status_t c_geometry_status(os64_geometry_status_t s)
 {
     return s==OS64_GEOMETRY_OK?CANVAS_OK:s==OS64_GEOMETRY_NO_MEMORY?CANVAS_NO_MEMORY:
         s==OS64_GEOMETRY_LIMIT?CANVAS_LIMIT:s==OS64_GEOMETRY_UNSUPPORTED?CANVAS_UNSUPPORTED:CANVAS_BAD_ARGUMENT;
@@ -383,21 +383,28 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
         }
         draw2d_stroke_ops_t ops={&cut,c->options.max_commands,cut_spend,cut_grow,cut_free,cut_emit,cut_cap};
         draw2d_stroke_style_t style={{c->state.dash,c->state.dash_count,c->state.dash_offset}};
-        status=geometry_status(draw2d_stroke_cut(&ops,converted.commands,converted.count,&map,1.0/64,&style));
+        status=c_geometry_status(draw2d_stroke_cut(&ops,converted.commands,converted.count,&map,1.0/64,&style));
         if(status!=CANVAS_OK)goto done;
     }
     os64_geometry_context_t *geometry=NULL;
     os64_geometry_options_t options={.memory={c,geometry_alloc,geometry_free},.max_work=c->options.max_geometry_work};
-    status=geometry_status(b->create(&options,&geometry));if(status!=CANVAS_OK)goto done;
+    status=c_geometry_status(b->create(&options,&geometry));if(status!=CANVAS_OK)goto done;
     os64_geometry_outline_t *outline=NULL;
     if(mode==2 && (cut.center.count||cut.caps.count)) {
         os64_geometry_stroke_t line=c->state.line;
         /* Canvas admits positive miter limits below one; those joins bevel. */
         if(line.miter_limit<1){line.miter_limit=1;if(line.join==OS64_GEOMETRY_MITER)line.join=OS64_GEOMETRY_BEVEL;}
-        status=geometry_status(b->stroke_with_caps(geometry,cut.center.commands,cut.center.count,
+        status=c_geometry_status(b->stroke_with_caps(geometry,cut.center.commands,cut.center.count,
             cut.caps.commands,cut.caps.count,&map,1.0/64,&line,&outline));
     } else if(mode!=2 && path->count)
-        status=geometry_status(b->path(geometry,path->commands,path->count,&map,1.0/64,&outline));
+        status=c_geometry_status(b->path(geometry,path->commands,path->count,&map,1.0/64,&outline));
+    if(status==CANVAS_OK && mode!=1 && mode!=3 && c_shadows(c)) {
+        status=c_shadow_paint(c,geometry,outline,&map,even_odd,
+            (draw2d_solid_t){mode==2?c->state.stroke_argb:c->state.fill_argb},gradient?&shader:NULL,image);
+        if(outline)b->release(geometry,outline);
+        b->destroy(geometry);
+        goto done;
+    }
     draw2d_damage_t box={0,0,c->surface.width,c->surface.height};
     draw2d_operator_t op=mode==1?DRAW2D_CLEAR:c->state.composite;
     /* Solid paints can use a sub-surface without changing source coordinates.
@@ -407,7 +414,7 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
         draw2d_zero_coverage_preserves_destination(op);
     if(status==CANVAS_OK && compact) {
         os64_geometry_bounds_t bounds={.empty=true};
-        if(outline)status=geometry_status(b->bounds(geometry,outline,&map,0,0,&bounds));
+        if(outline)status=c_geometry_status(b->bounds(geometry,outline,&map,0,0,&bounds));
         if(status==CANVAS_OK)status=coverage_box(c,bounds,&box);
     }
     uint32_t width=box.x1-box.x0,height=box.y1-box.y0;
@@ -418,7 +425,7 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
     if(status==CANVAS_OK && covered) {
         for(size_t i=0;i<covered;++i)coverage[i]=0;
         os64_geometry_target_t target={box.x0,box.y0,width,height,width,covered,coverage,even_odd};
-        if(outline)status=geometry_status(b->raster(geometry,outline,&map,&target));
+        if(outline)status=c_geometry_status(b->raster(geometry,outline,&map,&target));
     }
     if(outline)b->release(geometry,outline);
     b->destroy(geometry);
@@ -481,7 +488,7 @@ canvas_status_t c_rectangle(canvas_context_t *c,double x,double y,double w,doubl
     if(!isfinite(x)||!isfinite(y)||!isfinite(w)||!isfinite(h) || (mode!=2 && (!w||!h)) || (!w&&!h))
         return c_leave(c,CANVAS_OK);
     Map m=c->state.transform;
-    if(mode!=2 && (mode==1||!c->state.fill_gradient) && !c->clip && m.a==1&&m.b==0&&m.c==0&&m.d==1 &&
+    if(mode!=2 && (mode==1||!c_shadows(c)) && (mode==1||!c->state.fill_gradient) && !c->clip && m.a==1&&m.b==0&&m.c==0&&m.d==1 &&
        (mode==1 || c->state.composite==DRAW2D_SOURCE_OVER)) {
         draw2d_damage_t damage;
         draw2d_status_t result=draw2d_paint_rect(&c->surface,x+m.tx,y+m.ty,w,h,

@@ -9,6 +9,26 @@ canvas_options_t canvas_options_default(os64_geometry_memory_t memory)
         .max_bytes = 96u * 1024 * 1024, .max_saved_states = 256,
         .max_commands=4096,.max_geometry_work=16u*1024*1024};
 }
+canvas_status_t canvas_set_shadow_color(canvas_context_t *c,uint32_t rgb,double alpha)
+{
+    canvas_status_t s=c_enter(c);if(s!=CANVAS_OK)return s;
+    if(isfinite(alpha)&&alpha>=0&&alpha<=1) {
+        c->state.shadow_argb=(rgb&0xffffff)|((uint32_t)(alpha*255+.5)<<24);
+        c->state.shadow_alpha=alpha;
+    }
+    return c_leave(c,CANVAS_OK);
+}
+canvas_status_t canvas_set_shadow_value(canvas_context_t *c,unsigned member,double v)
+{
+    canvas_status_t s=c_enter(c);if(s!=CANVAS_OK)return s;
+    if(member>2)return c_leave(c,CANVAS_BAD_ARGUMENT);
+    if(isfinite(v)&&(member||v>=0)) {
+        if(!member)c->state.shadow_blur=v;
+        else if(member==1)c->state.shadow_x=v;
+        else c->state.shadow_y=v;
+    }
+    return c_leave(c,CANVAS_OK);
+}
 canvas_status_t c_enter(canvas_context_t *c)
 {
     if (!c) return CANVAS_BAD_ARGUMENT;

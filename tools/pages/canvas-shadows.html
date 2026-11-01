@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — A Little Shade</title>
+<style>
+body{margin:0;background:#eaf1ee;color:#29413d;font:18px sans-serif}
+main{max-width:960px;margin:32px auto;padding:0 24px}h1{font-size:42px;margin:8px 0 12px}h2{font-size:23px;margin:0 0 12px}
+p{line-height:1.5}.eyebrow{color:#678b80;font-size:14px;letter-spacing:3px}.cards{display:flex;flex-wrap:wrap;gap:20px}
+.card{width:400px;flex-shrink:0;padding:20px;border:1px solid #bdd1c9;background:#fffdf5;border-radius:12px}
+canvas{width:100%;height:180px;display:block;background:#e4ece4;border:1px solid #a4bcae}
+button{margin-top:12px;padding:10px 16px;background:#386d61;color:white;border:0;border-radius:6px;font-size:16px}
+.caption{font-size:15px;min-height:66px}
+</style>
+<main><p class="eyebrow">YONDER / CANVAS 2D / C6B</p><h1>A Little Shade</h1>
+<p>A light to chase, a hidden caster, and shadows with holes in them.</p>
+<p id="status">Enable Scripts and Modern Web, then reload.</p>
+<div class="cards">
+<section class="card"><h2>1. Follow the light</h2><canvas id="cast" width="400" height="180"></canvas>
+<p class="caption">The light travels around a raised tile. Its soft shadow moves the other way. Start the light for hands-free motion.</p>
+<button id="light">Move the light</button> <button id="animate">Start the light</button></section>
+<section class="card"><h2>2. Out of sight</h2><canvas id="window" width="400" height="180"></canvas>
+<p class="caption">An amber ring sits beyond the left edge, yet its blue shadow reaches the window. The button brings the ring inside.</p>
+<button id="reveal">Bring the caster inside</button></section>
+<section class="card"><h2>3. A hole lot of shade</h2><canvas id="stamp" width="400" height="180"></canvas>
+<p class="caption">These stamps come from another canvas. Transparent holes cast no shadow. Change the stamp and both copies follow.</p>
+<button id="stamp-change">Change the stamp</button></section>
+<section class="card"><h2>4. Words with depth</h2><canvas id="type" width="400" height="180"></canvas>
+<p class="caption">Filled and outlined letters cast colored shadows. The gaps between their strokes stay open.</p>
+<button id="words">Change the words</button></section>
+</div><p>Try 25%–400% zoom. The light can keep moving while you explore.</p></main>
+<script>
+(function(){
+ function context(id){return document.getElementById(id).getContext('2d');}
+ var cast=context('cast'),windowInk=context('window'),stamp=context('stamp'),type=context('type');
+ var tileInk=cast.createLinearGradient(150,50,250,130);tileInk.addColorStop(0,'#f4c768');tileInk.addColorStop(1,'#ce7950');
+ var sprite=document.createElement('canvas');sprite.width=64;sprite.height=64;var spriteInk=sprite.getContext('2d');
+ var phase=0,running=false,frame=0,last=0,inside=false,solid=false,other=false;
+ function light(){
+  cast.clearRect(0,0,400,180);cast.save();
+  cast.shadowColor='rgba(36,65,70,.65)';cast.shadowBlur=18;
+  cast.shadowOffsetX=27*Math.cos(phase);cast.shadowOffsetY=18*Math.sin(phase)+6;
+  cast.fillStyle=tileInk;cast.fillRect(153,49,94,82);cast.restore();
+  cast.fillStyle='#fffdf0';cast.beginPath();cast.arc(200-110*Math.cos(phase),90-61*Math.sin(phase),9,0,Math.PI*2);cast.fill();
+ }
+ function tick(now){
+  if(!running)return;
+  if(last)phase+=Math.min(now-last,80)*.0015;last=now;light();frame=requestAnimationFrame(tick);
+ }
+ function reveal(){
+  windowInk.clearRect(0,0,400,180);windowInk.save();windowInk.beginPath();windowInk.rect(82,18,258,144);windowInk.clip();
+  windowInk.shadowColor='#527bac';windowInk.shadowBlur=3;windowInk.shadowOffsetX=177;
+  windowInk.strokeStyle='#d79a36';windowInk.lineWidth=12;windowInk.beginPath();windowInk.arc(inside?134:-36,90,26,0,Math.PI*2);windowInk.stroke();windowInk.restore();
+  windowInk.strokeStyle='#99afa6';windowInk.lineWidth=2;windowInk.strokeRect(82,18,258,144);
+ }
+ function stamps(){
+  var ink=spriteInk;ink.reset();
+  ink.fillStyle='#397f70';ink.beginPath();ink.arc(32,32,29,0,Math.PI*2);ink.fill();
+  if(!solid){ink.globalCompositeOperation='destination-out';ink.beginPath();ink.arc(32,32,14,0,Math.PI*2);ink.fill();}
+  stamp.clearRect(0,0,400,180);stamp.save();stamp.shadowColor='rgba(96,67,124,.75)';stamp.shadowOffsetX=32;stamp.shadowOffsetY=20;stamp.shadowBlur=5;
+  stamp.drawImage(sprite,45,44,78,78);stamp.drawImage(sprite,230,34,90,90);stamp.restore();
+ }
+ function words(){
+  type.clearRect(0,0,400,180);type.save();type.font='bold 46px sans-serif';type.textAlign='center';
+  type.shadowColor='rgba(195,122,77,.8)';type.shadowOffsetX=8;type.shadowOffsetY=7;type.shadowBlur=4;
+  type.fillStyle='#386d61';type.fillText(other?'HELLO':'LIGHT',195,74);
+  type.strokeStyle='#4e6389';type.lineWidth=1.5;type.strokeText(other?'CANVAS':'SHADE',195,135);type.restore();
+ }
+ document.getElementById('light').onclick=function(){phase+=Math.PI/4;light();};
+ document.getElementById('animate').onclick=function(){running=!running;this.textContent=running?'Pause the light':'Start the light';last=0;if(running)frame=requestAnimationFrame(tick);else cancelAnimationFrame(frame);};
+ document.getElementById('reveal').onclick=function(){inside=!inside;this.textContent=inside?'Hide the caster':'Bring the caster inside';reveal();};
+ document.getElementById('stamp-change').onclick=function(){solid=!solid;stamps();};
+ document.getElementById('words').onclick=function(){other=!other;words();};
+ light();reveal();stamps();words();document.getElementById('status').textContent='Four experiments, ready to cast a little shade.';
+})();
+</script>

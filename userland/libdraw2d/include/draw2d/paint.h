@@ -90,6 +90,11 @@ typedef struct {
  * reenter painting, mutate storage, or execute script. */
 typedef struct { void *context; uint32_t (*sample)(void *,double,double); } draw2d_shader_t;
 #pragma GCC visibility push(default)
+/* Premultiplied pixel composition followed by clip interpolation. Source
+ * already includes coverage and global alpha. CLEAR is a separate coverage
+ * operation; callers pass SOURCE_OVER through LIGHTER, excluding CLEAR. */
+draw2d_pixel_t draw2d_blend_pixel(draw2d_pixel_t source, draw2d_pixel_t destination,
+                                  draw2d_operator_t, uint16_t clip);
 /* Empty surfaces may have NULL storage. Nonempty surfaces require aligned
  * storage/stride, nonoverflowing row bounds and sufficient capacity. */
 draw2d_status_t draw2d_surface_validate(const draw2d_surface_t *);

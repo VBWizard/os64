@@ -219,8 +219,10 @@ static void compact_coverage(void)
 }
 #include "test_canvas_images.inc"
 #include "test_canvas_paints.inc"
+#include "test_canvas_shadows.inc"
 int main(void)
 {
     canvas_baseline_main();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();paints();
+    shadows();shadow_refusal();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }
