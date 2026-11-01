@@ -828,6 +828,10 @@ typedef struct {
     uint32_t line, column;
 } os64_dom_frame_t;
 bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame);
+/* The file the binding's own script, the Streams standard (streams.js),
+ * runs under: a frame naming it is a throw inside the browser's code, not
+ * the page's, whoever is at fault (STREAMS.md § 4, rule 4). */
+#define OS64_DOM_STREAMS_SCRIPT "os64-streams"
 /* The script a frame's file names, when it is one of the binding's names:
  * its address, as os64_dom_script_address reads one. The page's own name,
  * its inline scripts', is NULL with *page true; any other file, and one of

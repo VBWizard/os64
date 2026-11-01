@@ -287,6 +287,10 @@ struct os64_dom {
     /* HTMLOptionsCollection's prototype (options.c), over a collection's;
      * NULL with the modern switch off. */
     DValue *options_prototype;
+    /* The Streams standard's door (streams.c, STREAMS.md): the internal
+     * object streams.js hands back, through which a body's stream is made,
+     * read, teed and errored; NULL with the modern switch off. */
+    DValue *streams_door;
     /* HTMLFormControlsCollection's prototype, over a collection's, and
      * RadioNodeList's, over a NodeList's (collection.c, 0f's P3b); NULL
      * with the modern switch off. */
@@ -1153,9 +1157,36 @@ extern uint64_t d_request_steps;
 int d_iterator_next(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSCFunctionData *fn, int magic);
 /* A header block (way/origin.h's shape) as a Headers object with `guard`. */
 JSValue d_headers_from_block(os64_dom_t *dom, JSContext *ctx, const char *block, size_t length, int guard);
-/* A minimal ReadableStream over a copy of `bytes` (fetch.c): its reader
- * hands over the whole as one Uint8Array, then done. */
+/* THE STREAMS STANDARD (streams.c over streams.js; STREAMS.md). Every verb
+ * below asks the realm's door; a realm without one (the modern switch off)
+ * has no streams, and each throws a TypeError, where d_stream_is answers
+ * false. */
+int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A ReadableStream over a copy of `bytes`: one Uint8Array chunk, handed
+ * over at the first read, and closed behind it; closed from its creation
+ * when `length` is 0. */
 JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length);
+/* Whether `value` is a ReadableStream of this realm. */
+bool d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* A stream's state, as a body asks it: 1 yes, 0 no, -1 an exception. */
+int d_stream_locked(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
+int d_stream_disturbed(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
+/* The stream of a body read whole before its stream was made: closed and
+ * disturbed, and locked when `locked` (the read kept its reader). */
+JSValue d_stream_spent(os64_dom_t *dom, JSContext *ctx, bool locked);
+/* A body taken whole by a Request made from its own: the stream locked
+ * and disturbed for good. 0, or -1. */
+int d_stream_take(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
+/* Fetch's "fully read", then `convert` called with one Uint8Array of every
+ * chunk: a promise of what it returns. The stream stays locked for good; a
+ * chunk that is no Uint8Array rejects it with a TypeError. */
+JSValue d_stream_read_all_then(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, JSValueConst convert);
+/* Fetch's "tee": out[0] and out[1] (taken by the caller), the second's
+ * chunks copies. 0, or -1 with the exception pending. */
+int d_stream_tee(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, JSValue out[2]);
+/* A readable stream errored with `reason` (the Response's abort steps); a
+ * stream already closed or errored is left alone. 0, or -1. */
+int d_stream_error(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, JSValueConst reason);
 /* A promise settled with `value` (taken), or rejected with the pending
  * exception when `value` is JS_EXCEPTION (blob.c). */
 JSValue d_promise_settled(JSContext *ctx, JSValue value);

@@ -45,7 +45,11 @@ LIBDOM_SRCS += libdom/importmap.c
 LIBDOM_SRCS += libdom/custom.c
 # MutationObserver, fed by the same listener.
 LIBDOM_SRCS += libdom/observer.c
+# The Streams standard: streams.js, carried in streams.c's object.
+LIBDOM_SRCS += libdom/streams.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
+# The compiler's dependency list does not see an .incbin.
+$(OBJ)/pic/libdom/streams.c.o: libdom/streams.js
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
 LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libway/include

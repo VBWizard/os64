@@ -84,7 +84,9 @@ a first.
    `json()`, `arrayBuffer()`, `blob()`, `formData()` and `bytes()` read
    the stream to its end through a reader, as the standard's "fully read"
    does, so `bodyUsed`, locked and disturbed are one state, in JS, and
-   `new Response(stream)` takes the same path as a fetched body.
+   `new Response(stream)` takes the same path as a fetched body. (As
+   built, the owner is of the state, and a Request keeps its bytes as
+   Fetch's body source: § 8.)
 2. **The switch.** Streams is a row in libdom's Modern Web table
    (`modern.c`), so its globals exist only with `os64_dom_options_t.modern`
    set, like `fetch` and `XMLHttpRequest`, which are rows there already.
@@ -173,3 +175,61 @@ request bodies that stream (`duplex: "half"`), `CompressionStream` and
   (§ 3).
 - **The P5**: the social site's sign-in pages draw; GitHub's bundles get
   past `ReadableStream`.
+
+## 8. S1, as built
+
+`userland/libdom/streams.js` is the standard (one function expression,
+handed the captures); `streams.c` is its C half (the captures, the
+interfaces on `window`, the door's verbs); `fetch.c` lost its C streams.
+Where the build departs from §§ 3–7, and why:
+
+- **Compiled once per process, not at build time.** The first realm
+  compiles streams.js and keeps the bytecode in a static buffer; every
+  later realm reads it back (5.3 ms to compile, 0.16 ms to read, on the
+  desktop's host build). A build-time compile would have needed a host
+  build of the engine inside the userland build for 5 ms once a run.
+- **Eager, not lazy.** A realm holds about 250 KB of it, source text
+  stripped (`JS_STRIP_SOURCE`, set around this compile alone, so page
+  functions keep their `toString`): 0.4% of a page's 64 MiB. Lazy without
+  a visible accessor on `window` needs an engine patch to reach QuickJS's
+  lazily-initialized properties, which is more than the cost asks for.
+  Two DOM host fixtures whose engine caps had less than 250 KB to spare
+  were given room.
+- **Rule 1 is one owner of the STATE.** Fetch's own body keeps a byte
+  source beside its stream, and a Request needs it: the host takes a
+  request's bytes whole, so a Request whose `body` was asked for still
+  sends them. Once a body's stream exists it alone answers usable,
+  disturbed and locked; a Response's bytes move into it, a Request keeps
+  its own as the source. Until then nothing has observed a stream, and
+  fetch.c's bytes and flags are the whole state (which keeps `text()` on
+  an untouched body as fast as it was).
+- **A fetched body's stream stays readable until it is read**: its bytes
+  are enqueued at the first pull and the stream closes behind them, so an
+  abort that lands after the answer still errors a body nobody read.
+- **A clone an abort can still reach is teed**, and the abort errors the
+  tee's source, so the clone sees it (DEBTS' clone row, paid).
+- **EventTarget's methods are captured from `AbortSignal.prototype`**:
+  that is where libdom puts them when the streams row runs, and a signal
+  is the only target the pipes listen on.
+- **A refusal while streams.js loads fails the runtime.** libjs latches an
+  allocator refusal met under script as the runtime's failure; no C-only
+  installer had ever run script, so the DOM host's allocation sweep now
+  allows it.
+- **WPT's lessons, each a rule now written at its site in streams.js:**
+  WebIDL's "a promise resolved with" is a NEW promise resolved with the
+  value, not `Promise.resolve` (the two ticks a promise's adoption takes
+  decide what TransformStream's cancel sees); an internal record's every
+  field is a declared class field, since an assignment to a property an
+  object lacks reaches a page's setter on `Object.prototype`; a pipe's
+  write waits a microtask behind the read that brought its chunk.
+- **A tee's second branch is cloned by the window's `structuredClone`**,
+  captured like the rest, so the streams row comes after the clone row.
+- **Rule 4 is built**: yonder's FAILED line begins `(in os64-streams)` when
+  the innermost frame is streams.js's (`OS64_DOM_STREAMS_SCRIPT`, dom.h).
+- **An engine patch rode along (libjs 0017).** streams.js's atoms moved
+  where yonder's scripted-page sweep cut an event handler's compile, and
+  the cut landed on DEBTS' booked `resolve_labels` fault (the parser row's
+  item 3): a refused bytecode buffer that kept accepting smaller writes,
+  and a relocation patched over an atom. Neither is the Streams
+  standard's; both crashed the sweep, so the slice could not pass without
+  them.

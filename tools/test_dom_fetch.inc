@@ -422,8 +422,10 @@ static void dom_fetch_object_cases(void)
         "r.text().catch(e=>log.push('locked:'+e.name));throws('TypeError',()=>r.clone());"
         "rd.read().then(a=>{log.push(a.done+':'+new TextDecoder().decode(a.value));return rd.read()})"
         ".then(a=>{log.push(a.done+':'+a.value);rd.releaseLock();log.push(s.locked)});"
-        "assert(typeof ReadableStream==='undefined'||true);"
-        "throws('RangeError',()=>new Response('x').body.getReader({mode:'byob'}));",
+        "assert(s instanceof ReadableStream);"
+        /* A body's stream has no byte controller, so a BYOB reader is
+         * refused as the standard's getReader refuses one. */
+        "throws('TypeError',()=>new Response('x').body.getReader({mode:'byob'}));",
         "stream: one chunk, then done");
     /* The body is enqueued whole and closed: taking its one chunk closes
      * the stream, so `closed` resolves with no further read. */
@@ -711,6 +713,18 @@ static void dom_fetch_abort_cases(void)
                "abort: cancel an errored body");
     dom_script(&f, FETCH_ASSERT "assert(clog.join()==='stream:AbortError,closed:AbortError,reader:AbortError',clog.join());",
                "abort: an errored stream's cancel answers its error");
+    /* A clone made after the answer and before the abort tees the one
+     * body, so the abort reaches both (Fetch's clone; the stream's
+     * source is what an abort errors). */
+    dom_script(&f, "globalThis.c8=new AbortController();fetch('/s8',{signal:c8.signal}).then(r=>{globalThis.r8=r});",
+               "abort: a request to clone");
+    os64_dom_response_t s8 = net_answer_of(200, "http://example.test/s8", "", "eight");
+    net_answer(&f, &net, net.count - 1, &s8);
+    dom_script(&f, "globalThis.klog=[];var k=r8.clone();c8.abort();"
+               "r8.text().catch(e=>klog.push('original:'+e.name));k.text().catch(e=>klog.push('clone:'+e.name));",
+               "abort: after a clone");
+    dom_script(&f, FETCH_ASSERT "assert(klog.join()==='original:AbortError,clone:AbortError',klog.join());",
+               "abort: the clone is reached too");
     fixture_free(&f);
 }
 
