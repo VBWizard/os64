@@ -159,6 +159,11 @@
       "path": "patches/0016-read-module-failure-unlisted.patch",
       "sha256": "e8b16adb9e4eb886850ad5c8c9d2be8294e7f75e60ade69913ac3b6f6591262d",
       "reason": "A module read that fails part way (an allocation refused) is unlisted and freed: upstream dropped one of its two references, leaving a half-read module on the context's list under its name, which the GC then walked through entry counts whose arrays were never allocated."
+    },
+    {
+      "path": "patches/0017-dynbuf-refusal-sticky.patch",
+      "sha256": "1c39f0068a6d296fcb2cf1476a0257714a659b8844ac1c1baf79cbd3bef32e47",
+      "reason": "A DynBuf whose growth is refused gives up the room it has left, so every later put is refused too: upstream accepted a later put that still fit, leaving a hole in the buffer, and a compile cut short that way was freed by walking the holed bytecode as instructions, reading an operand as an atom. resolve_labels then patches nothing once a write is refused (a jump emitted after the refusal recorded its relocation inside the last instruction written, and the patch wrote over that instruction's atom), and keeps the refused output as the code its free walks."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

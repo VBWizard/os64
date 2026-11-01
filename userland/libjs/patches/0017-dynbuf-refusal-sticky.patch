@@ -1,0 +1,81 @@
+# A compile whose bytecode buffer is refused memory, freed safely.
+# yonder's scripted-page host found both faults below, its allocation
+# sweep cutting an event handler's compile in resolve_labels.
+#
+# 1. A DynBuf whose growth was refused set its error flag, but a later
+#    put that still fit the room already allocated succeeded, so the
+#    buffer held a hole where the refused bytes belong. free_bytecode_atoms
+#    then walked the holed bytes as instructions and read an operand as an
+#    atom. A refused growth now gives up the room left (cutils.c), so every
+#    later put is refused too and the buffer holds exactly what was written
+#    before the first refusal.
+#
+# 2. With that, resolve_labels still recorded a relocation for a jump
+#    emitted after the refusal, at "the end less its operand": inside the
+#    last instruction written. The label's patch then wrote the jump's
+#    distance over that instruction's atom (an `n` became an unrelated
+#    `hasFeature`, freed one time too many, found broken at the runtime's
+#    teardown), and the jump passes after the loop would patch and move
+#    bytes the buffer does not hold. Nothing is patched once a write is
+#    refused, and the loop's refused output is kept as the code the
+#    definition's free walks: its instructions own their atoms by then.
+--- a/cutils.c
++++ b/cutils.c
+@@ -119,6 +119,13 @@
+         new_buf = s->realloc_func(s->opaque, s->buf, new_size);
+         if (!new_buf) {
+             s->error = TRUE;
++            /* os64: the buffer gives up the room it has left, so every
++               later put asks again, and is refused: a put that still fit
++               would leave a hole where the refused bytes belong, and a
++               reader of the buffer (free_bytecode_atoms over a cut-short
++               compile) would take what follows the hole for something
++               else. */
++            s->allocated_size = s->size;
+             return -1;
+         }
+         s->buf = new_buf;
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -35165,6 +35165,19 @@
+                 for(re = ls->first_reloc; re != NULL; re = re_next) {
+                     int diff = ls->addr - re->addr;
+                     re_next = re->next;
++                    /* os64: once a write to bc_out is refused, nothing is
++                       patched. A jump emitted after the refusal put no
++                       bytes, but its relocation was still recorded at
++                       "the end less its operand", inside the last
++                       instruction written, and patching it wrote the jump's
++                       distance over that instruction's atom. The output
++                       is never run (the compile fails below the loop), and
++                       a jump's operand holds no atom, so a patch skipped
++                       loses nothing. */
++                    if (dbuf_error(&bc_out)) {
++                        js_free(ctx, re);
++                        continue;
++                    }
+                     switch (re->size) {
+                     case 4:
+                         put_u32(bc_out.buf + re->addr, diff);
+@@ -35838,6 +35851,21 @@
+         }
+     }
+ 
++    /* os64: a refused write left bc_out cut short, and the labels and
++       jumps recorded below it point past what it holds, so the passes
++       that follow would patch and move bytes it does not have. Its
++       instructions (short opcodes) own their atoms now, so it becomes the
++       code the definition's free walks, and the compile fails here. A
++       last instruction the refusal cut in two keeps its atom: the free
++       stops at it, and the runtime's teardown releases every atom. */
++    if (dbuf_error(&bc_out)) {
++        dbuf_free(&s->byte_code);
++        s->byte_code = bc_out;
++        s->use_short_opcodes = TRUE;
++        JS_ThrowOutOfMemory(ctx);
++        return -1;
++    }
++
+     /* check that there were no missing labels */
+     for(i = 0; i < s->label_count; i++) {
+         assert(label_slots[i].first_reloc == NULL);
