@@ -116,6 +116,21 @@ static inline bool f_group_filter(const flow_style_t *s)
     return s->nfilter > 0 && f_filtered(s);
 }
 
+// Whether a `mix-blend-mode` other than normal is granted (MIX_BLEND.md):
+// a stacking context and a group laid by its mode; a plain inline's does
+// nothing, and an inline-block's is not drawn (it is no stacked box), as
+// their opacity is painted opaque.
+static inline bool f_blended(const flow_style_t *s)
+{
+    return s->mix_blend != FLOW_BLEND_NORMAL && s->display != FLOW_DISPLAY_INLINE;
+}
+
+// Whether `isolation: isolate` is granted: a stacking context, no group.
+static inline bool f_isolated(const flow_style_t *s)
+{
+    return s->isolate && s->display != FLOW_DISPLAY_INLINE;
+}
+
 // A containing block for the absolute boxes inside it: an element whose
 // position is not static, or that is transformed (f_transformed) or
 // filtered (f_filtered), and that makes a box of its own. A table's rows,

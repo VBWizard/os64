@@ -1603,6 +1603,8 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
         d->backdrop_filter = s->backdrop_filter;
         d->nbackdrop_filter = s->nbackdrop_filter;
         break;
+    case GARB_MIX_BLEND_MODE: d->mix_blend = s->mix_blend; break;
+    case GARB_ISOLATION: d->isolate = s->isolate; break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     case GARB_TRANSFORM:
         d->transform = s->transform;

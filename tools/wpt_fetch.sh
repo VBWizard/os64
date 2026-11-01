@@ -52,6 +52,7 @@ WPT_DIRS=(
     css/css-ui
     css/css-overflow
     css/filter-effects
+    css/compositing
     css/support
     html/browsers/the-window-object
     html/dom

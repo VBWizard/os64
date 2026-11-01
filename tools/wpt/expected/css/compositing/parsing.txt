@@ -1,0 +1,34 @@
+# WPT's css/compositing/parsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/compositing/parsing --update
+# rewrites [passing].
+[required]
+[excluded]
+isolation-computed.html	needs CSS.supports
+mix-blend-mode-computed.html	needs CSS.supports
+[passing]
+background-blend-mode-invalid.html	e.style['background-blend-mode'] = "auto" should not set the property value
+background-blend-mode-invalid.html	e.style['background-blend-mode'] = "normal luminosity" should not set the property value
+isolation-invalid.html	e.style['isolation'] = "auto isolate" should not set the property value
+isolation-invalid.html	e.style['isolation'] = "none" should not set the property value
+isolation-valid.html	e.style['isolation'] = "auto" should set the property value
+isolation-valid.html	e.style['isolation'] = "isolate" should set the property value
+mix-blend-mode-invalid.html	e.style['mix-blend-mode'] = "auto" should not set the property value
+mix-blend-mode-invalid.html	e.style['mix-blend-mode'] = "normal luminosity" should not set the property value
+mix-blend-mode-invalid.html	e.style['mix-blend-mode'] = "normal, luminosity" should not set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "color" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "color-burn" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "color-dodge" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "darken" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "difference" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "exclusion" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "hard-light" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "hue" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "lighten" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "luminosity" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "multiply" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "normal" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "overlay" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "saturation" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "screen" should set the property value
+mix-blend-mode-valid.html	e.style['mix-blend-mode'] = "soft-light" should set the property value

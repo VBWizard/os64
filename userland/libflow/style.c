@@ -2069,6 +2069,8 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->backdrop_filter = s->backdrop_filter;
         d->nbackdrop_filter = s->nbackdrop_filter;
         break;
+    case GARB_MIX_BLEND_MODE: d->mix_blend = s->mix_blend; break;
+    case GARB_ISOLATION: d->isolate = s->isolate; break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     case GARB_TRANSFORM:
         d->transform = s->transform;
@@ -3620,6 +3622,21 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_FILTER: case GARB_BACKDROP_FILTER:
         if (!author_filter(a, s, v, p == GARB_BACKDROP_FILTER))
             return false;
+        break;
+    case GARB_MIX_BLEND_MODE: {
+        // libgarb's spellings, in flow_blend_t's order.
+        static const char *const words[] = {
+            "normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge",
+            "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue",
+            "saturation", "color", "luminosity", "plus-lighter", "plus-darker"};
+        int32_t i = pick(v, words, F_ARRAY(words));
+        if (i >= 0)
+            s->mix_blend = (flow_blend_t)i;
+        break;
+    }
+    case GARB_ISOLATION:
+        if (is_word(v, "isolate") || is_word(v, "auto"))
+            s->isolate = is_word(v, "isolate");
         break;
     case GARB_TRANSFORM:
         if (!author_transform(a, s, v))

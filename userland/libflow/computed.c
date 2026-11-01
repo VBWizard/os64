@@ -1413,6 +1413,15 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
     case GARB_TEXT_SHADOW: shadows(c, &o, s->text_shadows, s->ntext_shadows, false); break;
     case GARB_FILTER: filters(c, &o, s->filter, s->nfilter); break;
     case GARB_BACKDROP_FILTER: filters(c, &o, s->backdrop_filter, s->nbackdrop_filter); break;
+    case GARB_MIX_BLEND_MODE: {
+        static const char *const kModes[] = {
+            "normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge",
+            "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue",
+            "saturation", "color", "luminosity", "plus-lighter", "plus-darker"};
+        puts_(&o, kModes[s->mix_blend]);
+        break;
+    }
+    case GARB_ISOLATION: puts_(&o, s->isolate ? "isolate" : "auto"); break;
     case GARB_IMAGE_RENDERING: puts_(&o, s->pixelated ? "pixelated" : "auto"); break;
     case GARB_CLIP:
         if (!s->legacy_clip_set) {

@@ -129,7 +129,7 @@ half-covered pixel.
   standard deviation up to `FLOW_FILTER_BLUR_MAX` (100 px, libflow's, so
   its bounds and the painter agree; a larger one is drawn at it). Past the
   area budget, or a layer the face cannot make or filter, a group paints unfiltered
-  and the record names it (`css-value filter: drawn unfiltered`), so a page
+  and the record names it (`css-value layer: drawn plain`), so a page
   of a hundred blurred cards degrades, never stalls the window.
 
 ## 7. `backdrop-filter` (8c's second part)
@@ -234,13 +234,13 @@ and booked.
 - **yonder**: `filter.c` is pure, host-tested pixel by pixel — the
   recovery, each function (the colour ones held to WPT's reftest
   expectations), the blur, the drop shadow, the lay. The painter opens a
-  layer per filtered group (`filter_try`), inside any matrix, at most
+  layer per filtered group (`layer_try`), inside any matrix, at most
   `YONDER_FILTER_AREA_VIEWS` times the view's pixels a paint; the pane makes
   it two sheets (`pane_sheets_open`, shared with a laid group, to their own
   `FILTER_SHEET_*` limits, which hold a whole 4K window and its spread) and at the
-  close recovers, filters and lays them (`pane_filter_close`). A refused
+  close recovers, filters and lays them (`pane_layer_close`). A refused
   layer paints the group unfiltered, and the record says
-  `css-value filter: drawn unfiltered`. The paint's cost line has a
+  `css-value layer: drawn plain`. The paint's cost line has a
   `filters` stage.
 - **Measured** in QEMU: a page of every function, a blur, drop shadows on a
   rounded box and on text, a filter under opacity and one under a

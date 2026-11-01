@@ -888,7 +888,7 @@ IN: scale: 1 2 3 4
 OUT: invalid
 
 # ── What libgarb does not read here ──
-IN: mix-blend-mode: normal
+IN: background-blend-mode: normal
 OUT: unknown
 IN: --panel: 10px
 OUT: unknown
@@ -1494,3 +1494,24 @@ OUT: invalid
 IN: filter: blur(1px) 3px
 OUT: invalid
 
+# ── Blending (Compositing and Blending 1 § 3; MIX_BLEND.md) ──
+IN: mix-blend-mode: multiply
+OUT: mix-blend-mode: multiply
+IN: mix-blend-mode: Difference
+OUT: mix-blend-mode: difference
+IN: mix-blend-mode: plus-lighter
+OUT: mix-blend-mode: plus-lighter
+IN: mix-blend-mode: plus-darker
+OUT: mix-blend-mode: plus-darker
+IN: mix-blend-mode: color-dodge
+OUT: mix-blend-mode: color-dodge
+IN: mix-blend-mode: multiply screen
+OUT: invalid
+IN: mix-blend-mode: add
+OUT: invalid
+IN: isolation: isolate
+OUT: isolation: isolate
+IN: isolation: auto
+OUT: isolation: auto
+IN: isolation: none
+OUT: invalid

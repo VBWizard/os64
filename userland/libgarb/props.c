@@ -37,6 +37,8 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_QUOTES] = {"quotes", true, true},
     [GARB_FILTER] = {"filter", false, true},
     [GARB_BACKDROP_FILTER] = {"backdrop-filter", false, true},
+    [GARB_MIX_BLEND_MODE] = {"mix-blend-mode", false, true},
+    [GARB_ISOLATION] = {"isolation", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -375,6 +377,10 @@ static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
     if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
         prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
+    // plus-darker, drawn as normal (MIX_BLEND.md § 2).
+    if (prop == GARB_MIX_BLEND_MODE && v->kind == GARB_V_KEYWORD &&
+        os64_streq(v->keyword, "plus-darker"))
+        return "plus-darker";
     // A filter list's SVG references, which draw it unfiltered.
     if ((prop == GARB_FILTER || prop == GARB_BACKDROP_FILTER) && v->kind == GARB_V_FUNCTIONS) {
         for (int32_t i = 0; i < v->nitems; i++)
@@ -488,6 +494,11 @@ static const char *const kClear[] = {"none", "left", "right", "both", "inline-st
                                      "inline-end", NULL};
 static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto", NULL};
 static const char *const kPosition[] = {"static", "relative", "absolute", "fixed", "sticky", NULL};
+static const char *const kBlendModes[] = {
+    "normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn",
+    "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color",
+    "luminosity", "plus-lighter", "plus-darker", NULL};
+static const char *const kIsolation[] = {"auto", "isolate", NULL};
 // CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
 // auto: read so a sheet written for both keeps its declaration.
 static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
@@ -2079,6 +2090,7 @@ static const Longhand kLonghands[] = {
     {GARB_COUNTER_SET, G_COUNTERS, NULL},
     {GARB_QUOTES, G_QUOTES, NULL},
     {GARB_FILTER, G_FILTER, NULL}, {GARB_BACKDROP_FILTER, G_FILTER, NULL},
+    {GARB_MIX_BLEND_MODE, G_KEYWORDS, kBlendModes}, {GARB_ISOLATION, G_KEYWORDS, kIsolation},
     {GARB_FILL, G_SVG_PAINT, NULL},
     {GARB_STROKE, G_SVG_PAINT, NULL},
     {GARB_FILL_OPACITY, G_ALPHA, NULL},

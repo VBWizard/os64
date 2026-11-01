@@ -429,12 +429,13 @@ static void rec_clip_close(void *ctx)
     out(&((Rec *)ctx)->out, "end clip\n");
 }
 
-// A filtered group (FILTER.md): its layer when it opens, and its list's
-// length, its currentColor and its alpha when it closes. Refused when the
-// case says the face cannot make one (s_filter_refused).
+// A layer (FILTER.md, MIX_BLEND.md): its bounds when it opens, and its
+// list's length, its currentColor, its alpha and — when not normal — its
+// mode when it closes. Refused when the case says the face cannot make one
+// (s_filter_refused).
 static bool s_filter_refused;
 
-static bool rec_filter_open(void *ctx, os64_gui_rect_t bounds)
+static bool rec_layer_open(void *ctx, os64_gui_rect_t bounds)
 {
     Rec *rec = ctx;
     if (s_filter_refused)
@@ -443,12 +444,15 @@ static bool rec_filter_open(void *ctx, os64_gui_rect_t bounds)
     return true;
 }
 
-static void rec_filter_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                             uint8_t alpha)
+static void rec_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                            uint8_t alpha, flow_blend_t mode)
 {
     Rec *rec = ctx;
     (void)filter;
-    out(&rec->out, "end filter %d #%06x %d\n", (int)n, current, (int)alpha);
+    out(&rec->out, "end filter %d #%06x %d", (int)n, current, (int)alpha);
+    if (mode != FLOW_BLEND_NORMAL)
+        out(&rec->out, " mode %d", (int)mode);
+    out(&rec->out, "\n");
 }
 
 // A backdrop (FILTER.md § 7): its rect, its coverage (the mask's sum, or
@@ -548,7 +552,7 @@ static yonder_verbs_t verbs_of(Rec *rec)
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
                             rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
                             rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close,
-                            rec_filter_open, rec_filter_close, rec_backdrop_filter};
+                            rec_layer_open, rec_layer_close, rec_backdrop_filter};
 }
 
 // The oracle's caches: the suite's, which every page painted before fills,
@@ -754,14 +758,14 @@ static void filter_paint_cases(void)
                     "<!doctype html><style>body { margin: 0 }"
                     " .f { filter: url(#x) blur(2px); height: 20px }</style><div class=f>a</div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true, kPlain);
-    expect("filter: a reference is not counted refused", yonder_paint_filters_refused == 0, NULL);
+    expect("filter: a reference is not counted refused", yonder_paint_layers_refused == 0, NULL);
     s_filter_refused = true;
     paint_page_case("filter: a layer the face refuses is a plain group",
                     "<!doctype html><style>body { margin: 0 }"
                     " .f { filter: grayscale(1); height: 20px }</style><div class=f>a</div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true, kPlain);
     s_filter_refused = false;
-    expect("filter: a refused layer is counted", yonder_paint_filters_refused == 1, NULL);
+    expect("filter: a refused layer is counted", yonder_paint_layers_refused == 1, NULL);
     // Each layer is charged the pixels it shows in the view: three boxes
     // filling the 200 x 100 view spend 2 x 200 x 100 with two, and the
     // third is a plain group.
@@ -778,7 +782,7 @@ static void filter_paint_cases(void)
     for (const char *at = got; at != NULL && (at = strstr(at, "\ngroup ")) != NULL; at++)
         groups++;
     expect("filter: past the paint's budget, a plain group",
-           filters == 2 && groups == 1 && yonder_paint_filters_refused == 1, got);
+           filters == 2 && groups == 1 && yonder_paint_layers_refused == 1, got);
     free(got);
     // A filter inside a filter is charged what it shows in the repaint,
     // not in the outer layer's margin (Codex #445 round 1): a 10 x 10
@@ -791,7 +795,7 @@ static void filter_paint_cases(void)
     for (const char *at = got; at != NULL && (at = strstr(at, "\nfilter ")) != NULL; at++)
         nested++;
     expect("filter: a nested filter is charged against the repaint, not the outer margin",
-           nested == 2 && yonder_paint_filters_refused == 0, got);
+           nested == 2 && yonder_paint_layers_refused == 0, got);
     free(got);
     // A shadow whose source is above the view (the cold read's first
     // finding): cast 200 down from a 100-high box, the view scrolled to
@@ -821,7 +825,66 @@ static void filter_paint_cases(void)
                                  " .f { filter: blur(30px); height: 20px }</style><div class=f>a</div>";
     got = paint_of(kSmall, strlen(kSmall), 200, (os64_gui_rect_t){0, 0, 10, 10}, &escaped, true);
     expect("filter: a small repaint is charged what it shows, not the margin",
-           got != NULL && strstr(got, "\nfilter ") != NULL && yonder_paint_filters_refused == 0, got);
+           got != NULL && strstr(got, "\nfilter ") != NULL && yonder_paint_layers_refused == 0, got);
+    free(got);
+}
+
+// A blended group (MIX_BLEND.md): one layer, closed with its mode
+// (FLOW_BLEND_MULTIPLY is 1, DIFFERENCE 10); a filter and a blend share
+// it; the root's blend and plus-darker open none.
+static void blend_paint_cases(void)
+{
+    paint_page_case("blend: a blended block is one layer, closed with its mode",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .b { mix-blend-mode: multiply; height: 20px; background: #00ff00 }</style>"
+                    "<div class=b></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "filter 0 0 200 20\n"
+                    "fill 0 0 200 20 #00ff00\n"
+                    "end filter 0 #101010 255 mode 1\n");
+    paint_page_case("blend: a filter and a blend share one layer, at the opacity",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .b { mix-blend-mode: difference; filter: grayscale(1); opacity: 0.5;"
+                    " height: 20px; background: #00ff00 }</style><div class=b></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "filter 0 0 200 20\n"
+                    "fill 0 0 200 20 #00ff00\n"
+                    "end filter 1 #101010 128 mode 10\n");
+    bool escaped = false;
+    static const char kRoot[] = "<!doctype html><style>html { mix-blend-mode: multiply }"
+        " body { margin: 0 }</style><p>x";
+    char *got = paint_of(kRoot, strlen(kRoot), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("blend: the root's blend opens no layer, nor a group",
+           got != NULL && strstr(got, "filter ") == NULL && strstr(got, "group ") == NULL, got);
+    free(got);
+    static const char kDarker[] = "<!doctype html><style>body { margin: 0 }"
+        " .b { mix-blend-mode: plus-darker; height: 20px }</style><div class=b></div>";
+    got = paint_of(kDarker, strlen(kDarker), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("blend: plus-darker opens no layer, nor a group",
+           got != NULL && strstr(got, "filter ") == NULL && strstr(got, "group ") == NULL, got);
+    free(got);
+    // On sheets a blend is dropped before a layer is opened for it, and
+    // counted once (the cold read): through its own matrix, and inside a
+    // filter's layer.
+    static const char kTurned[] = "<!doctype html><style>body { margin: 0 }"
+        " .b { transform: rotate(10deg); mix-blend-mode: difference; height: 20px }</style>"
+        "<div class=b>x</div>";
+    got = paint_of(kTurned, strlen(kTurned), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("blend: through its own matrix, no layer, counted once",
+           got != NULL && strstr(got, "through ") != NULL && strstr(got, "filter ") == NULL &&
+               yonder_paint_layers_refused == 1, got);
+    free(got);
+    static const char kInside[] = "<!doctype html><style>body { margin: 0 }"
+        " .f { filter: blur(2px) } .b { mix-blend-mode: multiply; height: 20px }</style>"
+        "<div class=f><div class=b>x</div></div>";
+    got = paint_of(kInside, strlen(kInside), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    int layers = 0;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\nfilter ")) != NULL; at++)
+        layers++;
+    expect("blend: inside a filter's layer, only the filter's layer, counted once",
+           layers == 1 && yonder_paint_layers_refused == 1 && strstr(got, " mode ") == NULL, got);
     free(got);
 }
 
@@ -855,7 +918,7 @@ static void backdrop_paint_cases(void)
         " .h { backdrop-filter: url(#x) blur(2px); height: 20px }</style><div class=h></div>";
     got = paint_of(kUrl, strlen(kUrl), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
     expect("backdrop: a list with a reference asks nothing",
-           got != NULL && strstr(got, "backdrop ") == NULL && yonder_paint_filters_refused == 0, got);
+           got != NULL && strstr(got, "backdrop ") == NULL && yonder_paint_layers_refused == 0, got);
     free(got);
     // The root has nothing behind it (Filter Effects 2): no backdrop.
     static const char kRoot[] = "<!doctype html><style>html { backdrop-filter: invert(1) }"
@@ -868,7 +931,7 @@ static void backdrop_paint_cases(void)
         " .h { backdrop-filter: blur(2px); height: 20px }</style><div class=h></div>";
     got = paint_of(kPlain, strlen(kPlain), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
     s_backdrop_refused = false;
-    expect("backdrop: a refusal is counted", yonder_paint_filters_refused == 1, got);
+    expect("backdrop: a refusal is counted", yonder_paint_layers_refused == 1, got);
     free(got);
 }
 
@@ -3010,6 +3073,7 @@ int main(int argc, char **argv)
         huge_corner_case();
         filter_paint_cases();
         backdrop_paint_cases();
+        blend_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();
