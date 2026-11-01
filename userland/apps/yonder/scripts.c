@@ -1789,10 +1789,16 @@ void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const ch
         os64_strcopy(out, cap, message);
         return;
     }
+    // A throw inside the browser's own script (the Streams standard) is
+    // marked at the front, so the record is not read as the page using
+    // something yonder lacks. The mark says where, not whose fault.
+    static const char kStreams[] = OS64_DOM_STREAMS_SCRIPT;
+    bool ours = frame.file_length == sizeof(kStreams) - 1 && os64_memcmp(frame.file, kStreams, frame.file_length) == 0;
     const char *file;
     size_t file_length;
     frame_file(s, own, &frame, &file, &file_length);
-    os64_snprintf(out, cap, "%s, at %.*s%s%.*s%s%u:%u", message, (int)frame.function_length,
+    os64_snprintf(out, cap, "%s%s, at %.*s%s%.*s%s%u:%u", ours ? "(in " OS64_DOM_STREAMS_SCRIPT ") " : "", message,
+                  (int)frame.function_length,
                   frame.function != NULL ? frame.function : "", frame.function != NULL ? " " : "", (int)file_length,
                   file, file_length != 0 ? ":" : "", frame.line, frame.column);
     // A stack overflow's place is a recursion, which one frame does not

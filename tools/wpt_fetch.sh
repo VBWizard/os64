@@ -43,6 +43,7 @@ WPT_DIRS=(
     css/cssom
     css/mediaqueries
     fetch/api
+    streams
     xhr
     html/semantics/scripting-1/the-script-element
     css/css-logical

@@ -200,7 +200,10 @@ static DomFixture storage_fixture(const char *url, FakeStore *store)
     os64_dom_options_t options = os64_dom_default_options();
     options.url = url;
     options.now_ms = storage_now;
-    DomFixture f = fixture_new(&options);
+    /* The quota cases hold two quota-sized strings at once; the cap leaves
+     * room for them beside the realm's own baseline, which is no part of
+     * what they measure. */
+    DomFixture f = fixture_new_capped(&options, (size_t)24 * 1024 * 1024);
     if (f.binding != NULL && store != NULL) {
         const os64_dom_storage_t provider = {fake_identity, fake_load, fake_commit, store};
         os64_dom_set_storage(f.binding, OS64_DOM_STORAGE_LOCAL, &provider);

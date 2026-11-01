@@ -1,0 +1,15 @@
+# WPT's streams/readable-byte-streams in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh streams/readable-byte-streams --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+general.any.html	ReadableStream with byte source: autoAllocateChunkSize cannot be 0
+general.any.html	ReadableStream with byte source: pull() function is not callable
+general.any.html	getReader({mode: "byob"}) throws on non-bytes streams
+tee.any.html	Running templatedRSTeeCancel with ReadableStream teeing with byte source
+templated.any.html	Running templatedRSEmpty with ReadableStream with byte source (empty)
+templated.any.html	Running templatedRSEmptyReader with ReadableStream with byte source (empty) BYOB reader
+templated.any.html	Running templatedRSEmptyReader with ReadableStream with byte source (empty) default reader
+templated.any.html	Running templatedRSThrowAfterCloseOrError with ReadableStream with byte source

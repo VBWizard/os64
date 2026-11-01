@@ -538,7 +538,9 @@ static void dom_budget_cases(void)
         check(!strcmp(before,after)&&version==os64_html_version(f.document),"native quota preserves visible tree/version");
         free(before);free(after);fixture_free(&f);
     }
-    DomFixture f=fixture_base(0,0,1024*1024);os64_js_outcome_t outcome;
+    /* Room for the realm itself, and little beside: the loop below
+     * exhausts what is left. */
+    DomFixture f=fixture_base(0,0,2*1024*1024);os64_js_outcome_t outcome;
     f.binding=os64_dom_create(f.runtime,f.document,f.state,NULL,&outcome);
     if(!fixture_ready(&f))return;
     const char *source="try { let list=[];for(let i=0;i<100000;i++)list.push(document.createElement('div')); } catch(e) {}";
@@ -572,7 +574,12 @@ static void dom_allocation_cases(void)
         if(f.binding)fprintf(stderr,"Installer allocation cut %zu/%zu succeeded safely (attempts after cut: %zu)\n",cut,count,attempts);
         check(f.binding?outcome.status==OS64_JS_OK:outcome.status!=OS64_JS_OK,"every engine/native installer allocation failure has consistent outcome");
         os64_js_outcome_t access;JSContext *ctx=os64_js_context(f.runtime,OS64_JS_ABI_ID,&access);
-        JSValue pending=JS_GetException(ctx);check(JS_IsNull(pending)||JS_VALUE_GET_TAG(pending)==JS_TAG_UNINITIALIZED,"engine installer failure consumes pending exception");JS_FreeValue(ctx,pending);
+        /* A refusal met while an installer runs script (streams.js) latches
+         * the runtime failed, as any allocator refusal under script does
+         * (libjs's observe): no context is handed out, and there is no
+         * exception left to consume. */
+        if(ctx==NULL)check(!f.binding&&access.status==OS64_JS_FAILED_RUNTIME,"a refusal under an installer's script fails the runtime");
+        else{JSValue pending=JS_GetException(ctx);check(JS_IsNull(pending)||JS_VALUE_GET_TAG(pending)==JS_TAG_UNINITIALIZED,"engine installer failure consumes pending exception");JS_FreeValue(ctx,pending);}
         fixture_free(&f);
     }
     const char *operations[]={"document.body.textContent='replacement'","document.getElementById('box').innerHTML='<b>replacement</b>'",

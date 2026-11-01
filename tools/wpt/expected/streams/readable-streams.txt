@@ -1,0 +1,355 @@
+# WPT's streams/readable-streams in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh streams/readable-streams --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+async-iterator.any.html	Acquiring a reader after exhaustively async-iterating a stream
+async-iterator.any.html	Acquiring a reader after partially async-iterating a stream
+async-iterator.any.html	Acquiring a reader after return()ing from a stream that errors
+async-iterator.any.html	Acquiring a reader and reading the remaining chunks after partially async-iterating a stream with preventCancel = true
+async-iterator.any.html	Async iterator instances should have the correct list of properties
+async-iterator.any.html	Async-iterating a closed stream never executes the loop body, but works fine
+async-iterator.any.html	Async-iterating a partially consumed stream
+async-iterator.any.html	Async-iterating a pull source
+async-iterator.any.html	Async-iterating a pull source manually
+async-iterator.any.html	Async-iterating a pull source with undefined values
+async-iterator.any.html	Async-iterating a push source
+async-iterator.any.html	Async-iterating a push source with undefined values
+async-iterator.any.html	Async-iterating an empty but not closed/errored stream never executes the loop body and stalls the async function
+async-iterator.any.html	Async-iterating an errored stream throws
+async-iterator.any.html	Cancellation behavior when breaking inside loop body; preventCancel = false
+async-iterator.any.html	Cancellation behavior when breaking inside loop body; preventCancel = true
+async-iterator.any.html	Cancellation behavior when manually calling return(); preventCancel = false
+async-iterator.any.html	Cancellation behavior when manually calling return(); preventCancel = true
+async-iterator.any.html	Cancellation behavior when returning inside loop body; preventCancel = false
+async-iterator.any.html	Cancellation behavior when returning inside loop body; preventCancel = true
+async-iterator.any.html	Cancellation behavior when throwing inside loop body; preventCancel = false
+async-iterator.any.html	Cancellation behavior when throwing inside loop body; preventCancel = true
+async-iterator.any.html	close() while next() is pending
+async-iterator.any.html	next() rejects if the stream errors
+async-iterator.any.html	next() that succeeds; next() that reports an error(); next() [no awaiting]
+async-iterator.any.html	next() that succeeds; next() that reports an error(); return()
+async-iterator.any.html	next() that succeeds; next() that reports an error(); return() [no awaiting]
+async-iterator.any.html	next() that succeeds; next() that reports an error; next()
+async-iterator.any.html	next() that succeeds; return()
+async-iterator.any.html	next() that succeeds; return() [no awaiting]
+async-iterator.any.html	return() does not rejects if the stream has not errored yet
+async-iterator.any.html	return() rejects if the stream has errored
+async-iterator.any.html	return() should unlock the stream synchronously when preventCancel = false
+async-iterator.any.html	return() should unlock the stream synchronously when preventCancel = true
+async-iterator.any.html	return(); next()
+async-iterator.any.html	return(); next() [no awaiting]
+async-iterator.any.html	return(); next() with delayed cancel()
+async-iterator.any.html	return(); next() with delayed cancel() [no awaiting]
+async-iterator.any.html	return(); return()
+async-iterator.any.html	return(); return() [no awaiting]
+async-iterator.any.html	values() throws if there's already a lock
+bad-strategies.any.html	Readable stream: invalid strategy.highWaterMark
+bad-strategies.any.html	Readable stream: invalid strategy.size return value
+bad-strategies.any.html	Readable stream: invalid strategy.size return value when pulling
+bad-strategies.any.html	Readable stream: strategy.size errors the stream and then returns Infinity
+bad-strategies.any.html	Readable stream: strategy.size errors the stream and then throws
+bad-strategies.any.html	Readable stream: throwing strategy.highWaterMark getter
+bad-strategies.any.html	Readable stream: throwing strategy.size getter
+bad-strategies.any.html	Readable stream: throwing strategy.size method
+bad-underlying-sources.any.html	Underlying source cancel: throwing getter
+bad-underlying-sources.any.html	Underlying source cancel: throwing method
+bad-underlying-sources.any.html	Underlying source pull: throwing getter (second pull does not result in a second get)
+bad-underlying-sources.any.html	Underlying source pull: throwing method (second pull)
+bad-underlying-sources.any.html	Underlying source start: throwing getter
+bad-underlying-sources.any.html	Underlying source start: throwing method
+bad-underlying-sources.any.html	Underlying source: calling close after error should throw
+bad-underlying-sources.any.html	Underlying source: calling close on a non-empty canceled stream should throw
+bad-underlying-sources.any.html	Underlying source: calling close on an empty canceled stream should throw
+bad-underlying-sources.any.html	Underlying source: calling close twice on a non-empty stream should throw the second time
+bad-underlying-sources.any.html	Underlying source: calling close twice on an empty stream should throw the second time
+bad-underlying-sources.any.html	Underlying source: calling enqueue on a closed stream should throw
+bad-underlying-sources.any.html	Underlying source: calling enqueue on a non-empty canceled stream should throw
+bad-underlying-sources.any.html	Underlying source: calling enqueue on an empty canceled stream should throw
+bad-underlying-sources.any.html	Underlying source: calling enqueue on an errored stream should throw
+bad-underlying-sources.any.html	Underlying source: calling error after close should not throw
+bad-underlying-sources.any.html	Underlying source: calling error and returning a rejected promise from pull should cause the stream to error with the first error
+bad-underlying-sources.any.html	Underlying source: calling error and returning a rejected promise from start should cause the stream to error with the first error
+bad-underlying-sources.any.html	Underlying source: calling error twice should not throw
+bad-underlying-sources.any.html	Underlying source: throwing pull getter (initial pull)
+bad-underlying-sources.any.html	Underlying source: throwing pull method (initial pull)
+bad-underlying-sources.any.html	read should not error if it dequeues and pull() throws
+cancel.any.html	ReadableStream cancellation: cancel() on a locked stream should fail and not call the underlying source cancel
+cancel.any.html	ReadableStream cancellation: cancel(reason) should pass through the given reason to the underlying source
+cancel.any.html	ReadableStream cancellation: cancelling before start finishes should prevent pull() from being called
+cancel.any.html	ReadableStream cancellation: if the underlying source's cancel method returns a promise, the promise returned by the stream's cancel should fulfill when that one does (1)
+cancel.any.html	ReadableStream cancellation: if the underlying source's cancel method returns a promise, the promise returned by the stream's cancel should fulfill when that one does (2)
+cancel.any.html	ReadableStream cancellation: if the underlying source's cancel method returns a promise, the promise returned by the stream's cancel should reject when that one does
+cancel.any.html	ReadableStream cancellation: integration test on an infinite stream derived from a random push source
+cancel.any.html	ReadableStream cancellation: returning a value from the underlying source's cancel should not affect the fulfillment value of the promise returned by the stream's cancel
+cancel.any.html	ReadableStream cancellation: should fulfill promise when cancel callback went fine
+cancel.any.html	ReadableStream cancellation: should reject promise when cancel callback raises an exception
+cancel.any.html	ReadableStream cancellation: underlyingSource.cancel() should called, even with pending pull
+constructor.any.html	underlyingSource argument should be converted after queuingStrategy argument
+count-queuing-strategy-integration.any.html	Can construct a readable stream with a valid CountQueuingStrategy
+count-queuing-strategy-integration.any.html	Correctly governs a ReadableStreamController's desiredSize property (HWM = 0)
+count-queuing-strategy-integration.any.html	Correctly governs a ReadableStreamController's desiredSize property (HWM = 1)
+count-queuing-strategy-integration.any.html	Correctly governs a ReadableStreamController's desiredSize property (HWM = 4)
+crashtests/garbage-collection.any.html	Garbage-collecting a stream along with its reader should not crash
+crashtests/garbage-collection.any.html	Garbage-collecting a stream with a pending read should not crash
+default-reader.any.html	Cannot use an already-released reader to unlock a stream again
+default-reader.any.html	Constructing a ReadableStreamDefaultReader directly should be OK if the stream is closed
+default-reader.any.html	Constructing a ReadableStreamDefaultReader directly should be OK if the stream is errored
+default-reader.any.html	Constructing a ReadableStreamDefaultReader directly should fail if the stream is already locked (via direct construction)
+default-reader.any.html	Constructing a ReadableStreamDefaultReader directly should fail if the stream is already locked (via getReader)
+default-reader.any.html	Erroring a ReadableStream after checking closed should reject ReadableStreamDefaultReader closed promise
+default-reader.any.html	Erroring a ReadableStream before checking closed should reject ReadableStreamDefaultReader closed promise
+default-reader.any.html	Getting a ReadableStreamDefaultReader via getReader should fail if the stream is already locked (via direct construction)
+default-reader.any.html	Getting a ReadableStreamDefaultReader via getReader should fail if the stream is already locked (via getReader)
+default-reader.any.html	Getting a second reader after erroring the stream and releasing the reader should succeed
+default-reader.any.html	Multiple readers can access the stream in sequence
+default-reader.any.html	ReadableStreamDefaultReader closed promise should be rejected with undefined if that is the error
+default-reader.any.html	ReadableStreamDefaultReader closed should always return the same promise object
+default-reader.any.html	ReadableStreamDefaultReader constructor should get a ReadableStream object as argument
+default-reader.any.html	ReadableStreamDefaultReader: if start rejects with no parameter, it should error the stream with an undefined error
+default-reader.any.html	Reading from a reader for an empty stream will wait until a chunk is available
+default-reader.any.html	Reading twice on a closed stream
+default-reader.any.html	Reading twice on a stream that gets closed
+default-reader.any.html	Reading twice on a stream that gets errored
+default-reader.any.html	Reading twice on an errored stream
+default-reader.any.html	Second reader can read chunks after first reader was released with pending read requests
+default-reader.any.html	cancel() on a reader does not release the reader
+default-reader.any.html	cancel() on a released reader is a no-op and does not pass through
+default-reader.any.html	closed is replaced when stream closes and reader releases its lock
+default-reader.any.html	closed is replaced when stream errors and reader releases its lock
+default-reader.any.html	closed should be fulfilled after stream is closed (.closed access before acquiring)
+default-reader.any.html	closed should be rejected after reader releases its lock (multiple stream locks)
+default-reader.any.html	controller.close() should clear the list of pending read requests
+default-reader.any.html	getReader() should call ToString() on mode
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near 0 (total ends up positive, and not clamped)
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near 0 (total ends up positive, but clamped)
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near 0 (total ends up zero)
+floating-point-total-queue-size.any.html	Floating point arithmetic must manifest near NUMBER.MAX_SAFE_INTEGER (total ends up positive)
+from.any.html	ReadableStream.from accepts a ReadableStream
+from.any.html	ReadableStream.from accepts a ReadableStream async iterator
+from.any.html	ReadableStream.from accepts a Set
+from.any.html	ReadableStream.from accepts a Set iterator
+from.any.html	ReadableStream.from accepts a sync generator
+from.any.html	ReadableStream.from accepts a sync iterable of promises
+from.any.html	ReadableStream.from accepts a sync iterable of values
+from.any.html	ReadableStream.from accepts a sync iterable with a function iterator
+from.any.html	ReadableStream.from accepts an array iterator
+from.any.html	ReadableStream.from accepts an array of promises
+from.any.html	ReadableStream.from accepts an array of values
+from.any.html	ReadableStream.from accepts an async generator
+from.any.html	ReadableStream.from accepts an async iterable
+from.any.html	ReadableStream.from accepts an async iterable with a function iterator
+from.any.html	ReadableStream.from accepts an empty iterable
+from.any.html	ReadableStream.from ignores @@iterator if @@asyncIterator exists
+from.any.html	ReadableStream.from ignores a null @@asyncIterator
+from.any.html	ReadableStream.from re-throws errors from calling the @@asyncIterator method
+from.any.html	ReadableStream.from re-throws errors from calling the @@iterator method
+from.any.html	ReadableStream.from throws on invalid iterables; specifically 0
+from.any.html	ReadableStream.from throws on invalid iterables; specifically NaN
+from.any.html	ReadableStream.from throws on invalid iterables; specifically Object.create(null)
+from.any.html	ReadableStream.from throws on invalid iterables; specifically a function
+from.any.html	ReadableStream.from throws on invalid iterables; specifically a string
+from.any.html	ReadableStream.from throws on invalid iterables; specifically a symbol
+from.any.html	ReadableStream.from throws on invalid iterables; specifically an object with a non-callable @@asyncIterator method
+from.any.html	ReadableStream.from throws on invalid iterables; specifically an object with a non-callable @@iterator method
+from.any.html	ReadableStream.from throws on invalid iterables; specifically an object with an @@asyncIterator method returning a non-object
+from.any.html	ReadableStream.from throws on invalid iterables; specifically an object with an @@iterator method returning a non-object
+from.any.html	ReadableStream.from throws on invalid iterables; specifically null
+from.any.html	ReadableStream.from throws on invalid iterables; specifically true
+from.any.html	ReadableStream.from throws on invalid iterables; specifically undefined
+from.any.html	ReadableStream.from throws on invalid iterables; specifically {}
+from.any.html	ReadableStream.from(array), push() to array while reading
+from.any.html	ReadableStream.from: calls next() after first read()
+from.any.html	ReadableStream.from: cancel() rejects when return() fulfills with a non-object
+from.any.html	ReadableStream.from: cancel() rejects when return() is not a method
+from.any.html	ReadableStream.from: cancel() rejects when return() rejects
+from.any.html	ReadableStream.from: cancel() rejects when return() throws synchronously
+from.any.html	ReadableStream.from: cancel() resolves when return() method is missing
+from.any.html	ReadableStream.from: cancelling the returned stream calls and awaits return()
+from.any.html	ReadableStream.from: reader.cancel() inside next()
+from.any.html	ReadableStream.from: reader.cancel() inside return()
+from.any.html	ReadableStream.from: reader.read() inside next()
+from.any.html	ReadableStream.from: return() is not called when iterator completes normally
+from.any.html	ReadableStream.from: stream errors when next() fulfills with a non-object
+from.any.html	ReadableStream.from: stream errors when next() rejects
+from.any.html	ReadableStream.from: stream errors when next() returns a non-object
+from.any.html	ReadableStream.from: stream errors when next() throws synchronously
+from.any.html	ReadableStream.from: stream stalls when next() never settles
+garbage-collection.any.html	A ReadableStream and its reader should not be garbage collected while there is a read promise pending
+garbage-collection.any.html	Garbage-collecting a ReadableStreamDefaultReader should not unlock its stream
+garbage-collection.any.html	ReadableStream closed promise should fulfill even if the stream and reader JS references are lost
+garbage-collection.any.html	ReadableStream closed promise should reject even if stream and reader JS references are lost
+garbage-collection.any.html	ReadableStreamController methods should continue working properly when scripts lose their reference to the readable stream
+general.any.html	ReadableStream can be constructed with no errors
+general.any.html	ReadableStream can't be constructed with an invalid type
+general.any.html	ReadableStream can't be constructed with garbage
+general.any.html	ReadableStream constructor should throw for non-function start arguments
+general.any.html	ReadableStream constructor will not tolerate initial garbage as cancel argument
+general.any.html	ReadableStream constructor will not tolerate initial garbage as pull argument
+general.any.html	ReadableStream integration test: adapting a random push source
+general.any.html	ReadableStream integration test: adapting a sync pull source
+general.any.html	ReadableStream integration test: adapting an async pull source
+general.any.html	ReadableStream pull should be able to close a stream.
+general.any.html	ReadableStream pull should be able to error a stream and throw.
+general.any.html	ReadableStream pull should be able to error a stream.
+general.any.html	ReadableStream should be able to call start method within prototype chain of its source
+general.any.html	ReadableStream should be able to enqueue different objects.
+general.any.html	ReadableStream start controller parameter should be extensible
+general.any.html	ReadableStream start should be able to return a promise
+general.any.html	ReadableStream start should be able to return a promise and reject it
+general.any.html	ReadableStream start should be called with the proper thisArg
+general.any.html	ReadableStream strategies: the default strategy should continue giving desiredSize of 1 if the chunks are read immediately
+general.any.html	ReadableStream strategies: the default strategy should give desiredSize of 1 to start, decreasing by 1 per enqueue
+general.any.html	ReadableStream: desiredSize when closed
+general.any.html	ReadableStream: desiredSize when errored
+general.any.html	ReadableStream: enqueue should throw when the stream is closed
+general.any.html	ReadableStream: enqueue should throw when the stream is readable but draining
+general.any.html	ReadableStream: if pull rejects, it should error the stream
+general.any.html	ReadableStream: should call pull after enqueueing from inside pull (with no read requests), if strategy allows
+general.any.html	ReadableStream: should call pull in reaction to read()ing the last chunk, if not draining
+general.any.html	ReadableStream: should call pull when trying to read from a started, empty stream
+general.any.html	ReadableStream: should call underlying source methods as methods
+general.any.html	ReadableStream: should not call pull after start if the stream is now closed
+general.any.html	ReadableStream: should not call pull until the previous pull call's promise fulfills
+general.any.html	ReadableStream: should not call pull() in reaction to read()ing the last chunk, if draining
+general.any.html	ReadableStream: should only call pull once on a non-empty stream read from after start fulfills
+general.any.html	ReadableStream: should only call pull once on a non-empty stream read from before start fulfills
+general.any.html	ReadableStream: should only call pull once upon starting the stream
+general.any.html	ReadableStream: should pull after start, and after every read
+general.any.html	Subclassing ReadableStream should work
+general.any.html	default ReadableStream getReader() should only accept mode:undefined
+patched-global.any.html	ReadableStream async iterator should use the original values of getReader() and ReadableStreamDefaultReader methods
+patched-global.any.html	ReadableStream tee() should not call the global ReadableStream
+patched-global.any.html	ReadableStream tee() should not touch Object.prototype properties
+patched-global.any.html	pipeTo() should not call Promise.prototype.then()
+patched-global.any.html	tee() should not call Promise.prototype.then()
+read-task-handling.window.html	reading from a stream should occur in a microtask scope
+reentrant-strategies.any.html	cancel() inside size() should work
+reentrant-strategies.any.html	close request inside size() should work
+reentrant-strategies.any.html	close() inside size() should not crash
+reentrant-strategies.any.html	desiredSize inside size() should work
+reentrant-strategies.any.html	enqueue() inside size() should work
+reentrant-strategies.any.html	error() inside size() should work
+reentrant-strategies.any.html	getReader() inside size() should work
+reentrant-strategies.any.html	pipeTo() inside size() should behave as expected
+reentrant-strategies.any.html	read() inside of size() should behave as expected
+reentrant-strategies.any.html	tee() inside size() should work
+tee.any.html	ReadableStream teeing: canceling both branches in reverse order should aggregate the cancel reasons into an array
+tee.any.html	ReadableStream teeing: canceling both branches in sequence with delay
+tee.any.html	ReadableStream teeing: canceling both branches should aggregate the cancel reasons into an array
+tee.any.html	ReadableStream teeing: canceling branch1 should finish when branch2 reads until end of stream
+tee.any.html	ReadableStream teeing: canceling branch1 should finish when original stream errors
+tee.any.html	ReadableStream teeing: canceling branch1 should not impact branch2
+tee.any.html	ReadableStream teeing: canceling branch2 should not impact branch1
+tee.any.html	ReadableStream teeing: closing the original should immediately close the branches
+tee.any.html	ReadableStream teeing: enqueue() and close() while both branches are pulling
+tee.any.html	ReadableStream teeing: erroring a teed stream should error both branches
+tee.any.html	ReadableStream teeing: erroring a teed stream should properly handle canceled branches
+tee.any.html	ReadableStream teeing: erroring the original should immediately error the branches
+tee.any.html	ReadableStream teeing: errors in the source should propagate to both branches
+tee.any.html	ReadableStream teeing: failing to cancel the original stream should cause cancel() to reject on branches
+tee.any.html	ReadableStream teeing: failing to cancel when canceling both branches in sequence with delay
+tee.any.html	ReadableStream teeing: rs.tee() returns an array of two ReadableStreams
+tee.any.html	ReadableStream teeing: should be able to read one branch to the end without affecting the other
+tee.any.html	ReadableStream teeing: values should be equal across each branch
+tee.any.html	ReadableStreamTee should not pull more chunks than can fit in the branch queue
+tee.any.html	ReadableStreamTee should not pull when original is already errored
+tee.any.html	ReadableStreamTee should not use a modified ReadableStream constructor from the global object
+tee.any.html	ReadableStreamTee should only pull enough to fill the emptiest queue
+tee.any.html	ReadableStreamTee stops pulling when original stream errors while both branches are reading
+tee.any.html	ReadableStreamTee stops pulling when original stream errors while branch 1 is reading
+tee.any.html	ReadableStreamTee stops pulling when original stream errors while branch 2 is reading
+tee.any.html	Running templatedRSTeeCancel with ReadableStream teeing
+templated.any.html	ReadableStream (closed via call in start): cancel() should return a distinct fulfilled promise each time
+templated.any.html	ReadableStream (closed via call in start): getReader() should be OK
+templated.any.html	ReadableStream (closed via call in start): locked should be false
+templated.any.html	ReadableStream (closed via call in start): should be able to acquire multiple readers if they are released in succession
+templated.any.html	ReadableStream (closed via call in start): should not be able to acquire a second reader if we don't release the first one
+templated.any.html	ReadableStream (closed via cancel): cancel() should return a distinct fulfilled promise each time
+templated.any.html	ReadableStream (closed via cancel): getReader() should be OK
+templated.any.html	ReadableStream (closed via cancel): locked should be false
+templated.any.html	ReadableStream (closed via cancel): should be able to acquire multiple readers if they are released in succession
+templated.any.html	ReadableStream (closed via cancel): should not be able to acquire a second reader if we don't release the first one
+templated.any.html	ReadableStream (empty) reader: canceling via the reader should cause the reader to act closed
+templated.any.html	ReadableStream (empty) reader: canceling via the stream should fail
+templated.any.html	ReadableStream (empty) reader: getReader() again on the stream should fail
+templated.any.html	ReadableStream (empty) reader: instances have the correct methods and properties
+templated.any.html	ReadableStream (empty) reader: locked should be true
+templated.any.html	ReadableStream (empty) reader: read() should never settle
+templated.any.html	ReadableStream (empty) reader: read() should return distinct promises each time
+templated.any.html	ReadableStream (empty) reader: releasing the lock should cause closed calls to reject with a TypeError
+templated.any.html	ReadableStream (empty) reader: releasing the lock should cause further read() calls to reject with a TypeError
+templated.any.html	ReadableStream (empty) reader: releasing the lock should cause locked to become false
+templated.any.html	ReadableStream (empty) reader: releasing the lock should reject all pending read requests
+templated.any.html	ReadableStream (empty) reader: two read()s should both never settle
+templated.any.html	ReadableStream (empty): calling getReader with invalid arguments should throw appropriate errors
+templated.any.html	ReadableStream (empty): instances have the correct methods and properties
+templated.any.html	ReadableStream (errored via call in start): cancel() should return a distinct rejected promise each time
+templated.any.html	ReadableStream (errored via call in start): getReader() should return a reader that acts errored
+templated.any.html	ReadableStream (errored via call in start): locked should be false
+templated.any.html	ReadableStream (errored via call in start): read() twice should give the error each time
+templated.any.html	ReadableStream (errored via call in start): reader cancel() should return a distinct rejected promise each time
+templated.any.html	ReadableStream (errored via call in start): should be able to obtain a second reader, with the correct closed promise
+templated.any.html	ReadableStream (errored via call in start): should not be able to obtain additional readers if we don't release the first lock
+templated.any.html	ReadableStream (errored via returning a rejected promise in start) reader: closed should reject with the error
+templated.any.html	ReadableStream (errored via returning a rejected promise in start) reader: read() should reject with the error
+templated.any.html	ReadableStream (errored via returning a rejected promise in start) reader: releasing the lock should cause closed to reject and change identity
+templated.any.html	ReadableStream (errored via returning a rejected promise in start): getReader() should return a reader that acts errored
+templated.any.html	ReadableStream (errored via returning a rejected promise in start): locked should be false
+templated.any.html	ReadableStream (errored via returning a rejected promise in start): read() twice should give the error each time
+templated.any.html	ReadableStream (two chunks enqueued, still open) reader: calling read() twice without waiting will eventually give both chunks (nested)
+templated.any.html	ReadableStream (two chunks enqueued, still open) reader: calling read() twice without waiting will eventually give both chunks (sequential)
+templated.any.html	ReadableStream (two chunks enqueued, still open) reader: cancel() after a read() should still give that single read result
+templated.any.html	ReadableStream (two chunks enqueued, still open) reader: read() should return distinct promises each time
+templated.any.html	ReadableStream (two chunks enqueued, then closed) reader: draining the stream via read() should cause the reader closed promise to fulfill, but locked stays true
+templated.any.html	ReadableStream (two chunks enqueued, then closed) reader: reader's closed property always returns the same promise
+templated.any.html	ReadableStream (two chunks enqueued, then closed) reader: releasing the lock after the stream is closed should cause locked to become false
+templated.any.html	ReadableStream (two chunks enqueued, then closed) reader: releasing the lock should cause further read() calls to reject with a TypeError
+templated.any.html	ReadableStream (two chunks enqueued, then closed) reader: third read(), without waiting, should give { value: undefined, done: true } (nested)
+templated.any.html	ReadableStream (two chunks enqueued, then closed) reader: third read(), without waiting, should give { value: undefined, done: true } (sequential)
+templated.any.html	ReadableStream reader (closed after getting reader): cancel() should return a distinct fulfilled promise each time
+templated.any.html	ReadableStream reader (closed after getting reader): closed should fulfill with undefined
+templated.any.html	ReadableStream reader (closed after getting reader): read() multiple times should fulfill with { value: undefined, done: true }
+templated.any.html	ReadableStream reader (closed after getting reader): read() should fulfill with { value: undefined, done: true }
+templated.any.html	ReadableStream reader (closed after getting reader): read() should work when used within another read() fulfill callback
+templated.any.html	ReadableStream reader (closed after getting reader): releasing the lock should cause closed to reject and change identity
+templated.any.html	ReadableStream reader (closed before getting reader): cancel() should return a distinct fulfilled promise each time
+templated.any.html	ReadableStream reader (closed before getting reader): closed should fulfill with undefined
+templated.any.html	ReadableStream reader (closed before getting reader): read() multiple times should fulfill with { value: undefined, done: true }
+templated.any.html	ReadableStream reader (closed before getting reader): read() should fulfill with { value: undefined, done: true }
+templated.any.html	ReadableStream reader (closed before getting reader): read() should work when used within another read() fulfill callback
+templated.any.html	ReadableStream reader (closed before getting reader): releasing the lock should cause closed to reject and change identity
+templated.any.html	ReadableStream reader (closed via cancel after getting reader): cancel() should return a distinct fulfilled promise each time
+templated.any.html	ReadableStream reader (closed via cancel after getting reader): closed should fulfill with undefined
+templated.any.html	ReadableStream reader (closed via cancel after getting reader): read() multiple times should fulfill with { value: undefined, done: true }
+templated.any.html	ReadableStream reader (closed via cancel after getting reader): read() should fulfill with { value: undefined, done: true }
+templated.any.html	ReadableStream reader (closed via cancel after getting reader): read() should work when used within another read() fulfill callback
+templated.any.html	ReadableStream reader (closed via cancel after getting reader): releasing the lock should cause closed to reject and change identity
+templated.any.html	ReadableStream reader (errored after getting reader): closed should reject with the error
+templated.any.html	ReadableStream reader (errored after getting reader): read() should reject with the error
+templated.any.html	ReadableStream reader (errored after getting reader): releasing the lock should cause closed to reject and change identity
+templated.any.html	ReadableStream reader (errored before getting reader): closed should reject with the error
+templated.any.html	ReadableStream reader (errored before getting reader): read() should reject with the error
+templated.any.html	ReadableStream reader (errored before getting reader): releasing the lock should cause closed to reject and change identity
+templated.any.html	ReadableStream: close() throws after error()
+templated.any.html	ReadableStream: enqueue() throws after close()
+templated.any.html	ReadableStream: enqueue() throws after enqueue() and close()
+templated.any.html	ReadableStream: enqueue() throws after error()
+templated.any.html	Running templatedRSClosed with ReadableStream (closed via call in start)
+templated.any.html	Running templatedRSClosed with ReadableStream (closed via cancel)
+templated.any.html	Running templatedRSClosedReader with ReadableStream reader (closed after getting reader)
+templated.any.html	Running templatedRSClosedReader with ReadableStream reader (closed before getting reader)
+templated.any.html	Running templatedRSClosedReader with ReadableStream reader (closed via cancel after getting reader)
+templated.any.html	Running templatedRSEmpty with ReadableStream (empty)
+templated.any.html	Running templatedRSEmptyReader with ReadableStream (empty) reader
+templated.any.html	Running templatedRSErrored with ReadableStream (errored via call in start)
+templated.any.html	Running templatedRSErrored with ReadableStream (errored via returning a rejected promise in start)
+templated.any.html	Running templatedRSErroredReader with ReadableStream (errored via returning a rejected promise in start) reader
+templated.any.html	Running templatedRSErroredReader with ReadableStream reader (errored after getting reader)
+templated.any.html	Running templatedRSErroredReader with ReadableStream reader (errored before getting reader)
+templated.any.html	Running templatedRSErroredSyncOnly with ReadableStream (errored via call in start)
+templated.any.html	Running templatedRSThrowAfterCloseOrError with ReadableStream
+templated.any.html	Running templatedRSTwoChunksClosedReader with ReadableStream (two chunks enqueued, then closed) reader
+templated.any.html	Running templatedRSTwoChunksOpenReader with ReadableStream (two chunks enqueued, still open) reader

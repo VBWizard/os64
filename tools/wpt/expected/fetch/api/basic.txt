@@ -114,6 +114,8 @@ fetch-in-popup-from-iframe.html	popups and frames, which this browser does not h
 mediasource.window.html	MediaSource, which this browser does not have
 request-upload.h2.any.html	a streaming request body over HTTP/2: no ReadableStream global, no HTTP/2
 [passing]
+gc.any.html	GC/CC should not abruptly close the stream while being consumed by Response
+gc.any.html	GC/CC should not discard a FormData body's Blob before its stream is read
 gc.any.html	GC/CC should not discard a Request's FormData body Blob before it is read
 gc.any.html	GC/CC should not discard a Response's FormData body Blob before it is read
 gc.any.html	GC/CC should not discard a cloned FormData body's Blob before it is read
@@ -138,6 +140,12 @@ mode-same-origin.any.html	Fetch http://wpt.test/fetch/api/resources/top.txt with
 mode-same-origin.any.html	Fetch http://www1.wpt.test/fetch/api/resources/top.txt with same-origin mode
 mode-same-origin.any.html	Fetch https://wpt.test/fetch/api/resources/top.txt with same-origin mode
 request-head.any.html	Fetch with HEAD with body
+request-upload.any.html	Fetch with POST with ReadableStream containing ArrayBuffer
+request-upload.any.html	Fetch with POST with ReadableStream containing Blob
+request-upload.any.html	Fetch with POST with ReadableStream containing String
+request-upload.any.html	Fetch with POST with ReadableStream containing null
+request-upload.any.html	Fetch with POST with ReadableStream containing number
+request-upload.any.html	Streaming upload shouldn't work on Http/1.1.
 response-null-body.any.html	Null body status with subresource integrity should abort
 scheme-about.any.html	Fetching about:blank with method GET is KO
 scheme-about.any.html	Fetching about:blank with method POST is KO

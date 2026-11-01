@@ -95,6 +95,14 @@ static const DModernRow kModern[] = {
      * DataView, the blob row's File and the exception row's DOMException,
      * all installed above. */
     {(const char *const[]){"structuredClone", NULL}, d_clone_install},
+    /* The Streams standard (streams.c), after the rows its captures take
+     * from: queueMicrotask (browsing), AbortController (abort) and
+     * structuredClone (clone), which a tee's second branch is cloned by. */
+    {(const char *const[]){"ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamDefaultController",
+                           "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController",
+                           "TransformStream", "TransformStreamDefaultController", "ByteLengthQueuingStrategy",
+                           "CountQueuingStrategy", NULL},
+     d_streams_install},
     {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     /* 0f's node row: members of Node's, Attr's, Text's and a template's
