@@ -64,6 +64,7 @@ WPT_DIRS=(
     page-visibility
     html/interaction/focus
     dom/events
+    pointerevents
     html/webappapis/structured-clone
     requestidlecallback
     webmessaging/without-ports
