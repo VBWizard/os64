@@ -58,6 +58,10 @@ and the first is still hit by everything else, the idle loop included.
 
 ## 2. Part A — the parse's scratch is kept by its owner (libgarb, size S)
 
+*Built 2026-10-30 as designed here, so "Where it is" describes the code
+before it. The proof is `test_garb_host.sh --scratch` and
+`tools/test_garb_mutants.py`; the P5 measurement is still to take.*
+
 **Where it is.** `parse.c`: a `Parse` owns `scratch`/`scratch_cap`/`top`,
 the stack every list is built on and copied off at close (one stack serves
 the nested lists). `run` ends by freeing the scratch. `reparse` — behind

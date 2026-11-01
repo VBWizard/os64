@@ -774,6 +774,16 @@ the library serves every process). How it fits together:
   program** — `Fatal exception: prog (task N, #XM) - exit 219` /
   `Segmentation fault: prog (task N, why) - exit 139` — while the wire and
   the log get the full report (registers, forensics, call chain) in order.
+  **A fault in the thread's own stack guard is headed `Stack overflow`**
+  (or `Stack underflow`), same exit, plus a forensics line placing the
+  fault against the stack (`stack_guard_side`). It lands in the guard at
+  all because userland is built `-fstack-clash-protection`: a frame larger
+  than a page is lowered a page at a time and touched as it goes, so RSP
+  cannot leap the guard however big the frame. Before the check, a 16KB
+  frame sixty calls deep landed in the guard on 2026-10-30 and was reported
+  as a plain unmapped address, with the arithmetic left to the reader; that
+  is what this pair exists to name. Fixture: `/tests/stackprobe` (passes by
+  dying 139).
   Ruled 2026-08-28: the full dump on screen earned its place while the
   kernel liked to die; now that a user fault kills the program and never
   the machine, it is noise. And it goes to `task->tty`, not VT1 (the

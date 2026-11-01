@@ -19,4 +19,6 @@ a:link, a:visited { color: #00e !important; text-decoration: underline }
 .card { aspect-ratio: auto 16 / calc(9 + 0); object-position: right 10px top 5%; object-fit: cover; cursor: url(a.cur) 1 calc(2 + 0), image-set("b.png" 1x), pointer; outline: 2px dashed red; margin-inline: 1px calc(2px + 1em); letter-spacing: 1px; word-wrap: break-word; text-overflow: ellipsis; user-select: none; border-block: thin solid blue }
 .bad { color: red; width: 10px 20px {oops}; } } .after { color: \62 lue }
 <!-- .cdo { x: y } -->
+p::before, p.a::after { content: "x" attr(title) open-quote; color: red }
+ol { counter-reset: item 2 sub; quotes: "<" ">" } li::before { counter-increment: item; content: counters(item, ".", upper-roman) " " }
 .unterminated { content: "abc

@@ -394,7 +394,17 @@ bool p_base(os64_page_t *page)
     return true;
 }
 
-void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
+// Whether the `n` bytes at `ref` are an opaque `data:` reference, its scheme
+// in any case: one that carries its document in itself.
+static bool data_reference(const char *ref, size_t n)
+{
+    return n >= 5 && (ref[0] | 0x20) == 'd' && (ref[1] | 0x20) == 'a' && (ref[2] | 0x20) == 't' &&
+           (ref[3] | 0x20) == 'a' && opaque_reference(ref, n);
+}
+
+// `long_data`: a `data:` reference past OS64_URL_REF_MAX is taken whole
+// rather than refused (p_resolve_picture says why).
+static void resolve_ref(os64_page_t *page, const char *ref, os64_page_ref_t *out, bool long_data)
 {
     os64_memset(out, 0, sizeof(*out));
     out->refused = OS64_PAGE_REASON_OK;
@@ -440,6 +450,18 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
         return;
     }
     if (head >= OS64_URL_REF_MAX) {
+        // Spelled as a shorter one is (p_canonical's opaque rule): the input
+        // as cleaned, its scheme in lower case.
+        if (long_data && data_reference(ref, head)) {
+            char *whole = p_copy(page, ref, head);
+            if (whole == NULL) {
+                out->refused = OS64_PAGE_REASON_NO_MEMORY;
+                return;
+            }
+            os64_memcpy(whole, "data", 4);
+            out->url = whole;
+            return;
+        }
         out->refused = OS64_PAGE_REASON_TOO_LONG;
         return;
     }
@@ -475,6 +497,16 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
     out->refused = OS64_PAGE_REASON_BAD_ACTION;
 }
 
+void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
+{
+    resolve_ref(page, ref, out, false);
+}
+
+void p_resolve_picture(os64_page_t *page, const char *ref, os64_page_ref_t *out)
+{
+    resolve_ref(page, ref, out, true);
+}
+
 bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_url,
                           const char *reference, char *out, size_t cap)
 {
@@ -501,6 +533,41 @@ bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_
     p_arena_free(&page->arena);
     os64_free(page);
     return ok;
+}
+
+char *os64_page_resolve_in_alloc(const os64_html_document_t *doc, const char *document_url,
+                                 const char *reference)
+{
+    if (reference == NULL)
+        return NULL;
+    char *scratch = os64_malloc(OS64_URL_REF_MAX), *out = NULL;
+    if (scratch == NULL)
+        return NULL;
+    bool resolved = os64_page_resolve_in(doc, document_url, reference, scratch, OS64_URL_REF_MAX);
+    if (resolved && (out = os64_malloc(os64_strlen(scratch) + 1)) != NULL)
+        os64_memcpy(out, scratch, os64_strlen(scratch) + 1);
+    os64_free(scratch);
+    if (resolved)
+        return out;
+    // Refused. A data: URL too long for the resolve is spelled as it would
+    // have spelled it: cleaned as a link's input (url_input), its scheme in
+    // lower case as p_canonical writes an opaque address's. One the resolve
+    // refused at a length it holds was refused for another reason.
+    os64_page_t *page = os64_calloc(1, sizeof(*page));
+    if (page == NULL)
+        return NULL;
+    page->doc = doc;
+    const char *clean = url_input(page, reference);
+    size_t n = clean != NULL ? os64_strlen(clean) : 0;
+    bool data = n >= OS64_URL_REF_MAX && (clean[0] | 0x20) == 'd' && (clean[1] | 0x20) == 'a' &&
+                (clean[2] | 0x20) == 't' && (clean[3] | 0x20) == 'a' && clean[4] == ':' && clean[5] != '/';
+    if (data && (out = os64_malloc(n + 1)) != NULL) {
+        os64_memcpy(out, clean, n + 1);
+        os64_memcpy(out, "data", 4);
+    }
+    p_arena_free(&page->arena);
+    os64_free(page);
+    return out;
 }
 
 bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url, char *out,

@@ -141,7 +141,7 @@ static int data_cases(const char *path)
         fprintf(stderr, "test_importmap_host: cannot read %s\n", path);
         return 2;
     }
-    static char line[4 * CAP], name[CAP], base[CAP], expected[CAP * 4], got[CAP * 4], out[CAP];
+    static char line[4 * CAP], name[CAP], base[CAP], expected[CAP * 4], got[CAP * 4];
     yonder_import_map_t *parsed = NULL, *window = NULL;
     bool error = false, added = true;
     size_t expected_len = 0;
@@ -181,12 +181,14 @@ static int data_cases(const char *path)
             }
             char what[2 * CAP];
             snprintf(what, sizeof(what), "%s from %s", f[2], f[1]);
-            yonder_specifier_t r = yonder_import_map_resolve(window, f[1], f[2], out, sizeof(out));
+            char *out;
+            yonder_specifier_t r = yonder_import_map_resolve(window, f[1], f[2], &out);
             bool pass = f[3] == NULL ? r == YONDER_SPECIFIER_BARE || r == YONDER_SPECIFIER_BLOCKED
                                      : r == YONDER_SPECIFIER_OK && strcmp(out, f[3]) == 0;
             verdict(pass, name, what, r == YONDER_SPECIFIER_OK ? out
                                       : r == YONDER_SPECIFIER_BARE ? "(bare)"
                                       : r == YONDER_SPECIFIER_BLOCKED ? "(blocked)" : "(failed)");
+            os64_free(out);
         } else if (strcmp(f[0], "END") == 0) {
             if (error) {
                 printf("SKIP\t%s: libdom refuses its JSON\n", name);
@@ -232,9 +234,20 @@ static yonder_import_map_t *map_of(const char *const *entries)
 
 static bool resolves(yonder_import_map_t *window, const char *base, const char *specifier, const char *want)
 {
-    char out[1024];
-    yonder_specifier_t r = yonder_import_map_resolve(window, base, specifier, out, sizeof(out));
-    return want == NULL ? r != YONDER_SPECIFIER_OK : r == YONDER_SPECIFIER_OK && strcmp(out, want) == 0;
+    char *out;
+    yonder_specifier_t r = yonder_import_map_resolve(window, base, specifier, &out);
+    bool ok = want == NULL ? r != YONDER_SPECIFIER_OK : r == YONDER_SPECIFIER_OK && strcmp(out, want) == 0;
+    os64_free(out);
+    return ok;
+}
+
+// How `specifier` resolves from `base` through `window`, its answer let go.
+static yonder_specifier_t resolution(yonder_import_map_t *window, const char *base, const char *specifier)
+{
+    char *out;
+    yonder_specifier_t r = yonder_import_map_resolve(window, base, specifier, &out);
+    os64_free(out);
+    return r;
 }
 
 static int merge_cases(void)
@@ -307,13 +320,38 @@ static int merge_cases(void)
     // is BARE; a prefix that backtracks above itself is blocked.
     window = yonder_import_map_new();
     yonder_import_map_merge(window, map_of((const char *const[]){NULL, "x", NULL, NULL, "p/", "/pkg/", NULL, NULL}));
-    char out[64];
-    check(yonder_import_map_resolve(window, kPage, "x", out, sizeof(out)) == YONDER_SPECIFIER_BLOCKED &&
-          yonder_import_map_resolve(window, kPage, "y", out, sizeof(out)) == YONDER_SPECIFIER_BARE &&
-          yonder_import_map_resolve(window, kPage, "p/../x", out, sizeof(out)) == YONDER_SPECIFIER_BLOCKED &&
-          yonder_import_map_resolve(window, kPage, "p/a.js", out, 8) == YONDER_SPECIFIER_FAILED,
-          "resolve: a null rule blocks, an unmapped bare name is bare, a backtrack blocks, a short buffer fails");
+    check(resolution(window, kPage, "x") == YONDER_SPECIFIER_BLOCKED &&
+          resolution(window, kPage, "y") == YONDER_SPECIFIER_BARE &&
+          resolution(window, kPage, "p/../x") == YONDER_SPECIFIER_BLOCKED,
+          "resolve: a null rule blocks, an unmapped bare name is bare, a backtrack blocks");
     yonder_import_map_free(window);
+
+    // A data: URL carries its module in itself, so it is resolved at any
+    // length, spelled as a short one is; a long address of any other kind
+    // is past what yonder resolves, which is no bare name.
+    static char spelled[3 * CAP], written[3 * CAP];
+    memset(written, 0, sizeof(written));
+    strcpy(written, "  DATA:text/javascript,export default 1;//");
+    memset(written + strlen(written), 'x', 2 * CAP);
+    strcpy(spelled, "data:text/javascript,export default 1;//");
+    memset(spelled + strlen(spelled), 'x', 2 * CAP);
+    check(resolves(NULL, kPage, written, spelled), "resolve: a long data: URL resolves, spelled as a short one is");
+    window = yonder_import_map_new();
+    yonder_import_map_merge(window, map_of((const char *const[]){NULL, "react", "/r.js", NULL, NULL}));
+    check(resolves(window, spelled, "react", "https://example.com/r.js") &&
+          resolves(window, spelled, "https://example.com/b.js", "https://example.com/b.js") &&
+          resolution(window, spelled, "./b.js") == YONDER_SPECIFIER_BARE,
+          "resolve: a long data: module imports a bare name and an absolute URL, and nothing relative");
+    yonder_import_map_merge(window, map_of((const char *const[]){NULL, spelled, "/d.js", NULL, NULL}));
+    check(resolves(window, kPage, written, "https://example.com/d.js"),
+          "resolve: a rule for a long data: URL maps it");
+    yonder_import_map_free(window);
+    static char far[3 * CAP];
+    strcpy(far, "https://example.com/");
+    memset(far + strlen(far), 'f', 2 * CAP);
+    check(resolution(NULL, kPage, far) == YONDER_SPECIFIER_FAILED &&
+          resolution(NULL, kPage, far + strlen("https://example.com")) == YONDER_SPECIFIER_FAILED,
+          "resolve: a long URL of another kind fails, absolute or relative, and is no bare name");
 
     // Without a window map a resolution is a plain URL's, recorded nowhere.
     check(resolves(NULL, kPage, "./a.js", "https://example.com/app/a.js") && resolves(NULL, kPage, "a", NULL),
@@ -337,15 +375,14 @@ static int merge_cases(void)
 // over the pairs passes by minutes.
 static int scale_cases(void)
 {
-    static char deep[1900], specifier[2048], out[4096];
+    static char deep[1900], specifier[2048];
     memset(deep, 'd', 1800);
     deep[1800] = '\0';
     clock_t began = clock();
     yonder_import_map_t *window = yonder_import_map_new();
     for (int i = 0; i < 4096; i++) {
         snprintf(specifier, sizeof(specifier), "/%s/m%d.js", deep, i);
-        check(yonder_import_map_resolve(window, kPage, specifier, out, sizeof(out)) == YONDER_SPECIFIER_OK,
-              "scale: a resolution is made");
+        check(resolution(window, kPage, specifier) == YONDER_SPECIFIER_OK, "scale: a resolution is made");
     }
     yonder_import_map_t *incoming = yonder_import_map_new();
     for (int i = 0; i < 4096; i++) {
@@ -356,9 +393,7 @@ static int scale_cases(void)
     check(yonder_import_map_merge(window, incoming), "scale: the merge registers");
     for (int i = 0; i < 4096; i++) {
         snprintf(specifier, sizeof(specifier), "/%s/k%d/x.js", deep, i);
-        check(yonder_import_map_resolve(window, kPage, specifier, out, sizeof(out)) == YONDER_SPECIFIER_OK &&
-                  !strcmp(out, "https://example.com/lib/x.js"),
-              "scale: a prefix rule resolves");
+        check(resolves(window, kPage, specifier, "https://example.com/lib/x.js"), "scale: a prefix rule resolves");
     }
     yonder_import_map_free(window);
     double seconds = (double)(clock() - began) / CLOCKS_PER_SEC;
@@ -383,19 +418,17 @@ static bool scenario(void)
          yonder_import_map_add(first, kPage, NULL, "react/", "/r/") &&
          yonder_import_map_add(first, kPage, "/app/", "x", "/x.js");
     ok = yonder_import_map_merge(window, first) && ok;
-    char out[256];
     for (int i = 0; i < 40; i++) {
         char specifier[32];
         snprintf(specifier, sizeof(specifier), "./m%d.js", i);
-        ok = yonder_import_map_resolve(window, kPage, specifier, out, sizeof(out)) == YONDER_SPECIFIER_OK && ok;
+        ok = resolution(window, kPage, specifier) == YONDER_SPECIFIER_OK && ok;
     }
-    ok = yonder_import_map_resolve(window, kPage, "react/jsx", out, sizeof(out)) == YONDER_SPECIFIER_OK && ok;
+    ok = resolution(window, kPage, "react/jsx") == YONDER_SPECIFIER_OK && ok;
     yonder_import_map_t *second = yonder_import_map_new();
     ok = second != NULL && yonder_import_map_add(second, kPage, NULL, "vue", "/v.js") &&
          yonder_import_map_add(second, kPage, "/app/", "y", "/y.js") && ok;
     ok = yonder_import_map_merge(window, second) && ok;
-    ok = yonder_import_map_resolve(window, "https://example.com/app/a.js", "y", out, sizeof(out)) ==
-             YONDER_SPECIFIER_OK && ok;
+    ok = resolution(window, "https://example.com/app/a.js", "y") == YONDER_SPECIFIER_OK && ok;
     yonder_import_map_free(window);
     return ok;
 }

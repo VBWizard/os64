@@ -1474,6 +1474,24 @@ static void list_mode(void)
     queue(h,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,r.x+2,r.y+2,OS64_GUI_MOUSE_LEFT));
     queue(h,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_UP,r.x+2,r.y+2,OS64_GUI_MOUSE_LEFT));drain();
     CHECK(list_picks==2&&list_picked==row&&!popup_handle());drain();
+    current="list: a relabel shows the new rows, keeps the value and the pick, and drops a highlight it disables";
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();h=popup_handle();p=g.menus->panels[0].widget;
+    key(h,0,0x50,0);CHECK(p->selected==2);
+    {
+        int32_t width=p->w.bounds.w;
+        snprintf(text[0],sizeof(text[0]),"Zulu");enabled[2]=false;
+        CHECK(os64_ui_menu_list_relabel(g.menus,&list_user,labels,enabled,200)==OS64_UI_OK);
+        snprintf(text[0],sizeof(text[0]),"Alpha");enabled[2]=true;
+        CHECK(!strcmp(g.menus->list->labels[0],"Zulu")&&p->list==g.menus->list&&!p->list->enabled[2]);
+        CHECK(p->w.bounds.w==width&&p->stage_top==p->top&&!strcmp(p->stage[0].label,"Zulu"));
+        CHECK(g.menus->list->value==1&&p->selected==MENU_NONE&&popup_handle()==h);
+        CHECK(os64_ui_menu_list_relabel(g.menus,&list_user,labels,enabled,199)==OS64_UI_INVALID);
+        CHECK(os64_ui_menu_list_relabel(g.menus,&list_picked,labels,enabled,200)==OS64_UI_STALE);
+        CHECK(os64_ui_menu_list_relabel(g.menus,&list_user,labels,enabled,200)==OS64_UI_OK);
+        key(h,0,0x50,0);key(h,'\n',0x1c,0);CHECK(list_picks==3&&!popup_handle());drain();
+        CHECK(os64_ui_menu_list_relabel(g.menus,&list_user,labels,enabled,200)==OS64_UI_STALE);
+    }
+    list_picks=2;
     current="list: a detach closes it and no pick follows";
     CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();h=popup_handle();
     os64_ui_menu_list_detach(g.menus,&list_user);CHECK(!os64_ui_menu_active(g.menus));drain();CHECK(!popup_handle()&&list_picks==2);

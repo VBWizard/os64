@@ -1725,7 +1725,7 @@ struct way_preflight {
 // § 4.9's network partition key (the page's site, by the same-host stand-in),
 // the serialized request origin, and the URL.
 typedef struct {
-    char partition[WAY_ORIGIN_TEXT_MAX + 24];
+    char partition[WAY_PARTITION_MAX];
     char origin[WAY_ORIGIN_TEXT_MAX];
     const char *url;
     size_t partition_len, origin_len, url_len, len;
@@ -1742,12 +1742,17 @@ static uint64_t hash_bytes(uint64_t h, const char *p, size_t n)
     return h;
 }
 
+void way_partition_of(const way_origin_t *page, char *out, size_t cap)
+{
+    if (page->opaque)
+        os64_snprintf(out, cap, "opaque %lu", (unsigned long)page->id);
+    else
+        os64_snprintf(out, cap, "%s %s", page->scheme, page->host);
+}
+
 static bool key_of(const way_request_t *r, const char *url, Key *k)
 {
-    if (r->origin.opaque)
-        os64_snprintf(k->partition, sizeof(k->partition), "opaque %lu", (unsigned long)r->origin.id);
-    else
-        os64_snprintf(k->partition, sizeof(k->partition), "%s %s", r->origin.scheme, r->origin.host);
+    way_partition_of(&r->origin, k->partition, sizeof(k->partition));
     if (!way_request_origin(r, k->origin, sizeof(k->origin)))
         return false;
     k->url = url;

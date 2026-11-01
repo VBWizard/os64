@@ -25,6 +25,7 @@ typedef struct {
     os64_text_font_t *font;
     uint64_t version;
     uintptr_t bottom, top, lowest;
+    size_t engine;              // the engine's stack limit attach gave it
     unsigned depth, requested_depth, calls;
 } GeometryPage;
 
@@ -178,7 +179,14 @@ static bool attach(GeometryPage *page)
         os64_text_font_bitmap(page->text, &page->font) != OS64_FONT_OK) return false;
     page->state = os64_page_state_create(page->doc, 0);
     os64_js_config_t config = {.limits = os64_js_default_limits()};
-    config.limits.stack_bytes = 128 * 1024;
+    // yonder's engine share of the thread's stack (scripts.c's
+    // yonder_script_stack_limit, SCRIPT_STACK.md § 5), so this probe measures
+    // the browser's arrangement: the stack less 2 MiB of layout headroom,
+    // from 128 KiB to 8 MiB. Linked with yonder's 4 MiB, the engine has 2 MiB.
+    size_t stack = page->top - page->bottom, headroom = (size_t)2 << 20;
+    size_t engine = stack < headroom + 128 * 1024 ? 128 * 1024 : stack - headroom;
+    config.limits.stack_bytes = engine > ((size_t)8 << 20) ? (size_t)8 << 20 : engine;
+    page->engine = config.limits.stack_bytes;
     os64_js_outcome_t outcome;
     if (page->state == NULL || os64_js_create(&config, OS64_JS_ABI_ID, &page->runtime, &outcome) != OS64_JS_OK)
         return false;
@@ -257,7 +265,7 @@ static const char kDive[] =
     "var image=document.getElementById('probe');var layouts=0;var n=0;"
     "function dive(d){if(d){return dive(d-1)+1}"
     "image.setAttribute('width',String(20+layouts++));return image.offsetWidth}"
-    "function descend(){for(n=0;n<4096;n+=32){try{recordDepth(n);dive(n)}catch(e){"
+    "function descend(){for(n=0;n<16384;n+=32){try{recordDepth(n);dive(n)}catch(e){"
     "if(e.name!=='RangeError'&&e.name!=='InternalError')throw e;break}}}";
 
 /* `dispatch`: the descent runs in a listener the host dispatches to, which
@@ -301,12 +309,15 @@ static void stack_case(const char *name, const char *open, const char *close, un
     } else {
         check(run(&page, "descend()", &outcome), "descent runs from a script");
     }
-    check(run(&page, "if(n<64||n===4096)throw Error('stack guard not exercised');", &outcome),
+    check(run(&page, "if(n<64||n===16384)throw Error('stack guard not exercised');", &outcome),
         "native layout runs beneath increasing JavaScript frames and engine guard remains reusable");
     check(page.calls != 0 && page.lowest >= page.bottom + 128 * 1024,
           "sampled combined layout retains at least 128 KiB native headroom");
-    os64_printf("geometry-stack,%s,%u,%u,%lu,%lu\n", name, count, page.depth,
-        (unsigned long)(page.top - page.lowest), (unsigned long)(page.lowest - page.bottom));
+    // The engine's limit beside its depth, so a reader of the used bytes
+    // knows how much of them is the engine's (SCRIPT_STACK.md § 7).
+    os64_printf("geometry-stack,%s,%u,%u,%lu,%lu,engine=%lu\n", name, count, page.depth,
+        (unsigned long)(page.top - page.lowest), (unsigned long)(page.lowest - page.bottom),
+        (unsigned long)page.engine);
     check(run(&page, "if(6*7!==42)throw Error('reuse')", &outcome), "runtime reuses after the recursion limit");
     drop(&page);
 }

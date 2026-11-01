@@ -84,8 +84,18 @@ WERROR_FLAG := $(if $(NOWERROR),,-Werror)
 # after the kernel's identical lesson was already written down. The .d files
 # land next to the .o's; the -include below pulls them in. In CFLAGS because
 # CFLAGS is what the compile rules actually pass.
+# -fstack-clash-protection: a frame larger than a page is lowered one page at
+# a time, each page touched as it goes, so RSP can never step over the
+# unmapped guard below a thread's stack — an overflow faults IN the guard,
+# which the kernel names "Stack overflow" on the glass. Without it a frame
+# allocated in one `sub rsp` lands wherever the arithmetic puts it: yonder's
+# 16KB frame against the 16KB guard (2026-10-30) happened to land inside it,
+# and a 100KB frame would not. Costs one store per page of a large frame,
+# nothing for the rest.
+# The probe loop is inline (GCC 14), so the freestanding build needs nothing
+# from a runtime. Fixture: /tests/stackprobe.
 CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
-           -fno-stack-protector -fcf-protection=none \
+           -fno-stack-protector -fcf-protection=none -fstack-clash-protection \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
@@ -312,6 +322,13 @@ LIBGARB_PROGRAMS := garbdump flowdump yonder
 # (os64_tls_entropy) itself for crypto.getRandomValues.
 LIBTLS_PROGRAMS := tlslibtest tlstransportprobe yonder
 
+# Programs whose main thread asks for a 4 MiB stack, not the 1 MiB every
+# thread gets (SCRIPT_STACK.md): `-z stack-size` writes it in PT_GNU_STACK,
+# and the kernel reads it there. yonder, whose script engine and layout
+# share its window thread; and stacktest, which proves the kernel's half.
+BIG_STACK_PROGRAMS := yonder stacktest
+BIG_STACK_LDFLAGS := -z stack-size=4194304
+
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
 # libgzip, so consumers name the codec they asked for rather than its engine.
@@ -537,7 +554,7 @@ $$(APP_BASE_STAMP_$(1)):
 	@touch "$$@"
 $(3)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA_LIBS_$(1)) $(LIBOS64_SO) $$(APP_BASE_STAMP_$(1))
 	@mkdir -p "$(3)"
-	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA_LIBS_$(1)) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) $(LDFLAGS) $(if $(filter $(1),$(BIG_STACK_PROGRAMS)),$(BIG_STACK_LDFLAGS)) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA_LIBS_$(1)) $(LIBOS64_SO)
 	@printf '  %-10s base %s\n' "$(1)" "$(APP_BASE_$(1))"
 endef
 $(foreach app,$(APPS),$(eval $(call APP_RULE,$(app),apps,$(BIN))))

@@ -96,7 +96,8 @@ typedef struct {
     Tokenizer *tz;          // the text's tokenizer, whose buffer can fail too
     int32_t depth;
     // Where parse.c's lists are built before they are kept (parse.c § Lists):
-    // a stack on the heap, the open lists nested in it, `top` its end.
+    // a stack on the heap, the open lists nested in it, `top` its end. A
+    // block read borrows its owner's (garb_parsed_t.scratch).
     char *scratch;
     size_t top, scratch_cap;
 } Parse;

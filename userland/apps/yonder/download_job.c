@@ -125,8 +125,11 @@ int64_t yonder_download_run(void *job, bool (*cancelled)(void *ctx), void *ctx, 
     os64_free(buf);
     bool stopped = cancelled(ctx);
     bool whole = written && !stopped && os64_fetch_status(f) == OS64_FETCH_OK;
+    // A file system refuses a write for want of room and for a file grown
+    // past the largest it holds, and says neither: the row names both, and
+    // the size it stopped at (download_row) tells them apart.
     if (!written)
-        fail(j, "the disk would not take it (is it full?)");
+        fail(j, "the disk would not take more: full, or past its largest file");
     else if (!stopped && !whole)
         fail(j, os64_fetch_reason(f));
     os64_fetch_close(f);

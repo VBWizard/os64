@@ -24,8 +24,8 @@ the cache holds when it opens.
 
 ## Where it lives
 
-`/var/cache/yonder/` on the root filesystem, one file per response. Root
-is the P5's large disk, and both disks persist there. The one thing that
+`/var/cache/yonder/` on the root filesystem, one file per response, in
+the bucket its key's hash names (below). Root is the P5's large disk, and both disks persist there. The one thing that
 wiped root was `tools/p5-refresh.sh`, which mirrors the build with `rsync
 --delete`; it now excludes `/var/cache/`, which rsync's `--delete` leaves
 alone. A cache is the system's own disposable state, so it is the
@@ -102,11 +102,45 @@ charset, the address asked for and the one it came from, when it was
 stored — a blank line, and the body. It is written under a name no other
 writer has (`<hash>.<task>.<n>.new`) and renamed over its place, so a
 reader sees the old entry or the new one and two yonder windows share the
-directory safely. Its name is a 64-bit hash of the address asked for, and
-the address inside is checked, so a collision is a miss.
+directory safely.
 
-**When it is full** the oldest entries by their file's time — stored, or
-revalidated — are removed until it is under nine-tenths of the cap. That
+**In buckets** (2026-10-30): a key's files live in the subdirectory the
+top byte of its hash names, `/var/cache/yonder/3f/3f….e`, made by the
+first file that goes into it. ext2 looks a name up by reading its
+directory from the start, so one directory of every file made each open,
+create and rename cost as much as the cache was large: on the P5, 16,090
+files in one directory made a kept read take 64–76 ms where a small
+cache's took 2, and a sweep's unlinks each read the whole list again. With
+256 buckets each holds a 256th. A file an older build left in the store's
+own directory is never found by its key; it is counted, swept oldest
+first and cleared like any other until it ages out.
+
+**An entry is found by its KEY** (2026-10-30, SCRIPT_CACHE.md § 2-3): the
+partition of the page it was fetched for — the page's site, as the
+preflight cache keys (`way_partition_of`) — whether the request sent
+credentials, and the address asked for. So one site's page never finds
+what another's caused to be kept, which closes the timing leak a shared
+cache is (a page learning where you have been by how fast another site's
+picture arrives), at the price every browser pays since 2020: an asset two
+sites share is fetched once for each. A page of an opaque origin keeps
+nothing. The name is a 64-bit hash of the key's parts and the parts inside
+are checked, so a collision is a miss. The head is version 2 since then:
+it carries the key's parts and, after the body, what a script's request
+reads of a kept reply — its header lines, the names of the ones too long to
+read, and the request's own lines for each header its `Vary` names
+(`way_blocks_t`). A version 1 entry is a miss, and ages out.
+
+A face may keep a COMPANION beside an entry (`<hash>.b` beside
+`<hash>.e`, 2026-10-30): something it derived from the body, under the
+entry's key and a tag of its own that names what it was derived from —
+yonder's is a script's or a module's compiled form, tagged by the text's
+digest (BYTECODE_CACHE.md). It is dropped with its entry, cleared with the
+entries, swept by the same rule and counted in the same cap, and a face
+reads one only for a body the cache holds.
+
+**When it is full** the oldest entries and companions by their file's time
+— stored, or revalidated — are removed until it is under nine-tenths of
+the cap. That
 is a little blunter than least-recently-used (a hit does not rewrite the
 file), and needs no index that two windows would have to agree on. The
 cap is the DIRECTORY's, which other windows write to unseen: each counts

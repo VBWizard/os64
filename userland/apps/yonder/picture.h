@@ -17,7 +17,9 @@
 
 // Admission covers the encoded body, XML/tree/sheet parsing, bounded SVG
 // measurement cascade (including retained attribute parses and scratch), or
-// libimage's largest codec budget. Retained products move to the page account.
+// libimage's largest codec budget — and, for a data: picture, the job's
+// copy of its address, which the page catalog's budget for addresses
+// bounds. Retained products move to the page account.
 #define PICTURE_RESERVE ((size_t)512u << 20)
 _Static_assert(PICTURE_RESERVE >= (size_t)OS64_IMAGE_CAP_DEFAULT + OS64_WEBP_MEMORY_DEFAULT,
                "picture admission must cover the raster codec budget");
@@ -29,7 +31,11 @@ typedef struct {
     uint64_t generation;            // the page it belongs to
     const char *agent;              // the browser's, read-only for the run
     char url[OS64_FETCH_URL_MAX];
-    char *data_url;                 // owned long data URL, or NULL for url
+    // A data: picture's address, the job's own copy (os64_malloc'd), or
+    // NULL for one at `url`. A data: address carries the picture itself, so
+    // `url` may not hold one whole, and the page's catalog may be gone before
+    // the worker is: yonder_picture_release frees it, product or none.
+    char *data_url;
     unsigned canvas_request;        // 0 display; 1 no-cors; 2 anonymous; 3 use-credentials
     // The browser's cookies and the page's address for the Referer: a
     // picture is fetched as the page is (YONDER.md § Y3b); the agent's

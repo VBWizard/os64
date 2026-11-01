@@ -185,6 +185,14 @@ static void viewport(os64_ui_popup_t *p)
 /* A list's rows are staged once the viewport is where it will be painted,
  * not at each step on the way there (os64_ui_popup_select walks `top` a
  * row at a time). */
+/* The list's copy replaced (os64_ui_menu_list_relabel): the rows showing are
+ * laid out again from it, at the width fixed when the popup was made, and a
+ * highlight on a row now disabled goes. */
+void menu_popup_relist(os64_ui_popup_t *p,const menu_list *l)
+{
+    p->list=l; p->stage_top=MENU_NONE; stage_list(p);
+    if(p->selected!=MENU_NONE&&!menu_selectable(p,p->selected)) p->selected=MENU_NONE;
+}
 void os64_ui_popup_scroll(os64_ui_popup_t *p,int32_t rows)
 {
     if(!p||!p->scroll) return;

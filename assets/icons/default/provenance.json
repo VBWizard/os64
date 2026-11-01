@@ -134,6 +134,36 @@
       ]
     },
     {
+      "key": "download",
+      "variants": [
+        {
+          "size": 16,
+          "file": "download-16.png",
+          "sha256": "ae29b1c06f5c5b48f0743d8a7e5cd8ff53696df10ead63794fdda360cd7def2e"
+        },
+        {
+          "size": 24,
+          "file": "download-24.png",
+          "sha256": "7dc48cabdb7b64e6bbf69a99bec03606923df7f44753c62bb12e1e71e801df09"
+        },
+        {
+          "size": 32,
+          "file": "download-32.png",
+          "sha256": "d4bd570193f0c8c7d24347a0d854df108ec78d9a645821d437d916aa7a9704c6"
+        },
+        {
+          "size": 48,
+          "file": "download-48.png",
+          "sha256": "5d2d29e3fa41e54ffcf631670e029c2e35519942d2efbffeaca3c3dbb61ac015"
+        },
+        {
+          "size": 64,
+          "file": "download-64.png",
+          "sha256": "fef22dc2964e8f32d90935d6e1d20e2c6194c7dce5cdef6e13840ca3b7cd0d9a"
+        }
+      ]
+    },
+    {
       "key": "drive",
       "variants": [
         {

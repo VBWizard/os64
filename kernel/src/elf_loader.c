@@ -699,8 +699,11 @@ int elf_load_from_path(task_t *task, const char *path)
 // died on a path that exists but isn't a program (try /partition_info, a text
 // file). Neither is a kernel error. Both are just "no", and "no" is an answer a
 // shell is perfectly capable of printing.
-bool elf_can_load(const char *path)
+bool elf_can_load(const char *path, uint64_t *declared_stack)
 {
+    if (declared_stack != NULL) {
+        *declared_stack = 0;
+    }
     if (path == NULL) {
         return false;
     }
@@ -722,6 +725,23 @@ bool elf_can_load(const char *path)
     bool loadable = elf_read_at(file, 0, &ehdr, sizeof(ehdr)) && elf_validate_ehdr(&ehdr);
     if (!loadable) {
         printd(DEBUG_TASK, "elf_can_load: not a loadable ELF64: %s\n", path);
+    }
+
+    // The main thread's stack the program asks for (SCRIPT_STACK.md § 4):
+    // PT_GNU_STACK's p_memsz, which `ld -z stack-size` writes. Read here
+    // because every program passes here before its task is built, dynamic
+    // or not; createThread judges the number. A header that does not read
+    // asks for nothing.
+    if (loadable && declared_stack != NULL && ehdr.e_phentsize >= sizeof(Elf64_Phdr)) {
+        for (uint16_t i = 0; i < ehdr.e_phnum && i < ELF_STACK_PHDRS_MAX; i++) {
+            Elf64_Phdr ph;
+            if (!elf_read_at(file, ehdr.e_phoff + (uint64_t)i * ehdr.e_phentsize, &ph, sizeof(ph)))
+                break;
+            if (ph.p_type == PT_GNU_STACK) {
+                *declared_stack = ph.p_memsz;
+                break;
+            }
+        }
     }
 
     if (fs->fops->close != NULL) {

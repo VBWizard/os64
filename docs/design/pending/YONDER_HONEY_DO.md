@@ -67,7 +67,7 @@ Chris moves rows.
 | 3 | A menu bar, with Favorites and History on it | Opus | open |
 | 4 | ~~Persistent cookies, with a switch~~ | Opus | done (the login slice; § 4 has the as-built) |
 | 5 | The right-click menu | Opus; Quinn (the save dialog) | built (§ 5, as built; the Save verbs with § 6) |
-| 6 | Download | Opus | built (§ 6, as built); the live panel and drawn faces are the polish cut |
+| 6 | Download | Opus | built (§ 6, as built): its list live, the meter's flash, pictures on the head row's buttons; a panel with a bar per row is the polish left |
 | 7 | Selecting and copying text, and the I-beam | Fable design; Opus builds | open |
 | 8 | The mouse wheel through vncd | Fable reads; Opus fixes | open |
 
@@ -252,8 +252,9 @@ Window**, because a picture alone has no link to open and yonder shows a
 picture on a page of its own. The addresses are copied when the menu opens,
 so a page that changes under it cannot change what a verb acts on: the
 link's resolved address with its fragment, and the picture's address as
-the page's catalog fetched it (`srcset`'s choice; a `data:` picture is not
-in the catalog and offers nothing). A `javascript:` link can be copied but
+the page's catalog fetched it (`srcset`'s choice; a `data:` picture is in
+the catalog and offers its address when it fits the menu's copy, though
+Save takes `http:` and `https:` alone). A `javascript:` link can be copied but
 not opened. Shift+F10 opens the same menu at the pointer when the page has
 the keys. No `contextmenu` event reaches the page: that is web surface,
 and it waits for the arc. Save picture as and Save link as arrived with § 6,
@@ -336,8 +337,26 @@ and left for later, since the trip's fetch belongs to a job whose mailbox
 ends with it. `downloads = <dir>` is read by the same folder reader as
 `profile`. The meter is v1's: a bar along the button's foot in the
 button's ink (a band that steps with the bytes when no length was given),
-red across after a failure until the list is opened; no flash when one
-finishes, which waits for the polish cut with the live panel.
+red across after a failure until the list is opened, and green across,
+blinking three times a quarter second apart, when one finishes (stepped
+by the ticker on a `PAST_DOWNLOADS` deadline counted from the step last
+shown). The head row's five buttons wear the icon set's pictures beside
+their captions (`os64_icon_theme` from `icons.conf`, 24 px where the row
+is 32 high, else 16), the stock button paint when a picture is not to be
+had; Stop is the set's `window-close`, and Downloads has a `download`
+icon of its own, composed (not generated) from the set's `go-up` master
+over a tray in the set's outline, its record in
+`assets/icons/sources/default/generation.json`. The list is live while it is
+open: the menu session's `os64_ui_menu_list_relabel` swaps an open list's
+rows in place (same count, the width it opened at, a label grown past it
+cut), and yonder says the rows again on a state change, on the bell at
+most every 500 ms, and on the ticker every second while one runs, so a
+stall shows. A running row's speed is the average over its notes of the
+last five seconds (`yonder_download_pace_t`, notes kept a quarter second
+apart) and the time left is what remains over it, rounded up; a finished
+row gives its average from start to end, a failed one the size it
+stopped at, which is what tells a full disk from a file grown past the
+largest its file system holds.
 
 ### 7. Selecting and copying text, and the I-beam
 
@@ -463,3 +482,18 @@ platform surface; each is small; none is scheduled.
   show them all.
 - **An `img` with no `src` paints as a picture still coming**: booked in
   DEBTS § Browser layout the same day; listed here so the batch sees it.
+
+## Added 2026-10-31, from Chris's reload tests
+
+Low priority, kept at the end of the list on Chris's word, but likely to
+matter one day.
+
+- **A reload is slower than the first load.** In one window, a corpus
+  page's first load compiled its 207 modules in about 185 ms
+  and loaded in 4.3 to 4.8 s. Every reload of it in the same window took
+  about twice that CPU work (modules compiled in 340 to 435 ms, load 4.6
+  to 5.8 s), whatever the window's size. A fresh window was fast again
+  (records 0773 to 0790). The lead is the heap: allocations grow slower as
+  departed pages leave memory behind, which lengthens HEAP_BINS.md's
+  first-fit walk. Proof needs an allocation count or the walk's length for
+  a first load against a third reload of one page.

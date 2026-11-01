@@ -10,7 +10,10 @@ typedef uint64_t os64_work_id_t;
 
 // Fixed storage bounds keep submit allocation-free. Four workers are a
 // useful starting point; the caller chooses a positive count at creation.
-#define OS64_WORK_MAX_JOBS 256
+// A queued job holds only its slot until admission charges its reserve, so
+// the table is sized for a page's burst: yonder submits every module a page
+// imports at once, 227 on one corpus page (2026-10-31).
+#define OS64_WORK_MAX_JOBS 1024
 #define OS64_WORK_MAX_WORKERS 32
 #define OS64_WORK_ERR_IO (-1)
 

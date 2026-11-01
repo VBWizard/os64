@@ -5,6 +5,9 @@
 static void changed(void *opaque, const os64_html_change_t *record)
 {
     os64_dom_t *dom = opaque;
+    if (dom->closed) return;
+    /* Queue observer records before consumers can run custom reactions. */
+    d_observers_changed(dom, record);
     for (DMutationConsumer *c = dom->mutation_consumers; c; c = c->next)
         c->changed(dom, record);
 }

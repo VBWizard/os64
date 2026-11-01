@@ -103,6 +103,14 @@ os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *,const os64
  * and if its native destroy is refused the session retries at its next
  * boundary, the popup holding only its own copy meanwhile. Cannot fail. */
 void os64_ui_menu_list_detach(os64_ui_menu_session_t *,void *user);
+/* New labels and enabled flags for the list `user` opened, while it is
+ * open or waiting to open: copied as open_list copies them, the same number
+ * of rows (INVALID otherwise), shown at the next paint at the width the
+ * list was given when it opened, so a label grown past it is cut. The value,
+ * the highlight and the pick stay; a highlight on a row now disabled goes.
+ * STALE when no list of `user`'s is open. */
+os64_ui_status_code_t os64_ui_menu_list_relabel(os64_ui_menu_session_t *,void *user,
+    const char *const *labels,const bool *enabled,size_t count);
 
 /* ── dropdown — a one-line choice whose list drops from it ─────────────────
  * A closed box showing the chosen label and an arrow. A click, Space, Enter

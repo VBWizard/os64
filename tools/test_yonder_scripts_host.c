@@ -13,6 +13,10 @@
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
+#ifdef OS64_JS_BYTECODE_ROUND_TRIP
+/* libjs's round-trip build counts the scripts it ran from their bytecode. */
+extern size_t os64_js_round_trips, os64_js_round_trips_skipped;
+#endif
 #include "os64/procfs.h"
 #include "os64/js_engine.h"
 os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
@@ -21,6 +25,7 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
 #include "../userland/apps/yonder/settings.c"
 #undef s
 #include "yonder_host_menus.h"
+#include "yonder_host_console.h"
 
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
 
@@ -292,6 +297,9 @@ static int pool_fake;
 static struct { os64_work_id_t id; yonder_script_job_t *job; } script_jobs[32];
 static int nscript_jobs;
 static unsigned script_cancels;
+/* A compiled form's write (BYTECODE_CACHE.md), held until a case reaps it. */
+static struct { os64_work_id_t id; yonder_bytecode_job_t *job; } bytecode_jobs[8];
+static int nbytecode_jobs;
 /* A sheet's fetch job is held the same way, never run: a case that wants a
  * page waiting for its sheets gets one that waits until it is cancelled or
  * the window drops it. */
@@ -375,6 +383,11 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         if(nrequest_jobs==64) return 0;
         request_jobs[nrequest_jobs].id=++pool_ids; request_jobs[nrequest_jobs].job=work->job;
         return request_jobs[nrequest_jobs++].id;
+    }
+    if(*(const uint32_t *)work->job==YONDER_JOB_BYTECODE) {
+        if(nbytecode_jobs==8) return 0;
+        bytecode_jobs[nbytecode_jobs].id=++pool_ids; bytecode_jobs[nbytecode_jobs].job=work->job;
+        return bytecode_jobs[nbytecode_jobs++].id;
     }
     if(*(const uint32_t *)work->job==YONDER_JOB_FONT) {
         if(nfont_jobs==32 || font_refuse) return 0;
@@ -511,9 +524,10 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void 
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
 }
+/* As script_job.c releases a script job. */
 void yonder_script_release(void *job, void *product) {
     yonder_script_t *got=product;
-    if(got) { os64_free(got->source); os64_free(got); }
+    if(got) { os64_free(got->source); yonder_bytecode_free(got->bytecode); os64_free(got); }
     os64_free(job);
 }
 /* The worker's answer to the script job whose address ends with `tail`:
@@ -521,6 +535,11 @@ void yonder_script_release(void *job, void *product) {
  * out. */
 static bool script_land_from(const char *tail, const char *source, const char *final);
 static bool script_land(const char *tail, const char *source) { return script_land_from(tail,source,NULL); }
+/* The next landings' body is one the cache holds (BYTECODE_CACHE.md), with
+ * this compiled form beside it when it is not NULL. */
+static bool script_land_kept;
+static const uint8_t *script_land_blob;
+static size_t script_land_blob_length;
 /* The same, the response having come from `final` after its redirects
  * (NULL: from the address asked for). */
 static bool script_land_from(const char *tail, const char *source, const char *final) {
@@ -536,6 +555,19 @@ static bool script_land_from(const char *tail, const char *source, const char *f
             got->source=os64_malloc(got->length+1); memcpy(got->source,source,got->length+1);
         }
         os64_strcopy(got->url,sizeof(got->url),final!=NULL ? final : url);
+        if(source && script_land_kept) {
+            /* The cache holds the body: its compiled form, when the case
+             * gave one, and where a compile's is kept. */
+            got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
+            os64_strcopy(got->bytecode->partition,sizeof(got->bytecode->partition),"https page.test");
+            os64_strcopy(got->bytecode->url,sizeof(got->bytecode->url),url);
+            os64_strcopy(got->bytecode->tag,sizeof(got->bytecode->tag),"classic test");
+            if(script_land_blob) {
+                got->bytecode->blob=os64_malloc(script_land_blob_length);
+                memcpy(got->bytecode->blob,script_land_blob,script_land_blob_length);
+                got->bytecode->length=script_land_blob_length;
+            }
+        }
         reaped(id,job,got);
         return true;
     }
@@ -687,10 +719,6 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, con
     fake_cookie_encrypted=encrypted;
     snprintf(fake_cookie_set,sizeof(fake_cookie_set),"%.*s",(int)len,text);
 }
-void way_cache_enable(way_cache_t *cache, bool enabled) { (void)enabled; check(cache==NULL,"no test cache"); }
-void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cache==NULL,"no test cache"); }
-void way_cache_stats(way_cache_t *cache, way_cache_stats_t *out) { (void)out; check(cache==NULL,"no test cache"); }
-const char *way_cache_dir(way_cache_t *cache) { check(cache==NULL,"no test cache"); return ""; }
 
 static os64_text_context_t *probe_text;
 static os64_text_font_t *probe_font;
@@ -5103,6 +5131,28 @@ static void geometry_cases(void)
     probe_drop();
 }
 
+// An element's geometry is its own box's, not its pseudo-elements'
+// (GENERATED_CONTENT.md § 4): a ::before laid wide and away widens nothing,
+// and its text does not either.
+static void geometry_pseudo_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#d{position:relative;width:100px;height:20px}"
+        "#d::before{content:'';position:absolute;left:300px;top:0;width:400px;height:300px}"
+        "#d::after{content:'tail tail tail';display:block;width:50px}"
+        "</style><div id=d>x</div><script>"
+        "function eq(a,b){if(a!==b)throw Error(a+' != '+b)};"
+        "var d=document.getElementById('d');var r=d.getBoundingClientRect();"
+        "eq(r.width,100);eq(r.left,0);eq(d.offsetWidth,100);eq(d.offsetLeft,0);"
+        "d.setAttribute('data-pseudo-pass','yes');"
+        "</script>",true);
+    check(script_turn(), "geometry pseudo script task completes");
+    const os64_html_attr_t *passed=os64_html_attr(probe_id("d"),"data-pseudo-pass");
+    check(passed!=NULL && os64_streq(passed->value,"yes"),
+          "geometry: an element's rect is its own box's, not its ::before's or ::after's");
+    probe_drop();
+}
+
 static void geometry_body_cases(void)
 {
     probe_page("<!doctype html><div id=box style='height:20px'></div>",false);
@@ -5732,6 +5782,7 @@ static uint32_t *stand_in_shot(void) {
 #include "test_yonder_svg_images.inc"
 #include "test_yonder_canvas.inc"
 #include "test_yonder_animation.inc"
+#include "test_yonder_data_pictures.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -6884,6 +6935,37 @@ static void diag_lookup_bound_case(void) {
     if(steps>=100000u*8) fprintf(stderr,"diag lookup steps: %llu\n",(unsigned long long)steps);
     yonder_diag_free(d);
 }
+/* A data: address is its document: a line keeps its start and its end and
+ * counts what went between, a key given whole finds the line it was kept
+ * as, and a run within the limit, or a word that only ends in "data:", is
+ * kept as it is. */
+static void diag_data_short_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char url[6000], what[6100], where[6100], key[6100], word[400], text[16384];
+    snprintf(url,sizeof(url),"data:text/javascript,%05000dend:1:602",0);
+    snprintf(what,sizeof(what),"script %s",url);
+    snprintf(where,sizeof(where),"SyntaxError, at %s",url);
+    snprintf(key,sizeof(key),"request GET %s",url);
+    yonder_diag_failed(d,what,where);
+    yonder_diag_failed(d,what,where);
+    yonder_diag_fact(d,key,"200");
+    yonder_diag_fact(d,"source",url);
+    snprintf(word,sizeof(word),"metadata:%0300d",0);
+    yonder_diag_fact(d,"short","see data:text/plain,hi");
+    yonder_diag_fact(d,"word",word);
+    const char *value=yonder_diag_fact_value(d,key);
+    check(yonder_diag_failed_lines(d)==1 && value!=NULL && strcmp(value,"200")==0,
+          "diag: a long data: key finds the line it was kept as, given whole");
+    yonder_diag_render(d,text,sizeof(text));
+    char kept[512];
+    snprintf(kept,sizeof(kept),"script data:text/javascript,%079d...(4890 more bytes)...%031dend:1:602: SyntaxError, at "
+             "data:text/javascript,%079d...(4890 more bytes)...%031dend:1:602 (2)",0,0,0,0);
+    check(strstr(text,kept)!=NULL && strstr(text,"request GET data:text/javascript,")!=NULL &&
+              strstr(text,"source: data:text/javascript,0")!=NULL &&
+              strstr(text,"see data:text/plain,hi")!=NULL && strstr(text,word)!=NULL && strlen(text)<2000,
+          "diag: a long data: run keeps its start and its end, and a short one or a word that ends in it is whole");
+    yonder_diag_free(d);
+}
 /* A page let go before it was shown takes the families staged for it. */
 static void diag_arriving_released_case(void) {
     static Page p;
@@ -6933,12 +7015,12 @@ static void diag_css_unasked_case(void) {
         "diag: a page whose only picture is refused writes the record when it meets it");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
-    probe_page("<style>p{background-image:url('data:image/png;base64,AAAA')}</style><p>x</p>",true);
+    probe_page("<style>p{background-image:url('blob:image/png;base64,AAAA')}</style><p>x</p>",true);
     g.page.diag=diag_new_claimed("http://c.test/",1);
     css_pictures(&g.page);
     css_pictures(&g.page);          /* every layout meets it again */
     char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"MISSING picture-scheme data (1)") && g.page.unasked==1,
+    check(has(text,"MISSING picture-scheme blob (1)") && g.page.unasked==1,
         "diag: a sheet's picture refused before the table is on the record, once");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
@@ -7326,6 +7408,8 @@ static void diag_page_cases(void) {
         has(text,"\nscript http://fixture.test/final#inline-1: ran in 0 us\n") && !has(text,"script load"),
         "diag: a clean page's file says clean, carries no token, and says what ran and how long the "
         "engine took over it, on the clock that stood still");
+    check(has(text,"\nnavigation: first byte 0 ms, last byte 0 ms, parsed 0 ms, DOMContentLoaded 0 ms, load 0 ms\n"),
+        "diag: and where its arrival went, milestone by milestone");
     check(g.badge_text[0]=='\0' && g.badge.hidden,"diag: a clean page shows no badge");
     loop_drop();
     check(has(diag_file("/tmp/diag",name),"\nwritten: when the page was left\n"),"diag: leaving rewrites the file");
@@ -8257,7 +8341,7 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
                      "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
-                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, frames 0\n")!=NULL &&
+                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, frames 0, downloads 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
@@ -10665,6 +10749,7 @@ static void diag_cases(void) {
     diag_fact_short_case();
     diag_lost_overflow_case();
     diag_lookup_bound_case();
+    diag_data_short_case();
     diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
@@ -10790,6 +10875,131 @@ static void clipped_control_cases(void) {
 /* The window's name: the page's title through fit_title. A control
  * character the page spells is a '?', never a byte the kernel would log
  * raw; past ASCII is one '?' a character; a long title is cut with "...". */
+/* The downloads list while it is open: said again as the bytes arrive, at
+ * most every DOWNLOADS_RELIST_MS, with the last few seconds' speed and the
+ * time that leaves; said again with no bytes arriving, so a stall reads as
+ * one; its average once done; and no longer said once it is shut. */
+static void downloads_list_cases(void) {
+    void *menus=g.menus;
+    g.menus=(os64_ui_menu_session_t *)&yonder_host_list;    /* the hosts' session */
+    yonder_host_list=(yonder_host_list_t){0};
+    static yonder_download_job_t job;
+    memset(&job,0,sizeof(job));
+    job.total=(uint64_t)6<<30;
+    now_ms=100000;
+    Download *d=&s_downloads[0];
+    memset(d,0,sizeof(*d));
+    s_ndownloads=1;
+    d->state=DL_RUNNING; d->job=&job; d->began=now_ms;
+    snprintf(d->path,sizeof(d->path),"/home/downloads/ubuntu.iso");
+    yonder_download_pace_note(&d->pace,now_ms,0);
+    click_downloads(&g.downloads,NULL);
+    check(yonder_host_list.opens==1 && yonder_host_list.count==2 &&
+          !strcmp(yonder_host_list.labels[0],"ubuntu.iso - 0 KB of 6.0 GB") && !yonder_host_list.enabled[1] &&
+          downloads_due()==now_ms+DOWNLOADS_STALL_MS,
+          "downloads: the list opens on the running download, with no speed to say yet");
+    for(uint64_t i=1;i<=8;i++) { now_ms+=250; job.got=i*2*1024*1024; downloads_heard(); }
+    check(yonder_host_list.relabels==4 &&
+          !strcmp(yonder_host_list.labels[0],"ubuntu.iso - 16.0 MB of 6.0 GB, 8.0 MB/s, 13 min left"),
+          "downloads: the open list says the bytes, the speed and the time left, twice a second");
+    for(int i=0;i<6;i++) { now_ms=downloads_due(); downloads_heard(); }
+    check(!strcmp(yonder_host_list.labels[0],"ubuntu.iso - 16.0 MB of 6.0 GB, stalled"),
+          "downloads: with no bytes arriving the list is said again, and a stall reads as one");
+    job.got=job.total; job.whole=true;
+    download_arrived(d->id,&job);
+    check(!strcmp(yonder_host_list.labels[0],"ubuntu.iso - 6.0 GB, done (768.0 MB/s average)") &&
+          yonder_host_list.enabled[1] && download_flash_lit() && downloads_due()==now_ms+DOWNLOAD_FLASH_STEP_MS,
+          "downloads: a finished download is said at once, with its average, and the meter flashes");
+    now_ms+=DOWNLOAD_FLASH_STEP_MS;
+    check(downloads_due()<=now_ms,"downloads: when the step comes, it is owed (the ticker's ring meets it)");
+    downloads_heard();
+    check(!download_flash_lit() && downloads_due()==now_ms+DOWNLOAD_FLASH_STEP_MS,
+          "downloads: the flash blinks off, and owes the next step");
+    for(int i=0;i<5;i++) { now_ms=downloads_due(); downloads_heard(); }
+    check(!s_download_flashing && downloads_due()==YONDER_NEVER,
+          "downloads: the flash steps through its run, runs out, and owes nothing");
+    unsigned relabels=yonder_host_list.relabels;
+    check(yonder_host_list_pick(1) && s_ndownloads==0 && !s_downloads_listed &&
+          yonder_host_list.relabels==relabels,
+          "downloads: Clear finished shuts the list, which is not said again");
+    /* Shut by the person, and a failure arrives before yonder has looked:
+     * the rows built for it are not shown, so the failure stays unseen. */
+    memset(&job,0,sizeof(job));
+    memset(d,0,sizeof(*d));
+    s_ndownloads=1;
+    d->state=DL_RUNNING; d->job=&job; d->began=now_ms;
+    snprintf(d->path,sizeof(d->path),"/home/downloads/gone.zip");
+    click_downloads(&g.downloads,NULL);
+    yonder_host_list.open=false;
+    snprintf(job.why,sizeof(job.why),"the server answered 404");
+    download_arrived(d->id,&job);
+    check(!s_downloads_listed && s_download_failed_unseen && d->state==DL_FAILED,
+          "downloads: a failure arriving after the list was shut stays unseen, and the button red");
+    click_downloads(&g.downloads,NULL);
+    check(s_downloads_listed && !s_download_failed_unseen &&
+          !strcmp(yonder_host_list.labels[0],"gone.zip - failed: the server answered 404"),
+          "downloads: the list opened again shows it, and it is seen");
+    yonder_host_list.open=false;
+    s_downloads_listed=false;
+    s_ndownloads=0;
+    g.menus=menus;
+    os64_ui_font_release(&g.ui);            /* what measuring a row's width laid out */
+}
+
+/* The head row's pictures: taken at the size the row holds, beside the
+ * caption, swapped when the row's height crosses a size, kept when the set
+ * refuses, painted in their slot, and all given back as yonder leaves. */
+static void head_faces_cases(void) {
+    static int theme;
+    os64_icon_theme_t *icons=s_icons;
+    s_icons=(os64_icon_theme_t *)&theme;            /* the hosts' provider answers for it */
+    s_face_size=0; yonder_host_icons=(yonder_host_icons_t){0};
+    /* Back made as yonder's start makes it: the hosts do not run that. */
+    os64_ui_widget_t back=g.back;
+    void (*stock)(os64_ui_widget_t *,os64_draw_ctx_t *,const os64_ui_theme_t *)=s_button_paint;
+    os64_ui_button(&g.back,"Back",NULL,NULL);
+    g.back.ui=&g.ui;
+    s_button_paint=g.back.cls->paint;
+    s_head_class=*g.back.cls; s_head_class.paint=head_paint;
+    g.back.cls=&s_head_class;
+    int32_t plain=button_width(g.back.text);
+    head_faces_take(32);
+    check(yonder_host_icons.out==5 && s_face_size==24 && s_head_faces[4].icon.width==24 &&
+          head_width(&g.back,32)==plain+24+g.ui.theme.gap,
+          "head: a row 32 high takes 24-pixel pictures, each beside its caption");
+    head_faces_take(28);
+    check(yonder_host_icons.out==5 && s_face_size==16 && s_head_faces[0].icon.width==16,
+          "head: a shorter row trades them for 16-pixel ones, none kept twice");
+    yonder_host_icons.refuse=true;
+    head_faces_take(32);
+    check(yonder_host_icons.out==5 && s_head_faces[0].icon.width==16,
+          "head: a picture the set will not give keeps the one it has");
+    yonder_host_icons.refuse=false;
+    os64_draw_ctx_t screen={0};
+    screen.surf.width=screen.surf.pitch_px=200; screen.surf.height=40;
+    screen.surf.pixels=os64_calloc(200u*40u,sizeof(uint32_t));
+    os64_gui_rect_t saved=g.back.bounds;
+    g.back.bounds=(os64_gui_rect_t){0,0,head_width(&g.back,32),32};
+    g.back.cls->paint(&g.back,&screen,&g.ui.theme);
+    int32_t cx=2*g.ui.theme.pad+(int32_t)s_face_size/2;
+    check(screen.surf.pixels[16*200+cx]==0xff40a040u,"head: the picture is painted at the face's left");
+    s_head_faces[0].icon.pixels=NULL;               /* as a set without the icon leaves it */
+    memset(screen.surf.pixels,0,200u*40u*sizeof(uint32_t));
+    g.back.cls->paint(&g.back,&screen,&g.ui.theme);
+    check(screen.surf.pixels[16*200+cx]!=0xff40a040u && head_width(&g.back,32)==plain,
+          "head: a button with no picture is the captioned button");
+    s_head_faces[0].icon.pixels=s_head_faces[1].icon.pixels;
+    g.back.bounds=saved;
+    os64_ui_run_release(g.back.run);
+    g.back=back; s_button_paint=stock;
+    os64_free(screen.surf.pixels);
+    head_faces_drop();
+    check(yonder_host_icons.out==0 && s_icons==NULL,"head: every picture goes back as yonder leaves");
+    s_icons=icons; s_face_size=0;
+    for(size_t i=0;i<sizeof(s_head_faces)/sizeof(s_head_faces[0]);i++) s_head_faces[i].icon=(os64_ui_icon_lease_t){0};
+    os64_ui_font_release(&g.ui);
+}
+
 static void title_fit_cases(void)
 {
     char out[OS64_GUI_TITLE_MAX];
@@ -10813,6 +11023,191 @@ static void title_fit_cases(void)
     fit_title(named, out);
     check(os64_streq(out, "?]0;x? Name - yonder"), "title: a page's controls never reach the window");
     os64_html_document_free(doc);
+}
+
+/* BYTECODE_CACHE.md: a compiled form, as libjs keeps one, of `source`
+ * compiled under a name no page gives a script. The caller's to free. */
+static uint8_t *bytecode_blob_of(const char *source, size_t *length) {
+    os64_js_config_t config={.limits=os64_js_default_limits()};
+    os64_js_runtime_t *runtime=NULL; os64_js_outcome_t out;
+    if(os64_js_create(&config,OS64_JS_ABI_ID,&runtime,&out)!=OS64_JS_OK) return NULL;
+    os64_js_bytecode_t bc={.keep=true};
+    os64_js_run_bytecode(runtime,source,strlen(source),"os64-script:99",&bc,&out);
+    os64_js_destroy(runtime);
+    *length=bc.kept_length;
+    return bc.kept;
+}
+/* A `src` script whose body the cache holds runs through its compiled
+ * form when one is kept, and a compile's form goes to a job of its own. */
+/* A page whose window has a cache, one the fakes never open: keeping asks
+ * only that there is one. The window is made afresh with each page. */
+static void bytecode_page(void) {
+    loop_page("<p id=out>-</p><script src=app.js></script>");
+    g.cache=(way_cache_t *)&nbytecode_jobs;
+}
+static void bytecode_cases(void) {
+    script_land_kept=true;
+    bytecode_page();
+    check(loop_settle() && nscript_jobs==1,"bytecode: the script's fetch is out");
+    check(script_land("/app.js","document.getElementById('out').textContent='compiled'"),
+        "bytecode: its body comes back, kept, with no compiled form beside it");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","compiled"),
+        "bytecode: a script with no compiled form is compiled and runs");
+    check(javascript_record_has("/app.js: ran in ") && !javascript_record_has("from its bytecode"),
+        "bytecode: and the record says it ran, not that it was read");
+    check(nbytecode_jobs==1 && has(bytecode_jobs[0].job->url,"/app.js") &&
+        os64_streq(bytecode_jobs[0].job->partition,"https page.test") &&
+        os64_streq(bytecode_jobs[0].job->tag,"classic test") && bytecode_jobs[0].job->length>96 &&
+        bytecode_jobs[0].job->cache==g.cache && s_bytecode_queued==bytecode_jobs[0].job->length,
+        "bytecode: the compile's form goes to a job of its own, beside the entry's key, under its tag");
+    if(nbytecode_jobs!=1) {
+        script_land_kept=false; loop_drop(); g.cache=NULL; return;
+    }
+    reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
+    nbytecode_jobs=0;
+    check(s_bytecode_queued==0,"bytecode: what was queued is let go with its job");
+    loop_drop();
+
+    /* The next visit runs what was kept: here a form of another text, so
+     * the page says which of the two ran. */
+    size_t length=0;
+    uint8_t *blob=bytecode_blob_of("document.getElementById('out').textContent='from its bytecode'",&length);
+    script_land_blob=blob; script_land_blob_length=length;
+    bytecode_page();
+    check(loop_settle() && script_land("/app.js","document.getElementById('out').textContent='compiled'") &&
+        loop_settle() && g.page.tree!=NULL && probe_text_is("out","from its bytecode"),
+        "bytecode: a kept form is what runs");
+    check(javascript_record_has(" us from its bytecode\n"),
+        "bytecode: and the record says it ran from its bytecode, the before and after's number");
+    check(nbytecode_jobs==0,"bytecode: and running it keeps nothing new");
+    loop_drop();
+
+    /* A form that is not libjs's is refused, and the source runs instead,
+     * its own form kept. */
+    blob[0]^=0xff;
+    bytecode_page();
+    check(loop_settle() && script_land("/app.js","document.getElementById('out').textContent='compiled'") &&
+        loop_settle() && g.page.tree!=NULL && probe_text_is("out","compiled") && nbytecode_jobs==1,
+        "bytecode: a damaged form is refused, the source compiled and its form kept");
+    reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
+    nbytecode_jobs=0;
+    loop_drop();
+    os64_free(blob);
+    script_land_blob=NULL; script_land_blob_length=0;
+
+    /* A body the cache does not hold has no form, and keeps none. */
+    script_land_kept=false;
+    bytecode_page();
+    check(loop_settle() && script_land("/app.js","document.getElementById('out').textContent='compiled'") &&
+        loop_settle() && probe_text_is("out","compiled") && nbytecode_jobs==0,
+        "bytecode: a body the cache does not hold keeps no form");
+    loop_drop();
+
+    /* A form arriving for a page that is gone is let go with the answer:
+     * the suite's last check, an empty heap, is what sees it. */
+    yonder_script_job_t *job=os64_calloc(1,sizeof(*job));
+    job->kind=YONDER_JOB_SCRIPT; job->page=UINT64_MAX; job->token=1;
+    yonder_script_t *got=os64_calloc(1,sizeof(*got));
+    got->ok=true; got->source=os64_malloc(2); memcpy(got->source,"1",2); got->length=1;
+    got->bytecode=os64_calloc(1,sizeof(*got->bytecode));
+    got->bytecode->blob=os64_malloc(8);
+    reaped(0,job,got);
+    g.cache=NULL;
+}
+
+static bool never_cancelled(void *ctx) { (void)ctx; return false; }
+
+/* A module's compiled form (BYTECODE_CACHE.md § 9), end to end: its fetch
+ * through a real cache, its compile's form kept beside the entry, and the
+ * next visit's module read from it. */
+static void module_bytecode_cases(void) {
+    fake_reset();
+    way_cache_t *cache=way_cache_open("/tmp/cache",16<<20);
+    check(cache!=NULL,"module bytecode: a cache on the fake disk");
+    const char *page="<script type=module src=/m/k.js></script>";
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/k.js",200,MODULE_JS "Cache-Control: max-age=600\r\n","note('k');");
+    module_page(page);
+    g.cache=cache;                  /* the window is made afresh with each page */
+    check(loop_settle() && request_land("/m/k.js") && loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+        probe_text_is("out","k"),"module bytecode: a module whose answer the cache keeps runs");
+    check(nbytecode_jobs==1 && has(bytecode_jobs[0].job->url,"/m/k.js") &&
+        !strncmp(bytecode_jobs[0].job->tag,"module ",7) && bytecode_jobs[0].job->length>96,
+        "module bytecode: its compile's form goes to a job of its own, under the module's tag");
+    if(nbytecode_jobs==1) {
+        check(yonder_bytecode_keep_run(bytecode_jobs[0].job,never_cancelled,NULL,NULL)==1,
+            "module bytecode: and is written beside the entry");
+        reaped(bytecode_jobs[0].id,bytecode_jobs[0].job,NULL);
+        nbytecode_jobs=0;
+    }
+    request_drop();
+
+    int sent=nfake_requests;
+    module_page(page);
+    g.cache=cache;
+    check(loop_settle() && request_land("/m/k.js") && nfake_requests==sent && loop_settle() &&
+        g.page.tree!=NULL && script_rebuild() && probe_text_is("out","k"),
+        "module bytecode: the next visit's module comes from the cache and runs");
+    check(strstr(request_record_text(),", 1 from bytecode\n")!=NULL && nbytecode_jobs==0,
+        "module bytecode: read from its kept form, the record says so, and nothing new is kept");
+    request_drop();
+    way_cache_close(cache);
+    g.cache=NULL;
+    fake_reset();
+}
+
+/* `--exit-when-loaded`: yonder leaves once the shown page is settled and
+ * nothing has come back for the quiet, or once it has waited as long as it
+ * will, and not before. */
+static void exit_when_loaded_cases(void) {
+    loop_page("<p id=out>here</p>");
+    s_exit_when_loaded=true; s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
+    now_ms+=EXIT_QUIET_MS;
+    exit_follow();
+    check(g.running,"exit: not while the page is still arriving, however long the quiet");
+    check(loop_settle() && g.page.tree!=NULL,"exit: the page arrives");
+    exit_follow();
+    check(g.running,"exit: the quiet starts once the page has settled");
+    now_ms+=EXIT_QUIET_MS-1;
+    exit_follow();
+    check(g.running,"exit: not before the quiet is whole");
+    s_exit_quiet_from=now_ms;      /* as a job reaped now would set it */
+    now_ms+=EXIT_QUIET_MS-1;
+    exit_follow();
+    check(g.running,"exit: work that came back starts the quiet again");
+    now_ms+=1;
+    exit_follow();
+    check(!g.running,"exit: a settled page, quiet for its while, is left");
+    loop_drop();
+    /* An async script still being fetched holds the run, however long the
+     * quiet; once it lands and runs, the quiet starts. */
+    loop_page("<p id=out>here</p><script async src=slow.js></script>");
+    s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
+    check(loop_settle() && g.page.tree!=NULL && nscript_jobs==1,"exit: the page arrives, its async script still out");
+    now_ms+=EXIT_QUIET_MS*2;
+    exit_follow();
+    check(g.running,"exit: not while a script of the page is still being fetched");
+    bool landed=script_land("/slow.js","document.getElementById('out').textContent='late'");
+    script_turn();
+    check(landed && script_rebuild() && probe_text_is("out","late"),"exit: the script lands and runs");
+    exit_follow();
+    now_ms+=EXIT_QUIET_MS;
+    exit_follow();
+    check(!g.running,"exit: and the page is left once quiet after it");
+    loop_drop();
+    /* A page that never settles is left when the wait runs out. */
+    loop_page("<p id=out>here</p>");
+    s_exit_started=s_exit_quiet_from=now_ms; g.running=true;
+    now_ms+=EXIT_GIVE_UP_MS-1;
+    exit_follow();
+    check(g.running,"exit: an unsettled page is waited for");
+    now_ms+=1;
+    check(exit_due()==s_exit_started+EXIT_GIVE_UP_MS,"exit: the window wakes for the wait's end");
+    exit_follow();
+    check(!g.running,"exit: and left when the wait runs out");
+    loop_drop();
+    s_exit_when_loaded=false; g.running=true;
+    check(exit_due()==YONDER_NEVER,"exit: without the switch, never");
 }
 
 /* A unit that includes this file for the window and its fakes alone (the
@@ -10878,12 +11273,16 @@ int main(void)
     svg_cache_window_cases();
     svg_window_cases();
     picture_svg_window_cases();
+    data_picture_cases();
     covered_link_cases();
     clipped_control_cases();
     classic_downloaded_cases();
+    downloads_list_cases();
+    head_faces_cases();
     hover_batch_cases();
     classic_hover_profile();
     geometry_cases();
+    geometry_pseudo_cases();
     geometry_body_cases();
     geometry_publish_cases();
     geometry_scroll_cases();
@@ -10921,6 +11320,9 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) module_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) bytecode_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) module_bytecode_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) exit_when_loaded_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();
@@ -10928,6 +11330,12 @@ int main(void)
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");
+#ifdef OS64_JS_BYTECODE_ROUND_TRIP
+    /* The round trip's build: every classic script went through its blob. */
+    printf("Yonder scripted-page host: %zu scripts run from their round-tripped bytecode, %zu not (no memory for the blob)\n",
+           os64_js_round_trips,os64_js_round_trips_skipped);
+    check(os64_js_round_trips>0,"round trip: classic scripts were run from their bytecode");
+#endif
     printf("Yonder scripted-page host: %u checks, %u failed\n",checks,failures);
     return failures?1:0;
 }

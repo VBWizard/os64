@@ -37,6 +37,10 @@ typedef struct {
     uint64_t job;                   // while FETCHING
     char *source;
     size_t length;
+    // A `src` script whose body the cache holds: its compiled form, when
+    // one was kept for this text, and where a compile's is kept. Freed
+    // with the source.
+    yonder_bytecode_t *bytecode;
     const char *why;                // FAILED: what the status line says instead
     char name[OS64_JS_SOURCE_NAME_CAP];
     // A `src` script's whole address, which `name` (the engine's source
@@ -114,8 +118,10 @@ struct yonder_scripts {
     os64_dom_timing_t timing;
     // How long the last task's script took the engine to evaluate, in
     // microseconds; -1 when the last task evaluated none
-    // (yonder_scripts_task_us).
+    // (yonder_scripts_task_us). And whether what it evaluated was read
+    // from the script's kept bytecode rather than compiled.
     int64_t task_us;
+    bool task_from_bytecode;
     // The document's readiness, moved by the dispatches this host makes
     // (os64_dom_readiness_after) whether or not a binding hears them yet:
     // a binding made late, at the first script after the page's load, is
@@ -134,6 +140,8 @@ static void release_item(yonder_scripts_t *s, Item *it)
     it->job = 0;
     os64_free(it->source);
     it->source = NULL;
+    yonder_bytecode_free(it->bytecode);
+    it->bytecode = NULL;
     if (it->node != NULL)
         os64_html_release(s->doc, it->node);
     it->node = NULL;
@@ -385,18 +393,89 @@ static void net_release(void *opaque, os64_dom_response_t *response)
 
 static yonder_modules_t *module_map_new(yonder_scripts_t *s);
 
+size_t yonder_script_stack_limit(size_t stack)
+{
+    if (stack < YONDER_SCRIPT_HEADROOM + YONDER_SCRIPT_STACK_MIN)
+        return YONDER_SCRIPT_STACK_MIN;
+    size_t limit = stack - YONDER_SCRIPT_HEADROOM;
+    return limit > YONDER_SCRIPT_STACK_MAX ? YONDER_SCRIPT_STACK_MAX : limit;
+}
+
+static bool hex_word(const char **text, uintptr_t *value)
+{
+    const char *p = *text;
+    unsigned digits = 0;
+    *value = 0;
+    for (;; p++) {
+        unsigned c = (unsigned char)*p, n;
+        if (c >= '0' && c <= '9') n = c - '0';
+        else if (c >= 'a' && c <= 'f') n = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') n = c - 'A' + 10;
+        else break;
+        if (++digits > 16)
+            return false;
+        *value = *value * 16 + n;
+    }
+    *text = p;
+    return digits != 0;
+}
+
+// The size of the stack this thread runs on: its row in /proc/self/maps,
+// `[stack:<tid>]`, the one whose bounds hold one of its locals; 0 when it
+// cannot be read. yonder's scripts run on its main thread, whose size its
+// program declares (SCRIPT_STACK.md § 4). The map is read into a static
+// buffer, so the read takes none of the stack it is measuring.
+static size_t own_stack_bytes(void)
+{
+    static char maps[32768];
+    int64_t handle = os64_open("/proc/self/maps", "r");
+    if (handle < 0)
+        return 0;
+    size_t length = 0;
+    while (length < sizeof(maps) - 1) {
+        int64_t got = os64_read((int32_t)handle, maps + length, sizeof(maps) - 1 - length);
+        if (got <= 0)
+            break;
+        length += (size_t)got;
+    }
+    os64_close((int32_t)handle);
+    maps[length] = '\0';
+    uintptr_t here = (uintptr_t)&handle;
+    for (const char *line = maps; *line != '\0';) {
+        const char *end = os64_strchr(line, '\n');
+        const char *stop = end != NULL ? end : line + os64_strlen(line);
+        const char *p = line;
+        uintptr_t low, high;
+        if (hex_word(&p, &low) && *p++ == '-' && hex_word(&p, &high) && here >= low && here < high) {
+            for (const char *l = p; l < stop; l++)
+                if (*l == '[')
+                    return stop - l >= 7 && os64_memcmp(l, "[stack:", 7) == 0 ? (size_t)(high - low) : 0;
+            return 0;
+        }
+        if (end == NULL)
+            break;
+        line = end + 1;
+    }
+    return 0;
+}
+
 // The runtime and its binding, made at the first script that runs. Heap
-// and source keep the profile measured for libdom (DOM.md § D5b); the stack
-// is the 128 KiB DOM_D10.md measured, because geometry shares it with native
-// layout. The deadline is the page's task budget, and the job cap a backstop
-// only: a job costs time, which the deadline already bounds. Teardown
-// reclaims and reports a leak rather than ending the window (DOM_D8.md).
+// and source keep the profile measured for libdom (DOM.md § D5b). The stack
+// is the engine's share of yonder's window thread, which layout shares
+// (SCRIPT_STACK.md): the thread's size, read once, less layout's headroom
+// (yonder_script_stack_limit). The deadline is the page's task budget, and
+// the job cap a backstop only: a job costs time, which the deadline already
+// bounds. Teardown reclaims and reports a leak rather than ending the window
+// (DOM_D8.md).
 static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
+    static size_t engine_stack;
     if (s->runtime != NULL)
         return true;
+    if (engine_stack == 0)
+        engine_stack = yonder_script_stack_limit(own_stack_bytes());
     os64_js_config_t config = {os64_js_default_limits()};
-    config.limits.stack_bytes = 128 * 1024;
+    config.limits.stack_bytes = engine_stack;
     config.limits.execution_ms = s->options.execution_ms;
     config.limits.jobs_per_turn = (uint64_t)1 << 20;
     if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
@@ -724,12 +803,19 @@ static void module_release(void *opaque, os64_dom_response_t *response)
         s->options.release(s->options.opaque, response);
 }
 
+static void module_keep(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length)
+{
+    yonder_scripts_t *s = opaque;
+    s->options.keep_bytecode(s->options.opaque, where, blob, length);
+}
+
 // The page's module map, with its network: what ensure_runtime makes with
 // the runtime.
 static yonder_modules_t *module_map_new(yonder_scripts_t *s)
 {
     const yonder_modules_net_t net = {s, module_start, net_cancel, module_run_now, module_release,
-                                      module_document_base, module_script_base};
+                                      module_document_base, module_script_base,
+                                      s->options.keep_bytecode != NULL ? module_keep : NULL};
     return yonder_modules_new(s->runtime, &net, s->options.diag);
 }
 
@@ -790,14 +876,15 @@ static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, 
     int32_t entry;
     const os64_html_attr_t *src = os64_html_attr(script, "src");
     if (src != NULL) {
-        char url[OS64_DOM_URL_MAX];
-        os64_strcopy(it->name, sizeof(it->name), src->value);
-        if (src->value[0] == '\0' || !os64_dom_resolve(s->doc, s->url, src->value, url, sizeof(url))) {
+        // A data: module at any length (os64_page_resolve_in_alloc): it
+        // carries its source in its address.
+        char *url = src->value[0] != '\0' ? os64_page_resolve_in_alloc(s->doc, s->url, src->value) : NULL;
+        os64_strcopy(it->name, sizeof(it->name), url != NULL ? url : src->value);
+        if (url == NULL) {
             fail_item(s, it, "the script's address cannot be fetched");
             return;
         }
-        os64_strcopy(it->name, sizeof(it->name), url);
-        it->address = keep(url);
+        it->address = url;
         entry = yonder_modules_entry_src(s->modules, url);
     } else {
         if (!inline_source(s, it)) {
@@ -939,14 +1026,15 @@ void yonder_scripts_preload(yonder_scripts_t *s)
     const os64_html_node_t *root = s->doc->document;
     for (const os64_html_node_t *n = root; n != NULL;) {
         if (preload_link(n)) {
-            char url[OS64_DOM_URL_MAX];
-            if (os64_dom_resolve(s->doc, s->url, os64_html_attr(n, "href")->value, url, sizeof(url))) {
-                // The map is made for the first preload, as for the first
-                // module script; its runtime may retire the host.
-                if (!ensure_modules(s))
-                    return;
+            char *url = os64_page_resolve_in_alloc(s->doc, s->url, os64_html_attr(n, "href")->value);
+            // The map is made for the first preload, as for the first
+            // module script; its runtime may retire the host.
+            bool ready = url != NULL && ensure_modules(s);
+            if (ready)
                 (void)yonder_modules_entry_src(s->modules, url);
-            }
+            os64_free(url);
+            if (url != NULL && !ready)
+                return;
         }
         // The next node in tree order.
         if (n->first_child != NULL) {
@@ -1086,6 +1174,7 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     os64_strcopy(name, sizeof(name), it->name);
     s->task_address = it->address;
     s->task_us = -1;
+    s->task_from_bytecode = false;
     if (it->state == STATE_FAILED) {
         out->status = OS64_JS_EXCEPTION;
         os64_strcopy(out->message, sizeof(out->message), it->why);
@@ -1110,9 +1199,12 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         // reason the item is named by its index.
         char *source = it->source;
         size_t length = it->length;
+        yonder_bytecode_t *bytecode = it->bytecode;
         it->source = NULL;
-        // The engine's whole evaluation, compiling the source included: the
-        // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
+        it->bytecode = NULL;
+        // The engine's whole evaluation, compiling the source or reading its
+        // kept bytecode included: the number the bytecode cache makes
+        // smaller (BYTECODE_CACHE.md).
         // The engine knows the script by the binding's name for it, which is
         // how the binding tells another site's script's failures from the
         // page's (libdom's report.c); the outcome keeps the item's name.
@@ -1130,9 +1222,24 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         // itself; a run that threw drains them below. A link's script has
         // no element, and leaves it null.
         os64_dom_set_current_script(s->dom, it->node);
-        os64_js_run(s->runtime, source, length, engine_name, out);
+        // A script whose body the cache holds runs through its bytecode: the
+        // kept blob, read under this run's name, or a compile whose blob is
+        // kept for the next visit (the window hands it to a job to write).
+        os64_js_bytecode_t bc = {0};
+        if (bytecode != NULL) {
+            bc.blob = bytecode->blob;
+            bc.blob_length = bytecode->length;
+            bc.keep = s->options.keep_bytecode != NULL;
+            os64_js_run_bytecode(s->runtime, source, length, engine_name, &bc, out);
+        } else {
+            os64_js_run(s->runtime, source, length, engine_name, out);
+        }
         int64_t ended = os64_micros();
         s->task_us = began >= 0 && ended >= began ? ended - began : -1;
+        s->task_from_bytecode = bc.from_blob;
+        if (bc.kept != NULL)
+            s->options.keep_bytecode(s->options.opaque, bytecode, bc.kept, bc.kept_length);
+        yonder_bytecode_free(bytecode);
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
@@ -1196,6 +1303,16 @@ bool yonder_scripts_pending(const yonder_scripts_t *s)
         return true;
     Item *d = s->parse_ended ? next_defer((yonder_scripts_t *)s) : NULL;
     return d != NULL && d->state != STATE_FETCHING;
+}
+
+bool yonder_scripts_fetching(const yonder_scripts_t *s)
+{
+    if (s == NULL || s->dead)
+        return false;
+    for (uint32_t i = 0; i < s->count; i++)
+        if (s->items[i].state == STATE_FETCHING)
+            return true;
+    return false;
 }
 
 bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
@@ -1340,14 +1457,15 @@ bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fr
 }
 
 void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length,
-                            const char *final_url)
+                            const char *final_url, yonder_bytecode_t *bytecode)
 {
-    if (s == NULL || s->dead || token == 0 || token > s->count)
+    if (s == NULL || s->dead || token == 0 || token > s->count || s->items[token - 1].state != STATE_FETCHING) {
+        yonder_bytecode_free(bytecode);
         return;
+    }
     Item *it = &s->items[token - 1];
-    if (it->state != STATE_FETCHING)
-        return;
     it->job = 0;
+    it->bytecode = bytecode;
     if (source == NULL) {
         fail_item(s, it, "could not fetch the script");
         return;
@@ -1599,15 +1717,16 @@ bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, os64_j
 }
 
 bool yonder_scripts_answered(yonder_scripts_t *s, uint32_t token, const os64_dom_response_t *response,
-                             os64_js_outcome_t *out)
+                             yonder_bytecode_t *bytecode, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     // A module's answer is the map's: compiled, no task run (modules.h).
     if (s != NULL && !s->dead && (token & YONDER_MODULE_TOKEN) != 0) {
-        yonder_modules_answered(s->modules, token, response);
+        yonder_modules_answered(s->modules, token, response, bytecode);
         modules_progress(s);
         return false;
     }
+    yonder_bytecode_free(bytecode);
     if (s == NULL || s->dead || !os64_dom_fetch_waiting(s->dom, token))
         return false;
     s->written = 0;
@@ -1658,6 +1777,36 @@ const char *yonder_scripts_task_address(const yonder_scripts_t *s)
     return s != NULL ? s->task_address : NULL;
 }
 
+// How many of a stack overflow's callers its FAILED line names.
+#define FAILURE_CALLERS 3
+
+// The file a FAILED line names for `frame`, into `*file` and `*length`: the
+// script's address; nothing (length 0) in the task's own script, whose line
+// and column alone are its place; `inline` in the page's classic inline
+// scripts; and anywhere else, the engine's own name for it.
+static void frame_file(const yonder_scripts_t *s, const char *own, const os64_dom_frame_t *frame,
+                       const char **file, size_t *length)
+{
+    bool page = false;
+    const char *address = s != NULL ? os64_dom_frame_script(s->dom, frame, &page) : NULL;
+    // A classic script's file is the binding's name for it, a module's its
+    // own address (modules.c compiles it under its URL).
+    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame->file_length &&
+        os64_memcmp(own, frame->file, frame->file_length) == 0)
+        address = own;
+    *file = frame->file;
+    *length = frame->file_length;
+    if (address != NULL && own != NULL && os64_streq(address, own)) {
+        *length = 0;
+    } else if (address != NULL) {
+        *file = address;
+        *length = os64_strlen(address);
+    } else if (page) {
+        *file = "inline";
+        *length = os64_strlen(*file);
+    }
+}
+
 void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const char *message, const char *stack,
                             char *out, size_t cap)
 {
@@ -1666,33 +1815,55 @@ void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const ch
         os64_strcopy(out, cap, message);
         return;
     }
-    bool page = false;
-    const char *address = s != NULL ? os64_dom_frame_script(s->dom, &frame, &page) : NULL;
-    // A classic script's file is the binding's name for it, a module's its
-    // own address (modules.c compiles it under its URL).
-    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&
-        os64_memcmp(own, frame.file, frame.file_length) == 0)
-        address = own;
-    // The place: the line and column alone in the task's own script.
-    const char *file = frame.file;
-    size_t file_length = frame.file_length;
-    if (address != NULL && own != NULL && os64_streq(address, own)) {
-        file_length = 0;
-    } else if (address != NULL) {
-        file = address;
-        file_length = os64_strlen(address);
-    } else if (page) {
-        file = "inline";
-        file_length = os64_strlen(file);
-    }
+    const char *file;
+    size_t file_length;
+    frame_file(s, own, &frame, &file, &file_length);
     os64_snprintf(out, cap, "%s, at %.*s%s%.*s%s%u:%u", message, (int)frame.function_length,
                   frame.function != NULL ? frame.function : "", frame.function != NULL ? " " : "", (int)file_length,
                   file, file_length != 0 ? ":" : "", frame.line, frame.column);
+    // A stack overflow's place is a recursion, which one frame does not
+    // show: the frames that called it, a cycle of the same places, do
+    // (YONDER_DIAGNOSTICS.md § As built). Each caller is its function and
+    // line:col, with its file (frame_file's) when it is not the first
+    // frame's.
+    static const char kOverflow[] = "stack overflow";  // InternalError's, and the parser's SyntaxError's
+    size_t ml = os64_strlen(message), ol = sizeof(kOverflow) - 1;
+    if (ml < ol || !os64_streq(message + ml - ol, kOverflow))
+        return;
+    const char *first_file = file;
+    size_t first_length = file_length;
+    const char *next = frame.file + frame.file_length;
+    for (int k = 0; k < FAILURE_CALLERS; k++) {
+        while (*next != '\0' && *next != '\n')
+            next++;
+        if (*next == '\0' || !os64_dom_stack_frame(next + 1, &frame))
+            break;
+        frame_file(s, own, &frame, &file, &file_length);
+        bool elsewhere = file_length != first_length || os64_memcmp(file, first_file, file_length) != 0;
+        // The task's own script, named by nothing beside a first frame in
+        // another file, is named by its own name, or it would read as that
+        // file's.
+        if (elsewhere && file_length == 0 && own != NULL) {
+            file = own;
+            file_length = os64_strlen(own);
+        }
+        size_t at = os64_strlen(out);
+        os64_snprintf(out + at, cap - at, "%s%.*s%s%.*s%s%u:%u", k == 0 ? ", called from " : ", ",
+                      (int)frame.function_length, frame.function != NULL ? frame.function : "",
+                      frame.function != NULL ? " " : "", elsewhere ? (int)file_length : 0, file,
+                      elsewhere ? ":" : "", frame.line, frame.column);
+        next = frame.file + frame.file_length;
+    }
 }
 
 int64_t yonder_scripts_task_us(const yonder_scripts_t *s)
 {
     return s != NULL ? s->task_us : -1;
+}
+
+bool yonder_scripts_task_from_bytecode(const yonder_scripts_t *s)
+{
+    return s != NULL && s->task_us >= 0 && s->task_from_bytecode;
 }
 
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *s)
@@ -1821,6 +1992,11 @@ void yonder_scripts_mark(yonder_scripts_t *s, os64_dom_milestone_t which, uint64
     if (s == NULL || (unsigned)which >= OS64_DOM_TIMING_COUNT)
         return;
     s->timing.at[which] = now_us > s->timing.origin_us ? now_us - s->timing.origin_us : 0;
+}
+
+const os64_dom_timing_t *yonder_scripts_timing(const yonder_scripts_t *s)
+{
+    return s != NULL ? &s->timing : NULL;
 }
 
 uint64_t yonder_scripts_storage_due(const yonder_scripts_t *s)

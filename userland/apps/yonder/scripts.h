@@ -18,6 +18,7 @@
 #include <dom/dom.h>
 
 #include "diag.h"
+#include "script_job.h"
 #include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
@@ -37,6 +38,10 @@ typedef struct {
     uint64_t (*fetch)(void *opaque, uint64_t serial, uint32_t token, const char *url,
                       const char *fallback);
     void (*cancel)(void *opaque, uint64_t job);
+    // A `src` script or a module compiled from its source, whose body the
+    // cache holds: its blob (libjs's, taken) to be kept where `where` says
+    // (BYTECODE_CACHE.md). NULL keeps nothing.
+    void (*keep_bytecode)(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
     void (*activate)(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what);
     // document.write: the stream's parser takes the text (os64_html_parser_
     // write) and answers its status. Asked only while the script the parse
@@ -106,6 +111,16 @@ typedef struct {
     bool (*focus)(void *opaque, const os64_html_node_t **focused);
 } yonder_scripts_options_t;
 
+// The script engine's stack, out of yonder's window thread's `stack` bytes
+// (SCRIPT_STACK.md § 5): what is left above layout's headroom, which shares
+// the thread, clamped to [YONDER_SCRIPT_STACK_MIN, YONDER_SCRIPT_STACK_MAX].
+// A stack too small for the headroom and the least, the default 1 MiB or one
+// whose size could not be read (0), gives the least: DOM_D10.md's 128 KiB.
+#define YONDER_SCRIPT_STACK_MIN ((size_t)128 * 1024)
+#define YONDER_SCRIPT_STACK_MAX ((size_t)8 * 1024 * 1024)
+#define YONDER_SCRIPT_HEADROOM ((size_t)2 * 1024 * 1024)
+size_t yonder_script_stack_limit(size_t stack);
+
 // A host for `doc`, whose control state is `state` (which must outlive it).
 // No runtime yet. NULL on no memory.
 yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_t *state,
@@ -149,6 +164,9 @@ bool yonder_scripts_deferring(const yonder_scripts_t *scripts);
 // False when nothing is ready (a fetch may still be out).
 bool yonder_scripts_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 bool yonder_scripts_pending(const yonder_scripts_t *scripts);
+// Whether a script of the page is still being fetched: a `src` script, or
+// a module script whose graph is not all in.
+bool yonder_scripts_fetching(const yonder_scripts_t *scripts);
 // A script a verb connected with no `src`, which a browser runs inside the
 // verb: so it runs before the parse goes on, ahead of any async script that
 // landed first. False when none waits.
@@ -180,9 +198,11 @@ bool yonder_scripts_address(yonder_scripts_t *scripts, const char *url, const ch
 // A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed;
 // `final_url` the response's address after its redirects (NULL or empty:
 // the address asked for), which the script is named and muted by from
-// then on.
+// then on. `bytecode`, when the cache holds the script's body, is TAKEN
+// (freed whatever becomes of the script): the compiled form read beside
+// it, and where a compile's is kept.
 void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const char *source,
-                            size_t length, const char *final_url);
+                            size_t length, const char *final_url, yonder_bytecode_t *bytecode);
 
 // One event at `node`, or at window (NULL), as os64_dom_dispatch. A page
 // whose script never ran makes its runtime here if an element carries an
@@ -240,9 +260,10 @@ bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, 
 // The answer to the page's request `token` (os64_dom_fetched), as one
 // task. False when nothing ran: the runtime is gone, or never was, or the
 // answer was a module's (YONDER_MODULE_TOKEN), which the page's module map
-// compiles without a task.
+// compiles without a task. `bytecode`, a module's compiled form when the
+// cache holds its body (fetch_job.h), is TAKEN, and freed for any other.
 bool yonder_scripts_answered(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *response,
-                             os64_js_outcome_t *outcome);
+                             yonder_bytecode_t *bytecode, os64_js_outcome_t *outcome);
 // The navigation the last task asked for; nodes arrive held.
 bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigation_t *ask);
 // A new task budget, from the next task on, and the budget tasks have.
@@ -270,9 +291,12 @@ const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
 void yonder_scripts_failure(const yonder_scripts_t *scripts, const char *own, const char *message,
                             const char *stack, char *out, size_t cap);
 // How long the engine took to evaluate the script the last task ran
-// (os64_js_run, compiling it included), in microseconds; -1 when the last
-// task was an event or a timer, or ran no script.
+// (compiling it, or reading its kept bytecode, included), in microseconds;
+// -1 when the last task was an event or a timer, or ran no script.
 int64_t yonder_scripts_task_us(const yonder_scripts_t *scripts);
+// Whether that script was run from its kept bytecode (BYTECODE_CACHE.md)
+// rather than compiled; false whenever task_us is -1.
+bool yonder_scripts_task_from_bytecode(const yonder_scripts_t *scripts);
 // The record the host was given (options.diag).
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *scripts);
 // The serial a script's fetch job carries back.
@@ -338,6 +362,9 @@ bool yonder_scripts_scroll_manual(const yonder_scripts_t *scripts);
 // A milestone of the page's navigation timing reached at `now_us`
 // (os64_micros' clock), for performance.timing and the navigation entry.
 void yonder_scripts_mark(yonder_scripts_t *scripts, os64_dom_milestone_t which, uint64_t now_us);
+// The page's navigation timing as far as its milestones have been told it;
+// NULL for no host.
+const os64_dom_timing_t *yonder_scripts_timing(const yonder_scripts_t *scripts);
 // The page's storage (dom.h § Web storage): every task the host runs ends
 // with os64_dom_storage_settle, which commits what is due; `due` is when
 // the next commit is (UINT64_MAX for none, yonder_now_ms' clock), and

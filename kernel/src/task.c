@@ -299,7 +299,10 @@ uintptr_t task_reserve_task_virt(task_t* task, size_t size)
 /// @param stackSize Size of usable stack (guard pages are added automatically)
 /// @param isRing3 true for user stack (PAGE_USER set), false for kernel stack
 /// @return Virtual address of stack base (bottom), or NULL on failure
-void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+/// `optional`: a stack the caller can do without (a program's declared main
+/// stack, SCRIPT_STACK.md), asked of allocate_memory_try, which refuses with
+/// 0 where allocate_memory_aligned panics; nothing is reserved on a refusal.
+static void* guarded_stack(task_t* task, size_t stackSize, bool isRing3, bool optional)
 {
 	if (!task || stackSize == 0) {
 		return NULL;
@@ -310,7 +313,7 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 	size_t aligned_size = (total_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
 	// Allocate physical memory for entire region (including guards)
-	uintptr_t phys = allocate_memory_aligned(aligned_size);
+	uintptr_t phys = optional ? allocate_memory_try(aligned_size) : allocate_memory_aligned(aligned_size);
 	if (phys == 0) {
 		printd(DEBUG_TASK, "task_alloc_guarded_stack: Failed to allocate %lu bytes\n", aligned_size);
 		return NULL;
@@ -341,6 +344,16 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 		virt_stack_start + stackSize, virt_base + aligned_size);
 
 	return (void*)virt_stack_start;
+}
+
+void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+{
+	return guarded_stack(task, stackSize, isRing3, false);
+}
+
+void* task_try_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+{
+	return guarded_stack(task, stackSize, isRing3, true);
 }
 
 void task_idle_loop()
@@ -1943,7 +1956,10 @@ void task_init_page_tables(task_t *task)
     paging_init_null_guard(task->pml4v, task->tableArena);
 }
 
-task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedCPU)
+// `userStack`: the main thread's stack the program declared (elf_can_load),
+// 0 for the default; createThread decides what it gets.
+task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedCPU,
+                        uint64_t userStack)
 {
     printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
            "task_initialize: Initializing task\n");
@@ -2031,7 +2047,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		}
 	}
 
-	newTask->threads = createThread((void*)newTask, kernelTask);
+	newTask->threads = createThread((void*)newTask, kernelTask, userStack);
 	newTask->threads->idleThread = idleTask;
 	newTask->threads->pinnedCPU = pinnedCPU;
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
@@ -2585,6 +2601,7 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	// clean: there is no task-teardown path in this tree to unwind with (see
 	// DEBTS), so the only way to fail without leaking is to fail before we
 	// build. spawn() now returns -1 and husk prints "cannot run <path>".
+	uint64_t declaredStack = 0;
 	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		// ── #! — a script names its interpreter (2026-08-22) ────────────────
@@ -2634,7 +2651,9 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 			return task_create_checked(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedCPU, error);
 		}
 
-		if (!elf_can_load(path))
+		// The same look answers the main thread's stack size the program
+		// asks for (SCRIPT_STACK.md § 4), carried into task_initialize.
+		if (!elf_can_load(path, &declaredStack))
 		{
 			printd(DEBUG_TASK, "task_create: cannot load '%s' — not spawning\n", path);
 			return NULL;
@@ -2669,7 +2688,7 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	if (!isKernelTask && pinnedCPU == THREAD_NO_AFFINITY)
 		pinnedCPU = task_env_pin(inheritedEnv, path);
 
-	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedCPU);
+	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedCPU, declaredStack);
 	newTask->env = inheritedEnv;
 
     //Copy the path (parameter) value from the parentTask's memory.

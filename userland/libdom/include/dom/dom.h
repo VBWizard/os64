@@ -726,13 +726,14 @@ uint64_t os64_dom_handler_bit(const char *type);
 uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
-/* CUSTOM ELEMENT REACTIONS OWED (docs/design/pending/CUSTOM_ELEMENTS.md,
- * decision 6). A change made between tasks, which is the parser's, can
- * queue reactions (an element it inserts, upgraded) with no microtask
- * checkpoint coming to run them. They are OWED until the host runs them:
- * os64_dom_reactions_run runs them as one task named "custom element
- * reactions" and answers whether it ran one (outcome filled), false when
- * none were owed. The host calls it after every parser call and before a
+/* CUSTOM ELEMENT REACTIONS AND MUTATION RECORDS OWED
+ * (docs/design/pending/CUSTOM_ELEMENTS.md, decision 6). A change made
+ * between tasks, which is the parser's, can queue reactions (an element it
+ * inserts, upgraded) and mutation records (an observer on the document) with
+ * no microtask checkpoint coming to deliver them. They are OWED until the
+ * host runs them: os64_dom_reactions_run runs both, the reactions first, as
+ * one task named "custom element reactions" and answers whether it ran one
+ * (outcome filled), false when none were owed. The host calls it after every parser call and before a
  * parser-blocking script runs, so a classic script sees the elements above
  * it upgraded. While any are owed, os64_dom_timer_next answers 0 and
  * os64_dom_timer_fire runs them as its task: the backstop for a change no
@@ -913,7 +914,8 @@ bool os64_dom_resolve(const os64_html_document_t *document, const char *document
  * parsed it), its normalized method, its author headers as a header block
  * (way/origin.h), its body bytes (NULL for none), its mode, credentials
  * mode, redirect mode and referrer policy, whether an upload listener asks
- * for a preflight, and the address its Referer names ("" for none). */
+ * for a preflight, the address its Referer names ("" for none), and its
+ * cache mode. */
 typedef struct {
     const char *url;
     const char *method;
@@ -927,6 +929,10 @@ typedef struct {
     way_policy_t policy;
     bool preflight;
     const char *referrer;
+    // Fetch's cache mode, by its place in the API's list — default,
+    // no-store, reload, no-cache, force-cache, only-if-cached — which is
+    // way_cache_mode_t's order; zero, default, for a request that names none.
+    uint8_t cache;
 } os64_dom_request_t;
 /* The answer, borrowed for the call: `ok` false is a network error, which
  * carries nothing else (Fetch: a network error tells the page nothing; the

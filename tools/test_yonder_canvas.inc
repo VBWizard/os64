@@ -45,4 +45,16 @@ static void canvas_window_cases(void)
     check(tree==g.page.tree && (px[20*800+20]&0xffffff)==0xffffff,
           "Canvas: same-value dimension reset clears visible pixels without layout");
     os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><canvas id=c width=4 height=4></canvas><p id=result></p>"
+        "<script>var c=document.getElementById('c'),x=c.getContext('2d');"
+        "x.fillRect(0,0,4,4);var observed=0;"
+        "new MutationObserver(function(records){observed+=records.length;"
+        "document.getElementById('result').textContent=observed+':'+records[0].oldValue+':'"
+        "+x.getImageData(0,0,1,1).data[3];}).observe(c,{attributes:true,attributeOldValue:true});</script>"
+        "<script>c.setAttribute('width','4');</script>",true);
+    script_turn();script_turn();
+    check(probe_text_is("result","1:4:0"),
+          "Canvas and MutationObserver both receive a same-value dimension assignment");
+    probe_drop();
 }

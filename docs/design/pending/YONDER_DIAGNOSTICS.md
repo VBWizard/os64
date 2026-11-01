@@ -200,6 +200,35 @@ DOMException, a thrown primitive) says its message alone (DEBTS.md). The
 same message at two places is two lines; the status line says the
 message alone, as before.
 
+A stack overflow's place is a recursion, which one frame does not show,
+so its line names the callers too: up to three, each its function and
+`line:col`, with its file only when that is not the first frame's (named
+as the first frame's file is, a classic script by its address, never the
+engine's private name for it)
+(`InternalError: stack overflow, at deep inline:1:29, called from deep
+1:29, deep 1:29, deep 1:29`). A cycle of the same places is the recursion.
+The parser's `SyntaxError: stack overflow` has no callers to name.
+
+**Each failure is said on the console as well** (2026-10-31, Chris's ask),
+the first time a page's record holds it: `yonder: FAILED <what>:
+<message>`, through `os64_complain`, which writes the terminal yonder was
+started from and the kernel log. The prefix says it is the browser
+talking. A page's own `console.log` goes to standard output as the page
+wrote it, with no prefix. The record keeps its line whole (a 3,666-byte
+bundle address included, above), but a terminal line is read, so on the
+console an address over 96 characters is cut to its scheme and host,
+`/.../`, and the first 40 characters of its last part, its query dropped and its
+`:line:col` kept (`diag.c`'s `console_short`). An address runs to a space,
+and a comma or semicolon that ends it (the one before a stack overflow's
+callers) is not its own. The console is ASCII, as a terminal reads it: a
+control byte, a byte past ASCII and a backslash are written `\xNN`
+(`console_put`), so a page's error text can never end, bend or clear the
+line it is reported on. The whole line, its newline included, fits the
+1,024 bytes `os64_complain` writes whole: `what` may take 256 of them and
+the message the rest, so a long failure is cut in its message and never
+loses the line's end. An address's file is the last part of its path, found
+before its query, so a slash in a query never names it.
+
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 
 A page with `@font-face` rules, or one whose layout asked for a family,
@@ -410,7 +439,14 @@ was shown, or since its record was last written on asking:
   `F%41ILED` and `%25` in one pass from the left (`tools/yonder_records.py`'s
   `unescape`, the replay's `rp_unescape`). Records written before this
   wrote a `%25` of their own as it was, so in those a literal `%25` reads
-  back as `%`.
+  back as `%`. **A `data:` address is shortened as a line is kept**
+  (Chris, 2026-10-29), so for such a line the bytes back are the
+  shortened ones: from the first `data:` that begins a word to its
+  field's end, a run past 200 bytes keeps its first 100 and its last 40
+  with `...(<n> more bytes)...` between. A data: URL is its document, so a
+  module's name, a request's address or a failure's place can be
+  kilobytes of percent-encoded script on one line. The page's own
+  `address:` line is written whole, since a replay loads the page from it.
 - **The kinds are** `global`, `script` (`module`), `element`,
   `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`,
   and for pictures `picture-scheme` and `image`.
@@ -643,9 +679,44 @@ replay's record and of a kept page's record of version 2 (one that says
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling
-included. An event's or a timer's task, and a script that never reached
-the engine (its fetch failed), keep the plain `ran`/`failed`. QEMU's
-numbers are not a speed; the P5's are.
+included — or reading the script's kept bytecode instead, when it says
+`ran in 80 us from its bytecode` (BYTECODE_CACHE.md). An event's or a
+timer's task, and a script that never reached the engine (its fetch
+failed), keep the plain `ran`/`failed`. QEMU's numbers are not a speed; the
+P5's are.
+
+**What a page's requests and modules cost** (2026-10-30, the measurement
+BYTECODE_CACHE.md § 9's 7b was asked for): a script's request's line says
+the body's bytes and the fetch's time, from its job's start to its answer —
+`request GET <address>: 200 cors, 0 hops, 6718 bytes in 359 ms` — and the
+page's module compiles are one line together, `modules compiled: 207 in
+3167557 us, 8784400 bytes`, rewritten as each compiles (one line a module
+would crowd a page of hundreds out of the record's facts). A module read
+from its kept bytecode counts among them with its read's time, and the
+line ends `, N from bytecode` when any was. A module the engine's own
+loader compiles, a dynamic import's, is not in it. A request
+the HTTP cache answered says so after its time (SCRIPT_CACHE.md): `, kept`
+when it was served with nothing asked, `, confirmed` after a 304.
+
+**Where an arrival went** (2026-10-30): beside `arrived after`, a
+`navigation:` line gives performance.timing's milestones, each after the
+navigation began — `navigation: first byte 410 ms, last byte 1630 ms,
+parsed 2050 ms, DOMContentLoaded 6900 ms, load 7300 ms`: the document's
+first and last bytes, its parse done, DOMContentLoaded (after the deferred
+scripts and the module graphs have run), and load's end; `-` for one the
+page never reached. It is how a page whose module costs fell to nothing
+showed that its time was spent elsewhere. A request's line says, too, when
+either is a millisecond or more, how long its job waited for a worker
+(`, queued 840 ms`) and how long its answer then waited for the window
+(`, heard 300 ms later`): time a request spent not being fetched.
+
+**`yonder --exit-when-loaded <address>`** is the measuring run: yonder
+leaves once the shown page has settled (streamed, its pictures and fonts
+in, its record not owed, no script waiting) and no job has come back for
+3 s, or after 2 minutes whatever the page is doing, and says which on its
+way out. Leaving is the ordinary way out, so the page's record is written
+whole. Started over ssh it opens its window on the machine's desktop as any
+yonder does, and the shell has its prompt back when the record is written.
 
 ## Batch 1: what the first census taught the instrument
 
@@ -762,9 +833,12 @@ each was a page dying on something that browsers have had since the 2000s.
   fetch (no-memory)`, never `(ok)`. A picture the page or its sheets name
   that never reaches the table is on the record too, ONCE however often a
   rebuild or a layout meets it (a set of them, `unasked_first`): one in a
-  scheme nothing here fetches is `MISSING picture-scheme data`, counted,
+  scheme nothing here fetches is `MISSING picture-scheme blob`, counted,
   and an address that was refused is `FAILED picture` as written, with
-  the refusal. Met with no picture out, it writes the record then.
+  the refusal. Met with no picture out, it writes the record then. A
+  `data:` picture is decoded, not fetched, and fails as a fetched one does;
+  one longer than 200 bytes is named by its first 64 and its length, so
+  the line keeps its reason.
   However the pictures settle, if one moved the page the record waits
   until the page is laid out again (`diag_pictures_in` leaves it
   `record_owed`, `pictures_settle` writes it), so it says what that

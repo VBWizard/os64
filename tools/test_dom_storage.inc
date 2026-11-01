@@ -286,7 +286,17 @@ static void dom_storage_shape_cases(void)
  * an area; and 65536 keys. A refused write changes nothing. */
 static void dom_storage_quota_cases(void)
 {
-    DomFixture f = storage_fixture("http://example.test/", NULL);
+    // The area's 5 MiB quota is independent of the engine heap. Wide
+    // strings and their temporary UTF-8 exports must fit beside the binding
+    // so this case reaches Storage's refusal, not the engine's heap limit.
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = "http://example.test/";
+    options.now_ms = storage_now;
+    DomFixture f = fixture_base(0, 0, 32 * 1024 * 1024);
+    if (f.runtime && f.state) {
+        os64_js_outcome_t outcome;
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
+    }
     if (!fixture_ready(&f)) return;
     dom_script(&f, STORAGE_ASSERT
         "var big='x'.repeat(5*1024*1024/2-1);"            /* with key 'k', exactly the quota */

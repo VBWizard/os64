@@ -2263,6 +2263,30 @@ static void motion_due_cases(void)
         expect(kOutsideNames[i], due == (i < 3 ? 1000 : FLOW_NEVER), detail);
         moving_close(&m);
     }
+    // A pseudo-element's box is such a box: it names its originating
+    // element, whose animation it takes as a child does, by its own record
+    // (GENERATED_CONTENT.md § 4).
+    static const struct {
+        const char *name, *keyframes, *pseudo;
+        uint64_t due;
+    } kPseudo[] = {
+        {"motion due: seen through a fixed ::before", "to{color:red}", "", 1000},
+        {"motion due: not for the element's own background", "to{background-color:red}", "", FLOW_NEVER},
+        {"motion due: but for a background the ::before inherits", "to{background-color:red}",
+         "background-color:inherit", 1000},
+    };
+    for (size_t i = 0; i < sizeof(kPseudo) / sizeof(kPseudo[0]); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{%s}.c{animation:c 1s linear}"
+                 ".c::before{content:'x';position:fixed;top:0;%s}</style>"
+                 "<div class=c style='margin-top:2000px'>y</div>", kPseudo[i].keyframes, kPseudo[i].pseudo);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kPseudo[i].name, due == kPseudo[i].due, detail);
+        moving_close(&m);
+    }
     // And only for what it hands down: an inherited value and a fade reach
     // the box inside it; its own background and border do not — unless
     // the author hands them down by keyword, at every element between.
@@ -3752,6 +3776,35 @@ static flow_tree_t *moving_beside(Moving *m, uint64_t now)
     return flow_layout(m->p.doc, m->p.page, 800, &m->p.env);
 }
 
+// A group a pseudo-element opens (its opacity) is not its element's: a
+// tick, and a layout's parts, mark the element's whole box, not the
+// pseudo-element's group alone.
+static void motion_pseudo_group_cases(void)
+{
+    static const char kPage[] = MOTION_STYLE "@keyframes bg{to{background-color:blue}}"
+        "#p{width:300px;height:200px;animation:bg 1s linear infinite}"
+        "#p::before{content:'';display:block;width:10px;height:10px;opacity:.5}</style><div id=p></div>";
+    const flow_point_t o = {0, 0};
+    Moving m;
+    moving_open_for(&m, kPage, 0, true);
+    const flow_box_t *p = moving_box(&m, "p");
+    TickMarks k = {.n = 0};
+    (void)flow_motion_tick(m.tree, 500, o, tick_mark, &k, NULL);
+    expect("tick marks: an element whose ::before opens a group, its whole box",
+           p != NULL && marked(&k, p, flow_box_doc_rect(p, o)), NULL);
+    moving_close(&m);
+
+    moving_open(&m, kPage, 0);
+    p = moving_box(&m, "p");
+    flow_tree_t *now = moving_beside(&m, 500);
+    k.n = 0;
+    bool bounded = now != NULL && flow_layout_parts(m.tree, now, o, tick_mark, &k, NULL);
+    expect("layout parts: an element whose ::before opens a group, its whole box",
+           p != NULL && bounded && marked(&k, p, flow_box_doc_rect(p, o)), NULL);
+    flow_free(now);
+    moving_close(&m);
+}
+
 // Whether a mark was handed for a box of `node`, in either tree, and the
 // marks for its boxes joined.
 static bool marks_node(const TickMarks *k, const os64_html_node_t *node, os64_gui_rect_t *joined)
@@ -4336,6 +4389,7 @@ static void motion_tick_cases(void)
     motion_tick_condition_cases();
     motion_tick_edge_cases();
     motion_tick_mark_cases();
+    motion_pseudo_group_cases();
     motion_tick_sweep_cases();
     motion_tick_room_cases();
 }

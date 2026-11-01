@@ -37,7 +37,9 @@ static void update_dependencies(void)
         "p:empty{--ink:red}p:not(:empty){--ink:blue}span{color:var(--ink)}p:empty + p{color:green}",
         "p.on ~ p span{color:red}p:not(:is(.on + p)){opacity:.5}",
         "p:nth-child(2 of :is(.on, .on + p)){color:red}p:nth-last-child(1 of .on){opacity:.5}",
-        "x-item:defined{color:red}x-item:not(:defined) + p{color:blue}"
+        "x-item:defined{color:red}x-item:not(:defined) + p{color:blue}",
+        "i{--ink:black;color:var(--ink)}p{--ink:red}p::before,p::after{content:'x';color:var(--ink)}.on{--ink:blue}"
+        "p.on::before{content:attr(title)}p:empty + p::after{color:green}"
     };
     for(size_t k=0;k<sizeof(rules)/sizeof(*rules);++k) {
         size_t baseline=live;

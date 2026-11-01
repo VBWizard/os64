@@ -461,6 +461,24 @@ except for three points:
 
 What 5a then holds is the change log, its readers, and the instrument.
 
+Three things the build settled, each the standard's or WPT's:
+- **Notify walks every observer in the order the page made them**, not
+  the order they were queued a record, and drops each one's transient
+  registrations whether or not it had records. A node removed from an
+  observed subtree queues the notify itself, record or none.
+- **A transient registration's source is the one its chain began with**,
+  so `observe()` re-registering a target drops a subtree removed from a
+  removed subtree too.
+- **Between tasks the notify is owed** exactly as the backup element
+  queue is, and `os64_dom_reactions_run` runs both, the reactions first,
+  so an observer on `document` sees the page arrive.
+
+One divergence is booked in DEBTS: a "replace all" (`textContent`,
+`innerHTML`, `replaceChildren`) reaches the listener as an insertion and
+one removal per old child, not one record with both lists. Every change
+is seen. One record needs a libhtml verb for it and an array form of the
+listener's removed nodes.
+
 ## The cut, in order
 
 | Cut | Builds | Oracle | Size |

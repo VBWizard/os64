@@ -47,6 +47,20 @@ int64_t yonder_script_run(void *job, bool (*cancelled)(void *ctx), void *ctx, vo
     s->source = yonder_script_decode(body.bytes, body.len, body.charset, j->fallback, &s->length);
     os64_free(body.bytes);
     s->ok = s->source != NULL;
+    // A body the cache holds may have its compiled form beside it, and a
+    // compile of it is kept there (BYTECODE_CACHE.md § 5); one it does not
+    // hold has neither. Without memory for the record, it runs as source.
+    // Its entry is way_fetch_whole's: the page's partition, credentialed,
+    // the address asked for.
+    if (s->ok && body.kept && !cancelled(ctx) && (s->bytecode = os64_calloc(1, sizeof(*s->bytecode))) != NULL) {
+        yonder_bytecode_t *bc = s->bytecode;
+        way_partition_of(&j->hooks.metadata.origin, bc->partition, sizeof(bc->partition));
+        bc->credentials = true;
+        os64_strcopy(bc->url, sizeof(bc->url), j->url);
+        yonder_script_bytecode_tag(s->source, s->length, bc->tag, sizeof(bc->tag));
+        const way_cache_key_t key = {bc->partition, bc->credentials, bc->url};
+        (void)way_cache_companion_get(j->hooks.cache, &key, bc->tag, &bc->blob, &bc->length, SCRIPT_BYTECODE_MAX);
+    }
     return s->ok ? 1 : 0;
 }
 
@@ -55,6 +69,7 @@ void yonder_script_release(void *job, void *product)
     yonder_script_t *s = product;
     if (s != NULL) {
         os64_free(s->source);
+        yonder_bytecode_free(s->bytecode);
         os64_free(s);
     }
     os64_free(job);

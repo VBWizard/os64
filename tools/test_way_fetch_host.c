@@ -341,6 +341,11 @@ static bool whole(const char *url, way_whole_t *out, os64_fetch_options_t *opt)
     memset(&hooks, 0, sizeof(hooks));
     hooks.jar = s_jar;
     hooks.cache = s_cache;
+    // Fetched for one page throughout, as the cache keeps a reply under the
+    // page's site (SCRIPT_CACHE.md § 3).
+    way_origin_t page;
+    way_origin_of("https://page.test/", 0, &page);
+    way_metadata_request(&hooks.metadata, &page, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
     return way_fetch_whole(&hooks, url, opt, 1 << 20, out);
 }
 
@@ -470,6 +475,107 @@ static void restrictive_304(void)
     free(w.bytes);
     bool ok = whole("http://c.test/x", &w, NULL);
     expect("304 no-store: after it, nothing to serve stale", !ok && w.bytes == NULL, NULL);
+    free(w.bytes);
+}
+
+// Whether the cache holds the body it answered with, which is what a face
+// asks before it reads a companion (BYTECODE_CACHE.md § 5).
+static void kept_bodies(void)
+{
+    const char *fresh600 = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=600\r\n\r\nNEW";
+    fresh();
+    script("q.test", fresh600);
+    way_whole_t w;
+    expect("kept: a body stored by its fetch is held",
+           whole("http://q.test/", &w, NULL) && w.served == WAY_SERVED_NETWORK && w.kept, NULL);
+    free(w.bytes);
+    expect("kept: and served from the cache, still held",
+           whole("http://q.test/", &w, NULL) && w.served == WAY_SERVED_KEPT && w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("r.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: no-store\r\n\r\nNOT");
+    expect("kept: a no-store body is not held", whole("http://r.test/", &w, NULL) && !w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("s.test", kOld);
+    script("s.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("s.test", "HTTP/1.1 304 Not Modified\r\nCache-Control: no-store\r\n\r\n");
+    (void)whole("http://s.test/", &w, NULL);
+    free(w.bytes);
+    expect("kept: a body its 304 confirms is held",
+           whole("http://s.test/", &w, NULL) && w.served == WAY_SERVED_CONFIRMED && w.kept, NULL);
+    free(w.bytes);
+    expect("kept: one a 304 forbids keeping is not",
+           whole("http://s.test/", &w, NULL) && w.served == WAY_SERVED_CONFIRMED && !w.kept, NULL);
+    free(w.bytes);
+
+    fresh();
+    script("t.test", kOld);
+    script("t.test", NULL);
+    (void)whole("http://t.test/", &w, NULL);
+    free(w.bytes);
+    expect("kept: a stale body served for want of the server is held",
+           whole("http://t.test/", &w, NULL) && w.served == WAY_SERVED_STALE && w.kept, NULL);
+    free(w.bytes);
+}
+
+static bool whole_picture(const char *page, const char *url, way_whole_t *out);
+
+// The cache is partitioned by the page's site (SCRIPT_CACHE.md § 3): one
+// site's page is served what it caused to be kept, another's asks the
+// network for the same address.
+static void partitioned(void)
+{
+    const char *year = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nPIC";
+    fresh();
+    script("u.test", year);
+    script("u.test", year);
+    way_whole_t w;
+    expect("partition: one site's page keeps the picture",
+           whole_picture("https://one.test/", "http://u.test/p.png", &w) && w.kept, NULL);
+    free(w.bytes);
+    int before = s_dials;
+    expect("partition: and is served it again without asking",
+           whole_picture("https://one.test/", "http://u.test/p.png", &w) && w.served == WAY_SERVED_KEPT &&
+               s_dials == before, NULL);
+    free(w.bytes);
+    expect("partition: another site's page asks the network for it",
+           whole_picture("https://two.test/", "http://u.test/p.png", &w) && w.served == WAY_SERVED_NETWORK &&
+               s_dials > before, NULL);
+    free(w.bytes);
+}
+
+// An entry a script's request kept, varying on what that request sent,
+// is not this path's to serve: these requests do not say what they sent
+// (Codex #425 rd1).
+static void varied_entries(void)
+{
+    const char *year = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nPIC";
+    fresh();
+    script("u.test", year);
+    script("u.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=31536000\r\n\r\nNEW");
+    way_whole_t w;
+    expect("varied: a picture is kept", whole_picture("https://one.test/", "http://u.test/v.png", &w) && w.kept,
+           NULL);
+    free(w.bytes);
+    // Kept again as a script's request would keep it: with its head and
+    // the Accept it varied on.
+    const way_cache_key_t key = {"https one.test", true, "http://u.test/v.png"};
+    way_entry_t e;
+    uint8_t *body = NULL;
+    size_t len = 0;
+    bool found = way_cache_find(s_cache, &key, &e, &body, &len, NULL, 1 << 20);
+    const char head[] = "Content-Type: application/json\r\n", vary[] = "accept: application/json\r\n";
+    const way_blocks_t blocks = {head, sizeof(head) - 1, "", 0, vary, sizeof(vary) - 1};
+    expect("varied: kept again with the Accept a script's request varied on",
+           found && way_cache_put(s_cache, &e, &blocks, body, len), NULL);
+    free(body);
+    int before = s_dials;
+    expect("varied: a picture's request is not served it, and asks the network",
+           whole_picture("https://one.test/", "http://u.test/v.png", &w) && w.served == WAY_SERVED_NETWORK &&
+               s_dials > before && w.len == 3 && memcmp(w.bytes, "NEW", 3) == 0, NULL);
     free(w.bytes);
 }
 
@@ -1241,6 +1347,9 @@ int main(void)
     options_left_alone();
     validator_identity();
     restrictive_304();
+    kept_bodies();
+    partitioned();
+    varied_entries();
     redirect_restrictions();
     field_too_long();
     who_is_asking();

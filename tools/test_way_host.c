@@ -21,13 +21,6 @@
 
 // The console goes nowhere; a file the cache opened (test_way_cache.inc)
 // is written.
-int64_t os64_write(int32_t handle, const void *buf, size_t len)
-{
-    if (handle >= 1000)
-        return write(handle - 1000, buf, len);
-    (void)buf;
-    return (int64_t)len;
-}
 
 // The jar's lock yields under contention; one thread never contends.
 void os64_yield(void)

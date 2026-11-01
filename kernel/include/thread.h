@@ -24,7 +24,12 @@ typedef enum {
 } accounting_nested_cause_t;
 
 #define THREAD_USER_STACK_VIRTUAL_START 0x1000
-#define THREAD_USER_STACK_SIZE  0x100000	//1MB user stack
+#define THREAD_USER_STACK_SIZE  0x100000	//1MB user stack: every thread's, unless a program asks more
+// The most a program may ask for its main thread (SCRIPT_STACK.md § 4): a
+// PT_GNU_STACK size from THREAD_USER_STACK_SIZE up to this is kept, any
+// other gets the default. The stack is physical and contiguous, so the cap
+// keeps one program from asking for the machine.
+#define THREAD_USER_STACK_MAX   0x1000000	//16MB
 #define THREAD_USER_STACK_INITIAL_VIRT_ADDRESS THREAD_USER_STACK_VIRTUAL_START + THREAD_USER_STACK_SIZE - 8
 
 #define THREAD_KERNEL_STACK_VIRTUAL_START 0x20000
@@ -214,7 +219,11 @@ typedef struct s_thread
 _Static_assert(offsetof(thread_t, fpuState) % 16 == 0,
 		"thread FXSAVE state must begin on a 16-byte boundary");
 
-thread_t* createThread(void* parentTask, bool kernelThread);
+// `userStack` is the ring-3 stack the program asked for, 0 for the default
+// (THREAD_USER_STACK_SIZE): a task's main thread takes its PT_GNU_STACK
+// size, a spawned thread 0. The size it got is the thread's esp3Size, which
+// every reader of the stack's bounds uses.
+thread_t* createThread(void* parentTask, bool kernelThread, uint64_t userStack);
 uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtualStart, uint64_t requestedLength, bool isRing3Stack);
 // Return a thread ID to the pool (thread.c owns the TID bitmap). Called by
 // the undertaker (task_destroy) — a buried thread's ID is reusable.
