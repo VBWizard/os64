@@ -3,6 +3,7 @@
 #include "picture.h"
 #include "diag.h"
 #include "fetch_job.h"
+#include "scale.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
@@ -52,6 +53,40 @@ static os64_image_status_t svg_failure(svg_status_t st, yonder_picture_t *p)
            st == SVG_UNSUPPORTED ? OS64_IMAGE_UNSUPPORTED :
            st == SVG_CANCELLED ? OS64_IMAGE_IO_ERROR : OS64_IMAGE_MALFORMED;
 }
+
+// A still raster bigger than the rectangle it must cover is kept at the
+// size that covers it (PICTURE_SIZES.md), and the full decode is let go
+// here. With no memory for the smaller copy, or cancelled, it stays whole:
+// a picture kept too big is still the picture, and the page's budget
+// judges it at arrival as it judges any. A resample's rectangle is already
+// a kept size (the page's need), so it is taken as it is, held to the
+// picture: worked out again, its rounding up could answer a size the page
+// judges owed another resample, and that one the same, forever.
+static void keep_smaller(const yonder_picture_job_t *job, bool (*cancelled)(void *), void *context,
+                         yonder_picture_t *p)
+{
+    uint32_t kw, kh;
+    if (job->resample && job->cover_w > 0 && job->cover_h > 0) {
+        kw = job->cover_w < p->image.width ? job->cover_w : p->image.width;
+        kh = job->cover_h < p->image.height ? job->cover_h : p->image.height;
+    } else {
+        yonder_picture_kept_size(p->image.width, p->image.height, job->cover_w, job->cover_h, &kw, &kh);
+    }
+    if ((kw == p->image.width && kh == p->image.height) || (cancelled && cancelled(context)))
+        return;
+    uint32_t *small = os64_malloc((size_t)kw * kh * sizeof(*small));
+    if (small == NULL)
+        return;
+    if (!yonder_reduce_picture(p->image.pixels, p->image.width, p->image.height, small, kw, kh)) {
+        os64_free(small);
+        return;
+    }
+    os64_image_free(&p->image);
+    p->image.pixels = small;
+    p->image.width = kw;
+    p->image.height = kh;
+}
+
 // A moving GIF keeps its sequence; SVG keeps a tree rather than fixed-size
 // pixels. Raster formats retain libimage's signature-based decoding contract.
 static os64_image_status_t decode(const uint8_t *bytes, size_t len, const char *type,
@@ -84,6 +119,8 @@ static os64_image_status_t decode(const uint8_t *bytes, size_t len, const char *
                 // at most a canvas-sized restore rectangle.
                 p->kind = YONDER_PICTURE_SEQUENCE;
                 p->sequence = seq;
+                p->width = f->width;
+                p->height = f->height;
                 p->cost = len + (size_t)f->width * f->height * 9u;
                 return OS64_IMAGE_OK;
             }
@@ -91,6 +128,10 @@ static os64_image_status_t decode(const uint8_t *bytes, size_t len, const char *
         os64_image_sequence_free(seq);
     }
     os64_image_status_t st = os64_image_decode(bytes, len, &p->image);
+    p->width = p->image.width;
+    p->height = p->image.height;
+    if (st == OS64_IMAGE_OK)
+        keep_smaller(job, cancelled, context, p);
     p->cost = (size_t)p->image.width * p->image.height * 4u;
     if (st == OS64_IMAGE_UNKNOWN_FORMAT)
         p->format = yonder_diag_image_format(bytes, len);

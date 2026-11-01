@@ -598,6 +598,18 @@ os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image
         out->pixels=os64_malloc(4); if(!out->pixels) return OS64_IMAGE_NO_MEMORY;
         out->width=out->height=1; out->pixels[0]=0xff123456; return OS64_IMAGE_OK;
     }
+    /* "SIZED <w>x<h>": a w x h picture whose pixel (x, y) is opaque, red x,
+     * green y, blue 0x40 (test_yonder_picture_sizes.inc). */
+    unsigned w=0,h=0;
+    if(len>6 && len<32 && !memcmp(bytes,"SIZED ",6)) {
+        char text[32]; memcpy(text,bytes,len); text[len]=0;
+        if(sscanf(text+6,"%ux%u",&w,&h)==2 && w>0 && h>0 && w<=4096 && h<=4096) {
+            out->pixels=os64_malloc((size_t)w*h*4); if(!out->pixels) return OS64_IMAGE_NO_MEMORY;
+            for(unsigned y=0;y<h;y++) for(unsigned x=0;x<w;x++)
+                out->pixels[(size_t)y*w+x]=0xff000040u|(x&0xff)<<16|(y&0xff)<<8;
+            out->width=w; out->height=h; return OS64_IMAGE_OK;
+        }
+    }
     return OS64_IMAGE_UNKNOWN_FORMAT;
 }
 os64_image_status_t os64_image_sequence_decode(const uint8_t *bytes,size_t len,
@@ -5747,6 +5759,7 @@ static uint32_t *stand_in_shot(void) {
 }
 #include "test_yonder_svg_images.inc"
 #include "test_yonder_data_pictures.inc"
+#include "test_yonder_picture_sizes.inc"
 
 static void svg_partial_window_cases(void)
 {
@@ -11131,6 +11144,7 @@ int main(void)
     svg_window_cases();
     picture_svg_window_cases();
     data_picture_cases();
+    picture_sizes_cases();
     covered_link_cases();
     clipped_control_cases();
     classic_downloaded_cases();

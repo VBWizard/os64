@@ -42,6 +42,16 @@ typedef struct {
     // cache, which may answer instead (CACHE.md).
     way_hooks_t hooks;
     bool svg_enabled, dark, reduced_motion;
+    // The rectangle, in device pixels, the picture must cover where it is
+    // drawn, or 0 x 0 for none known: a still raster bigger than that is
+    // kept at yonder_picture_kept_size's answer (a resample's rectangle, a
+    // kept size already, as it is), reduced here, and the full
+    // decode never leaves the worker (PICTURE_SIZES.md). `resample` marks a
+    // picture the page already has (shown, or past the memory kept) asked
+    // for again at a new size, which replaces its pixels on arrival instead
+    // of arriving as new.
+    uint32_t cover_w, cover_h;
+    bool resample;
 } yonder_picture_job_t;
 
 // A tagged product: raster pixels, a moving GIF sequence, or an independently
@@ -50,9 +60,11 @@ typedef struct {
 typedef struct {
     yonder_picture_kind_t kind;
     yonder_svg_document_t *svg;      // when kind is YONDER_PICTURE_SVG
-    uint32_t width, height;         // SVG default object size in CSS pixels
+    // Its own size in CSS pixels, any kind (an SVG's default object size),
+    // which layout reads; a raster's `image` may be smaller (cover_w/h).
+    uint32_t width, height;
     os64_image_status_t status;     // OK, or why there is no picture
-    os64_image_t image;             // when kind is YONDER_PICTURE_RASTER
+    os64_image_t image;             // when kind is YONDER_PICTURE_RASTER: the pixels kept
     os64_image_sequence_t *sequence;
     size_t cost;
     // UNKNOWN_FORMAT: what the bytes are (yonder_diag_image_format), for

@@ -2,6 +2,9 @@
 
 #include "scale.h"
 
+#include "os64/mem.h"
+#include "os64/str.h"
+
 static int64_t max64(int64_t a, int64_t b)
 {
     return a > b ? a : b;
@@ -163,4 +166,76 @@ void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
             put(&out[x], row[sx]);
         }
     }
+}
+
+void yonder_picture_kept_size(uint32_t nw, uint32_t nh, uint32_t dw, uint32_t dh, uint32_t *kw,
+                              uint32_t *kh)
+{
+    if (nw == 0 || nh == 0 || dw == 0 || dh == 0) {
+        *kw = nw;
+        *kh = nh;
+        return;
+    }
+    uint64_t w, h;
+    if ((uint64_t)dw * nh >= (uint64_t)dh * nw) {
+        w = dw;
+        h = ((uint64_t)nh * dw + nw - 1) / nw;
+    } else {
+        h = dh;
+        w = ((uint64_t)nw * dh + nh - 1) / nh;
+    }
+    *kw = w < nw ? (uint32_t)w : nw;
+    *kh = h < nh ? (uint32_t)h : nh;
+}
+
+bool yonder_reduce_picture(const uint32_t *src, uint32_t sw, uint32_t sh, uint32_t *dst,
+                           uint32_t dw, uint32_t dh)
+{
+    if (sw == 0 || sh == 0 || dw == 0 || dh == 0 || dw > sw || dh > sh)
+        return false;
+    // Measured in 1/dw of a source column and 1/dh of a source row, source
+    // pixel i spans [i * dw, (i + 1) * dw) and output pixel o spans
+    // [o * sw, (o + 1) * sw): every overlap is a whole number, and every
+    // output pixel's weights add to sw * sh. A row's sums: weight times
+    // alpha, then that times each colour, which stay within 64 bits for
+    // any picture of fewer than 2^28 pixels.
+    uint64_t *sum = os64_calloc((size_t)dw * 4, sizeof(*sum));
+    if (sum == NULL)
+        return false;
+    uint64_t total = (uint64_t)sw * sh;
+    for (uint32_t oy = 0; oy < dh; oy++) {
+        os64_memset(sum, 0, (size_t)dw * 4 * sizeof(*sum));
+        uint64_t y0 = (uint64_t)oy * sh, y1 = y0 + sh;
+        for (uint64_t sy = y0 / dh; sy * dh < y1; sy++) {
+            uint64_t top = sy * dh > y0 ? sy * dh : y0;
+            uint64_t bottom = (sy + 1) * dh < y1 ? (sy + 1) * dh : y1;
+            uint64_t wy = bottom - top;
+            const uint32_t *row = src + sy * sw;
+            for (uint32_t ox = 0; ox < dw; ox++) {
+                uint64_t x0 = (uint64_t)ox * sw, x1 = x0 + sw;
+                uint64_t *s = sum + (size_t)ox * 4;
+                for (uint64_t sx = x0 / dw; sx * dw < x1; sx++) {
+                    uint64_t left = sx * dw > x0 ? sx * dw : x0;
+                    uint64_t right = (sx + 1) * dw < x1 ? (sx + 1) * dw : x1;
+                    uint32_t p = row[sx];
+                    uint64_t wa = (right - left) * wy * (p >> 24);
+                    s[0] += wa;
+                    s[1] += wa * ((p >> 16) & 0xff);
+                    s[2] += wa * ((p >> 8) & 0xff);
+                    s[3] += wa * (p & 0xff);
+                }
+            }
+        }
+        uint32_t *out = dst + (uint64_t)oy * dw;
+        for (uint32_t ox = 0; ox < dw; ox++) {
+            const uint64_t *s = sum + (size_t)ox * 4;
+            uint64_t a = s[0];
+            out[ox] = a == 0 ? 0
+                             : (uint32_t)((a + total / 2) / total) << 24 |
+                                   (uint32_t)((s[1] + a / 2) / a) << 16 |
+                                   (uint32_t)((s[2] + a / 2) / a) << 8 | (uint32_t)((s[3] + a / 2) / a);
+        }
+    }
+    os64_free(sum);
+    return true;
 }
