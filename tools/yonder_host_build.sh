@@ -52,7 +52,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,custom,observer}.c \
-        userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
+        userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
         "${svg_sources[@]}" userland/libdraw2d/paint.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
