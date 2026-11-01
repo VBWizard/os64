@@ -743,6 +743,18 @@ static void dom_fetch_abort_cases(void)
     dom_script(&f, FETCH_ASSERT "assert(tlog.join()==='first:AbortError,original:AbortError,clone:AbortError',tlog.join());"
                "assert(r11.body.locked);throws('TypeError',()=>r11.body.getReader());",
                "abort: a read begun in the abort's turn is aborted, and an aborted read body is locked");
+    /* A Promise chunk is a chunk: async iteration hands it over as it was
+     * enqueued, never adopted. And a page that shadows a typed array's
+     * byteLength changes nothing a body's own stream holds. */
+    dom_script(&f, "globalThis.ilog=[];var pc=Promise.resolve('payload');"
+               "new ReadableStream({start(c){c.enqueue(pc);c.close()}}).values().next()"
+               ".then(r=>ilog.push('kept:'+(r.value===pc)));"
+               "Object.defineProperty(Uint8Array.prototype,'byteLength',{value:0,configurable:true});"
+               "var shadowed=new Response('payload').body;delete Uint8Array.prototype.byteLength;"
+               "shadowed.getReader().read().then(r=>ilog.push('bytes:'+r.value.length));",
+               "stream: a promise chunk, and a shadowed byteLength");
+    dom_script(&f, FETCH_ASSERT "assert(ilog.join()==='kept:true,bytes:7',ilog.join());",
+               "stream: the promise chunk is kept, and the body keeps its bytes");
     /* WebIDL reads `init` before the constructor asks the stream: a getter
      * there that locks it makes the stream unusable. */
     dom_script(&f, FETCH_ASSERT

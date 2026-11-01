@@ -1346,8 +1346,13 @@ function asyncIteratorNext() {
         if (it.finished) return resolvedWith(iterResult(undefined, true));
         const reader = it.reader;
         const d = newDeferred();
+        // The chunk travels boxed: a deferred resolved with a thenable
+        // adopts it, and a chunk is the page's value, Promise or not. The
+        // box has no prototype, so no `then` a page put anywhere is found.
         readerRead(reader, new ReadRequest(function (chunk) {
-            resolveDeferred(d, chunk);
+            const box = objectCreate(null);
+            box.value = chunk;
+            resolveDeferred(d, box);
         }, function () {
             defaultReaderRelease(reader);
             resolveDeferred(d, endOfIteration);
@@ -1361,7 +1366,7 @@ function asyncIteratorNext() {
                 it.finished = true;
                 return iterResult(undefined, true);
             }
-            return iterResult(next, false);
+            return iterResult(next.value, false);
         }, function (reason) {
             it.ongoing = undefined;
             it.finished = true;
@@ -2425,7 +2430,7 @@ function doorFromBytes(bytes) {
         return resolvedWith(undefined);
     }
     stream = createReadableStream(noop, pullAlgorithm, resolvedUndefined, 0);
-    if (bytes.byteLength === 0) controllerClose(stream.controller);
+    if (apply(typedArrayByteLength, bytes, []) === 0) controllerClose(stream.controller);
     return stream.pub;
 }
 
@@ -2481,13 +2486,20 @@ function doorReadAll(value) {
         if (reading) more = true;
         else loop();
     }, function () {
-        const all = new Uint8Array_(total);
-        let at = 0;
-        for (let i = 0; i < count; i++) {
-            apply(uint8Set, all, [chunks[i], at]);
-            at += apply(typedArrayByteLength, chunks[i], []);
+        // A chunk's buffer can be taken from it after it was read (a page
+        // transfers it), and joining it then throws; the read fails with
+        // that, not the controller's close that called these steps.
+        try {
+            const all = new Uint8Array_(total);
+            let at = 0;
+            for (let i = 0; i < count; i++) {
+                apply(uint8Set, all, [chunks[i], at]);
+                at += apply(typedArrayByteLength, chunks[i], []);
+            }
+            resolveDeferred(d, all);
+        } catch (e) {
+            rejectDeferred(d, e);
         }
-        resolveDeferred(d, all);
     }, function (e) {
         rejectDeferred(d, e);
     });
