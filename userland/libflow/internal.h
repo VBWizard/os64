@@ -145,6 +145,21 @@ static inline bool f_contains_fixed(const flow_style_t *s)
     return f_contains_absolute(s) && (f_transformed(s) || f_filtered(s));
 }
 
+// The same two answers for an element, `root` the document's root: the
+// root's filter makes it neither containing block (Filter Effects 1 § 5,
+// 2 § 3: "unless the element it applies to is document root element"),
+// though its position or transform still does. So `html { filter:
+// grayscale(1) }` leaves a fixed header fixed to the viewport.
+static inline bool f_anchors(const flow_style_t *s, bool root, bool fixed)
+{
+    if (root && f_filtered(s)) {
+        flow_style_t plain = *s;
+        plain.nfilter = plain.nbackdrop_filter = 0;
+        return fixed ? f_contains_fixed(&plain) : f_contains_absolute(&plain);
+    }
+    return fixed ? f_contains_fixed(s) : f_contains_absolute(s);
+}
+
 // ── Storage ─────────────────────────────────────────────────────────────
 //
 // Everything a layout builds lives until the layout is freed and is never

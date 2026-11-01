@@ -1339,6 +1339,8 @@ int32_t flow_shadow_blur_reach(int32_t blur);
 // spreads, its blurs held at FLOW_FILTER_BLUR_MAX, so a group's bounds and
 // the painter agree. All 0 for none, for a list holding a URL, which
 // draws unfiltered, and where a filter is not drawn (a plain inline).
+// Mirrored (top for bottom, left for right) it is how far from outside a
+// rect what the filter draws in it can come from.
 void flow_filter_reach(const flow_style_t *s, int32_t out[4]);
 // Whether an outer box shadow of `box` casts anything: its shape, the
 // border box grown by its spread, is not empty. One a negative spread
@@ -1558,8 +1560,9 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // through its matrix. Inside a drawn-through group the walk culls against
 // the viewport taken back through the matrices, and where the face would
 // draw it upright instead, so a face that refuses to lay it loses nothing;
-// inside a filtered one, against the view grown by what its filter
-// spreads, so a box its blur reaches in from outside the view is painted.
+// inside a filtered one, against the view grown by how far from outside
+// it what the filter draws in it can come — flow_filter_reach mirrored —
+// so a box whose blur or shadow reaches into the view is painted.
 // A face that blends nothing
 // may leave `open` and `close` NULL, which is flow_visit.
 // `outline`, when not NULL, is handed each box that draws an outline

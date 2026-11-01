@@ -80,6 +80,13 @@ static void colour_cases(void)
     yonder_filter_run(&px, 1, 1, two, 2, 0, work);
     free(work);
     expect("colour: each function is held before the next", px == 0xff800000u, NULL);
+    // An amount as large as a double holds reaches the pixels as infinity:
+    // contrast(inf) makes inf - inf, held as 0, never cast as a NaN (the
+    // sanitizer's float-cast-overflow is on).
+    expect("colour: an infinite contrast is held, not cast as a NaN",
+           (one(0xffffff, fn(FLOW_FILTER_CONTRAST, INFINITY)) >> 24) == 0xff, NULL);
+    expect("colour: an infinite hue-rotate is held, not cast as a NaN",
+           (one(0x336699, fn(FLOW_FILTER_HUE_ROTATE, INFINITY)) >> 24) == 0xff, NULL);
     // opacity scales the coverage, and the colour with it.
     expect("colour: opacity(0.5) halves the coverage", one(0xffffff, fn(FLOW_FILTER_OPACITY, 0.5)) == 0x80808080u,
            NULL);

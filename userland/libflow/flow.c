@@ -3055,6 +3055,19 @@ static os64_gui_rect_t filter_grown(const flow_box_t *box, os64_gui_rect_t r)
     return grown(r, d);
 }
 
+// A view `r` grown by how far from outside it what lands in it can come
+// through a box's filter: flow_filter_reach mirrored, since a shadow cast
+// down shows below a source above `r`.
+static os64_gui_rect_t filter_sources(const flow_box_t *box, os64_gui_rect_t r)
+{
+    int32_t d[4];
+    flow_filter_reach(box->style, d);
+    const int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
+    if (r.w <= 0 || r.h <= 0 || (in[0] | in[1] | in[2] | in[3]) == 0)
+        return r;
+    return grown(r, in);
+}
+
 static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_point_t scroll,
                                     int32_t *close)
 {
@@ -3180,9 +3193,10 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     // joined with it moved back to where an upright drawing puts the group
     // — the face may refuse to lay it through (flow_box_through's
     // `upright`), and the walk is over before it is asked. A filtered
-    // group's view is grown by what its filter spreads, in the group's own
-    // coordinates (taken back through its matrix first, when it has one):
-    // a box that far outside it blurs or casts into it. Past the deepest
+    // group's view is grown by how far from outside it what its filter
+    // draws there can come (filter_sources), in the group's own coordinates
+    // (taken back through its matrix first, when it has one): a box that
+    // far outside it blurs or casts into it. Past the deepest
     // kept, the whole plane, which culls nothing and so loses nothing.
     os64_gui_rect_t views[F_VIEWS];
     int32_t depth = 0;
@@ -3204,7 +3218,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
                         os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
                         in = back.w > 0 && back.h > 0 ? join(back, upright) : upright;
                     }
-                    views[depth] = view.w == kWholePlane.w ? kWholePlane : filter_grown(b, in);
+                    views[depth] = view.w == kWholePlane.w ? kWholePlane : filter_sources(b, in);
                 }
                 depth++;
             }

@@ -37,7 +37,10 @@ recoloured for dark mode (`invert()`, `brightness(0)`), greyed-out logos
   the element makes a stacking context and is the containing block of its
   absolute and fixed descendants, as a transform is (`f_contains_absolute`,
   `f_contains_fixed`). A `backdrop-filter` does both too (Filter Effects 2
-  § 3). A fixed box a filter contains scrolls with it.
+  § 3). A fixed box a filter contains scrolls with it. **The root is the
+  exception** (both specs: "unless the element it applies to is document
+  root element", `f_anchors`): `html { filter: grayscale(1) }` leaves a
+  fixed header fixed to the viewport.
 - **A plain inline's filter is not drawn** and makes nothing
   (`f_filtered`), and **an inline-block's is not drawn** though it is a
   containing block, as their opacity is painted opaque (§ 10).
@@ -125,7 +128,7 @@ half-covered pixel.
   standard deviation up to `FLOW_FILTER_BLUR_MAX` (100 px, libflow's, so
   its bounds and the painter agree; a larger one is drawn at it). Past the
   area budget, or a layer the face cannot make or filter, a group paints unfiltered
-  and the record names it (`css-value filter: past the budget`), so a page
+  and the record names it (`css-value filter: drawn unfiltered`), so a page
   of a hundred blurred cards degrades, never stalls the window.
 
 ## 7. `backdrop-filter` (8c's second part)
@@ -190,15 +193,23 @@ since it shares the filters and the budget.
   against, `box_seen`, and the painter. A change inside a filtered group
   marks the group's bounds (`mark_filtered`). `getComputedStyle` writes
   the lists back (`filters`, computed.c).
+- **What a layer holds**: the group's bounds (grown by the OUTPUT reach)
+  cut to the view grown by the INPUT reach — `flow_filter_reach` mirrored,
+  top for bottom, since a shadow cast down shows below a source above the
+  view (the cold read's first finding) — and cut to what clips the group
+  from outside, which the spread may not pass. libflow culls a filtered
+  group's members against the view grown the same mirrored way
+  (`filter_sources`).
 - **yonder**: `filter.c` is pure, host-tested pixel by pixel — the
   recovery, each function (the colour ones held to WPT's reftest
   expectations), the blur, the drop shadow, the lay. The painter opens a
   layer per filtered group (`filter_try`), inside any matrix, at most
   `YONDER_FILTER_AREA_VIEWS` times the view's pixels a paint; the pane makes
-  it two sheets (`pane_sheets_open`, shared with a laid group) and at the
+  it two sheets (`pane_sheets_open`, shared with a laid group, to their own
+  `FILTER_SHEET_*` limits, which hold a whole 4K window and its spread) and at the
   close recovers, filters and lays them (`pane_filter_close`). A refused
   layer paints the group unfiltered, and the record says
-  `css-value filter: past the budget`. The paint's cost line has a
+  `css-value filter: drawn unfiltered`. The paint's cost line has a
   `filters` stage.
 - **Measured** in QEMU: a page of every function, a blur, drop shadows on a
   rounded box and on text, a filter under opacity and one under a

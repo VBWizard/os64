@@ -760,6 +760,27 @@ static void filter_paint_cases(void)
     expect("filter: past the paint's budget, a plain group",
            filters == 2 && groups == 1 && yonder_paint_filters_refused == 1, got);
     free(got);
+    // A shadow whose source is above the view (the cold read's first
+    // finding): cast 200 down from a 100-high box, the view scrolled to
+    // 150..250 shows only shadow. The layer reaches up 200 — the reach
+    // mirrored — to hold the box that casts it, and the box is painted.
+    static const char kCast[] = "<!doctype html><style>body { margin: 0 }"
+        " .f { filter: drop-shadow(0 200px 0 red); height: 100px; background: #00ff00 }</style>"
+        "<div class=f></div><div style=\"height: 2000px\"></div>";
+    got = paint_of(kCast, strlen(kCast), 200, (os64_gui_rect_t){0, 150, 200, 100}, &escaped, true);
+    expect("filter: a shadow's source above the view is painted into the layer",
+           got != NULL && strstr(got, "filter 0 0 200 250\nfill 0 0 200 100 #00ff00\n") != NULL, got);
+    free(got);
+    // An overflow-clipped parent cuts the spread: a 40-high box casting 30
+    // down inside a 50-high clip is filtered in a layer cut at 50.
+    static const char kClipped[] = "<!doctype html><style>body { margin: 0 }"
+        " .c { overflow: hidden; height: 50px }"
+        " .f { filter: drop-shadow(0 30px 0 red); height: 40px; background: #00ff00 }</style>"
+        "<div class=c><div class=f></div></div>";
+    got = paint_of(kClipped, strlen(kClipped), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("filter: the spread is cut where an ancestor clips the group",
+           got != NULL && strstr(got, "filter 0 0 200 50\n") != NULL, got);
+    free(got);
     // A small repaint beside a big blur: blur(30px) reaches 90 past a
     // 200 x 20 box, and a 10 x 10 view at its corner spends 100 of its 200,
     // not the margin, so it is drawn filtered as the rest of the page is.

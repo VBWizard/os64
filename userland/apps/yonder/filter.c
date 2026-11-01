@@ -99,9 +99,12 @@ static void colour_of(const flow_filter_t *f, Colour *c)
     }
 }
 
+// Held to [0, 1], a NaN to 0: an amount the page wrote as large as a
+// double holds (contrast(1e500) is infinite) makes inf - inf, and a NaN
+// must not reach the cast to a byte.
 static double held(double v)
 {
-    return v < 0 ? 0 : v > 1 ? 1 : v;
+    return v > 0 ? (v < 1 ? v : 1) : 0;
 }
 
 static uint32_t byte(double v)

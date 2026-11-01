@@ -11914,14 +11914,22 @@ static void box_bars(Glass *gl, os64_gui_rect_t view)
 // filtered group, that group's two SHEETS, the same verb on black and on
 // white, which warp.c (or filter.c) lays onto the targets outside at the
 // close (PILE3.md § Transforms, the painter; FILTER.md). Each target keeps
-// its own opacity groups. Sheets are at most SHEET_SIDE a side and
-// SHEET_PIXELS in all, at most GLASS_THROUGHS pairs nest, laid and
+// its own opacity groups. A laid group's sheets are at most SHEET_SIDE a
+// side and SHEET_PIXELS in all, a filtered group's FILTER_SHEET_SIDE and
+// FILTER_SHEET_PIXELS, at most GLASS_THROUGHS pairs nest, laid and
 // filtered together, and they lie within half of what a 32-bit coordinate
 // can say; sheets past those, or that find no memory, are refused, and the
 // painter draws a laid group upright and a filtered one unfiltered.
 #define GLASS_THROUGHS 16
 #define SHEET_SIDE 4096
 #define SHEET_PIXELS 2097152
+// A filtered group's sheets are its layer, which the painter has already
+// cut to the view grown by the filter's spread (at most 3 x
+// FLOW_FILTER_BLUR_MAX a side), so they are bounded by the window, not by
+// a matrix: the window's size, its spread, and room for a 4K one, so a
+// page-wide filter (`html { filter: grayscale(1) }`) is drawn.
+#define FILTER_SHEET_SIDE 8192
+#define FILTER_SHEET_PIXELS 16777216
 
 typedef struct {
     Glass sheet[2];
@@ -12115,16 +12123,18 @@ static void through_free(GlassThrough *t)
 
 // Two sheets, `bounds` of the coordinates painted inside them, black and
 // white, made the targets until the close: a group laid through its
-// matrix's, or a filtered group's (pane_filter_open). NULL, and nothing
-// changed, when they cannot be made.
-static GlassThrough *pane_sheets_open(GlassPane *gp, os64_gui_rect_t bounds)
+// matrix's, or a filtered group's (pane_filter_open), each at most `side`
+// a side and `most` pixels. NULL, and nothing changed, when they cannot
+// be made.
+static GlassThrough *pane_sheets_open(GlassPane *gp, os64_gui_rect_t bounds, int32_t side,
+                                      int64_t most)
 {
     // A sheet's offset is its origin negated, and every verb adds it to a
     // coordinate in 32 bits: a sheet lying past half of what a coordinate
     // can say is refused, so neither can overflow.
     const int64_t half = INT32_MAX / 2;
-    if (gp->depth >= GLASS_THROUGHS || bounds.w <= 0 || bounds.h <= 0 || bounds.w > SHEET_SIDE ||
-        bounds.h > SHEET_SIDE || (int64_t)bounds.w * bounds.h > SHEET_PIXELS ||
+    if (gp->depth >= GLASS_THROUGHS || bounds.w <= 0 || bounds.h <= 0 || bounds.w > side ||
+        bounds.h > side || (int64_t)bounds.w * bounds.h > most ||
         bounds.x < -half || bounds.y < -half || (int64_t)bounds.x + bounds.w > half ||
         (int64_t)bounds.y + bounds.h > half)
         return NULL;
@@ -12176,7 +12186,7 @@ static GlassThrough *pane_sheets_close(GlassPane *gp)
 static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
                               os64_gui_rect_t clip)
 {
-    GlassThrough *t = pane_sheets_open(ctx, bounds);
+    GlassThrough *t = pane_sheets_open(ctx, bounds, SHEET_SIDE, SHEET_PIXELS);
     if (t == NULL)
         return false;
     os64_memcpy(t->m, m, sizeof(t->m));
@@ -12211,7 +12221,7 @@ static void pane_through_close(void *ctx, uint8_t alpha)
 // being painted, which stay those (pane_sheets_open).
 static bool pane_filter_open(void *ctx, os64_gui_rect_t bounds)
 {
-    return pane_sheets_open(ctx, bounds) != NULL;
+    return pane_sheets_open(ctx, bounds, FILTER_SHEET_SIDE, FILTER_SHEET_PIXELS) != NULL;
 }
 
 // Its pixels recovered from the two sheets, into the black one, filtered
@@ -12454,7 +12464,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     // Filtered groups painted unfiltered (FILTER.md § 6), the most any one
     // paint did.
     if (yonder_paint_filters_refused > 0 && g.page.diag != NULL)
-        yonder_diag_missing_seen(g.page.diag, "css-value", "filter: past the budget",
+        yonder_diag_missing_seen(g.page.diag, "css-value", "filter: drawn unfiltered",
                                  yonder_paint_filters_refused);
     if (pane.canvas_label.run != NULL)
         os64_text_run_release(pane.canvas_label.run);

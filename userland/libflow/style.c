@@ -4568,8 +4568,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->quotes = own_quotes(c->env->cascade != NULL
                                  ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
                              up != NULL ? up->quotes : NULL);
-    out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
-    out->fixed_anchor = f_contains_fixed(&sp.s) ? n
+    out->anchor = f_anchors(&sp.s, root, false) ? n : up != NULL ? up->anchor : NULL;
+    out->fixed_anchor = f_anchors(&sp.s, root, true) ? n
                       : up != NULL ? up->fixed_anchor : NULL;
     // An opacity an animation moves is the painter's to judge as it paints
     // (PILE3.md § Animations): none of it is gone for the layout.

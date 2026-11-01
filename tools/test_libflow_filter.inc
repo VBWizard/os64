@@ -146,6 +146,23 @@ static void filter_layout_cases(void)
     }
 }
 
+// The root's filter makes it no containing block (Filter Effects 1 § 5):
+// a fixed header stays fixed to the viewport.
+static void filter_root_cases(void)
+{
+    Sheeted q;
+    sheeted_open(&q, "<!doctype html><style>html{filter:grayscale(1)} body{margin:0}"
+                     "#h{position:fixed;top:0;width:200px;height:20px}</style>"
+                     "<div id=h></div><div style=\"height:3000px\"></div>",
+                 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *h = box_with_id(t, q.doc->document, "h");
+    expect("filter: the root's filter leaves a fixed box fixed",
+           h != NULL && h->fixed && flow_box_doc_rect(h, (flow_point_t){0, 500}).y == 500, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void filter_computed_cases(void)
 {
     Sheeted p;
@@ -207,6 +224,7 @@ static void filter_cases(void)
 {
     filter_group_cases();
     filter_layout_cases();
+    filter_root_cases();
     filter_computed_cases();
     filter_mark_cases();
 }

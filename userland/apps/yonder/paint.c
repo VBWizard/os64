@@ -2513,20 +2513,24 @@ static bool filter_drawn(const Painter *p, const flow_box_t *box)
 }
 
 // A filtered group's layer opened (FILTER.md): its bounds `b`, in the
-// coordinates being painted, cut to the view grown by what the filter
-// spreads — a box that far outside the view blurs or casts into it — and
-// that layer what is painted until the close. True when the group is the
-// filter's: a layer open, or none of it showing, so nothing is painted.
-// False when it is to be painted unfiltered: no filter to draw, past the
-// paint's budget, or a layer the verbs could not make; the last two are
-// counted (yonder_paint_filters_refused).
-static bool filter_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, int32_t d)
+// coordinates being painted, cut to the view grown by how far from outside
+// it what lands in it can come — flow_filter_reach MIRRORED, since a
+// shadow cast down shows below a source above the view — and to
+// `outside`, what clips the group from outside, which its spread may not
+// pass; that layer is what is painted until the close. True when the
+// group is the filter's: a layer open, or none of it showing, so nothing
+// is painted. False when it is to be painted unfiltered: no filter to
+// draw, past the paint's budget, or a layer the verbs could not make; the
+// last two are counted (yonder_paint_filters_refused).
+static bool filter_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64_gui_rect_t outside,
+                       int32_t d)
 {
     if (!filter_drawn(p, box))
         return false;
-    int32_t reach[4];
-    flow_filter_reach(box->style, reach);
-    os64_gui_rect_t layer = cut(b, grown_by(p->view, reach));
+    int32_t out[4];
+    flow_filter_reach(box->style, out);
+    const int32_t in[4] = {out[FLOW_BOTTOM], out[FLOW_LEFT], out[FLOW_TOP], out[FLOW_RIGHT]};
+    os64_gui_rect_t layer = cut(cut(b, grown_by(p->view, in)), outside);
     if (layer.w <= 0 || layer.h <= 0) {
         p->view = (os64_gui_rect_t){0, 0, 0, 0};
         return true;
@@ -2534,6 +2538,8 @@ static bool filter_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, int
     // Charged what it shows in the view, not its margin: a paint of a
     // small part of the window (a caret's) has a small budget, and the
     // same group must not be refused there and drawn filtered beside it.
+    // Inside a group laid through its matrix the view is that group's own,
+    // so it is charged in those pixels, before the matrix.
     os64_gui_rect_t shown = cut(layer, p->view);
     int64_t area = (int64_t)shown.w * shown.h;
     if (area > p->filter_left || !p->v->filter_open(p->v->ctx, layer)) {
@@ -2585,6 +2591,9 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
     double m[6];
     os64_gui_rect_t clip;
     flow_point_t upright;
+    // What clips the group from outside, which a filter's spread may not
+    // pass: nothing, unless the box is clipped or drawn upright inside one.
+    os64_gui_rect_t outside = held(INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX);
     if (flow_box_through(box, p->scroll, m, &clip, &upright)) {
         m[4] += p->shift.x;
         m[5] += p->shift.y;
@@ -2606,8 +2615,9 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
             gs->open[d].kind = G_THROUGH;
             p->view = own;
             p->shift = (flow_point_t){0, 0};
-            // Filtered first, in its own coordinates, then laid through.
-            (void)filter_try(p, box, bounds, d);
+            // Filtered first, in its own coordinates, then laid through,
+            // inside what clips it from outside.
+            (void)filter_try(p, box, bounds, bounds, d);
             return;
         }
         // Drawn upright instead, still inside what clips it from outside,
@@ -2617,9 +2627,12 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         p->shift.y = sum32(p->shift.y, upright.y);
         if (box->style->opacity >= 1000 && !filter_drawn(p, box))
             return;
+        outside = clip;
+    } else if (box->clipped) {
+        outside = shifted(flow_box_doc_clip(box, p->scroll), p->shift);
     }
     // A filter lays its layer at the group's opacity itself.
-    if (filter_try(p, box, shifted(bounds, p->shift), d))
+    if (filter_try(p, box, shifted(bounds, p->shift), outside, d))
         return;
     if (opacity_verbs(p)) {
         gs->open[d].kind = G_OPACITY;
