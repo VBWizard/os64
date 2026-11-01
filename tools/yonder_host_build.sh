@@ -53,7 +53,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,animation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,image_data,canvas,canvas_path,canvas_text,canvas_image,mutation,custom,observer}.c \
         userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
-        "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c \
+        "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml}.c userland/libxml/xml.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \

@@ -26,7 +26,7 @@ host_flags=(
    -I userland/libway/include -I userland/libhtml/include -I userland/libos64/include
    -I abi/include -I tools -I userland/libpage/upstream/ryu)
 host_sources=(
-   userland/libdraw2d/paint.c
+   userland/libdraw2d/paint.c userland/libdraw2d/blur.c
    tools/test_yonder_host.c userland/apps/yonder/paint.c userland/apps/yonder/paint_cache.c
    userland/apps/yonder/scratch.c
    userland/apps/yonder/bar.c userland/apps/yonder/download.c userland/apps/yonder/scale.c
