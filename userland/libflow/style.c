@@ -2553,6 +2553,8 @@ static bool filter_px(const Author *a, const garb_val_t *v, int32_t *out)
     return true;
 }
 
+static bool author_number(const Author *a, const garb_val_t *v, double *out);
+
 // One function of libgarb's filter list (values.h's GARB_FILTER) into `f`;
 // false for one libflow cannot work out — a calc() it cannot settle —
 // which leaves the property as it was, as a value it cannot read does.
@@ -2615,6 +2617,10 @@ static bool author_filter_fn(const Author *a, const flow_style_t *s, const garb_
                 return false;
         if (f->shadow.blur < 0)
             return false;
+        // The third length is a standard deviation (Filter Effects 1 §
+        // 13, unlike a box shadow's blur radius), kept as blur() keeps
+        // one: as the shadow blur of twice it.
+        f->shadow.blur = f->shadow.blur < INT32_MAX / 2 ? 2 * f->shadow.blur : INT32_MAX;
         const garb_val_t *c = &v->items[0];
         f->shadow.current = c->kind != GARB_V_COLOR || c->color.current;
         f->shadow.colour = f->shadow.current ? s->color : colour_of(c->color);
@@ -2623,16 +2629,15 @@ static bool author_filter_fn(const Author *a, const flow_style_t *s, const garb_
     default:
         break;
     }
-    // A number or a percentage, 1 when omitted; four of them held at 1
-    // (Filter Effects 1 § 13).
+    // A number or a percentage, a calc() of either worked out and held to
+    // the domain (author_number), 1 when omitted; a calc() below 0 held at
+    // 0, and four of them held at 1 (Filter Effects 1 § 13). A written
+    // negative never arrives: libgarb refuses it.
     f->amount = 1;
-    if (arg != NULL) {
-        if (arg->kind != GARB_V_NUMBER && arg->kind != GARB_V_PERCENTAGE)
-            return false;
-        f->amount = arg->kind == GARB_V_PERCENTAGE ? arg->number / 100 : arg->number;
-    }
-    if (f->amount < 0)
+    if (arg != NULL && !author_number(a, arg, &f->amount))
         return false;
+    if (f->amount < 0)
+        f->amount = 0;
     if ((f->fn == FLOW_FILTER_GRAYSCALE || f->fn == FLOW_FILTER_INVERT ||
          f->fn == FLOW_FILTER_OPACITY || f->fn == FLOW_FILTER_SEPIA) && f->amount > 1)
         f->amount = 1;

@@ -2049,8 +2049,9 @@ static os64_gui_rect_t space_rect(const flow_frame_t *f, os64_gui_rect_t r, flow
 
 // Whether a box can be seen in `view`: all it paints — its overflow and
 // what its ink reaches past it (a shadow, a glyph's overhang, the like
-// from a box inside it), and what its own filter spreads all of that
-// (flow_filter_reach) — where the page paints it, through any transform,
+// from a box inside it), and what its own filter and every filtered
+// ancestor's spread all of that (flow_filter_reach, summed: a bound) —
+// where the page paints it, through any transform,
 // and `reach` px past that on every side, for a text shadow a frame may
 // cast farther than the ink holds (FMotion.text_reach). The ink already
 // holds the shadow on show, so the reach counts it twice: a bound, which
@@ -2064,8 +2065,13 @@ static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scr
     if (reach >= INT32_MAX / 4)
         return true;
     os64_gui_rect_t o = b->overflow;
-    int32_t f[4];
-    flow_filter_reach(b->style, f);
+    int64_t f[4] = {0, 0, 0, 0};
+    for (const flow_box_t *a = b; a != NULL; a = a->parent) {
+        int32_t one[4];
+        flow_filter_reach(a->style, one);
+        for (int k = 0; k < 4; k++)
+            f[k] = f[k] + one[k] < INT32_MAX / 4 ? f[k] + one[k] : INT32_MAX / 4;
+    }
     os64_gui_rect_t inked =
         rect_from((int64_t)o.x - b->ink[FLOW_LEFT] - f[FLOW_LEFT] - reach,
                   (int64_t)o.y - b->ink[FLOW_TOP] - f[FLOW_TOP] - reach,

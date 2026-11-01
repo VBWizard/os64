@@ -41,9 +41,10 @@ static void filter_group_cases(void)
     expect("filter: a drop shadow reaches only where it is cast",
            g.opens == 1 && rect_is(g.bounds[0], 0, 0, 404, 20), g.log);
 
-    // Cast 4 left and 3 down, a blur radius of 2 (a deviation of 1, reach
-    // 3): top 3 - 3 = 0, right 3 - 4 < 0, bottom 3 + 3, left 3 + 4.
-    g = filter_walk(FILTER_PAGE(".f{filter:drop-shadow(red -4px 3px 2px);height:20px}"), 400);
+    // Cast 4 left and 3 down, a deviation of 1 (the third length is a
+    // standard deviation, as blur()'s is: reach 3): top 3 - 3 = 0, right
+    // 3 - 4 < 0, bottom 3 + 3, left 3 + 4.
+    g = filter_walk(FILTER_PAGE(".f{filter:drop-shadow(red -4px 3px 1px);height:20px}"), 400);
     snprintf(detail, sizeof(detail), "%d %d %d %d", g.bounds[0].x, g.bounds[0].y, g.bounds[0].w,
              g.bounds[0].h);
     expect("filter: a blurred drop shadow reaches by its blur and its offsets",
@@ -56,6 +57,10 @@ static void filter_group_cases(void)
              g.bounds[0].h);
     expect("filter: each function spreads what the ones before it made",
            g.opens == 1 && rect_is(g.bounds[0], -3, -3, 416, 26), detail);
+
+    // A calc() amount is worked out, not refused: the filter is drawn.
+    g = filter_walk(FILTER_PAGE(".f{filter:invert(calc(1)) brightness(calc(-10%));height:20px}"), 400);
+    expect("filter: calc() amounts are worked out", g.opens == 1, g.log);
 
     // A colour filter spreads nothing, and is a group all the same.
     g = filter_walk(FILTER_PAGE(".f{filter:grayscale(1);height:20px}"), 400);
@@ -220,6 +225,23 @@ static void filter_mark_cases(void)
     moving_close(&m);
 }
 
+// An animated box outside the view that an ancestor's blur spreads into
+// it is seen: its ticks are due (box_seen sums every filtered ancestor's
+// reach). Codex #445 round 1.
+static void filter_seen_cases(void)
+{
+    static const char kPage[] = MOTION_STYLE "@keyframes bg{to{background-color:blue}}"
+        "#f{filter:blur(10px);position:relative;width:300px}"
+        "#c{position:absolute;left:205px;top:0;width:10px;height:10px;"
+        "animation:bg 1s linear infinite}</style><div id=f><div id=c></div></div>";
+    Moving m;
+    moving_open_for(&m, kPage, 0, true);
+    uint64_t due = flow_motion_tick_due(m.tree, (os64_gui_rect_t){0, 0, 200, 600}, (flow_point_t){0, 0});
+    expect("filter: an animation an ancestor's blur spreads into view is seen", due != FLOW_NEVER,
+           NULL);
+    moving_close(&m);
+}
+
 static void filter_cases(void)
 {
     filter_group_cases();
@@ -227,4 +249,5 @@ static void filter_cases(void)
     filter_root_cases();
     filter_computed_cases();
     filter_mark_cases();
+    filter_seen_cases();
 }

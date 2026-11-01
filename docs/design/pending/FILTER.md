@@ -105,9 +105,10 @@ half-covered pixel.
   black. The layer is grown by `3r` on every side, because a blur spreads
   ink that far.
 - **`drop-shadow(c x y r)`**: the layer's alpha, blurred, offset by
-  `(x, y)`, tinted `c`, under the layer. `r` is a blur RADIUS read as a box
-  shadow's (Filter Effects 1 § 13: a deviation of `r/2`), so it is blurred
-  as yonder blurs a box shadow, three box blurs of radius `r/2`. Each side
+  `(x, y)`, tinted `c`, under the layer. `r` is a STANDARD DEVIATION, as
+  `blur()`'s is (Filter Effects 1 § 13, unlike a box shadow's blur radius;
+  first built as a radius, corrected at Codex #445 round 1), blurred as
+  yonder blurs a box shadow of blur `2r`, three box blurs of radius `r`. Each side
   grows by that blur's reach less the offset toward the other side, never
   below 0, and functions after the first spread what the ones before made
   (`flow_filter_reach`).

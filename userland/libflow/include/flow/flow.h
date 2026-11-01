@@ -462,7 +462,7 @@ typedef enum {
     FLOW_FILTER_SEPIA,
     FLOW_FILTER_SATURATE,
     FLOW_FILTER_HUE_ROTATE,     // `amount` in degrees
-    FLOW_FILTER_DROP_SHADOW,    // `shadow`: its offsets, its blur radius, its colour
+    FLOW_FILTER_DROP_SHADOW,    // `shadow`: its offsets, its blur, its colour
 } flow_filter_fn_t;
 
 typedef struct {
@@ -470,10 +470,11 @@ typedef struct {
     // As computed, an omitted argument's default in its place: 0 for blur
     // and hue-rotate, 1 for the others.
     double amount;
-    // DROP_SHADOW's, read as a box shadow's is (no spread, never inset), so
-    // the painter blurs it as it blurs one (flow_shadow_blur_reach); and
-    // BLUR's, as that shadow blur: `blur` twice the standard deviation, to
-    // the nearest pixel.
+    // DROP_SHADOW's offsets and colour, read as a box shadow's are (no
+    // spread, never inset). Its blur and BLUR's are standard deviations
+    // (Filter Effects 1 § 13), kept as the box-shadow blur that is twice
+    // one, to the nearest pixel, so the painter blurs each as it blurs a
+    // box shadow (flow_shadow_blur_reach).
     flow_shadow_t shadow;
     // URL's reference as written, kept where libgarb keeps the value, as a
     // background image's URL is.

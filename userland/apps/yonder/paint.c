@@ -25,6 +25,7 @@ typedef struct {
         flow_point_t shift;
         PaintGroupKind kind;
         bool filtered;              // a filter layer is open inside it (filter_try)
+        os64_gui_rect_t shown;      // the Painter's, to put back
     } open[PAINT_GROUPS];
     int32_t depth;                  // may pass PAINT_GROUPS; those are not kept
     // Past the deepest kept, a group drawn through its matrix is not painted
@@ -60,8 +61,12 @@ typedef struct {
     // line as cut.
     flow_cut_memo_t *cuts;
     // What is left of the paint's budget for filter layers, in pixels
-    // (yonder_paint_filters_refused).
+    // (yonder_paint_filters_refused), and the part of the view a layer is
+    // charged for showing, in the coordinates being painted: the paint's
+    // view, or a laid group's own inside it — never a filter's layer,
+    // whose margin a filter inside it would otherwise be charged for.
     int64_t filter_left;
+    os64_gui_rect_t shown;
 } Painter;
 
 // A coordinate and a move added, held to what a 32-bit coordinate can say,
@@ -2538,9 +2543,9 @@ static bool filter_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os6
     // Charged what it shows in the view, not its margin: a paint of a
     // small part of the window (a caret's) has a small budget, and the
     // same group must not be refused there and drawn filtered beside it.
-    // Inside a group laid through its matrix the view is that group's own,
-    // so it is charged in those pixels, before the matrix.
-    os64_gui_rect_t shown = cut(layer, p->view);
+    // Inside a group laid through its matrix it is charged in that
+    // group's own pixels, before the matrix.
+    os64_gui_rect_t shown = cut(layer, p->shown);
     int64_t area = (int64_t)shown.w * shown.h;
     if (area > p->filter_left || !p->v->filter_open(p->v->ctx, layer)) {
         yonder_paint_filters_refused++;
@@ -2588,6 +2593,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
     gs->open[d].shift = p->shift;
     gs->open[d].kind = G_ASKED;
     gs->open[d].filtered = false;
+    gs->open[d].shown = p->shown;
     double m[6];
     os64_gui_rect_t clip;
     flow_point_t upright;
@@ -2614,6 +2620,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
             p->v->through_open(p->v->ctx, own, m, clip)) {
             gs->open[d].kind = G_THROUGH;
             p->view = own;
+            p->shown = own;
             p->shift = (flow_point_t){0, 0};
             // Filtered first, in its own coordinates, then laid through,
             // inside what clips it from outside.
@@ -2671,6 +2678,7 @@ static void group_close(void *ctx, const flow_box_t *box)
         p->v->group_close(p->v->ctx, alpha);
     p->view = gs->open[d].view;
     p->shift = gs->open[d].shift;
+    p->shown = gs->open[d].shown;
 }
 
 // Whether a box has any background: a colour, a gradient, or a picture
@@ -2710,7 +2718,8 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     flow_cut_memo_open(&cuts, tree);
     Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
                  .cache = cache, .scratch = scratch, .cuts = &cuts,
-                 .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * viewport.w * viewport.h};
+                 .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * viewport.w * viewport.h,
+                 .shown = viewport};
     yonder_paint_filters_refused = 0;
     if (cache != NULL)
         paint_cache_begin(cache);

@@ -760,6 +760,19 @@ static void filter_paint_cases(void)
     expect("filter: past the paint's budget, a plain group",
            filters == 2 && groups == 1 && yonder_paint_filters_refused == 1, got);
     free(got);
+    // A filter inside a filter is charged what it shows in the repaint,
+    // not in the outer layer's margin (Codex #445 round 1): a 10 x 10
+    // repaint draws both the outer blur and the inner invert.
+    static const char kNested[] = "<!doctype html><style>body { margin: 0 }"
+        " .o { filter: blur(30px) } .i { filter: invert(1); height: 20px; background: red }</style>"
+        "<div class=o><div class=i></div></div>";
+    got = paint_of(kNested, strlen(kNested), 200, (os64_gui_rect_t){0, 0, 10, 10}, &escaped, true);
+    int nested = 0;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\nfilter ")) != NULL; at++)
+        nested++;
+    expect("filter: a nested filter is charged against the repaint, not the outer margin",
+           nested == 2 && yonder_paint_filters_refused == 0, got);
+    free(got);
     // A shadow whose source is above the view (the cold read's first
     // finding): cast 200 down from a 100-high box, the view scrolled to
     // 150..250 shows only shadow. The layer reaches up 200 — the reach

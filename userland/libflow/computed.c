@@ -698,7 +698,8 @@ static void filters(const flow_computed_t *c, Out *o, const flow_filter_t *f, in
         case FLOW_FILTER_DROP_SHADOW: {
             const flow_shadow_t *sh = &f[i].shadow;
             colour(o, sh->current ? c->style->color : sh->colour);
-            int32_t v[3] = {sh->x, sh->y, sh->blur};
+            // The blur kept as twice its standard deviation (flow.h).
+            double v[3] = {sh->x, sh->y, sh->blur / 2.0};
             for (int k = 0; k < 3; k++) {
                 puts_(o, " ");
                 px(c, o, v[k]);
