@@ -189,8 +189,10 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 extern uint64_t yonder_paint_cuts;
 // How many filtered groups the last yonder_paint drew unfiltered: past its
 // budget for filter layers — YONDER_FILTER_AREA_VIEWS times the
-// viewport's pixels, FILTER.md § 6 — or a layer the verbs refused. The
-// caller's to name in the record.
+// viewport's pixels, each layer charged the pixels it shows in the
+// viewport, FILTER.md § 6 — or a layer the verbs refused or found no
+// memory to filter. The caller's to name in the record; the verbs count
+// what they refuse at the close themselves.
 extern uint32_t yonder_paint_filters_refused;
 #define YONDER_FILTER_AREA_VIEWS 2
 

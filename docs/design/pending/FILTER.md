@@ -118,12 +118,13 @@ half-covered pixel.
   against is grown the same way, so a box the blur reaches in from outside
   the view is painted. A change to any box inside a filtered group marks
   the group's bounds (`mark_filtered`), since the filter spreads it.
-- **A budget per paint**: filtered area (each layer's pixels, the grown
-  bounds cut to the view grown by the spread) up to
+- **A budget per paint**: filtered area (each layer charged the pixels it
+  shows in the view, not its margin, so a small repaint beside a big blur
+  is not refused what the rest of the page was drawn with) up to
   `YONDER_FILTER_AREA_VIEWS` (2) times the view's pixels, and a blur's
   standard deviation up to `FLOW_FILTER_BLUR_MAX` (100 px, libflow's, so
   its bounds and the painter agree; a larger one is drawn at it). Past the
-  area budget, or a layer the face cannot make, a group paints unfiltered
+  area budget, or a layer the face cannot make or filter, a group paints unfiltered
   and the record names it (`css-value filter: past the budget`), so a page
   of a hundred blurred cards degrades, never stalls the window.
 

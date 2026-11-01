@@ -2531,7 +2531,11 @@ static bool filter_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, int
         p->view = (os64_gui_rect_t){0, 0, 0, 0};
         return true;
     }
-    int64_t area = (int64_t)layer.w * layer.h;
+    // Charged what it shows in the view, not its margin: a paint of a
+    // small part of the window (a caret's) has a small budget, and the
+    // same group must not be refused there and drawn filtered beside it.
+    os64_gui_rect_t shown = cut(layer, p->view);
+    int64_t area = (int64_t)shown.w * shown.h;
     if (area > p->filter_left || !p->v->filter_open(p->v->ctx, layer)) {
         yonder_paint_filters_refused++;
         return false;

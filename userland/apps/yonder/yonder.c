@@ -12218,7 +12218,8 @@ static bool pane_filter_open(void *ctx, os64_gui_rect_t bounds)
 // (filter.h) and laid onto each target outside at `alpha`: a sheet pixel
 // (i, j) is the coordinates' (i + bounds.x, j + bounds.y), the target's
 // offset taking that onto its pixels, inside what the target paints. With
-// no memory for the filter's work, it is laid unfiltered.
+// no memory for the filter's work, it is laid unfiltered, and counted as a
+// refused layer is (yonder_paint_filters_refused).
 static void pane_filter_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
                               uint8_t alpha)
 {
@@ -12234,6 +12235,8 @@ static void pane_filter_close(void *ctx, const flow_filter_t *filter, int32_t n,
     if (work != NULL) {
         yonder_filter_run(layer, w, h, filter, n, current, work);
         glass_give(work);
+    } else {
+        yonder_paint_filters_refused++;
     }
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];

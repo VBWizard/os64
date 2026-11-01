@@ -742,16 +742,33 @@ static void filter_paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true, kPlain);
     s_filter_refused = false;
     expect("filter: a refused layer is counted", yonder_paint_filters_refused == 1, NULL);
-    // blur(30px) reaches 90: a 380 x 200 layer, past 2 x 200 x 100.
-    paint_page_case("filter: past the paint's budget, a plain group",
-                    "<!doctype html><style>body { margin: 0 }"
-                    " .f { filter: blur(30px); height: 20px }</style><div class=f>a</div>",
-                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
-                    "fill 0 0 200 100 #fefefe\n"
-                    "group 0 0 200 100\n"
-                    "text \"a\" 0 14 #101010\n"
-                    "end group 255\n");
-    expect("filter: past the budget is counted", yonder_paint_filters_refused == 1, NULL);
+    // Each layer is charged the pixels it shows in the view: three boxes
+    // filling the 200 x 100 view spend 2 x 200 x 100 with two, and the
+    // third is a plain group.
+    static const char kThree[] =
+        "<!doctype html><style>body { margin: 0 } div { position: absolute; top: 0;"
+        " width: 200px; height: 100px; filter: grayscale(1) }</style>"
+        "<div>a</div><div>b</div><div>c</div>";
+    bool escaped = false;
+    char *got = paint_of(kThree, strlen(kThree), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped,
+                         true);
+    int filters = 0, groups = 0;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\nfilter ")) != NULL; at++)
+        filters++;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\ngroup ")) != NULL; at++)
+        groups++;
+    expect("filter: past the paint's budget, a plain group",
+           filters == 2 && groups == 1 && yonder_paint_filters_refused == 1, got);
+    free(got);
+    // A small repaint beside a big blur: blur(30px) reaches 90 past a
+    // 200 x 20 box, and a 10 x 10 view at its corner spends 100 of its 200,
+    // not the margin, so it is drawn filtered as the rest of the page is.
+    static const char kSmall[] = "<!doctype html><style>body { margin: 0 }"
+                                 " .f { filter: blur(30px); height: 20px }</style><div class=f>a</div>";
+    got = paint_of(kSmall, strlen(kSmall), 200, (os64_gui_rect_t){0, 0, 10, 10}, &escaped, true);
+    expect("filter: a small repaint is charged what it shows, not the margin",
+           got != NULL && strstr(got, "\nfilter ") != NULL && yonder_paint_filters_refused == 0, got);
+    free(got);
 }
 
 static void huge_corner_case(void)
