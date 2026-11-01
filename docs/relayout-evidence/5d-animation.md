@@ -9,7 +9,7 @@ C6 target work, remain separate cuts.
 
 The [rendering contract](../design/pending/RELAYOUT.md#requestanimationframe)
 covers callback order, shared timestamps, microtask checkpoints, cancellation,
-execution bounds, covered windows, cost pacing and the idle deadline. The queue
+execution bounds, covered windows, frame pacing and the idle deadline. The queue
 belongs to libdom; Yonder supplies rendering opportunities and presents once
 after the batch. Script-only canvas pixel updates preserve the layout tree.
 CSS motion runs on the same window loop after callbacks, and a script's fresh

@@ -332,9 +332,10 @@ static void sparse_paint(void)
         }
 }
 #include "test_draw2d_blur.inc"
+#include "test_draw2d_rect.inc"
 int main(void)
 {
-    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels(); sparse_paint(); shared_blur();
+    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels(); sparse_paint(); shared_blur(); rectangle_spans(); rectangle_blend_table();
     printf("Canvas core: %zu assertions passed (pixels, rounding, bounds, state, reset, refusal, ownership)\n", checks);
     return 0;
 }

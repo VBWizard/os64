@@ -345,6 +345,23 @@ static canvas_status_t coverage_box(const canvas_context_t *c,os64_geometry_boun
     if(x1>x0 && y1>y0)*box=(draw2d_damage_t){x0,y0,x1,y1};
     return CANVAS_OK;
 }
+/* Lines, Beziers and implicit closing edges stay within their control hull.
+ * Commands are already in device space. A common outside half-plane proves
+ * an empty fill without asking the fixed-point backend to admit far-away
+ * coordinates. Retain the coverage box's two-pixel quantization fringe. */
+static bool fill_outside(const canvas_context_t *c,const Path *path)
+{
+    bool left=true,right=true,top=true,bottom=true,any=false;
+    for(size_t i=0;i<path->count;++i) for(unsigned j=0;j<points(path->commands[i]);++j) {
+        Point p=path->commands[i].p[j];
+        if(!isfinite(p.x)||!isfinite(p.y))return false;
+        any=true;
+        left &= p.x < -2;right &= p.x > (double)c->surface.width+2;
+        top &= p.y < -2;bottom &= p.y > (double)c->surface.height+2;
+        if(!left&&!right&&!top&&!bottom)return false;
+    }
+    return any && (left||right||top||bottom);
+}
 /* Geometry and coverage are scratch until preparation succeeds. Neither a
  * backend refusal nor a failed clip allocation can partially paint a bitmap. */
 static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool even_odd,const draw2d_image_t *image)
@@ -360,6 +377,12 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
     size_t pixels=(size_t)c->surface.width*c->surface.height;
     if(!pixels)return CANVAS_OK;
     if(pixels>c->options.max_draw_pixels)return CANVAS_LIMIT;
+    /* Stroke expansion and shifted/blurred shadows can enter the bitmap.
+     * Clip replacement and operators such as copy also affect pixels outside
+     * the fill, so those operations must keep their normal preparation. */
+    if((mode==0||mode==1) && (mode==1||!c_shadows(c)) &&
+       draw2d_zero_coverage_preserves_destination(mode==1?DRAW2D_CLEAR:c->state.composite) &&
+       fill_outside(c,path))return CANVAS_OK;
     Map map=identity,inv;
     Path converted={0};Cut cut={.c=c,.status=CANVAS_OK};
     canvas_status_t status=CANVAS_OK;

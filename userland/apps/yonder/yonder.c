@@ -1761,10 +1761,10 @@ static struct {
     uint64_t tick_began, tick_ended, tick_us;
     int64_t tick_began_us;
     // A script frame includes callbacks, their rebuild and the final paint.
-    // Its successor rests for that cost, without accumulating missed frames.
+    // Its successor leaves a 10 ms input/idle opportunity after painting,
+    // in addition to the DOM frame deadline. Missed frames do not accumulate.
     bool raf_painting, script_painting;
-    int64_t raf_began_us;
-    uint64_t raf_rested;
+    uint64_t raf_resume_at;
     // Widgets have stable addresses and node keys; rebuilding replaces the
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
@@ -3491,7 +3491,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.ticked = false;
     g.raf_painting = false;
     g.script_painting = false;
-    g.raf_rested = 0;
+    g.raf_resume_at = 0;
     g.motion_pause[0] = '\0';
     pictures_start(&g.page);
     css_pictures(&g.page);
@@ -7002,7 +7002,7 @@ static uint64_t animation_next(void)
         page_rebuild_owed(&g.page) || g.raf_painting)
         return YONDER_NEVER;
     uint64_t due = yonder_scripts_animation_next(g.page.scripts);
-    return due < g.raf_rested ? g.raf_rested : due;
+    return due < g.raf_resume_at ? g.raf_resume_at : due;
 }
 
 // Hands the ticker the earliest of its deadlines: the next frame among the
@@ -7311,9 +7311,8 @@ static void motion_painted(void)
     g.script_painting = false;
     if (g.raf_painting) {
         g.raf_painting = false;
-        int64_t elapsed = os64_micros() - g.raf_began_us;
-        uint64_t rest = elapsed > 0 ? ((uint64_t)elapsed + 999) / 1000 : 0;
-        g.raf_rested = yonder_now_ms() + rest;
+        uint64_t now = yonder_now_ms();
+        g.raf_resume_at = now < UINT64_MAX - 10 ? now + 10 : UINT64_MAX - 1;
     }
     if (g.motion_painting) {
         g.motion_painting = false;
@@ -10468,13 +10467,11 @@ static bool script_turn(void)
     // the rebuild below. Only a failed rebuild from an earlier turn blocks
     // callbacks (the entry guard), not the task's fresh mutations.
     uint64_t now = yonder_now_ms();
-    if (!g.covered && !g.raf_painting && now >= g.raf_rested &&
+    if (!g.covered && !g.raf_painting && now >= g.raf_resume_at &&
         yonder_scripts_animation_next(g.page.scripts) <= now) {
-        int64_t frame_clock = os64_micros();
         int64_t frame_began = task_begin(g.page.scripts);
         if (yonder_scripts_animation_fire(g.page.scripts, now, &out)) {
             g.raf_painting = true;
-            g.raf_began_us = frame_clock;
             ran = true;
             task_said(g.page.scripts, true, "animation-frame", &out, frame_began);
         }
