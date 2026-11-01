@@ -22,8 +22,8 @@ first lean below adds a mechanism libdom does not have.*
 
 ## 2. What yonder has today
 
-libdom's `fetch.c` builds `response.body` as a one-chunk stream with a
-default reader, in C (`DStream`, `DReader`): no `ReadableStream` global, no
+libdom's `fetch.c` builds a Request's or Response's `body` as a one-chunk
+stream with a default reader, in C (`DStream`, `DReader`): no `ReadableStream` global, no
 `tee()`, no BYOB reader, no stream as a request body. A fetch answer
 reaches libdom whole, in one `os64_dom_fetched` call (`os64_dom_response_t`
 in `dom.h`). DEBTS.md books the gap and two smaller rows it causes (a
@@ -53,8 +53,9 @@ yonder would carry `streams.js`:
   closes it and errors it.
 - Cost: one new mechanism in libdom (engine-hosted code), and that code's
   frames appear in a page's stack traces, named `os64-streams`.
-- Size: the reference implementation is about 4,000 lines of JS with its
-  comments; the part this needs is less.
+- Size: a few thousand lines of JS for S1 and S2 together, to be measured
+  as it is written; the standard's own reference implementation is the
+  yardstick.
 
 **B. C in libdom, as every other binding is.** Consistent with the rest of
 libdom, and nothing new. But every abstract operation becomes C over the
