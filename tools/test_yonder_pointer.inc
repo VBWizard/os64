@@ -56,8 +56,51 @@ static void pointer_frame_cases(void)
           "pointer frame: fragment source runs outside the completed input task");
     loop_drop();
 }
+static void pointer_disabled_fieldsets(void)
+{
+    const char *cases[]={
+        "<fieldset disabled>%s</fieldset>",
+        "<fieldset disabled><legend><span>%s</span></legend></fieldset>",
+        "<fieldset disabled><legend>first</legend><legend>%s</legend></fieldset>",
+        "<fieldset disabled><legend>outer first</legend><fieldset><legend>%s</legend></fieldset></fieldset>",
+        "<fieldset disabled><legend><fieldset disabled><legend>%s</legend></fieldset></legend></fieldset>",
+        "<fieldset disabled><legend><fieldset disabled>%s</fieldset></legend></fieldset>"};
+    for(unsigned radio=0;radio<2;++radio)for(unsigned i=0;i<6;++i) {
+        char control[128],group[512],html[1400];
+        snprintf(control,sizeof(control),"<input id=c type=%s name=g>",radio?"radio":"checkbox");
+        snprintf(group,sizeof(group),cases[i],control);
+        snprintf(html,sizeof(html),"<input id=other type=radio name=g checked>%s<p id=out>0</p>"
+            "<script>var c=document.getElementById('c'),count=0;"
+            "c.oninput=c.onchange=()=>document.getElementById('out').textContent=String(++count);"
+            "if(c.type==='checkbox')c.indeterminate=true;</script>",group);
+        probe_page(html,true);script_turn();ui_click_on("c");
+        bool expected=i==1||i==4,checked=false,other=false,indeterminate=false;
+        os64_page_state_t *state=os64_page_shared_state(page_model(&g.page));
+        check(os64_page_node_checked(state,probe_id("c"),&checked)==0 && checked==expected &&
+              probe_field("c")->u.check.checked==expected,
+              "pointer: checkbox/radio native activation honors fieldsets and first-legend exceptions");
+        check(probe_text_is("out",expected?"2":"0"),
+              "pointer: fieldset-disabled controls emit no input/change events");
+        if(radio)check(os64_page_node_checked(state,probe_id("other"),&other)==0 && other==!expected,
+              "pointer: a disabled radio does not clear its enabled group peer");
+        else check(os64_page_node_indeterminate(state,probe_id("c"),&indeterminate)==0 && indeterminate==!expected,
+              "pointer: disabled checkbox preactivation preserves indeterminate");
+        probe_drop();
+    }
+    for(unsigned disabled=0;disabled<2;++disabled) {
+        char html[700];snprintf(html,sizeof(html),
+            "<fieldset id=f %s><input id=c type=checkbox></fieldset>"
+            "<script>var f=document.getElementById('f'),c=document.getElementById('c');"
+            "c.onpointerdown=()=>f.disabled=%s;</script>",disabled?"disabled":"",disabled?"false":"true");
+        probe_page(html,true);script_turn();ui_click_on("c");
+        check(probe_field("c")->u.check.checked==(disabled!=0),
+              "pointer: activation observes fieldset changes made during pointerdown");
+        probe_drop();
+    }
+}
 static void pointer_window_cases(void)
 {
+    pointer_disabled_fieldsets();
     probe_page("<!doctype html><style>body{margin:0}#pad{width:100px;height:80px;background:green}</style>"
         "<div id=pad></div><p id=out>-</p><script>var pad=document.getElementById('pad'),log=[];"
         "function note(e){log.push(e.type+':'+e.target.id+':'+e.buttons);document.getElementById('out').textContent=log.join('|')}"

@@ -370,6 +370,34 @@ static void dom_modern_cases(void)
         "sp2.remove();holder.remove();"
         "form.remove();",
         "modern-on-ui-events");
+    dom_script(&f, MODERN_ASSERT
+        "for(var kind of ['checkbox','radio']){"
+        "var fs=document.createElement('fieldset');fs.disabled=true;"
+        "fs.innerHTML='<legend><input id=first type='+kind+'></legend><input id=off type='+kind+'>'"
+        "+'<legend><input id=second type='+kind+'></legend>';"
+        "var off=fs.querySelector('#off'),first=fs.querySelector('#first'),second=fs.querySelector('#second');"
+        "var clicks=0,changes=0;off.onclick=()=>clicks++;off.oninput=off.onchange=()=>changes++;"
+        "off.click();assert(clicks===0&&!off.checked,'detached disabled click does nothing');"
+        "document.body.append(fs);off.click();second.click();"
+        "assert(clicks===0&&!off.checked&&!second.checked,'connected and second-legend controls stay disabled');"
+        "off.dispatchEvent(new MouseEvent('click'));"
+        "assert(clicks===1&&changes===0&&!off.checked,'dispatch delivers click without disabled preactivation');"
+        "off.checked=true;assert(off.checked&&changes===0,'direct script assignment remains allowed');off.checked=false;"
+        "first.click();assert(first.checked,'first legend is exempt');first.checked=false;"
+        "first.disabled=true;first.click();assert(!first.checked,'own disabled overrides legend exemption');"
+        "first.disabled=false;"
+        "var prior=document.createElement('legend');fs.insertBefore(prior,fs.firstChild);"
+        "first.click();assert(!first.checked,'a new first legend removes the old exemption');prior.remove();"
+        "first.click();assert(first.checked,'removing the preceding legend restores the exemption');"
+        "fs.disabled=false;off.click();assert(off.checked&&changes===2,'re-enabling restores activation');fs.remove()}"
+        "var form=document.createElement('form');form.innerHTML='<fieldset disabled><button id=submit>go</button>'"
+        "+'<button id=reset type=reset>reset</button></fieldset>';document.body.append(form);"
+        "var submitted=0,resets=0;form.onsubmit=e=>{submitted++;e.preventDefault()};"
+        "form.onreset=e=>{resets++;e.preventDefault()};"
+        "form.querySelector('#submit').dispatchEvent(new MouseEvent('click'));"
+        "form.querySelector('#reset').dispatchEvent(new MouseEvent('click'));"
+        "assert(submitted===0&&resets===0,'fieldset disables submit and reset activation too');form.remove();",
+        "modern-disabled-fieldset-activation");
     /* 0f's P1b lists: NodeList apart from HTMLCollection, and the names of
      * the token and string lists (ES5 TodoMVC patches NodeList.prototype). */
     dom_script(&f, MODERN_ASSERT

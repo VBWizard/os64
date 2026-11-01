@@ -211,3 +211,31 @@ cohort. Chris reported that drawing in a maximized window had no perceptible
 slowdown and explicitly accepted the result. This is qualitative hardware
 acceptance, not a measured frame-rate claim; no additional diagnostic capture
 was requested. The tested binaries and their SHA-256 manifest remain unchanged.
+
+
+## Review correction: inherited control disabling
+
+Review identified native checkbox/radio activation inside a disabled fieldset.
+The shared activation helper checked only the control's own attribute; the
+node-based state setters intentionally allow script assignments even when a
+control is disabled. Native pointer clicks had moved activation from libpage's
+model-backed default into this helper, exposing the missing inherited check.
+
+The helper now reads effective disabledness from the live DOM ancestry. Each
+disabled fieldset exempts descendants of its first direct HTML legend, without
+exempting them from another disabled fieldset. This serves preactivation,
+post-click defaults and `element.click()`; direct `checked` assignments retain
+their existing semantics. Live-tree reads also handle fieldset and legend
+changes made before activation without depending on a refreshed page model.
+
+The native pointer regressions produced 24 failures before the fix and pass
+after it. They cover checkbox/radio state, input/change events, indeterminate
+state, radio peers, nested fieldsets, first/second legends and changes during
+pointerdown. DOM coverage adds detached and connected `.click()`, dispatched
+MouseEvent activation, direct state assignment, own disabling inside an exempt
+legend, changing which legend is first, and disabled submit/reset buttons.
+
+Validation passes: 368 focused native-pointer checks; 16,493 complete browser
+checks; 31,131 target-engine and 167,269 fully sanitized DOM checks. The DOM
+profiles include 3,845 and 26,046 allocation-failure sweeps respectively.
+ASan/UBSan/LeakSanitizer remain enabled, and the native DOM library builds.

@@ -439,8 +439,21 @@ const os64_html_node_t *d_form_owner(const os64_html_node_t *node)
 
 static bool disabled(const os64_html_node_t *node)
 {
-    return form_associated(node) && node->tag != OS64_HTML_TAG_OBJECT && node->tag != OS64_HTML_TAG_OUTPUT &&
-        os64_html_attr(node, "disabled") != NULL;
+    if (!form_associated(node) || node->tag == OS64_HTML_TAG_OBJECT || node->tag == OS64_HTML_TAG_OUTPUT)
+        return false;
+    if (os64_html_attr(node, "disabled") != NULL) return true;
+    /* Read the live tree: pointer/click listeners can change fieldsets before
+     * activation. A first-legend exemption applies to that fieldset alone;
+     * an outer disabled fieldset can still disable the same control. */
+    for (const os64_html_node_t *below = node, *up = node->parent; up != NULL;
+         below = up, up = up->parent) {
+        if (!html_element(up, OS64_HTML_TAG_FIELDSET) || os64_html_attr(up, "disabled") == NULL)
+            continue;
+        const os64_html_node_t *legend = up->first_child;
+        while (legend != NULL && !html_element(legend, OS64_HTML_TAG_LEGEND)) legend = legend->next;
+        if (below != legend) return true;
+    }
+    return false;
 }
 
 /* Fire `event` (taken; JS_EXCEPTION when it could not be made), which a
