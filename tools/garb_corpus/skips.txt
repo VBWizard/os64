@@ -59,13 +59,13 @@ END
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
-@keyframes spin { to { color: red; filter: blur(2px) } }
+@keyframes spin { to { color: red; mix-blend-mode: multiply } }
 @-webkit-keyframes spin2 { to { color: red } }
 p { animation: spin 1s; will-change: transform }
 </style>
 <p>x
 WANT
-property filter 1
+property mix-blend-mode 1
 (end)
 END
 
@@ -86,10 +86,10 @@ END
 # reader is counted when it is dropped.
 VIEWPORT 800x600
 PAGE
-<!doctype html><style>p { filter: var(--x) }</style>
+<!doctype html><style>p { mix-blend-mode: var(--x) }</style>
 <p style="resize: both; color: var(--c)">x
 WANT
-property filter 1
+property mix-blend-mode 1
 property resize 1
 (end)
 END
@@ -167,5 +167,22 @@ p::after { content: "x" attr(title) open-quote }
 <p>x
 WANT
 value content: url 1
+(end)
+END
+
+# A filter list holding an SVG reference draws unfiltered, and a
+# backdrop-filter is not drawn (FILTER.md § 2, § 7): each is named as
+# approximated, a backdrop by its first function. A list of functions
+# alone is drawn, and is not counted.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { filter: url(#f) blur(1px) } div { filter: grayscale(1) blur(2px) }
+header { backdrop-filter: blur(8px) saturate(2) }
+</style>
+<p>x<div>y</div><header>z</header>
+WANT
+value filter: url 1
+value backdrop-filter: blur 1
 (end)
 END

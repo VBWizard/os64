@@ -429,6 +429,28 @@ static void rec_clip_close(void *ctx)
     out(&((Rec *)ctx)->out, "end clip\n");
 }
 
+// A filtered group (FILTER.md): its layer when it opens, and its list's
+// length, its currentColor and its alpha when it closes. Refused when the
+// case says the face cannot make one (s_filter_refused).
+static bool s_filter_refused;
+
+static bool rec_filter_open(void *ctx, os64_gui_rect_t bounds)
+{
+    Rec *rec = ctx;
+    if (s_filter_refused)
+        return false;
+    out(&rec->out, "filter %d %d %d %d\n", bounds.x, bounds.y, bounds.w, bounds.h);
+    return true;
+}
+
+static void rec_filter_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                             uint8_t alpha)
+{
+    Rec *rec = ctx;
+    (void)filter;
+    out(&rec->out, "end filter %d #%06x %d\n", (int)n, current, (int)alpha);
+}
+
 // THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask and
 // a picture are recorded whole, every alpha and every pixel, so two
 // paintings of one page compare pixel for pixel (paint_of).
@@ -505,7 +527,8 @@ static yonder_verbs_t verbs_of(Rec *rec)
     return (yonder_verbs_t){rec,          rec_fill,     rec_text,       rec_image,
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
                             rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
-                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close};
+                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close,
+                            rec_filter_open, rec_filter_close};
 }
 
 // The oracle's caches: the suite's, which every page painted before fills,
@@ -675,6 +698,113 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 // (Quinn, #203): the corner arithmetic must stay in range — UBSan is fatal
 // here — and the view, deep inside the top-left curve's square, shows the
 // paper where the curve leaves it and red where it is inside.
+// A filtered group (FILTER.md): its layer the group's bounds, grown by
+// what the filter spreads, cut to the view grown the same way; laid at the
+// group's opacity, so no opacity group opens beside it. A list with a
+// reference, a layer the face refuses and one past the paint's budget
+// (twice the view) are painted as a plain group, and the last two are
+// counted.
+static void filter_paint_cases(void)
+{
+    // blur(2px): 6 every side of the 200 x 20 box.
+    paint_page_case("filter: a blur's layer is grown by what it spreads",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .f { filter: blur(2px); height: 20px; background: #00ff00 }</style>"
+                    "<div class=f>a</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "filter -6 -6 212 32\n"
+                    "fill 0 0 200 20 #00ff00\n"
+                    "text \"a\" 0 14 #101010 clip -6 -6 212 32\n"
+                    "end filter 1 #101010 255\n");
+    paint_page_case("filter: laid at the group's opacity, no group beside it",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .f { filter: grayscale(1) sepia(1); opacity: 0.5; height: 20px }</style>"
+                    "<div class=f>a</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "filter 0 0 200 20\n"
+                    "text \"a\" 0 14 #101010 clip 0 0 200 20\n"
+                    "end filter 2 #101010 128\n");
+    static const char kPlain[] = "fill 0 0 200 100 #fefefe\n"
+                                 "group 0 0 200 20\n"
+                                 "text \"a\" 0 14 #101010\n"
+                                 "end group 255\n";
+    paint_page_case("filter: a list with a reference is a plain group",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .f { filter: url(#x) blur(2px); height: 20px }</style><div class=f>a</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true, kPlain);
+    expect("filter: a reference is not counted refused", yonder_paint_filters_refused == 0, NULL);
+    s_filter_refused = true;
+    paint_page_case("filter: a layer the face refuses is a plain group",
+                    "<!doctype html><style>body { margin: 0 }"
+                    " .f { filter: grayscale(1); height: 20px }</style><div class=f>a</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true, kPlain);
+    s_filter_refused = false;
+    expect("filter: a refused layer is counted", yonder_paint_filters_refused == 1, NULL);
+    // Each layer is charged the pixels it shows in the view: three boxes
+    // filling the 200 x 100 view spend 2 x 200 x 100 with two, and the
+    // third is a plain group.
+    static const char kThree[] =
+        "<!doctype html><style>body { margin: 0 } div { position: absolute; top: 0;"
+        " width: 200px; height: 100px; filter: grayscale(1) }</style>"
+        "<div>a</div><div>b</div><div>c</div>";
+    bool escaped = false;
+    char *got = paint_of(kThree, strlen(kThree), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped,
+                         true);
+    int filters = 0, groups = 0;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\nfilter ")) != NULL; at++)
+        filters++;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\ngroup ")) != NULL; at++)
+        groups++;
+    expect("filter: past the paint's budget, a plain group",
+           filters == 2 && groups == 1 && yonder_paint_filters_refused == 1, got);
+    free(got);
+    // A filter inside a filter is charged what it shows in the repaint,
+    // not in the outer layer's margin (Codex #445 round 1): a 10 x 10
+    // repaint draws both the outer blur and the inner invert.
+    static const char kNested[] = "<!doctype html><style>body { margin: 0 }"
+        " .o { filter: blur(30px) } .i { filter: invert(1); height: 20px; background: red }</style>"
+        "<div class=o><div class=i></div></div>";
+    got = paint_of(kNested, strlen(kNested), 200, (os64_gui_rect_t){0, 0, 10, 10}, &escaped, true);
+    int nested = 0;
+    for (const char *at = got; at != NULL && (at = strstr(at, "\nfilter ")) != NULL; at++)
+        nested++;
+    expect("filter: a nested filter is charged against the repaint, not the outer margin",
+           nested == 2 && yonder_paint_filters_refused == 0, got);
+    free(got);
+    // A shadow whose source is above the view (the cold read's first
+    // finding): cast 200 down from a 100-high box, the view scrolled to
+    // 150..250 shows only shadow. The layer reaches up 200 — the reach
+    // mirrored — to hold the box that casts it, and the box is painted.
+    static const char kCast[] = "<!doctype html><style>body { margin: 0 }"
+        " .f { filter: drop-shadow(0 200px 0 red); height: 100px; background: #00ff00 }</style>"
+        "<div class=f></div><div style=\"height: 2000px\"></div>";
+    got = paint_of(kCast, strlen(kCast), 200, (os64_gui_rect_t){0, 150, 200, 100}, &escaped, true);
+    expect("filter: a shadow's source above the view is painted into the layer",
+           got != NULL && strstr(got, "filter 0 0 200 250\nfill 0 0 200 100 #00ff00\n") != NULL, got);
+    free(got);
+    // An overflow-clipped parent cuts the spread: a 40-high box casting 30
+    // down inside a 50-high clip is filtered in a layer cut at 50.
+    static const char kClipped[] = "<!doctype html><style>body { margin: 0 }"
+        " .c { overflow: hidden; height: 50px }"
+        " .f { filter: drop-shadow(0 30px 0 red); height: 40px; background: #00ff00 }</style>"
+        "<div class=c><div class=f></div></div>";
+    got = paint_of(kClipped, strlen(kClipped), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    expect("filter: the spread is cut where an ancestor clips the group",
+           got != NULL && strstr(got, "filter 0 0 200 50\n") != NULL, got);
+    free(got);
+    // A small repaint beside a big blur: blur(30px) reaches 90 past a
+    // 200 x 20 box, and a 10 x 10 view at its corner spends 100 of its 200,
+    // not the margin, so it is drawn filtered as the rest of the page is.
+    static const char kSmall[] = "<!doctype html><style>body { margin: 0 }"
+                                 " .f { filter: blur(30px); height: 20px }</style><div class=f>a</div>";
+    got = paint_of(kSmall, strlen(kSmall), 200, (os64_gui_rect_t){0, 0, 10, 10}, &escaped, true);
+    expect("filter: a small repaint is charged what it shows, not the margin",
+           got != NULL && strstr(got, "\nfilter ") != NULL && yonder_paint_filters_refused == 0, got);
+    free(got);
+}
+
 static void huge_corner_case(void)
 {
     const char *html = "<!doctype html><style>body { margin: 0 } div { width: 31000000px;"
@@ -2811,6 +2941,7 @@ int main(int argc, char **argv)
         batch_a_paint_cases();
         shadow_blur_cases();
         huge_corner_case();
+        filter_paint_cases();
         round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();

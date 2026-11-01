@@ -2061,6 +2061,14 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->text_shadows = s->text_shadows;
         d->ntext_shadows = s->ntext_shadows;
         break;
+    case GARB_FILTER:
+        d->filter = s->filter;
+        d->nfilter = s->nfilter;
+        break;
+    case GARB_BACKDROP_FILTER:
+        d->backdrop_filter = s->backdrop_filter;
+        d->nbackdrop_filter = s->nbackdrop_filter;
+        break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     case GARB_TRANSFORM:
         d->transform = s->transform;
@@ -2531,6 +2539,136 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
     }
     *list = out;
     *count = v->nitems;
+    return true;
+}
+
+// A length to the nearest pixel, a negative one as a positive one is, as
+// a shadow's are read; false when it is no length libflow can settle.
+static bool filter_px(const Author *a, const garb_val_t *v, int32_t *out)
+{
+    Len l;
+    if (!author_len(a, v, false, &l) || l.kind != L_PX)
+        return false;
+    *out = l.v >= 0 ? (l.v + 32) / 64 : -((-l.v + 32) / 64);
+    return true;
+}
+
+static bool author_number(const Author *a, const garb_val_t *v, double *out);
+
+// One function of libgarb's filter list (values.h's GARB_FILTER) into `f`;
+// false for one libflow cannot work out — a calc() it cannot settle —
+// which leaves the property as it was, as a value it cannot read does.
+static bool author_filter_fn(const Author *a, const flow_style_t *s, const garb_val_t *v,
+                             flow_filter_t *f)
+{
+    static const struct {
+        const char *name;
+        flow_filter_fn_t fn;
+    } kFns[] = {
+        {"blur", FLOW_FILTER_BLUR}, {"brightness", FLOW_FILTER_BRIGHTNESS},
+        {"contrast", FLOW_FILTER_CONTRAST}, {"grayscale", FLOW_FILTER_GRAYSCALE},
+        {"invert", FLOW_FILTER_INVERT}, {"opacity", FLOW_FILTER_OPACITY},
+        {"sepia", FLOW_FILTER_SEPIA}, {"saturate", FLOW_FILTER_SATURATE},
+        {"hue-rotate", FLOW_FILTER_HUE_ROTATE}, {"drop-shadow", FLOW_FILTER_DROP_SHADOW},
+    };
+    os64_memset(f, 0, sizeof(*f));
+    if (v->kind == GARB_V_URL) {
+        f->fn = FLOW_FILTER_URL;
+        f->url = v->text;
+        f->url_len = v->len;
+        return true;
+    }
+    if (v->kind != GARB_V_FUNCTION || v->keyword == NULL)
+        return false;
+    int32_t k = 0;
+    while (k < (int32_t)F_ARRAY(kFns) && !os64_streq(v->keyword, kFns[k].name))
+        k++;
+    if (k == (int32_t)F_ARRAY(kFns))
+        return false;
+    f->fn = kFns[k].fn;
+    const garb_val_t *arg = v->nitems > 0 ? &v->items[0] : NULL;
+    switch (f->fn) {
+    case FLOW_FILTER_BLUR:
+        if (arg != NULL) {
+            Len l;
+            if (!author_len(a, arg, false, &l) || l.kind != L_PX || l.v < 0)
+                return false;
+            f->amount = (double)l.v / 64;
+        }
+        f->shadow.blur = (int32_t)(f->amount * 2 + 0.5);
+        return true;
+    case FLOW_FILTER_HUE_ROTATE:
+        if (arg == NULL)
+            return true;
+        if (arg->kind != GARB_V_ANGLE)
+            return false;
+        f->amount = arg->unit == GARB_U_TURN ? arg->number * 360
+                  : arg->unit == GARB_U_GRAD ? arg->number * 0.9
+                  : arg->unit == GARB_U_RAD  ? arg->number * (180 / 3.14159265358979323846)
+                  : arg->number;
+        return true;
+    case FLOW_FILTER_DROP_SHADOW: {
+        // The colour, then two or three lengths (values.h).
+        if (v->nitems < 3)
+            return false;
+        int32_t *len[3] = {&f->shadow.x, &f->shadow.y, &f->shadow.blur};
+        for (int32_t i = 1; i < v->nitems && i <= 3; i++)
+            if (!filter_px(a, &v->items[i], len[i - 1]))
+                return false;
+        if (f->shadow.blur < 0)
+            return false;
+        // The third length is a standard deviation (Filter Effects 1 §
+        // 13, unlike a box shadow's blur radius), kept as blur() keeps
+        // one: as the shadow blur of twice it.
+        f->shadow.blur = f->shadow.blur < INT32_MAX / 2 ? 2 * f->shadow.blur : INT32_MAX;
+        const garb_val_t *c = &v->items[0];
+        f->shadow.current = c->kind != GARB_V_COLOR || c->color.current;
+        f->shadow.colour = f->shadow.current ? s->color : colour_of(c->color);
+        return true;
+    }
+    default:
+        break;
+    }
+    // A number or a percentage, a calc() of either worked out and held to
+    // the domain (author_number), 1 when omitted; a calc() below 0 held at
+    // 0, and four of them held at 1 (Filter Effects 1 § 13). A written
+    // negative never arrives: libgarb refuses it.
+    f->amount = 1;
+    if (arg != NULL && !author_number(a, arg, &f->amount))
+        return false;
+    if (f->amount < 0)
+        f->amount = 0;
+    if ((f->fn == FLOW_FILTER_GRAYSCALE || f->fn == FLOW_FILTER_INVERT ||
+         f->fn == FLOW_FILTER_OPACITY || f->fn == FLOW_FILTER_SEPIA) && f->amount > 1)
+        f->amount = 1;
+    return true;
+}
+
+// `none`, or libgarb's filter list (values.h's GARB_FILTER), for `filter`
+// or `backdrop-filter`. False only when memory runs out.
+static bool author_filter(const Author *a, flow_style_t *s, const garb_val_t *v, bool backdrop)
+{
+    const flow_filter_t **list = backdrop ? &s->backdrop_filter : &s->filter;
+    int32_t *count = backdrop ? &s->nbackdrop_filter : &s->nfilter;
+    if (is_word(v, "none") || v->kind != GARB_V_FUNCTIONS || v->nitems == 0) {
+        if (is_word(v, "none")) {
+            *list = NULL;
+            *count = 0;
+        }
+        return true;
+    }
+    flow_filter_t one[GARB_FILTERS_MAX];
+    int32_t n = v->nitems < GARB_FILTERS_MAX ? v->nitems : GARB_FILTERS_MAX;
+    for (int32_t i = 0; i < n; i++)
+        if (!author_filter_fn(a, s, &v->items[i], &one[i]))
+            return true;                    // one it cannot work out: as it was
+    bool spent;
+    flow_filter_t *out = list_alloc(a->c, (size_t)n * sizeof(*out), &spent);
+    if (out == NULL)
+        return spent;                       // past the lists' budget: as it was
+    os64_memcpy(out, one, (size_t)n * sizeof(*out));
+    *list = out;
+    *count = n;
     return true;
 }
 
@@ -3477,6 +3615,10 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     }
     case GARB_BOX_SHADOW: case GARB_TEXT_SHADOW:
         if (!author_shadows(a, s, v, p == GARB_BOX_SHADOW))
+            return false;
+        break;
+    case GARB_FILTER: case GARB_BACKDROP_FILTER:
+        if (!author_filter(a, s, v, p == GARB_BACKDROP_FILTER))
             return false;
         break;
     case GARB_TRANSFORM:
@@ -4431,8 +4573,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->quotes = own_quotes(c->env->cascade != NULL
                                  ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
                              up != NULL ? up->quotes : NULL);
-    out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
-    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? n
+    out->anchor = f_anchors(&sp.s, root, false) ? n : up != NULL ? up->anchor : NULL;
+    out->fixed_anchor = f_anchors(&sp.s, root, true) ? n
                       : up != NULL ? up->fixed_anchor : NULL;
     // An opacity an animation moves is the painter's to judge as it paints
     // (PILE3.md § Animations): none of it is gone for the layout.
@@ -4824,7 +4966,7 @@ static bool style_pseudo(Ctx *c, const os64_html_node_t *el, FStyled *of, garb_p
     out->in_nobr = of->in_nobr;
     out->quotes = quotes;
     out->anchor = f_contains_absolute(&sp.s) ? node : of->anchor;
-    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? node : of->fixed_anchor;
+    out->fixed_anchor = f_contains_fixed(&sp.s) ? node : of->fixed_anchor;
     out->transparent = sp.s.opacity == 0 || of->transparent;
     out->taken = sp.taken;
     taken_from(of, &sp.taken);
