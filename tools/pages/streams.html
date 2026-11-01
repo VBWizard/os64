@@ -7,6 +7,9 @@ p{margin:4px 0}.pass{color:#16733a}.fail{color:#b3261e;font-weight:bold}</style>
 const out = document.getElementById('out');
 function say(ok, what) { const p = document.createElement('p'); p.className = ok ? 'pass' : 'fail'; p.textContent = (ok ? 'PASS  ' : 'FAIL  ') + what; out.appendChild(p); }
 async function run(name, f) { try { const r = await f(); say(r === true, name + (r === true ? '' : ' (got ' + r + ')')); } catch (e) { say(false, name + ' threw ' + e); } }
+// A data: address, because a script may not fetch a file: one and this page
+// is opened from the disk; its answer is a fetched body like any other.
+const DATA = 'data:text/plain,abcdefghijklmnopqrstuvwxyz';
 (async () => {
   say(typeof ReadableStream === 'function' && typeof WritableStream === 'function' && typeof TransformStream === 'function', 'the three globals exist');
   await run('a pulled stream, read by for await', async () => {
@@ -22,11 +25,11 @@ async function run(name, f) { try { const r = await f(); say(r === true, name + 
     const enc = new TextEncoder(); const rs = new ReadableStream({start(c) { c.enqueue(enc.encode('hello ')); c.enqueue(enc.encode('streams')); c.close(); }});
     const t = await new Response(rs).text(); return t === 'hello streams' || t; });
   await run('a fetched body, read chunk by chunk', async () => {
-    const r = await fetch('streams-data.txt'); const reader = r.body.getReader(); let bytes = 0, chunks = 0;
+    const r = await fetch(DATA); const reader = r.body.getReader(); let bytes = 0, chunks = 0;
     for (;;) { const {done, value} = await reader.read(); if (done) break; chunks++; bytes += value.length; }
     return (bytes === 26 && r.bodyUsed) || ('bytes ' + bytes + ' chunks ' + chunks); });
   await run('a clone of a fetched body reads the same', async () => {
-    const r = await fetch('streams-data.txt'); const c = r.clone(); const [x, y] = [await r.text(), await c.text()]; return x === y && x.length === 26; });
+    const r = await fetch(DATA); const c = r.clone(); const [x, y] = [await r.text(), await c.text()]; return x === y && x.length === 26; });
   await run('backpressure: desiredSize falls as writes queue', async () => {
     const ws = new WritableStream({write() { return new Promise(res => setTimeout(res, 10)); }}, new CountQueuingStrategy({highWaterMark: 2}));
     const w = ws.getWriter(); const before = w.desiredSize; w.write(1); w.write(2); const after = w.desiredSize; await w.close(); return (before === 2 && after === 0) || (before + '/' + after); });
