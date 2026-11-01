@@ -4,15 +4,18 @@
  * realm at the realm's start and calls it with the INTRINSICS it captured
  * there (`I`, a null-prototype object): the engine's own Promise, its
  * `then`, the error constructors and the rest, taken before any page script
- * ran. Every built-in this file uses is one of those captures, never a
- * global looked up when an algorithm runs, because a page may replace any
+ * ran. Every built-in this file uses is one of those captures, or taken
+ * from them as the file loads (which is the realm's start), never a global
+ * looked up when an algorithm runs, because a page may replace any
  * global or prototype member afterwards and the standard's algorithms must
  * not notice (WPT's patched-global pages). For the same reason:
  *
  *   - internal algorithms never call a public method: tee, the pipes and
  *     async iteration work on the internal records directly;
  *   - no for-of, no spread, no destructuring of arrays, no method looked up
- *     on an array: those go through Array.prototype, which a page owns;
+ *     on an array, and no array as storage: those go through
+ *     Array.prototype, which a page owns, and an index an array lacks
+ *     reaches a getter or setter a page put on Object.prototype;
  *   - internal records are instances of classes declared here whose every
  *     field is a declared class field: a field is DEFINED on the object at
  *     construction, so neither a read nor a later write reaches
@@ -46,7 +49,8 @@
 // load, which fails the realm's creation, so the DOM host suite fails at its
 // first window.
 const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply',
-    'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames', 'Object_create',
+    'Object_defineProperty', 'Object_getPrototypeOf', 'Object_getOwnPropertyNames',
+    'Object_getOwnPropertyDescriptor', 'Object_create',
     'TypeError', 'RangeError', 'Uint8Array', 'Uint8Array_set', 'queueMicrotask',
     'structuredClone',
     'Symbol_asyncIterator', 'Symbol_iterator', 'Symbol_toStringTag',
@@ -64,10 +68,17 @@ const defineProperty = I.Object_defineProperty;
 const getPrototypeOf = I.Object_getPrototypeOf;
 const getOwnPropertyNames = I.Object_getOwnPropertyNames;
 const objectCreate = I.Object_create;
+const getOwnPropertyDescriptor = I.Object_getOwnPropertyDescriptor;
 const TypeError_ = I.TypeError;
 const RangeError_ = I.RangeError;
 const Uint8Array_ = I.Uint8Array;
 const uint8Set = I.Uint8Array_set;
+// %TypedArray%.prototype's toStringTag and byteLength getters, which read
+// a typed array's internal slots: taken from the captures at load, which
+// is the realm's start.
+const typedArrayPrototype = getPrototypeOf(Uint8Array_.prototype);
+const typedArrayTag = getOwnPropertyDescriptor(typedArrayPrototype, I.Symbol_toStringTag).get;
+const typedArrayByteLength = getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get;
 const queueMicrotask_ = I.queueMicrotask;
 const structuredClone_ = I.structuredClone;
 const asyncIteratorSymbol = I.Symbol_asyncIterator;
@@ -236,16 +247,30 @@ function webidlInterface(cls, name, interfaceStatics) {
 }
 
 // ── The queue with sizes (the standard's § 8.1) ─────────────────────────
-// Index-based, with a moving head, so a dequeue is constant time and no
-// Array.prototype member is ever called.
+// Index-based, with a moving head, so a dequeue is constant time. The
+// slots live in null-prototype objects, not arrays: a write to an index an
+// array lacks walks to Array.prototype and Object.prototype, where a page
+// may have put a setter for "0", and a read there would reach its getter.
+// A queue that is never empty (a pipe into a slower sink) would grow by a
+// slot per chunk ever passed, so the live slots are moved down once the
+// dead ones outnumber them: amortized constant time, and room for what is
+// queued, not for what went through.
+function slots() { return objectCreate(null); }
+
+function compact(from, head, length) {
+    const to = slots();
+    for (let i = 0; i < length; i++) to[i] = from[head + i];
+    return to;
+}
+
 class Queue {
     items;
     sizes;
     head;
     length;
     constructor() {
-        this.items = [];
-        this.sizes = [];
+        this.items = slots();
+        this.sizes = slots();
         this.head = 0;
         this.length = 0;
     }
@@ -263,12 +288,15 @@ function queueShift(q) {
     const pair = new QueuePair(q.items[at], q.sizes[at]);
     q.items[at] = undefined;
     q.length--;
+    q.head++;
     if (q.length === 0) {
-        q.items = [];
-        q.sizes = [];
+        q.items = slots();
+        q.sizes = slots();
         q.head = 0;
-    } else {
-        q.head++;
+    } else if (q.head > 64 && q.head > q.length) {
+        q.items = compact(q.items, q.head, q.length);
+        q.sizes = compact(q.sizes, q.head, q.length);
+        q.head = 0;
     }
     return pair;
 }
@@ -305,13 +333,13 @@ function resetQueue(container) {
     container.queueTotalSize = 0;
 }
 
-// A simple list (read requests, write requests) without Array.prototype.
+// A simple list (read requests, write requests), kept as the queue is.
 class List {
     items;
     head;
     length;
     constructor() {
-        this.items = [];
+        this.items = slots();
         this.head = 0;
         this.length = 0;
     }
@@ -326,11 +354,13 @@ function listShift(l) {
     const v = l.items[l.head];
     l.items[l.head] = undefined;
     l.length--;
+    l.head++;
     if (l.length === 0) {
-        l.items = [];
+        l.items = slots();
         l.head = 0;
-    } else {
-        l.head++;
+    } else if (l.head > 64 && l.head > l.length) {
+        l.items = compact(l.items, l.head, l.length);
+        l.head = 0;
     }
     return v;
 }
@@ -686,7 +716,7 @@ class ReadableStreamDefaultReader {
         rsReaderOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
     }
 
-    constructor(stream = undefined, record = undefined) {
+    constructor(stream, record = undefined) {
         if (stream === INTERNAL) {
             this.#r = record;
             record.pub = this;
@@ -1126,7 +1156,7 @@ function readableStreamPipeTo(source, dest, preventClose, preventAbort, preventC
     if (signal !== undefined) {
         abortListener = function () {
             const error = apply(abortSignalReason, signal, []);
-            const actions = [];
+            const actions = slots();
             let count = 0;
             if (!preventAbort) actions[count++] = function () {
                 return dest.state === 'writable' ? writableStreamAbort(dest, error) : resolvedWith(undefined);
@@ -1717,7 +1747,7 @@ class WritableStreamDefaultWriter {
         wsWriterOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
     }
 
-    constructor(stream = undefined, record = undefined) {
+    constructor(stream, record = undefined) {
         if (stream === INTERNAL) {
             this.#r = record;
             record.pub = this;
@@ -2409,8 +2439,9 @@ function doorSpent(locked) {
     return stream.pub;
 }
 
-// A body taken by a Request made from this one (Fetch's proxy reads it to
-// its end): its stream disturbed and locked for good.
+// A body's stream locked and disturbed for good: one a Request made from
+// its own takes (Fetch's proxy reads it to its end), or one a body method
+// read after an abort errored it (the read kept its reader).
 function doorTake(value) {
     const stream = rsOf(value);
     acquireDefaultReader(stream);
@@ -2423,39 +2454,52 @@ function doorLocked(value) { return isReadableStreamLocked(rsOf(value)); }
 
 function doorDisturbed(value) { return rsOf(value).disturbed; }
 
-// Fetch's "fully read": a reader taken and never released, every chunk a
-// Uint8Array, the bytes joined into one Uint8Array.
+// Fetch's "fully read" (Streams' "read all bytes"): a reader taken and
+// never released, every chunk a Uint8Array, the bytes joined into one. A
+// chunk that is not one fails the read and nothing else: the source is not
+// cancelled. A loop and not a recursion: the reads a queue answers at once
+// would otherwise nest a call per chunk queued, and a page's stream can
+// queue more than the stack holds. A chunk is known by its internal slot
+// (the typed arrays' own toStringTag and byteLength getters), never by
+// instanceof or a byteLength a page can redefine.
 function doorReadAll(value) {
     const stream = rsOf(value);
     const reader = acquireDefaultReader(stream);
     const d = newDeferred();
-    const chunks = [];
+    const chunks = slots();
     let count = 0;
     let total = 0;
-    function step() {
-        readerRead(reader, new ReadRequest(function (chunk) {
-            if (!(chunk instanceof Uint8Array_)) {
-                const e = new TypeError_('A body chunk is not a Uint8Array');
-                readableStreamCancel(stream, e);
-                rejectDeferred(d, e);
-                return;
-            }
-            chunks[count++] = chunk;
-            total += chunk.byteLength;
-            step();
-        }, function () {
-            const all = new Uint8Array_(total);
-            let at = 0;
-            for (let i = 0; i < count; i++) {
-                apply(uint8Set, all, [chunks[i], at]);
-                at += chunks[i].byteLength;
-            }
-            resolveDeferred(d, all);
-        }, function (e) {
-            rejectDeferred(d, e);
-        }));
+    let reading = false;
+    let more = false;
+    const request = new ReadRequest(function (chunk) {
+        if (apply(typedArrayTag, chunk, []) !== 'Uint8Array') {
+            rejectDeferred(d, new TypeError_('A body chunk is not a Uint8Array'));
+            return;
+        }
+        chunks[count++] = chunk;
+        total += apply(typedArrayByteLength, chunk, []);
+        if (reading) more = true;
+        else loop();
+    }, function () {
+        const all = new Uint8Array_(total);
+        let at = 0;
+        for (let i = 0; i < count; i++) {
+            apply(uint8Set, all, [chunks[i], at]);
+            at += apply(typedArrayByteLength, chunks[i], []);
+        }
+        resolveDeferred(d, all);
+    }, function (e) {
+        rejectDeferred(d, e);
+    });
+    function loop() {
+        do {
+            more = false;
+            reading = true;
+            readerRead(reader, request);
+            reading = false;
+        } while (more);
     }
-    step();
+    loop();
     return d.promise;
 }
 

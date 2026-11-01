@@ -52,7 +52,7 @@ typedef struct {
 } DHeadersIterator;
 
 typedef struct {
-    uint8_t *bytes;             /* NULL once a Response's have moved into its stream */
+    uint8_t *bytes;             /* NULL once a Response's have moved into its stream, or when it never had any */
     size_t length;
     bool has;                   /* a body, not null */
     /* Before the stream exists: */
@@ -1127,7 +1127,9 @@ int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *
     }
     /* A Response takes a stream before it asks here (response_constructor);
      * a request's body that streams is booked (STREAMS.md). */
-    if (d_stream_is(dom, ctx, value)) {
+    int stream = d_stream_is(dom, ctx, value);
+    if (stream < 0) return -1;
+    if (stream > 0) {
         JS_ThrowTypeError(ctx, "A stream as a request body is not supported");
         return -1;
     }
@@ -1239,6 +1241,9 @@ static JSValue body_converted(JSContext *ctx, JSValueConst self, int argc, JSVal
         return JS_ThrowTypeError(ctx, "A body's read did not answer bytes");
     DReq *q = request_state(data[1]);
     DResp *r = q == NULL ? response_state(data[1]) : NULL;
+    /* Read to its end: an abort reaches the body no more. Until here it
+     * could, and errored the read. */
+    response_settled(ctx, r);
     JSValueConst headers = q != NULL ? q->headers : r != NULL ? r->headers : JS_UNDEFINED;
     return body_convert(dom, ctx, headers, magic, length != 0 ? bytes : (const uint8_t *)"", length);
 }
@@ -1258,7 +1263,6 @@ static JSValue body_consume(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
         if (JS_IsException(convert)) return d_promise_settled(ctx, convert);
         JSValue promise = d_stream_read_all_then(dom, ctx, b->stream, convert);
         JS_FreeValue(ctx, convert);
-        response_settled(ctx, response_state(self));
         return JS_IsException(promise) ? d_promise_settled(ctx, promise) : promise;
     }
     /* A body an abort errored answers its reason however often it is
@@ -1283,17 +1287,22 @@ static JSValue body_stream(os64_dom_t *dom, JSContext *ctx, JSValueConst self, D
     if (!b->has) return JS_NULL;
     if (!body_streamed(b)) {
         /* A body read already is a stream read already: closed and
-         * disturbed, and locked when a body method kept its reader. */
-        JSValue stream = b->used ? d_stream_spent(dom, ctx, b->consumed)
-                                 : d_stream_new(dom, ctx, b->bytes, b->length);
+         * disturbed, and locked when a body method kept its reader. One an
+         * abort reached is made errored instead, below. */
+        bool aborted = !JS_IsUndefined(b->aborted);
+        JSValue stream = b->used && !aborted ? d_stream_spent(dom, ctx, b->consumed)
+                                             : d_stream_new(dom, ctx, b->bytes, b->length);
         if (JS_IsException(stream)) return stream;
         b = body_of(self);
         b->stream = stream;
-        /* An abort that reached the body before its stream was made
-         * errors it now; a stream with no bytes was closed at birth and
-         * stays so. */
-        if (!JS_IsUndefined(b->aborted) && !b->used && d_stream_error(dom, ctx, stream, b->aborted) < 0)
-            return JS_EXCEPTION;
+        /* An abort that reached the body before its stream was made errors
+         * it now (an abort reaches only a body with bytes, whose stream is
+         * readable until read); a body method that read the aborted body
+         * since then holds its reader, so the stream is locked too. */
+        if (aborted) {
+            if (d_stream_error(dom, ctx, stream, b->aborted) < 0) return JS_EXCEPTION;
+            if (b->used && d_stream_take(dom, ctx, stream) < 0) return JS_EXCEPTION;
+        }
         /* The stream is the body's state from here; a Response's bytes are
          * its, and a Request keeps its own as the source it sends. */
         DResp *r = response_state(self);
@@ -2037,16 +2046,12 @@ static JSValue response_constructor(JSContext *ctx, JSValueConst new_target, int
     DBytes extracted = {0};
     bool has_type = false, has_body = !JS_IsUndefined(body) && !JS_IsNull(body);
     /* A stream is the body as given (Fetch's "extract" of a ReadableStream):
-     * no bytes, no type, and refused when it is disturbed or locked. */
-    bool streamed = has_body && d_stream_is(dom, ctx, body);
-    if (streamed) {
-        int disturbed = d_stream_disturbed(dom, ctx, body);
-        int locked = disturbed == 0 ? d_stream_locked(dom, ctx, body) : 0;
-        if (disturbed < 0 || locked < 0) return JS_EXCEPTION;
-        if (disturbed || locked) return JS_ThrowTypeError(ctx, "The stream is disturbed or locked");
-    } else if (has_body && d_body_extract(dom, ctx, body, &extracted, &has_type) < 0) {
-        return JS_EXCEPTION;
-    }
+     * no bytes, no type, and refused when it is disturbed or locked, which
+     * is asked after `init` is read (WebIDL converts the arguments before
+     * the constructor's steps run, and a getter in `init` can lock it). */
+    int streamed = has_body ? d_stream_is(dom, ctx, body) : 0;
+    if (streamed < 0) return JS_EXCEPTION;
+    if (!streamed && has_body && d_body_extract(dom, ctx, body, &extracted, &has_type) < 0) return JS_EXCEPTION;
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
     JSValue object = JS_IsException(prototype) ? JS_EXCEPTION : response_alloc(ctx, prototype);
     JS_FreeValue(ctx, prototype);
@@ -2057,7 +2062,16 @@ static JSValue response_constructor(JSContext *ctx, JSValueConst new_target, int
         return JS_EXCEPTION;
     }
     d_bytes_free(ctx, &extracted);
-    if (streamed) response_state(object)->body.stream = JS_DupValue(ctx, body);
+    if (streamed) {
+        int disturbed = d_stream_disturbed(dom, ctx, body);
+        int locked = disturbed == 0 ? d_stream_locked(dom, ctx, body) : 0;
+        if (disturbed != 0 || locked != 0) {
+            if (disturbed > 0 || locked > 0) JS_ThrowTypeError(ctx, "The stream is disturbed or locked");
+            JS_FreeValue(ctx, object);
+            return JS_EXCEPTION;
+        }
+        response_state(object)->body.stream = JS_DupValue(ctx, body);
+    }
     return object;
 }
 
@@ -2325,15 +2339,22 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
      * closed behind it (streams.js's fromBytes). Before the stream exists,
      * the reason waits here for a body method or the stream. */
     DResp *r = answered;
+    JSValue target = JS_UNDEFINED;
     if (r != NULL && r->body.has && body_streamed(&r->body)) {
-        JSValueConst target = JS_IsUndefined(r->source) ? r->body.stream : r->source;
-        if (d_stream_error(dom, ctx, target, reason) < 0 && d_exception_catchable(ctx))
-            JS_FreeValue(ctx, JS_GetException(ctx));
+        target = JS_DupValue(ctx, JS_IsUndefined(r->source) ? r->body.stream : r->source);
     } else if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);
     }
-    /* Reached by the abort, or read already: settled either way. */
+    /* Reached by the abort, or read already: settled either way. Settled
+     * BEFORE the stream is errored, and `r` is not touched after: erroring
+     * runs streams.js, a collection it triggers can finalize the Response,
+     * and nothing holds the Response but the page. The stream is held here. */
     response_settled(ctx, r);
+    if (!JS_IsUndefined(target)) {
+        if (d_stream_error(dom, ctx, target, reason) < 0 && d_exception_catchable(ctx))
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, target);
+    }
 }
 
 /* The request as the host takes it. */

@@ -1157,25 +1157,27 @@ extern uint64_t d_request_steps;
 int d_iterator_next(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSCFunctionData *fn, int magic);
 /* A header block (way/origin.h's shape) as a Headers object with `guard`. */
 JSValue d_headers_from_block(os64_dom_t *dom, JSContext *ctx, const char *block, size_t length, int guard);
-/* THE STREAMS STANDARD (streams.c over streams.js; STREAMS.md). Every verb
- * below asks the realm's door; a realm without one (the modern switch off)
- * has no streams, and each throws a TypeError, where d_stream_is answers
- * false. */
+/* THE STREAMS STANDARD (streams.c over streams.js; STREAMS.md).
+ * d_streams_install makes the realm's door; every d_stream_* verb asks it.
+ * A realm without one (the modern switch off) has no streams: each verb
+ * throws a TypeError, where d_stream_is answers 0. */
 int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A ReadableStream over a copy of `bytes`: one Uint8Array chunk, handed
  * over at the first read, and closed behind it; closed from its creation
  * when `length` is 0. */
 JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length);
-/* Whether `value` is a ReadableStream of this realm. */
-bool d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* Whether `value` is a ReadableStream of this realm: 1, 0, or -1 with the
+ * exception pending. */
+int d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 /* A stream's state, as a body asks it: 1 yes, 0 no, -1 an exception. */
 int d_stream_locked(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
 int d_stream_disturbed(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
 /* The stream of a body read whole before its stream was made: closed and
  * disturbed, and locked when `locked` (the read kept its reader). */
 JSValue d_stream_spent(os64_dom_t *dom, JSContext *ctx, bool locked);
-/* A body taken whole by a Request made from its own: the stream locked
- * and disturbed for good. 0, or -1. */
+/* The stream locked and disturbed for good: a body taken whole by a
+ * Request made from its own, or one a body method read after an abort had
+ * errored it. 0, or -1. */
 int d_stream_take(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
 /* Fetch's "fully read", then `convert` called with one Uint8Array of every
  * chunk: a promise of what it returns. The stream stays locked for good; a

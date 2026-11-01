@@ -85,12 +85,20 @@ static JSValue streams_factory(JSContext *ctx)
         }
         js_free(ctx, bytes);
         /* A write the engine had no memory for is no verdict on the
-         * script: the next realm tries again. */
+         * script: the next realm tries again. Its exception is cleared
+         * only when catchable; one that is not (the runtime stopping)
+         * stays pending, and this realm's streams are refused with it. */
+        bool stopped = false;
         if (bytes == NULL) {
             state = CACHE_EMPTY;
-            JS_FreeValue(ctx, JS_GetException(ctx));
+            if (d_exception_catchable(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
+            else stopped = true;
         }
         __atomic_store_n(&s_bytecode_state, state, __ATOMIC_RELEASE);
+        if (stopped) {
+            JS_FreeValue(ctx, function);
+            return JS_EXCEPTION;
+        }
     }
     return JS_EvalFunction(ctx, function);
 }
@@ -111,6 +119,7 @@ static const struct {
     {"Object_defineProperty", "Object.defineProperty", VALUE},
     {"Object_getPrototypeOf", "Object.getPrototypeOf", VALUE},
     {"Object_getOwnPropertyNames", "Object.getOwnPropertyNames", VALUE},
+    {"Object_getOwnPropertyDescriptor", "Object.getOwnPropertyDescriptor", VALUE},
     {"Object_create", "Object.create", VALUE},
     {"TypeError", "TypeError", VALUE},
     {"RangeError", "RangeError", VALUE},
@@ -277,15 +286,10 @@ JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size
     return stream;
 }
 
-bool d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+int d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 {
-    if (dom->streams_door == NULL || !JS_IsObject(value)) return false;
-    int yes = door_bool(dom, ctx, "is", value);
-    if (yes < 0) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return false;
-    }
-    return yes != 0;
+    if (dom->streams_door == NULL || !JS_IsObject(value)) return 0;
+    return door_bool(dom, ctx, "is", value);
 }
 
 int d_stream_locked(os64_dom_t *dom, JSContext *ctx, JSValueConst stream)

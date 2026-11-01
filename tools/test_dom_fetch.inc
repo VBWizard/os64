@@ -725,6 +725,30 @@ static void dom_fetch_abort_cases(void)
                "abort: after a clone");
     dom_script(&f, FETCH_ASSERT "assert(klog.join()==='original:AbortError,clone:AbortError',klog.join());",
                "abort: the clone is reached too");
+    /* A read that began in the turn of the abort is still aborted: the
+     * body settles when its read ends, not when it starts. And a body an
+     * abort errored, read by a body method before its stream existed,
+     * becomes a stream errored and locked by that read. */
+    dom_script(&f, "globalThis.c10=new AbortController();fetch('/s10',{signal:c10.signal}).then(r=>{globalThis.r10=r});"
+               "globalThis.c11=new AbortController();fetch('/s11',{signal:c11.signal}).then(r=>{globalThis.r11=r});",
+               "abort: two requests to read");
+    os64_dom_response_t s10 = net_answer_of(200, "http://example.test/s10", "", "ten");
+    os64_dom_response_t s11 = net_answer_of(200, "http://example.test/s11", "", "eleven");
+    net_answer(&f, &net, net.count - 2, &s10);
+    net_answer(&f, &net, net.count - 1, &s11);
+    dom_script(&f, "globalThis.tlog=[];var k10=r10.clone();r10.text().then(t=>tlog.push('read:'+t),e=>tlog.push('original:'+e.name));"
+               "k10.text().then(t=>tlog.push('read:'+t),e=>tlog.push('clone:'+e.name));c10.abort();"
+               "c11.abort();r11.text().catch(e=>tlog.push('first:'+e.name));",
+               "abort: in the turn a read began");
+    dom_script(&f, FETCH_ASSERT "assert(tlog.join()==='first:AbortError,original:AbortError,clone:AbortError',tlog.join());"
+               "assert(r11.body.locked);throws('TypeError',()=>r11.body.getReader());",
+               "abort: a read begun in the abort's turn is aborted, and an aborted read body is locked");
+    /* WebIDL reads `init` before the constructor asks the stream: a getter
+     * there that locks it makes the stream unusable. */
+    dom_script(&f, FETCH_ASSERT
+               "var rs=new ReadableStream();throws('TypeError',()=>new Response(rs,{get status(){rs.getReader();return 200}}));"
+               "var free=new ReadableStream();assert(new Response(free,{status:201}).status===201);",
+               "response: a stream locked while init is read is refused");
     fixture_free(&f);
 }
 
