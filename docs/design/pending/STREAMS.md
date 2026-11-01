@@ -232,4 +232,5 @@ Where the build departs from §§ 3–7, and why:
   item 3): a refused bytecode buffer that kept accepting smaller writes,
   and a relocation patched over an atom. Neither is the Streams
   standard's; both crashed the sweep, so the slice could not pass without
-  them.
+  them. Fable reviewed 0017 (LIBJS_0017_REVIEW.md, untracked), and it
+  pays the whole of that item, the unsafe `add_reloc` path included.

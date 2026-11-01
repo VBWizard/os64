@@ -404,9 +404,14 @@ static void compile_failure_sweep(const char *name, const char *source)
  * - args_local, name_local: a function reading its own `arguments` or
  *   name, whose failed add upstream looked up as a global (a
  *   ReferenceError, or the wrong answer).
- * None has a jump, a with or a sloppy direct eval: each of those is
- * compiled through a label, and a label reaches resolve_labels, whose
- * output-buffer failure still crashes (DEBTS.md). */
+ * - with, eval_var, eval_arg, eval_with (and patch 0017): the
+ *   closure-variable adds 0011a checks for a with object, a sloppy direct
+ *   eval's variable object, its parameter-scope variable object, and the
+ *   variables of code a direct eval compiles inside a with, plus the
+ *   assignment through a with (OP_scope_make_ref). A with or a variable
+ *   object is tested through a label, so each also reaches resolve_labels
+ *   with its output buffer or a relocation refused, which 0017 made an
+ *   exception and a clean free. */
 static void compile_failure_cases(void)
 {
     compile_failure_sweep("nested",
@@ -420,28 +425,22 @@ static void compile_failure_cases(void)
     compile_failure_sweep("name_arrow", "(function h(){return (()=>typeof h)().length})()");
     compile_failure_sweep("args_local", "(function f(){return arguments.length})(1,2)");
     compile_failure_sweep("name_local", "(function g(){return (typeof g).length})()");
+    compile_failure_sweep("with", "(function(o){var t=0;with(o){(function(){t=x+1})()}return t})({x:41})");
+    compile_failure_sweep("eval_var", "var q=1;(function(){eval('var y=40');return function(){return y+q+1}})()()");
+    compile_failure_sweep("eval_arg", "var q=40;(function(a=eval('1'),f=function(){return a+q+1}){return f()})()");
+    compile_failure_sweep("eval_with", "(function(o){with(o){return eval('(function(){return w+1})')()}})({w:41})");
 }
 
 /* Sweeps that reach a parser out-of-memory path DEBTS.md still books, so
  * the suite does not run them; `--compile-failure-pending [name]` runs
  * them by hand, and each becomes a suite case when its path is paid.
- * - with, eval_var, eval_arg, eval_with: the closure-variable adds 0011a
- *   checks for a with object, a sloppy direct eval's variable object, its
- *   parameter-scope variable object, and the variables of code a direct
- *   eval compiles inside a with, plus the assignment through a with
- *   (OP_scope_make_ref). A with or a variable object is tested through a
- *   label, so each also reaches resolve_labels' failed output buffer.
- * - loop_arrow_class: a loop (resolve_labels' relocations written through
- *   a failed buffer, a SEGV), an arrow and a destructuring swap (the
- *   lookahead that swallows a failed atom, then a SyntaxError) and a class
- *   method's `this` (a failed pseudo-variable add, a wrong value). */
+ * - loop_arrow_class: an arrow and a destructuring swap (the lookahead
+ *   that swallows a failed atom, then a SyntaxError) and a class method's
+ *   `this` (a failed pseudo-variable add, a wrong value), with a loop
+ *   through resolve_labels besides (0017 paid that part). */
 static void compile_failure_pending(const char *only)
 {
     static const struct { const char *name, *source; } pending[] = {
-        {"with", "(function(o){var t=0;with(o){(function(){t=x+1})()}return t})({x:41})"},
-        {"eval_var", "var q=1;(function(){eval('var y=40');return function(){return y+q+1}})()()"},
-        {"eval_arg", "var q=40;(function(a=eval('1'),f=function(){return a+q+1}){return f()})()"},
-        {"eval_with", "(function(o){with(o){return eval('(function(){return w+1})')()}})({w:41})"},
         {"loop_arrow_class",
          "(function outer(seed){var total=seed;"
          "function inner(step){var a=step+1,b=a*2,c=b-3,d=c/4,e=d%5,f=e+total;"

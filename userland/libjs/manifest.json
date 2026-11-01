@@ -162,8 +162,8 @@
     },
     {
       "path": "patches/0017-dynbuf-refusal-sticky.patch",
-      "sha256": "1c39f0068a6d296fcb2cf1476a0257714a659b8844ac1c1baf79cbd3bef32e47",
-      "reason": "A DynBuf whose growth is refused gives up the room it has left, so every later put is refused too: upstream accepted a later put that still fit, leaving a hole in the buffer, and a compile cut short that way was freed by walking the holed bytecode as instructions, reading an operand as an atom. resolve_labels then patches nothing once a write is refused (a jump emitted after the refusal recorded its relocation inside the last instruction written, and the patch wrote over that instruction's atom), and keeps the refused output as the code its free walks."
+      "sha256": "7f2401e82b0f3def6b25c2253e4d1be38ecbdc03091d7b06dbdbc4c458f23bb0",
+      "reason": "A compile whose bytecode buffer is refused memory is freed safely: an errored DynBuf has no room (dbuf_set_error, which a refused growth calls too), so every later put is refused and no hole is left; resolve_labels patches nothing once its output has errored (a relocation recorded after the error pointed inside the last instruction written, and its patch wrote over that instruction's atom); a refused relocation marks the output errored in place of upstream's unsafe fail path, which is gone; and the refused output is what the definition's free walks."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
