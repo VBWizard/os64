@@ -11,8 +11,10 @@ static os64_font_status_t canvas_font_layout(void *opaque,const os64_font_family
     os64_text_layout_t layout={.fonts=&font,.font_count=1,.tab_interval=64};
     status=os64_text_layout(fonts->context,text,length,&layout,out);os64_text_font_release(font);return status;
 }
+#include "test_dom_canvas_shadows.inc"
 static void dom_canvas_paint_cases(void)
 {
+    dom_canvas_shadow_cases();
     DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
     dom_script(&f,STORAGE_ASSERT
         "var c=document.createElement('canvas');c.width=32;c.height=32;var x=c.getContext('2d');"
@@ -88,5 +90,13 @@ static void dom_canvas_paint_cases(void)
         "x.fillText('A',{valueOf(){c.width=c.width;return 10}},40);assert(x.font==='10px sans-serif');"
         "throws('DataCloneError',()=>structuredClone(m));",
         "canvas: shared outline text, font state, metrics, whitespace, maxWidth, transforms and reentry");
+    dom_script(&f,STORAGE_ASSERT
+        "c.width=160;c.height=80;x.font='16px sans-serif';x.fillStyle='red';x.strokeStyle='red';"
+        "x.shadowColor='blue';x.shadowOffsetY=35;"
+        "for(var method of ['fillText','strokeText']){x.clearRect(0,0,160,80);x[method]('AV',10,22);"
+        "var p=x.getImageData(0,0,160,80).data,count=0;"
+        "for(var y=0;y<30;y++)for(var xx=0;xx<80;xx++){var a=p[(y*160+xx)*4+3],b=p[((y+35)*160+xx)*4+3];"
+        "assert(Math.abs(a-b)<=1,method+' shadow alpha');if(a)count++}assert(count>0);}",
+        "canvas: fillText and strokeText cast shadows from shared text outlines");
     fixture_free(&f);check(os64_text_destroy(fonts.context)==OS64_FONT_OK,"canvas text released");free(fonts.bytes);
 }

@@ -36,6 +36,8 @@ typedef struct {
     double fill_alpha; /* Unquantized source alpha for state serialization. */
     uint32_t stroke_argb;
     double stroke_alpha;
+    uint32_t shadow_argb;
+    double shadow_alpha, shadow_blur, shadow_x, shadow_y;
     os64_geometry_map_t transform;
     os64_geometry_stroke_t line;
     double dash[256], dash_offset;
@@ -82,8 +84,12 @@ canvas_status_t canvas_set_fill(canvas_context_t *, uint32_t straight_argb);
 canvas_status_t canvas_set_fill_rgb_alpha(canvas_context_t *, uint32_t rgb, double alpha);
 /* Nonfinite/out-of-range values are ignored, matching Canvas assignment. */
 canvas_status_t canvas_set_alpha(canvas_context_t *, double);
+canvas_status_t canvas_set_shadow_color(canvas_context_t *, uint32_t rgb, double alpha);
+/* member: 0 blur (nonnegative), 1 offset X, 2 offset Y. Nonfinite values
+ * are ignored. State retains the supplied blur; rendering bounds its sigma. */
+canvas_status_t canvas_set_shadow_value(canvas_context_t *, unsigned member, double);
 /* Rectangles use the current transform and clip without altering the current
- * path. clear ignores paint, alpha and the composite operator. */
+ * path. clear ignores paint, alpha, shadows and the composite operator. */
 canvas_status_t canvas_fill_rect(canvas_context_t *, double x, double y, double w, double h);
 canvas_status_t canvas_clear_rect(canvas_context_t *, double x, double y, double w, double h);
 /* The current path stores transformed points and is not saved/restored.

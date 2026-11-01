@@ -27,9 +27,31 @@ static void canvas_damage_cases(void)
         os64_free(before);os64_free(whole);probe_drop();
     }
 }
+/* The off-canvas caster contributes only its blurred shadow to damage. */
+static void canvas_shadow_damage_cases(void)
+{
+    const char *styles[]={"","object-fit:contain;object-position:20% 70%","transform:rotate(8deg)","opacity:0.6"};
+    for(unsigned i=0;i<4;i++) {
+        char html[1400];snprintf(html,sizeof(html),
+            "<!doctype html><style>body{margin:0;background:white}canvas{display:block;width:300px;height:200px;"
+            "border:2px solid black;%s}#cover{position:absolute;left:65px;top:35px;width:20px;height:20px;background:blue}</style>"
+            "<canvas id=c width=200 height=100></canvas><div id=cover></div>"
+            "<script>var x=document.getElementById('c').getContext('2d');x.fillStyle='red';x.fillRect(0,0,200,100);</script>"
+            "<script>x.shadowColor='blue';x.shadowOffsetX=60;x.shadowOffsetY=40;x.shadowBlur=8;x.fillRect(-20,0,8,8);</script>",styles[i]);
+        probe_page(html,true);script_turn();g.sy=30;
+        flow_tree_t *tree=g.page.tree;uint64_t version=os64_html_version(page_doc(&g.page));
+        uint32_t *before=stand_in_shot();g.ui.dirty=(os64_gui_rect_t){0};script_turn();
+        check(tree==g.page.tree&&version==os64_html_version(page_doc(&g.page))&&g.ui.dirty.w>0,
+              "Canvas: off-bitmap caster produces shadow damage without layout");
+        canvas_partial_repaint(before);uint32_t *whole=stand_in_shot();
+        check(!memcmp(before,whole,800u*600u*sizeof(uint32_t)),
+              "Canvas: blurred shadow partial paint matches full with scroll, fit, overlap and effects");
+        os64_free(before);os64_free(whole);probe_drop();
+    }
+}
 static void canvas_window_cases(void)
 {
-    canvas_damage_cases();
+    canvas_damage_cases();canvas_shadow_damage_cases();
     probe_page("<!doctype html><style>body{margin:0;background:white}canvas{display:block;width:400px;height:200px;border:2px solid black}</style>"
         "<canvas id=c width=200 height=100></canvas><canvas id=b width=200 height=100></canvas>"
         "<script>var c=document.getElementById('c'),x=c.getContext('2d'),b=document.getElementById('b').getContext('2d');"

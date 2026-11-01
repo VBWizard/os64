@@ -67,14 +67,15 @@ int main(int argc,char **argv)
     char *html=malloc(n+1);if(!html)return 2;
     if(fread(html,1,n,file)!=(size_t)n)return 2;
     html[n]=0;fclose(file);
+    bool shadows=strstr(html,"YONDER / CANVAS 2D / C6B")!=NULL;
     bool paints=strstr(html,"YONDER / CANVAS 2D / C5")!=NULL;
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
-        .backend=paints?os64_freetype_real_backend_v1():flow_test_backend(),.memory_cap=32*1024*1024};
+        .backend=(paints||shadows)?os64_freetype_real_backend_v1():flow_test_backend(),.memory_cap=32*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     bool images=strstr(html,"YONDER / CANVAS 2D / C4")!=NULL;
     probe_page(html,true);free(html);
-    if(paints) {
+    if(paints||shadows) {
         FILE *font=fopen("userland/libfreetype/fixtures/DejaVuSans.ttf","rb");check(font!=NULL,"gallery font opens");
         if(!font)return 2;
         fseek(font,0,SEEK_END);gallery_font_length=ftell(font);rewind(font);gallery_font_bytes=malloc(gallery_font_length);
@@ -83,14 +84,34 @@ int main(int argc,char **argv)
     }
     if(images){pool_open=true;g.pool=(os64_work_pool_t *)1;pool_submit_hook=gallery_submit;}
     gallery_pump();
-    const char *names[]={paints?"glow":images?"stamps":"route",paints?"shared":images?"crop":"turn",paints?"lettering":images?"echo":"stencil",paints?"fitted":images?"returned":"scratch"};
-    const char *buttons[]={paints?"light":images?"stamp":"march",paints?"color":images?"inspect":"spin",paints?"turn":images?"scoot":"slide",paints?"words":images?"export":"reveal"};
+    const char *names[]={shadows?"cast":paints?"glow":images?"stamps":"route",shadows?"window":paints?"shared":images?"crop":"turn",shadows?"stamp":paints?"lettering":images?"echo":"stencil",shadows?"type":paints?"fitted":images?"returned":"scratch"};
+    const char *buttons[]={shadows?"light":paints?"light":images?"stamp":"march",shadows?"reveal":paints?"color":images?"inspect":"spin",shadows?"stamp-change":paints?"turn":images?"scoot":"slide",shadows?"words":paints?"words":images?"export":"reveal"};
     for(unsigned i=0;i<4;++i)dump_canvas(argv[2],names[i],"");
     for(unsigned i=0;i<4;++i) {
         os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};
         bool prevented=false;os64_js_outcome_t outcome;
         check(yonder_scripts_dispatch(g.page.scripts,probe_id(buttons[i]),&event,&prevented,&outcome)==OS64_JS_OK,"gallery button executes");
         gallery_pump();dump_canvas(argv[2],names[i],"-clicked");
+    }
+    if(shadows) {
+        os64_dom_event_t event={.type="click",.bubbles=true,.cancelable=true};
+        bool prevented=false;os64_js_outcome_t outcome;
+        check(yonder_scripts_dispatch(g.page.scripts,probe_id("animate"),&event,&prevented,&outcome)==OS64_JS_OK,"shadow animation starts");
+        gallery_pump();
+        flow_tree_t *tree=g.page.tree;uint64_t version=os64_html_version(page_doc(&g.page));
+        canvas_bitmap_t bitmap;
+        check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("cast"),&bitmap),"animated shadow canvas exists");
+        uint32_t *before=malloc(bitmap.capacity);check(before!=NULL,"animation snapshot");
+        if(!before)return 2;
+        memcpy(before,bitmap.pixels,bitmap.capacity);
+        for(unsigned frame=0;frame<12;frame++) {
+            now_ms+=40;clock_us+=40000;script_turn();motion_painted();
+        }
+        check(memcmp(before,bitmap.pixels,bitmap.capacity)!=0,"scheduled frames move the shadow");free(before);
+        check(tree==g.page.tree&&version==os64_html_version(page_doc(&g.page)),"shadow animation preserves layout and DOM version");
+        check(yonder_scripts_dispatch(g.page.scripts,probe_id("animate"),&event,&prevented,&outcome)==OS64_JS_OK,"shadow animation pauses");
+        gallery_pump();
+        check(yonder_scripts_animation_next(g.page.scripts)==YONDER_NEVER,"paused gallery cancels pending frame");
     }
     if(images) {
         check(g.page.waiting==0&&g.page.in_flight==0&&!gallery_queued,"gallery images all settled");

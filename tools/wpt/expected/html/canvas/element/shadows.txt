@@ -1,0 +1,64 @@
+# WPT's html/canvas/element/shadows in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/shadows --update
+# rewrites [passing].
+[required]
+2d.shadow.alpha.4.html	Shadows with alpha components are correctly affected by globalAlpha
+2d.shadow.attributes.shadowBlur.initial.html	Canvas test: 2d.shadow.attributes.shadowBlur.initial
+2d.shadow.attributes.shadowColor.current.basic.html	currentColor is computed from the canvas element
+2d.shadow.attributes.shadowOffset.valid.html	Canvas test: 2d.shadow.attributes.shadowOffset.valid
+2d.shadow.stroke.basic.html	Shadows are drawn for strokes
+2d.shadow.transform.2.html	Shadow offsets are not affected by transformations
+[excluded]
+[passing]
+2d.shadow.alpha.1.html	Shadow color alpha components are used
+2d.shadow.alpha.2.html	Shadow color alpha components are used
+2d.shadow.alpha.3.html	Shadows are affected by globalAlpha
+2d.shadow.alpha.4.html	Shadows with alpha components are correctly affected by globalAlpha
+2d.shadow.alpha.5.html	Shadows of shapes with alpha components are drawn correctly
+2d.shadow.attributes.shadowBlur.initial.html	Canvas test: 2d.shadow.attributes.shadowBlur.initial
+2d.shadow.attributes.shadowBlur.invalid.html	Canvas test: 2d.shadow.attributes.shadowBlur.invalid
+2d.shadow.attributes.shadowBlur.valid.html	Canvas test: 2d.shadow.attributes.shadowBlur.valid
+2d.shadow.attributes.shadowColor.current.basic.html	currentColor is computed from the canvas element
+2d.shadow.attributes.shadowColor.current.changed.html	currentColor is computed when the attribute is set, not when it is painted
+2d.shadow.attributes.shadowColor.current.removed.html	currentColor is solid black when the canvas element is not in a document
+2d.shadow.attributes.shadowColor.initial.html	Canvas test: 2d.shadow.attributes.shadowColor.initial
+2d.shadow.attributes.shadowColor.invalid.html	Canvas test: 2d.shadow.attributes.shadowColor.invalid
+2d.shadow.attributes.shadowColor.valid.html	Canvas test: 2d.shadow.attributes.shadowColor.valid
+2d.shadow.attributes.shadowOffset.initial.html	Canvas test: 2d.shadow.attributes.shadowOffset.initial
+2d.shadow.attributes.shadowOffset.invalid.html	Canvas test: 2d.shadow.attributes.shadowOffset.invalid
+2d.shadow.attributes.shadowOffset.valid.html	Canvas test: 2d.shadow.attributes.shadowOffset.valid
+2d.shadow.canvas.alpha.html	Shadows are drawn correctly for partially-transparent canvases
+2d.shadow.canvas.basic.html	Shadows are drawn for canvases
+2d.shadow.canvas.transparent.1.html	Shadows are not drawn for transparent canvases
+2d.shadow.canvas.transparent.2.html	Shadows are not drawn for transparent parts of canvases
+2d.shadow.clip.1.html	Shadows of clipped shapes are still drawn within the clipping region
+2d.shadow.clip.2.html	Shadows are not drawn outside the clipping region
+2d.shadow.clip.3.html	Shadows of clipped shapes are still drawn within the clipping region
+2d.shadow.composite.1.html	Shadows are drawn using globalCompositeOperation
+2d.shadow.composite.2.html	Shadows are drawn using globalCompositeOperation
+2d.shadow.composite.3.html	Areas outside shadows are drawn correctly with destination-out
+2d.shadow.enable.blur.html	Shadows are drawn if shadowBlur is set
+2d.shadow.enable.off.1.html	Shadows are not drawn when only shadowColor is set
+2d.shadow.enable.off.2.html	Shadows are not drawn when only shadowColor is set
+2d.shadow.enable.x.html	Shadows are drawn if shadowOffsetX is set
+2d.shadow.enable.y.html	Shadows are drawn if shadowOffsetY is set
+2d.shadow.gradient.alpha.html	Shadows are drawn correctly for partially-transparent gradient fills
+2d.shadow.gradient.basic.html	Shadows are drawn for gradient fills
+2d.shadow.gradient.transparent.1.html	Shadows are not drawn for transparent gradient fills
+2d.shadow.gradient.transparent.2.html	Shadows are not drawn for transparent parts of gradient fills
+2d.shadow.image.section.html	Shadows are not drawn for areas outside image source rectangles
+2d.shadow.image.transparent.1.html	Shadows are not drawn for transparent images
+2d.shadow.offset.negativeX.html	Shadows can be offset with negative x
+2d.shadow.offset.negativeY.html	Shadows can be offset with negative y
+2d.shadow.offset.positiveX.html	Shadows can be offset with positive x
+2d.shadow.offset.positiveY.html	Shadows can be offset with positive y
+2d.shadow.outside.html	Shadows of shapes outside the visible area can be offset onto the visible area
+2d.shadow.stroke.basic.html	Shadows are drawn for strokes
+2d.shadow.stroke.cap.1.html	Shadows are not drawn for areas outside stroke caps
+2d.shadow.stroke.cap.2.html	Shadows are drawn for stroke caps
+2d.shadow.stroke.join.1.html	Shadows are not drawn for areas outside stroke joins
+2d.shadow.stroke.join.2.html	Shadows are drawn for stroke joins
+2d.shadow.stroke.join.3.html	Shadows are drawn for stroke joins respecting miter limit
+2d.shadow.transform.1.html	Shadows take account of transformations
+2d.shadow.transform.2.html	Shadow offsets are not affected by transformations

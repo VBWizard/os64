@@ -231,7 +231,7 @@ static int gradients_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,
     return 0;
 }
 enum { C_CANVAS, C_FILL, C_ALPHA, C_SAVE, C_RESTORE, C_FILL_RECT, C_CLEAR_RECT,
-       C_CREATE_IMAGE, C_GET_IMAGE, C_PUT_IMAGE, C_LOST, C_RESET, C_STROKE };
+       C_CREATE_IMAGE, C_GET_IMAGE, C_PUT_IMAGE, C_LOST, C_RESET, C_STROKE, C_SHADOW_COLOR, C_SHADOW_BLUR, C_SHADOW_X, C_SHADOW_Y };
 static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                        int magic, JSValue *data)
 {
@@ -242,12 +242,12 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     bool set = magic & D_SET;
     magic &= ~D_SET;
     if (magic == C_CANVAS) return JS_DupValue(ctx, e->value);
-    if (magic == C_FILL || magic == C_STROKE || magic == C_ALPHA) {
+    if (magic == C_FILL || magic == C_STROKE || magic == C_SHADOW_COLOR || magic == C_ALPHA) {
         uint32_t fill = 0; double alpha = 1;
         if (set) {
-            if (magic == C_FILL || magic == C_STROKE) {
+            if (magic == C_FILL || magic == C_STROKE || magic == C_SHADOW_COLOR) {
                 DValue *gradient=argc?JS_GetOpaque(argv[0],dom->gradient_class):NULL;
-                if(gradient&&gradient->dom==dom) {
+                if(magic!=C_SHADOW_COLOR&&gradient&&gradient->dom==dom) {
                     d_canvas_sync(e);
                     return e->canvas?d_canvas_result(ctx,canvas_set_gradient(e->canvas,gradient->canvas_gradient,magic==C_STROKE)):JS_UNDEFINED;
                 }
@@ -266,15 +266,16 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
         d_canvas_sync(e);
         if (set) return e->canvas ? d_canvas_result(ctx, magic == C_FILL ? canvas_set_fill_rgb_alpha(e->canvas, fill, alpha) :
                     magic == C_STROKE ? canvas_set_stroke(e->canvas, fill, alpha) :
+                    magic == C_SHADOW_COLOR ? canvas_set_shadow_color(e->canvas, fill, alpha) :
                                                          canvas_set_alpha(e->canvas, alpha)) : JS_UNDEFINED;
         canvas_state_t state = {.fill_argb=0xff000000,.global_alpha=1,.fill_alpha=1, .stroke_argb=0xff000000,.stroke_alpha=1};
         if (e->canvas) canvas_state(e->canvas, &state);
         if (magic == C_ALPHA) return JS_NewFloat64(ctx, state.global_alpha);
-        canvas_gradient_t *gradient=magic==C_STROKE?state.stroke_gradient:state.fill_gradient;
+        canvas_gradient_t *gradient=magic==C_SHADOW_COLOR?NULL:magic==C_STROKE?state.stroke_gradient:state.fill_gradient;
         if(gradient)for(DValue *held=dom->values;held;held=held->next)
             if(held->canvas_gradient==gradient)return JS_DupValue(ctx,held->value);
-        char text[80]; uint32_t p = magic == C_STROKE ? state.stroke_argb : state.fill_argb;
-        double paint_alpha = magic == C_STROKE ? state.stroke_alpha : state.fill_alpha;
+        char text[80]; uint32_t p = magic == C_SHADOW_COLOR ? state.shadow_argb : magic == C_STROKE ? state.stroke_argb : state.fill_argb;
+        double paint_alpha = magic == C_SHADOW_COLOR ? state.shadow_alpha : magic == C_STROKE ? state.stroke_alpha : state.fill_alpha;
         if (paint_alpha == 1) os64_snprintf(text, sizeof(text), "#%06x", p & 0xffffff);
         else {
             garb_val_t value = {.kind = GARB_V_COLOR, .color = {
@@ -282,6 +283,14 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
             garb_val_dump(&value, text, sizeof(text));
         }
         return JS_NewString(ctx, text);
+    }
+    if(magic>=C_SHADOW_BLUR && magic<=C_SHADOW_Y) {
+        double value=0;
+        if(set && JS_ToFloat64(ctx,&value,argc?argv[0]:JS_UNDEFINED)<0)return JS_EXCEPTION;
+        d_canvas_sync(e);
+        if(set)return e->canvas?d_canvas_result(ctx,canvas_set_shadow_value(e->canvas,magic-C_SHADOW_BLUR,value)):JS_UNDEFINED;
+        canvas_state_t state={0};if(e->canvas)canvas_state(e->canvas,&state);
+        return JS_NewFloat64(ctx,magic==C_SHADOW_BLUR?state.shadow_blur:magic==C_SHADOW_X?state.shadow_x:state.shadow_y);
     }
     if (magic == C_FILL_RECT || magic == C_CLEAR_RECT) {
         if (argc < 4) return JS_ThrowTypeError(ctx, "Canvas rectangle requires four coordinates");
@@ -363,6 +372,8 @@ int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     const char *accessors[] = {"canvas", "fillStyle", "globalAlpha"};
     for (unsigned i = 0; i < 3; ++i)
         if (d_accessor(dom, ctx, prototype, accessors[i], member, i, i != 0) < 0) return -1;
+    const char *shadows[]={"shadowColor","shadowBlur","shadowOffsetX","shadowOffsetY"};
+    for(unsigned i=0;i<4;i++)if(d_accessor(dom,ctx,prototype,shadows[i],member,C_SHADOW_COLOR+i,true)<0)return -1;
     if (d_accessor(dom, ctx, prototype, "strokeStyle", member, C_STROKE, true) < 0 ||
         d_canvas_paths_install(dom, ctx, prototype) < 0 ||
         d_canvas_images_install(dom,ctx,prototype) < 0 ||

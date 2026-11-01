@@ -44,7 +44,7 @@ for source in userland/libjs/runtime/runtime.c userland/libos64/str.c userland/l
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \
     userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
-    userland/libway/origin.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libpng/encode.c userland/libos64/crc32.c; do
+    userland/libway/origin.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libos64/crc32.c; do
     object="$work/${source//\//_}.o"
     cc "${flags[@]}" -c "$source" -o "$object"
     if [ "$source" = userland/libos64/str.c ]; then
