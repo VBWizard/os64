@@ -438,6 +438,43 @@ static void sizes_page_cases(void)
     check(sizes_held() == NULL && g.page.resample_owed == 0 && g.page.pics[0].need_w == 400,
           "sizes: and is never kept smaller");
     sizes_close();
+
+    /* Codex #444 rd2: a refusal lasts while its need does; a zoom away and
+     * back asks again. */
+    sizes_open("<!doctype html><style>body{margin:0}img{display:block;width:100px}</style>"
+               "<img id=pic src='https://t.test/a.png'>", "SIZED 400x200");
+    pictures_start(&g.page);
+    check(sizes_run(), "sizes: whole, for the refusal");
+    sizes_layout(1000);
+    picture_http_failure = true;
+    check(!sizes_run() && g.page.pics[0].refused_w == 100, "sizes: refused at 100 x 50");
+    picture_http_failure = false;
+    sizes_layout(1500);
+    job = sizes_held();
+    check(job && job->cover_w == 150 && sizes_run() && g.page.pics[0].image.width == 150 &&
+          g.page.pics[0].refused_w == 0, "sizes: another need lets the refusal go");
+    sizes_layout(1000);
+    job = sizes_held();
+    check(job && job->resample && job->cover_w == 100, "sizes: and back at the refused need, it is asked again");
+    sizes_close();
+
+    /* Codex #444 rd2: the record's line stays true when a zoom grows every
+     * picture back whole. */
+    sizes_open("<!doctype html><style>body{margin:0}img{display:block;width:100px}</style>"
+               "<img id=pic src='https://t.test/a.png'>", "SIZED 400x200");
+    g.page.diag = diag_new_claimed("http://s.test/", 4);
+    pictures_start(&g.page);
+    check(sizes_run(), "sizes: whole, for the record");
+    sizes_layout(1000);
+    check(sizes_run() && g.page.pics[0].image.width == 100, "sizes: kept smaller");
+    diag_observe(&g.page, "when its pictures and fonts were in");
+    sizes_layout(4000);
+    check(sizes_run() && g.page.pics[0].image.width == 400, "sizes: zoomed in, grown back whole");
+    diag_observe(&g.page, "when the page was left");
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(strstr(text, "picture sizes: 0 kept at the size they are drawn, 0 KiB less than whole") != NULL &&
+          strstr(text, "picture sizes: 1 kept") == NULL, "sizes: the record says none are kept smaller now");
+    sizes_close();
 }
 
 static void picture_sizes_cases(void)

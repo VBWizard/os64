@@ -199,6 +199,14 @@ mutants = [
     ('rd1-leaving-does-not-wait-for-a-resample', YONDER,
      '           g.page.in_flight == 0 && g.page.resample_owed == 0 && !g.pictures_judge_owed &&',
      '           g.page.resample_owed == 0 && !g.pictures_judge_owed &&'),
+    # Codex #444 round 2.
+    ('rd2-a-refusal-outlives-its-need', YONDER,
+     '        if (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)\n'
+     '            pic->refused_w = pic->refused_h = 0;\n',
+     ''),
+    ('rd2-the-record-keeps-an-old-saving', YONDER,
+     '    if (smaller > 0 || p->sizes_said) {',
+     '    if (smaller > 0) {'),
     # The record.
     ('the-record-counts-whole-pictures', YONDER,
      '            (pic->image.width >= pic->width && pic->image.height >= pic->height))',

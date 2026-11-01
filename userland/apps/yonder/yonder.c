@@ -722,6 +722,10 @@ typedef struct Page {
     // owed walks no table. Resamples out count in in_flight, not waiting:
     // their pictures are already had.
     int32_t resample_owed;
+    // The record's `picture sizes` line has been written (diag_observe): it
+    // is kept true when no picture is kept smaller any more, since a fact
+    // stays until it is written again.
+    bool sizes_said;
     // Pictures refused before the table (picture_unasked): how many, and
     // each one's identity, so a rebuild or a new layout that meets the
     // same one again records nothing more.
@@ -2597,7 +2601,8 @@ static void diag_observe(Page *p, const char *when)
                   (int)p->unasked);
     yonder_diag_fact(d, "pictures", v);
     // Kept at the size they are drawn (PICTURE_SIZES.md), and what that
-    // spared against keeping them whole; a line only when there are some.
+    // spared against keeping them whole: a line once there are some, and
+    // from then on, saying none when a zoom has grown them all back whole.
     int32_t smaller = 0;
     uint64_t spared = 0;
     for (int32_t i = 0; i < p->npics; i++) {
@@ -2608,10 +2613,11 @@ static void diag_observe(Page *p, const char *when)
         smaller++;
         spared += (uint64_t)pic->width * pic->height * 4u - pic->cost;
     }
-    if (smaller > 0) {
+    if (smaller > 0 || p->sizes_said) {
         os64_snprintf(v, sizeof(v), "%d kept at the size they are drawn, %lu KiB less than whole",
                       (int)smaller, (unsigned long)(spared >> 10));
         yonder_diag_fact(d, "picture sizes", v);
+        p->sizes_said = true;
     }
     os64_snprintf(v, sizeof(v), "%d, %d ready", (int)p->nsheets, (int)p->sheets_ready);
     yonder_diag_fact(d, "sheets", v);
@@ -4828,17 +4834,18 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
                            const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
                            int32_t oy, os64_gui_rect_t clip);
 
-// PICTURE_SIZES.md's rules, against each picture's need from the last
-// layout. A shown still raster kept at twice the area it is drawn at, or
+// PICTURE_SIZES.md's rules, against each picture's need from the last walk
+// (css_pictures). A shown still raster kept at twice the area it is drawn at, or
 // more, is owed a resample smaller (not at less than twice: a window
 // dragged narrower, or a zoom stepped, would decode the page again for
 // pixels it can spare); one drawn bigger than it is kept, on either axis,
 // is owed one bigger, if the page's memory has room. One past the memory
 // kept is owed one at the size it is drawn when that fits. A picture with
 // a resample out is judged when it lands; one whose resample at this need
-// came back refused (Picture.refused_w/h) is not owed it again; and one
-// no layout draws keeps what it has. The shown page's alone: a picture
-// arrives only to it.
+// came back refused (Picture.refused_w/h) is not owed it again while its
+// need stays that one — any other need lets the refusal go, so a zoom out
+// and back in asks again; and one no layout draws keeps what it has. The
+// shown page's alone: a picture arrives only to it.
 static void pictures_judge(Page *p)
 {
     if (p != &g.page)
@@ -4847,6 +4854,8 @@ static void pictures_judge(Page *p)
         Picture *pic = &p->pics[k];
         if (pic->resampling)
             continue;
+        if (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)
+            pic->refused_w = pic->refused_h = 0;
         bool owed = false;
         if (pic->kind == YONDER_PICTURE_RASTER && pic->need_w > 0 && pic->need_h > 0 &&
             (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)) {

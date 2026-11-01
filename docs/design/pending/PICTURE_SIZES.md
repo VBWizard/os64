@@ -129,8 +129,9 @@ above, that is the 13 empty frames.
 
 A line of its own beside the pictures line, so what reads that line reads it
 unchanged, says how many are kept smaller than they are and what that
-spared, and is written only when there are some: `picture sizes: 4 kept at
-the size they are drawn, 66485 KiB less than whole`. A resample that failed
+spared, written once there are some and from then on (saying none when a
+zoom has grown them all back whole): `picture sizes: 4 kept at the size
+they are drawn, 66485 KiB less than whole`. A resample that failed
 is a plain fact line, not a FAILED picture: the picture is still shown.
 
 ## Tests
