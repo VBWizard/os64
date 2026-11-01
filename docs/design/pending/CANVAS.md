@@ -688,7 +688,10 @@ under the existing DOM deadline. The P5 browsing pass accepted that pacing and
 confirmed a substantial speed improvement. Starfield's blinking led to a further
 fix: provably offscreen fills with no destination effect skip backend preparation,
 while strokes, shadows, clipping and clearing composite operations retain their
-normal paths. Starfield's P5 confirmation is pending; see [C6e validation](../../canvas-evidence/c6e-validation.md).
+normal paths. The P5 browsing pass approved Starfield without blinking. Game of
+Life's remaining startup dependency is Window named access (WINDOW_DOCUMENT
+P3c), deferred to a separate browser slice; an explicit-lookup diagnostic runs
+its animation successfully. These Canvas fixes are ready for review; see [C6e validation](../../canvas-evidence/c6e-validation.md).
 
 Danlegt's wall and selected rainbow cursor render in the broader captured
 replay. Its game startup reaches missing observer/media APIs, and its modal

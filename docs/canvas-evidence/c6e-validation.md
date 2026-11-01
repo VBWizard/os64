@@ -138,7 +138,32 @@ Validation:
   or to the delivered captured scripts. Runs release tracked allocations with
   leak checking enabled outside the debugger.
 
-P5 confirmation of this Starfield fix remains pending.
+The P5 browsing pass approved Starfield after the fix: smooth motion without
+the repeated blinking. The native QEMU run also animated and recorded a clean
+diagnostic. Its first boot stalled at GUI startup with both CPUs waiting on a
+kernel block-cache lock; a restart of the unchanged guest passed. That startup
+hang is unresolved, with kernel traces retained separately from Canvas evidence.
+
+## Game of Life: deferred Window named access
+
+The completed P5 collection pass identified Game of Life's startup error:
+`automata.js: ReferenceError: 'automata' is not defined, at 5:12`. The page
+contains `<canvas id="automata">`, then assigns `canvas = automata` without a
+variable declaration for that name. It relies on
+[Window named access](https://html.spec.whatwg.org/multipage/nav-history-apis.html#named-access-on-the-window-object),
+which is already planned in [WINDOW_DOCUMENT P3c](../design/pending/WINDOW_DOCUMENT.md#p3c--legacy-named-access-3-members).
+
+The unchanged captured page reproduces the error. A private diagnostic copy
+changes that one assignment to `document.getElementById('automata')`; it
+initializes and runs eight animated frames without script errors, changes its
+512 × 128 bitmap, and performs no frame layouts. The replay passes its ten
+harness checks with ASan, UBSan and LeakSanitizer enabled and no tracked memory
+left. Library feature probes still produce missing-global diagnostics; this is
+not a claim of full browser-interface coverage.
+
+The diagnostic edit is not shipped. Window named access stays a separate
+browser compatibility slice; the accepted Canvas fixes proceed to review.
+The wave mouse-coordinate limitation below remains recorded independently.
 
 ## Native handoff
 
