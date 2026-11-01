@@ -421,12 +421,7 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         if (os64_dom_resolve(dom->document,dom->url,text,absolute,sizeof(absolute))) return JS_NewString(ctx,absolute);
     }
     if (magic == C_WIDTH || magic == C_HEIGHT) {
-        uint64_t number = 0;
-        while (*text >= '0' && *text <= '9') {
-            number = number * 10 + (unsigned)(*text++ - '0');
-            if (number > UINT32_MAX) return JS_NewInt32(ctx,0);
-        }
-        return JS_NewUint32(ctx,(uint32_t)number);
+        return d_image_dimension(dom,ctx,node,magic == C_HEIGHT);
     }
     return JS_NewString(ctx,text);
 }

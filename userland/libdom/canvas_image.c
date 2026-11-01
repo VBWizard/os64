@@ -17,6 +17,35 @@ static void image_release(os64_dom_t *dom,os64_dom_image_view_t *view)
 {
     if(dom->image_provider.release)dom->image_provider.release(dom->image_provider.opaque,view);
 }
+static bool image_attribute_size(const os64_html_attr_t *attr,uint32_t *out)
+{
+    if(!attr)return false;
+    const char *s=attr->value;
+    while(*s==' '||*s=='\t'||*s=='\n'||*s=='\r'||*s=='\f')s++;
+    bool negative=*s=='-';
+    if(*s=='+'||*s=='-')s++;
+    if(*s<'0'||*s>'9')return false;
+    uint64_t value=0;
+    while(*s>='0'&&*s<='9') {
+        value=value*10+(unsigned)(*s++-'0');
+        if(value>UINT32_MAX){*out=0;return !negative;}
+    }
+    if(negative&&value)return false;
+    *out=(uint32_t)value;return true;
+}
+JSValue d_image_dimension(os64_dom_t *dom,JSContext *ctx,const os64_html_node_t *node,bool height)
+{
+    /* Texture images created with new Image() need no layout: absent or
+     * invalid dimension attributes fall back to the loaded image size. */
+    uint32_t value;
+    if(image_attribute_size(os64_html_attr(node,height?"height":"width"),&value))
+        return JS_NewUint32(ctx,value);
+    os64_dom_image_view_t view;
+    os64_dom_image_status_t status=image_acquire(dom,node,false,&view);
+    value=status==OS64_DOM_IMAGE_READY?(height?view.surface.height:view.surface.width):0;
+    image_release(dom,&view);
+    return JS_NewUint32(ctx,value);
+}
 void d_image_changed(os64_dom_t *dom,const os64_html_change_t *change)
 {
     if(change->kind!=OS64_HTML_CHANGE_ATTR||change->attr_ns||

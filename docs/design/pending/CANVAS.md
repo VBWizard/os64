@@ -702,3 +702,8 @@ separates these outcomes from full-site support. Acceptance is not a fixed
 count of remaining PRs.
 
 See [C6a validation and target checkpoint](../../canvas-evidence/c6a-validation.md).
+
+The first two Phoria Canvas 2D demos extend live-site acceptance. The textured
+cube exposed missing natural-size fallback in `HTMLImageElement.width` and
+`height`; [the Phoria checkpoint](../../canvas-evidence/phoria-images.md) records
+the focused fix and the separate basic-cube timing investigation.
