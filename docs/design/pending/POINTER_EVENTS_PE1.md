@@ -204,5 +204,10 @@ ASan/UBSan/LeakSanitizer are enabled; the native build also passes.
 The demo's resize coordinate mismatch is also explained by its saved source:
 CSS makes the canvas follow the window, but the script initializes its bitmap
 and device-pixel-ratio transform only at load and installs no resize handler.
-Reload after resizing for comparable hardware tests. Large-window acceptance
-of this follow-up remains pending.
+Reload after resizing for comparable hardware tests.
+
+Large-window P5 acceptance passed on 2026-11-01 with the frozen `e3492691`
+cohort. Chris reported that drawing in a maximized window had no perceptible
+slowdown and explicitly accepted the result. This is qualitative hardware
+acceptance, not a measured frame-rate claim; no additional diagnostic capture
+was requested. The tested binaries and their SHA-256 manifest remain unchanged.
