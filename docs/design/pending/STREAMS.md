@@ -252,12 +252,14 @@ verb. Where the build departs from §§ 3–7, or says what they left open:
   answered so; the close errors the stream, and the read rejects with a
   TypeError, the pull's throw made a rejection as "set up with byte
   reading support" says.
-- **A byte tee's branch pulls turn a throw into a rejection** too. The
-  standard writes a branch's close as one that cannot fail, but it fails
-  for the same partial element when the source ends under a branch's
-  BYOB read; the branch is errored, and the page's read rejects instead of
-  throwing out of `read()`. A page's own byte source that ends outside a
-  pull still hears the TypeError from the call that ended it (DEBTS).
+- **A byte tee's branch close may fail, and the tee goes on.** The
+  standard's byte tee writes a branch's close as a step that cannot fail,
+  but it fails for the same partial element when the source ends under a
+  branch's BYOB read. The close has errored the branch by then, so its
+  read rejects with the TypeError; the tee drops the throw and runs the
+  rest of its close steps, so the other branch still closes and a
+  cancelled branch's `cancel()` still settles, whoever's call ended the
+  source.
 - **The buffers are the engine's.** The standard's buffer operations
   (TransferArrayBuffer, IsDetachedBuffer, a view's slots) go through
   `ArrayBuffer.prototype.transfer`, the `detached` getter and the view

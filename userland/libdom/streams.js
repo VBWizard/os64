@@ -2066,8 +2066,22 @@ function readableByteStreamTee(stream) {
     }
 
     function pullAgainIfAsked() {
-        if (readAgainForBranch1) setHandled(pull1Algorithm());
-        else if (readAgainForBranch2) setHandled(pull2Algorithm());
+        if (readAgainForBranch1) pull1Algorithm();
+        else if (readAgainForBranch2) pull2Algorithm();
+    }
+
+    // A branch's close, which the standard's close steps write as one that
+    // cannot fail. It fails when a BYOB read pending on the branch holds
+    // part of an element as the source ends; the close has errored the
+    // branch by then, which is how its reader hears it, so the throw goes
+    // no further and the rest of the close steps (the other branch, the
+    // cancel promise) still run.
+    function closeBranch(branch) {
+        try {
+            rbsControllerClose(branch.controller);
+        } catch (e) {
+            // the branch is errored: nothing more to do for it
+        }
     }
 
     function pullWithDefaultReader() {
@@ -2099,8 +2113,8 @@ function readableByteStreamTee(stream) {
             }]);
         }, function () {
             reading = false;
-            if (!canceled1) rbsControllerClose(branch1.controller);
-            if (!canceled2) rbsControllerClose(branch2.controller);
+            if (!canceled1) closeBranch(branch1);
+            if (!canceled2) closeBranch(branch2);
             if (branch1.controller.pendingPullIntos.length > 0) rbsControllerRespond(branch1.controller, 0);
             if (branch2.controller.pendingPullIntos.length > 0) rbsControllerRespond(branch2.controller, 0);
             if (!canceled1 || !canceled2) resolveDeferred(cancelDeferred, undefined);
@@ -2145,10 +2159,13 @@ function readableByteStreamTee(stream) {
             reading = false;
             const byobCanceled = forBranch2 ? canceled2 : canceled1;
             const otherCanceled = forBranch2 ? canceled1 : canceled2;
-            if (!byobCanceled) rbsControllerClose(byobBranch.controller);
-            if (!otherCanceled) rbsControllerClose(otherBranch.controller);
+            if (!byobCanceled) closeBranch(byobBranch);
+            if (!otherCanceled) closeBranch(otherBranch);
             if (chunk !== undefined) {
-                if (!byobCanceled) rbsControllerRespondWithNewView(byobBranch.controller, viewFacts(chunk));
+                // A branch whose close failed is errored, and has no read
+                // left to answer.
+                if (!byobCanceled && byobBranch.state !== 'errored')
+                    rbsControllerRespondWithNewView(byobBranch.controller, viewFacts(chunk));
                 if (!otherCanceled && otherBranch.controller.pendingPullIntos.length > 0)
                     rbsControllerRespond(otherBranch.controller, 0);
             }
@@ -2158,32 +2175,29 @@ function readableByteStreamTee(stream) {
         }));
     }
 
-    // The standard's pulls cannot fail, but a branch's close can, though
-    // its close steps write it as one that cannot: a BYOB read pending on
-    // the branch that holds part of an element when the source ends under
-    // it. The close errors the branch first; caught here, the throw
-    // reaches the page as its read's rejection, not as a throw out of the
-    // read() that pulled.
-    function pullBranch(forBranch2) {
+    function pull1Algorithm() {
         if (reading) {
-            if (forBranch2) readAgainForBranch2 = true;
-            else readAgainForBranch1 = true;
+            readAgainForBranch1 = true;
             return resolvedWith(undefined);
         }
         reading = true;
-        try {
-            const byobRequest = rbsControllerGetBYOBRequest((forBranch2 ? branch2 : branch1).controller);
-            if (byobRequest === null) pullWithDefaultReader();
-            else pullWithBYOBReader(byobRequest.view, forBranch2);
-        } catch (e) {
-            return rejectedWith(e);
-        }
+        const byobRequest = rbsControllerGetBYOBRequest(branch1.controller);
+        if (byobRequest === null) pullWithDefaultReader();
+        else pullWithBYOBReader(byobRequest.view, false);
         return resolvedWith(undefined);
     }
 
-    function pull1Algorithm() { return pullBranch(false); }
-
-    function pull2Algorithm() { return pullBranch(true); }
+    function pull2Algorithm() {
+        if (reading) {
+            readAgainForBranch2 = true;
+            return resolvedWith(undefined);
+        }
+        reading = true;
+        const byobRequest = rbsControllerGetBYOBRequest(branch2.controller);
+        if (byobRequest === null) pullWithDefaultReader();
+        else pullWithBYOBReader(byobRequest.view, true);
+        return resolvedWith(undefined);
+    }
 
     function cancel1Algorithm(reason) {
         canceled1 = true;

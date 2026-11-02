@@ -445,10 +445,15 @@ static void dom_fetch_object_cases(void)
         "p1.then(()=>olog.push('body:read'),e=>olog.push('body:'+e.name));"
         "var oc=new Response('xyz');oc.body;oc.clone();var orr=oc.body.getReader({mode:'byob'});"
         "orr.read(new Uint16Array(1)).then(()=>orr.read(new Uint16Array(1)))"
-        ".then(()=>olog.push('clone:read'),e=>olog.push('clone:'+e.name));",
+        ".then(()=>olog.push('clone:read'),e=>olog.push('clone:'+e.name));"
+        /* The tee goes on past the failed branch close: a cancelled
+         * clone's cancel() still settles. */
+        "var ox=new Response('x');ox.body;var oxc=ox.clone();oxc.body.cancel().then(()=>olog.push('cancel:settled'));"
+        "ox.body.getReader({mode:'byob'}).read(new Uint16Array(1)).catch(e=>olog.push('teed:'+e.name));",
         "stream: a BYOB read past a body's last whole element");
-    dom_script(&f, FETCH_ASSERT "assert(olog.join()==='body:TypeError,clone:TypeError',olog.join());",
-               "stream: a partial element rejects the read, on a body and on a clone");
+    dom_script(&f, FETCH_ASSERT
+        "assert(olog.sort().join()==='body:TypeError,cancel:settled,clone:TypeError,teed:TypeError',olog.join());",
+        "stream: a partial element rejects the read, on a body and on a clone");
     /* The body is enqueued whole and closed: taking its one chunk closes
      * the stream, so `closed` resolves with no further read. */
     dom_script(&f,
