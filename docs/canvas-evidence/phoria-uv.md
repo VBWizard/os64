@@ -56,4 +56,48 @@ These are sanitizer-host measurements, not a hardware frame-rate promise.
 Native validation uses a frozen cohort with the matching `libcanvas.so` and
 `libdraw2d.so`; the image-dimension fix and other runtime files are reused.
 The original scene rotates in the native guest, with distinct before/after
-frames and a saved diagnostic record. Hardware acceptance remains pending.
+frames and a saved diagnostic record. The user subsequently confirmed that
+the UV scene animates correctly on hardware.
+
+## Point-light follow-up: allocator bookkeeping
+
+The animated point-light scene (`test1.html`) showed intermittent runs of
+slow frames. Hardware phase timing kept model-view work near 1.6 ms while
+rendering rose from about 5 ms to 65–72 ms. A second diagnostic counted the
+same 397 strokes per frame: their combined duration rose from about 3 ms to
+50 ms, spread across many short calls rather than one long pause.
+
+A host replay using the ordinary hosted allocator did not reproduce the
+clusters. Replacing that allocator with the production Os64 heap did. The
+expensive operation was recomputing `largest_free`: unlinking the largest
+free block scanned the entire free list, even when the same transaction
+immediately split or coalesced it and supplied another maximum. A slow frame
+walked up to 13,775,541 entries solely to maintain this statistic.
+
+The heap now retains a maximum-block pointer and an upper bound on the other
+free blocks. Removing the maximum leaves it unresolved during the odd report
+generation. If a replacement meets the bound, it is provably a maximum;
+otherwise the list is scanned before publishing the even generation. The
+published statistic stays exact. First-fit allocation order, region handling,
+block layout, locking and the public ABI are unchanged.
+
+In an identical 360-frame sanitizer-host replay, maximum-statistic walks fell
+from 591,838,404 to 21,915,998. Frames exceeding 40 ms fell from 50 to zero;
+the maximum callback time fell from 101.778 ms to 32.119 ms. All 360 complete
+bitmap hashes matched. These are host measurements, not a hardware frame-rate
+claim. On hardware, the user confirmed smooth point-light animation with the
+candidate library. The user also timed the basic cube again and reported that
+it now turns as fast as Chrome. That comparison is user-reported acceptance;
+no numerical rotation timings or matched comparison conditions were recorded.
+
+The existing heap suite passes 215 checks. A new independent physical-pool
+walk audits the reported maximum and free totals after tied maxima, splits,
+coalesces, reallocations, dedicated allocations and a pool return at teardown:
+43,855 checks pass under ASan, UBSan and LeakSanitizer after the architectural
+review follow-up. The runtime verifier now audits the cached maximum, its
+identity and the other-block bound; corruption tests exercise those checks,
+and the mixed workload also runs with `HEAPCHECK` enabled. The architectural
+review and remaining near-runner-up scan case are recorded in the
+[heap design](../design/pending/HEAP_MAXIMUM_REVIEW.md). The accepted native
+delivery changed only `libos64.so` from the prior runtime cohort and predates
+the verifier additions; that delivery remains frozen.

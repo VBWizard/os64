@@ -268,13 +268,26 @@ calls is not evidence that the site's initialization, loading and events work.
 Exercise signature export locally; automated testing does not submit a real
 signature to the public wall.
 
-Completion requires the signature wall/editor and scratch-off game to work
-on the P5 with scheduled drawing and pointer interaction. Record frame cost,
-layout count, dirty pixel area and memory peaks. A bitmap-only animation must
-not cause whole-document layout, and a covered/idle window must not accumulate
-unbounded frame work. Preserve the existing small frozen-bundle handoff for
-hardware tests. Video playback and a particular external game's broader API
-requirements are outside this Canvas acceptance claim.
+The original completion targets were Danlegt's signature wall/editor and
+scratch-off game. The 2026-11-01 acceptance decision above replaces full-site
+Danlegt support as a release gate with Curran's examples and the subsequent
+Phoria checks. Local signature and scratch fixtures remain regression coverage
+for drawing, export, scheduled frames and pointer interaction. Record frame
+cost, layout count, dirty pixel area and memory peaks when investigating those
+paths. A bitmap-only animation must not cause whole-document layout, and a
+covered/idle window must not accumulate unbounded frame work. Preserve the
+existing small frozen-bundle handoff for hardware tests. Video playback and a
+particular external game's broader API requirements are outside this Canvas
+acceptance claim.
+
+Closeout decision, 2026-11-01: finish the reviewed Phoria and heap work, then
+regression-test the combined integration candidate against current userland
+before merging. Cover shared SVG/Canvas drawing, browser loading and input,
+resize/zoom, frame teardown and covered-window behavior, plus ordinary
+userland allocation workloads. Known site-startup dependencies and the
+JavaScript-heavy software-triangle performance work remain follow-ups. New
+regressions found in this pass must be investigated; improving every demo to
+another browser's speed is not a prerequisite for this milestone.
 
 ## C1 native foundation
 

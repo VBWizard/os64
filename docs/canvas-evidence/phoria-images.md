@@ -51,3 +51,10 @@ These host timings exclude native scheduling, publication and the compositor;
 they do not settle the reported P5 window-size effect or establish a hardware
 frame-rate improvement. Hardware follow-up should hold zoom constant and
 record small/maximized runs before changing scheduling or painting.
+
+Subsequent hardware acceptance of the shared-allocator fix described in
+[the point-light follow-up](phoria-uv.md#point-light-follow-up-allocator-bookkeeping)
+also included the basic cube: the user timed it again and reported rotation
+as fast as Chrome. This is user-reported acceptance, without recorded numerical
+timings or matched comparison conditions; it does not isolate the earlier
+window-size effect.
