@@ -9,8 +9,9 @@ static void canvas_partial_repaint(uint32_t *pixels)
 }
 static void canvas_damage_cases(void)
 {
-    const char *styles[]={"","object-fit:contain;object-position:20% 70%", "transform:rotate(8deg)","opacity:0.6"};
-    for(unsigned i=0;i<4;++i) {
+    const char *styles[]={"","object-fit:contain;object-position:20% 70%", "transform:rotate(8deg)","opacity:0.6",
+        "filter:blur(4px)","filter:drop-shadow(25px 10px 3px blue)","mix-blend-mode:multiply"};
+    for(unsigned i=0;i<sizeof(styles)/sizeof(styles[0]);++i) {
         char html[1200];snprintf(html,sizeof(html),
             "<!doctype html><style>body{margin:0;background:white}canvas{display:block;width:300px;height:200px;"
             "border:2px solid black;%s}#cover{position:absolute;left:65px;top:35px;width:20px;height:20px;background:blue}</style>"
@@ -30,8 +31,9 @@ static void canvas_damage_cases(void)
 /* The off-canvas caster contributes only its blurred shadow to damage. */
 static void canvas_shadow_damage_cases(void)
 {
-    const char *styles[]={"","object-fit:contain;object-position:20% 70%","transform:rotate(8deg)","opacity:0.6"};
-    for(unsigned i=0;i<4;i++) {
+    const char *styles[]={"","object-fit:contain;object-position:20% 70%","transform:rotate(8deg)","opacity:0.6",
+        "filter:blur(4px)","filter:drop-shadow(25px 10px 3px blue)","mix-blend-mode:multiply"};
+    for(unsigned i=0;i<sizeof(styles)/sizeof(styles[0]);i++) {
         char html[1400];snprintf(html,sizeof(html),
             "<!doctype html><style>body{margin:0;background:white}canvas{display:block;width:300px;height:200px;"
             "border:2px solid black;%s}#cover{position:absolute;left:65px;top:35px;width:20px;height:20px;background:blue}</style>"

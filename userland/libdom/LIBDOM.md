@@ -1030,9 +1030,12 @@ writes itself (a body's Content-Type, a redirect's Location) goes through
 the guarded append, so a no-cors request never carries a Content-Type
 that is not safelisted. RequestInit and ResponseInit are read in WebIDL's
 order; a record init converts each key before its value. Bodies are
-engine memory, read whole: a stream hands the body over as one chunk, a
-body method locks it, and there is no `ReadableStream` global (a page
-that detects one would find a half API). `integrity` fails closed.
+engine memory, read whole. A body's stream is the Streams standard's
+(streams.js, self-hosted, through streams.c's door; STREAMS.md): made when
+first needed (the first ask of `body`, or a clone an abort can still
+reach), or given to `new Response(stream)`, and from then on the only
+answer to whether the body is usable; a fetched body's bytes
+are handed over as one chunk at the first read. `integrity` fails closed.
 `fetch()` hands the request to the host (`os64_dom_set_network`) and its
 answer comes back as one task (`os64_dom_fetched`), copied into the
 runtime's memory: a body past the runtime's limit is the sticky LIMIT, as

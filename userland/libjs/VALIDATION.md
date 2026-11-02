@@ -818,3 +818,34 @@ failures in the target-core probe, which ends the run); with it both
 probes pass: 1,285 target-core
 and 6,115 instrumented checks, zero failures, zero live allocations.
 `tools/test_js_prepare.py` passes. The export count is unchanged.
+
+## Refused bytecode buffer validation
+
+Patch 0017 (after 0016) makes a compile safe to free when its bytecode
+buffer is refused memory (LIBJS_0017_REVIEW.md is Fable's review). The
+cuts that found it were yonder's scripted-page host's: an allocation
+sweep over an event handler's compile. Without the patch it crashed
+twice in `resolve_labels`. First a buffer marked errored accepted a
+smaller later put, and `free_bytecode_atoms` read an operand as an atom
+(a SEGV). Then a relocation recorded after the error was patched over the
+last instruction's atom, which was freed one time too many and found at
+the runtime's teardown. Fable's hand-run sweeps
+(`--compile-failure-pending`) on the first draft found the rest: the
+`add_reloc` fail path leaked a `RelocEntry` per label not yet reached
+(`eval_arg`, `eval_with`, `loop_arrow_class` on the instrumented engine).
+With the patch, `with`, `eval_var`, `eval_arg` and `eval_with` are suite
+cases (`--compile-failure`), clean on both probes:
+
+| sweep | target-core cuts | instrumented cuts |
+|---|---|---|
+| `with` | 14 (14 out of memory) | 166 (121) |
+| `eval_var` | 27 (24) | 220 (173) |
+| `eval_arg` | 23 (19) | 230 (170) |
+| `eval_with` | 13 (12) | 209 (161) |
+
+Every cut answers the script's value or `InternalError: out of memory`,
+and frees everything it made. `loop_arrow_class` stays pending for
+0011b's items 1 and 4, and no longer crashes. The runtime suite passes
+on both probes: 1,893 target-core and 15,137 instrumented checks, zero
+failures, zero live allocations. The compile sweeps' 40 checks pass on
+each. `tools/test_js_prepare.py` passes. The export count is unchanged.

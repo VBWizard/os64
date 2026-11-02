@@ -69,7 +69,9 @@ def main():
         entries.append((ROOT/'userland'/name, shlex.split(math['MATH_SQRT_FLAGS'])))
     if args.yonder:
         membership = (ROOT/'tools/test_yonder_host.sh').read_text().split('host_sources=(',1)[1].split(')',1)[0]
-        entries += [(ROOT/p, includes) for p in shlex.split(membership) if p != 'tools/test_yonder_host.c']
+        shared = {source for source, _ in entries}
+        entries += [(ROOT/p, includes) for p in shlex.split(membership)
+                    if p != 'tools/test_yonder_host.c' and ROOT/p not in shared]
         entries += [(ROOT/p, includes) for p in ('userland/apps/yonder/svg.c',
             'userland/apps/yonder/svg_document.c', 'userland/libhtml/xml.c', 'userland/libxml/xml.c')]
     harness = 'test_canvas_paths.c' if args.canvas else 'test_yonder_svg.c' if args.yonder else 'test_svg_paint.c' if args.paint else 'test_svg_core.c'

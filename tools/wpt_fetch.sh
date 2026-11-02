@@ -43,6 +43,7 @@ WPT_DIRS=(
     css/cssom
     css/mediaqueries
     fetch/api
+    streams
     xhr
     html/semantics/scripting-1/the-script-element
     css/css-logical
@@ -51,6 +52,8 @@ WPT_DIRS=(
     css/css-text
     css/css-ui
     css/css-overflow
+    css/filter-effects
+    css/compositing
     css/support
     html/browsers/the-window-object
     html/dom

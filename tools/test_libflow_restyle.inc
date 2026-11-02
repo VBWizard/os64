@@ -32,6 +32,8 @@ static void restyle_cases(void)
         "#kept{font-family:Missing,serif;background-image:linear-gradient(45deg,red,blue),url(a.png);"
         "background-position:2px 3px,4px 5px;background-repeat:no-repeat,repeat;"
         "box-shadow:1px 2px 3px red;text-shadow:2px 3px blue;transform:translate(2px,3px) rotate(5deg);"
+        "filter:blur(2px) url(effect.svg#ink);backdrop-filter:brightness(0.8) url(back.svg#glass);"
+        "mix-blend-mode:multiply;isolation:isolate;"
         "display:grid;grid-template-columns:20px 1fr;grid-template-areas:'one two';}"
         "#kept span{grid-area:one}"
         "</style><div id=changed>change <b>me</b></div>"

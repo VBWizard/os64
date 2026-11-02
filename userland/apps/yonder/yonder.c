@@ -52,6 +52,7 @@
 #include "sheet.h"
 #include "scale.h"
 #include "warp.h"
+#include "filter.h"
 #include "settings.h"
 #include "scripts.h"
 #include "diag.h"
@@ -575,15 +576,38 @@ typedef struct {
     unsigned canvas_request;
     bool origin_clean;
     yonder_svg_document_t *svg;
-    uint32_t width, height;         // SVG default object size, in CSS pixels
-    os64_image_t image;             // a still raster picture's pixels
+    // Its own size in CSS pixels, any kind, once it has arrived (kept when
+    // it is NOT_KEPT too): what layout reads (picture_natural).
+    uint32_t width, height;
+    // Display raster pixels may be smaller than the natural size
+    // (PICTURE_SIZES.md); Canvas sources retain full-resolution pixels.
+    os64_image_t image;
     os64_image_sequence_t *moving;  // or a moving one's, its frame on show
+    size_t cost;                    // what it is charged to kept_bytes while SHOWN
     uint64_t due;                   // when its next frame is, while it plays
     bool playing;                   // false once it stops: its loops done, or a frame failed
     os64_work_id_t id;              // while WAITING
     // An image naming it gives no width and height of its own, so its
     // arrival may require relayout; rebuilt models can add such a use.
     bool moves;
+    // Asked for at first (pictures_start) to cover this rectangle, the
+    // largest fixed box an `img` draws it in with object-fit fill, contain
+    // or cover, or 0 x 0 for whole: whole when any use is not such a box (a
+    // box that waits on its size, another object-fit, a background) or is
+    // drawn pixelated.
+    uint32_t cover_w, cover_h;
+    bool cover_whole;
+    // The size the last layout draws it at, as yonder_picture_kept_size
+    // keeps it (css_pictures' walk; 0 x 0 for no use), and the size wanted of a
+    // resample owed or out: `resampling` while its job (`resample_id`) is
+    // in the pool, `resample_owed` while it waits to be handed over.
+    uint32_t need_w, need_h, want_w, want_h;
+    bool resample_owed, resampling;
+    os64_work_id_t resample_id;
+    // A resample that came back without a picture, one that would not fit,
+    // or one no different from what is kept: that size is not asked for
+    // again until the need changes, or the page would ask forever.
+    uint32_t refused_w, refused_h;
 } Picture;
 
 // One of a page's style sheets (GARB.md, G3 and G4): a `style` element's,
@@ -708,6 +732,14 @@ typedef struct Page {
     // next picture to hand it.
     int32_t waiting, in_flight, next_pic;
     int32_t not_kept;
+    // Pictures owed a resample (Picture.resample_owed), so a feed with none
+    // owed walks no table. Resamples out count in in_flight, not waiting:
+    // their pictures are already had.
+    int32_t resample_owed;
+    // The record's `picture sizes` line has been written (diag_observe): it
+    // is kept true when no picture is kept smaller any more, since a fact
+    // stays until it is written again.
+    bool sizes_said;
     // Pictures refused before the table (picture_unasked): how many, and
     // each one's identity, so a rebuild or a new layout that meets the
     // same one again records nothing more.
@@ -774,15 +806,27 @@ static int32_t picture_find(const Page *p, const char *url);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
 
-// A shown picture's natural size and raster pixels. SVG returns no pixels:
-// it is rasterized at the object/tile dimensions by the window painter.
+// A shown picture's natural size, in CSS pixels: what layout, object-fit
+// and a background's tile are worked out from. An SVG's follows the
+// appearance it is drawn in.
+static void picture_natural(const Picture *pic, uint32_t *w, uint32_t *h)
+{
+    if (pic->kind == YONDER_PICTURE_SVG && pic->svg != NULL &&
+        yonder_svg_document_size(pic->svg, s_dark, s_reduce_motion, NULL, NULL, w, h) == SVG_OK)
+        return;
+    *w = pic->width;
+    *h = pic->height;
+}
+
+// A shown picture's raster pixels and THEIR size, which for a still raster
+// may be smaller than its natural size (PICTURE_SIZES.md): the painters
+// scale them into whatever rectangle the natural size gave. SVG returns no
+// pixels: it is rasterized at the object/tile dimensions by the window
+// painter.
 static const uint32_t *picture_pixels(const Picture *pic, uint32_t *w, uint32_t *h)
 {
     if (pic->kind == YONDER_PICTURE_SVG) {
-        if (yonder_svg_document_size(pic->svg, s_dark, s_reduce_motion, NULL, NULL, w, h) != SVG_OK) {
-            *w = pic->width;
-            *h = pic->height;
-        }
+        picture_natural(pic, w, h);
         return NULL;
     }
     if (pic->moving != NULL) {
@@ -1029,6 +1073,36 @@ static uint32_t zoomed_px(uint32_t n, uint32_t zoom)
     uint64_t z = zoom != 0 ? zoom : 1000;
     uint64_t r = ((uint64_t)n * z + 500) / 1000;
     return (uint32_t)(r > INT32_MAX ? INT32_MAX : r < 1 && n > 0 ? 1 : r);
+}
+
+// Where picture `pic` is drawn for an `img` box `b` whose content box is
+// `content`: placed by object-fit and object-position at its natural size at
+// the page's zoom (CSS Images 3 § 4.5), before it is cut to the box. The
+// painter draws it here, and the walk after layout (css_pictures_of) asks
+// for the picture to be kept at this size.
+static os64_gui_rect_t picture_object_rect(const Page *p, const Picture *pic, const flow_box_t *b,
+                                           os64_gui_rect_t content)
+{
+    uint32_t w, h;
+    picture_natural(pic, &w, &h);
+    return yonder_object_rect(b->style, content, zoomed_px(w, p->laid_zoom), zoomed_px(h, p->laid_zoom));
+}
+
+// One copy of picture `pic` behind a box: a sheet layer's (`l`), sized and
+// placed in its `origin` box, or (`l` NULL) an attribute's, its natural
+// size at the page's zoom from (ox, oy) — a picture's own size is in CSS
+// pixels, so at the zoom it is that many device pixels times the zoom, as
+// every CSS length is. False when the layer draws nothing. The painter
+// tiles it, and the walk after layout (css_pictures_of) asks for the
+// picture to be kept at this size.
+static bool picture_tile(const Page *p, const Picture *pic, const flow_layer_t *l,
+                         os64_gui_rect_t origin, int32_t ox, int32_t oy, yonder_tile_t *tile)
+{
+    uint32_t w, h;
+    picture_natural(pic, &w, &h);
+    uint32_t zw = zoomed_px(w, p->laid_zoom), zh = zoomed_px(h, p->laid_zoom);
+    *tile = (yonder_tile_t){{ox, oy, (int32_t)zw, (int32_t)zh}, true, true};
+    return l == NULL || yonder_background_tile(l, origin, zw, zh, tile);
 }
 
 // A position in device pixels, laid out at zoom `from`, at zoom `to`
@@ -1721,6 +1795,11 @@ static struct {
     // last laid out (pictures_settle); cleared by any layout, whether or not
     // it fit.
     bool pictures_moved;
+    // A still raster arrived (shown, or past the memory kept) since the
+    // walk that finds how big each picture is drawn last ran (css_pictures):
+    // one that moves nothing is otherwise never judged, since only a layout
+    // runs that walk. pictures_settle runs it once for every arrival since.
+    bool pictures_judge_owed;
     // The window's clock, for moving pictures and a slow page's owed
     // layout; NULL, and nothing moves and a layout waits for an event.
     yonder_ticker_t *ticker;
@@ -2077,14 +2156,16 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
         select_size(c, node, w, h);
         return true;
     }
-    // A hidden model can have new image indices before the shown page's
-    // pic_of map is rebuilt. Resolve its current URL in the shared catalog.
+    // Resolve the hidden model's current URL rather than the shown image map.
+    // Even a picture past the kept-memory limit supplies its natural size.
     int32_t i = model != NULL ? os64_page_image_for(model, node) : -1;
     const os64_page_image_t *image = i >= 0 ? os64_page_image(model, i) : NULL;
     int32_t picture = image ? picture_find(p, image->src.url) : -1;
-    if (picture < 0 || p->pics[picture].state != PIC_SHOWN) return false;
+    if (picture < 0 || (p->pics[picture].state != PIC_SHOWN &&
+                        p->pics[picture].state != PIC_NOT_KEPT)) return false;
     uint32_t pw, ph;
-    (void)picture_pixels(&p->pics[picture], &pw, &ph);
+    picture_natural(&p->pics[picture], &pw, &ph);
+    if (pw == 0 || ph == 0) return false;
     *w = (int32_t)pw;
     *h = (int32_t)ph;
     return true;
@@ -2505,7 +2586,9 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // The stages of a paint, and the work beside paints. RENDER is libui's
 // whole walk — the root panel and the chrome as well as the view — and
 // VIEW the page's part of it; the rest are inside VIEW but for PUBLISH,
-// handing the damage to the compositor. LAID is inside SHADOWS and
+// handing the damage to the compositor. FILTERS is the layers of filtered
+// and blended groups made, filtered and laid, and backdrops filtered
+// (FILTER.md, MIX_BLEND.md). LAID is inside SHADOWS and
 // GRADIENTS: the part of them spent laying their pixels on the glass (the
 // mask and pixels verbs), the rest being working them out or copying them
 // out of the paint cache. TICKS is a tick's work before its
@@ -2519,12 +2602,12 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // here; the rebuild after it is a layout's alone.
 typedef enum {
     PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
-    PS_WARPS, PS_LAID, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
+    PS_WARPS, PS_FILTERS, PS_LAID, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
 } PaintStage;
 
 static const char *const kPaintStage[PS_COUNT] = {
     "render", "view", "backgrounds", "pictures", "text", "groups", "shadows", "gradients",
-    "warps", "laid", "publish", "ticks", "schedule", "tasks", "layouts",
+    "warps", "filters", "laid", "publish", "ticks", "schedule", "tasks", "layouts",
 };
 
 // The deadlines a schedule hands the ticker, by where the next came from:
@@ -2745,6 +2828,25 @@ static void diag_observe(Page *p, const char *when)
                   (int)p->npics, (int)shown, (int)failed, (int)p->not_kept, (int)coming,
                   (int)p->unasked);
     yonder_diag_fact(d, "pictures", v);
+    // Kept at the size they are drawn (PICTURE_SIZES.md), and what that
+    // spared against keeping them whole: a line once there are some, and
+    // from then on, saying none when a zoom has grown them all back whole.
+    int32_t smaller = 0;
+    uint64_t spared = 0;
+    for (int32_t i = 0; i < p->npics; i++) {
+        const Picture *pic = &p->pics[i];
+        if (pic->state != PIC_SHOWN || pic->kind != YONDER_PICTURE_RASTER ||
+            (pic->image.width >= pic->width && pic->image.height >= pic->height))
+            continue;
+        smaller++;
+        spared += (uint64_t)pic->width * pic->height * 4u - pic->cost;
+    }
+    if (smaller > 0 || p->sizes_said) {
+        os64_snprintf(v, sizeof(v), "%d kept at the size they are drawn, %lu KiB less than whole",
+                      (int)smaller, (unsigned long)(spared >> 10));
+        yonder_diag_fact(d, "picture sizes", v);
+        p->sizes_said = true;
+    }
     os64_snprintf(v, sizeof(v), "%d, %d ready", (int)p->nsheets, (int)p->sheets_ready);
     yonder_diag_fact(d, "sheets", v);
     diag_fonts(p);
@@ -4247,13 +4349,67 @@ static void hooks_ask(way_hooks_t *hooks, const char *page_url, way_dest_t dest)
     way_metadata_request(&hooks->metadata, &page, dest, WAY_MODE_NO_CORS);
 }
 
-// Hands the pool the page's next pictures, in table order, while fewer than
-// PICTURES_AT_ONCE are in it. One it cannot take keeps its frame, and is
-// named on the record; when that settles the page's last picture, the
-// record is written then, as a worker's last arrival writes it (reaped).
 static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
                            const char *asked);
+static void picture_fact(const Picture *pic, const char *what);
 
+// Hands picture `index` to the pool: its job, asked to cover `cover_w` x
+// `cover_h` device pixels (0 x 0: whole), a resample of one already had when
+// `resample`. Its id, or 0 with `*why` saying why it was not taken; the job
+// goes through its own release on every refusal.
+static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, uint32_t cover_h,
+                                     bool resample, const char **why)
+{
+    const Picture *pic = &p->pics[index];
+    yonder_picture_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+    if (job == NULL) {
+        *why = g.pool == NULL ? "no worker to fetch it" : "no memory to ask for it";
+        return 0;
+    }
+    job->kind = YONDER_JOB_PICTURE;
+    job->index = index;
+    job->generation = g.page_serial;
+    job->agent = g.way.agent;
+    job->svg_enabled = p->modern;
+    job->dark = s_dark;
+    job->reduced_motion = s_reduce_motion;
+    job->canvas_request = pic->canvas_request;
+    job->cover_w = cover_w;
+    job->cover_h = cover_h;
+    job->resample = resample;
+    // A data: address is the picture itself, which job->url may not
+    // hold, and the catalog's copy dies with the page: the job keeps its own.
+    if (data_address(pic->url, pic->url_len)) {
+        job->data_url = copy_text(pic->url);
+        if (job->data_url == NULL) {
+            yonder_picture_release(job, NULL);
+            *why = "no memory for its address";
+            return 0;
+        }
+    } else {
+        os64_strcopy(job->url, sizeof(job->url), pic->url);
+    }
+    job->hooks.jar = g.way.jar;
+    job->hooks.cache = g.cache;
+    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
+    hooks_ask(&job->hooks, p->way.url, WAY_DEST_IMAGE);
+    os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
+    os64_work_id_t id = os64_work_submit(g.pool, &work);
+    if (id == 0) {
+        yonder_picture_release(job, NULL);
+        *why = "the workers would not take it";
+    }
+    return id;
+}
+
+// Hands the pool the page's next pictures, in table order, while fewer than
+// PICTURES_AT_ONCE are in it, each asked to cover the box it was found in
+// (pictures_start). One it cannot take keeps its frame, and is named on the
+// record; when that settles the page's last picture, the record is written
+// then, as a worker's last arrival writes it (reaped). Then, with the first
+// asks all handed over, the resamples owed (pictures_judge), in table
+// order, in the same PICTURES_AT_ONCE. One the pool will not take is a
+// fact; the next layout judges it again.
 static void pictures_feed(Page *p)
 {
     bool refused = false;
@@ -4264,48 +4420,31 @@ static void pictures_feed(Page *p)
             continue;
         pic->state = PIC_FAILED;
         p->waiting--;
-        yonder_picture_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
-        if (job == NULL) {
-            picture_failed(p, pic->url, NULL,
-                           g.pool == NULL ? "no worker to fetch it" : "no memory to ask for it");
-            refused = true;
-            continue;
-        }
-        job->kind = YONDER_JOB_PICTURE;
-        job->index = index;
-        job->generation = g.page_serial;
-        job->agent = g.way.agent;
-        job->svg_enabled = p->modern;
-        job->dark = s_dark;
-        job->reduced_motion = s_reduce_motion;
-        job->canvas_request = pic->canvas_request;
-        // A data: address is the picture itself, which job->url may not
-        // hold, and the catalog's copy dies with the page: the job keeps its own.
-        if (data_address(pic->url, pic->url_len)) {
-            job->data_url = copy_text(pic->url);
-            if (job->data_url == NULL) {
-                yonder_picture_release(job, NULL);
-                picture_failed(p, pic->url, NULL, "no memory for its address");
-                refused = true;
-                continue;
-            }
-        } else {
-            os64_strcopy(job->url, sizeof(job->url), pic->url);
-        }
-        job->hooks.jar = g.way.jar;
-        job->hooks.cache = g.cache;
-        os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
-        hooks_ask(&job->hooks, p->way.url, WAY_DEST_IMAGE);
-        os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
-        pic->id = os64_work_submit(g.pool, &work);
+        const char *why = NULL;
+        pic->id = picture_submit(p, index, pic->cover_whole ? 0 : pic->cover_w,
+                                 pic->cover_whole ? 0 : pic->cover_h, false, &why);
         if (pic->id == 0) {
-            yonder_picture_release(job, NULL);
-            picture_failed(p, pic->url, NULL, "the workers would not take it");
+            picture_failed(p, pic->url, NULL, why);
             refused = true;
             continue;
         }
         pic->state = PIC_WAITING;
         p->waiting++;
+        p->in_flight++;
+    }
+    for (int32_t k = 0; p->resample_owed > 0 && p->in_flight < PICTURES_AT_ONCE && k < p->npics; k++) {
+        Picture *pic = &p->pics[k];
+        if (!pic->resample_owed)
+            continue;
+        pic->resample_owed = false;
+        p->resample_owed--;
+        const char *why = NULL;
+        pic->resample_id = picture_submit(p, k, pic->want_w, pic->want_h, true, &why);
+        if (pic->resample_id == 0) {
+            picture_fact(pic, "could not be asked for again at the size it is drawn");
+            continue;
+        }
+        pic->resampling = true;
         p->in_flight++;
     }
     if (refused && p->waiting == 0)
@@ -4862,14 +5001,64 @@ static bool picture_unasked(Page *p, const char *url, const char *written,
                             os64_page_reason_t refused);
 static const char *written_attr(const os64_html_node_t *node, const char *attr);
 
-// The pictures one box's layers put behind it, each sent for once.
+// What the walk after a layout carries beside each box: whether the sheets
+// are in, to send for their pictures; and the canvas's owner and the root,
+// since the owner's layers are tiled in the ROOT's origin box (the
+// painter's rule, yonder_paint), which is the size they are drawn at.
+typedef struct {
+    const flow_box_t *owner, *root;
+    bool sheets;
+} PictureWalk;
+
+// One use of picture `k` drawn `w` x `h` device pixels: its need
+// (Picture.need_w/h) is the largest of its uses', as the picture is kept. A
+// still raster only, once it has a size: nothing else is kept smaller. A use
+// drawn `pixelated` needs it whole, whatever its size: the painter keeps its
+// pixels hard, and a picture averaged smaller has already mixed them.
+static void picture_drawn_at(Page *p, int32_t k, int64_t w, int64_t h, bool pixelated)
+{
+    if (k < 0 || k >= p->npics || w <= 0 || h <= 0)
+        return;
+    Picture *pic = &p->pics[k];
+    if (pic->kind != YONDER_PICTURE_RASTER || (pic->state != PIC_SHOWN && pic->state != PIC_NOT_KEPT) ||
+        pic->width == 0 || pic->height == 0)
+        return;
+    uint32_t kw = pic->width, kh = pic->height;
+    if (!pixelated)
+        yonder_picture_kept_size(pic->width, pic->height, (uint32_t)(w < UINT32_MAX ? w : UINT32_MAX),
+                                 (uint32_t)(h < UINT32_MAX ? h : UINT32_MAX), &kw, &kh);
+    if (kw > pic->need_w)
+        pic->need_w = kw;
+    if (kh > pic->need_h)
+        pic->need_h = kh;
+}
+
+// The pictures one box draws: the sizes its `img` picture and its
+// pictures behind it are drawn at, and, once the sheets are in, each
+// picture its layers name sent for once.
 // NOT inlined into the walk below: the address buffer is 16KB, and the
 // walk recurses once per level of box nesting on a 1MB stack — with the
 // buffer in the walk's own frame, a page sixty boxes deep walked the stack
 // off its end (the P5, 2026-10-30). Here it lives in a frame that is popped
 // before the walk descends.
-static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t *b)
+static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t *b,
+                                                       const PictureWalk *walk)
 {
+    const os64_page_t *model = page_model(p);
+    int32_t m = model != NULL && p->pic_of != NULL ? os64_page_image_for(model, b->node) : -1;
+    if (m >= 0 && m < p->nimage_map && p->pic_of[m] >= 0) {
+        int32_t k = p->pic_of[m];
+        os64_gui_rect_t at = picture_object_rect(p, &p->pics[k], b, yonder_box_edge(b, b->rect, FLOW_EDGE_CONTENT));
+        picture_drawn_at(p, k, at.w, at.h, b->style->pixelated);
+    }
+    m = model != NULL && p->bg_of != NULL ? os64_page_background_for(model, b->node) : -1;
+    if (m >= 0 && m < p->nbackground_map && p->bg_of[m] >= 0) {
+        yonder_tile_t tile;
+        if (picture_tile(p, &p->pics[p->bg_of[m]], NULL, (os64_gui_rect_t){0, 0, 0, 0}, 0, 0, &tile))
+            picture_drawn_at(p, p->bg_of[m], tile.at.w, tile.at.h, b->style->pixelated);
+    }
+    if (!walk->sheets)
+        return false;
     bool fresh = false;             // a refusal the record had not met
     for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
         flow_layer_t l = flow_background_layer(b->style, i);
@@ -4878,13 +5067,14 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
             continue;
         const char *at;
         size_t n;
+        int32_t k = -1;
         if (css_data_span(&l, &at, &n)) {
             char *key = css_data_key(at, n);
             if (key == NULL) {
                 // No memory for its key: on the record by its opening.
                 os64_snprintf(url, sizeof(url), "%.*s", (int)(n < 64 ? n : 64), at);
                 fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
-            } else if (picture_for(p, key) < 0) {
+            } else if ((k = picture_for(p, key)) < 0) {
                 fresh |= picture_unasked(p, key, NULL, OS64_PAGE_REASON_OK);
             }
             os64_free(key);
@@ -4894,36 +5084,105 @@ static __attribute__((noinline)) bool css_pictures_of(Page *p, const flow_box_t 
             os64_memcpy(url, l.image, len);
             url[len] = '\0';
             fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);
-        } else if (picture_for(p, url) < 0) {
+        } else if ((k = picture_for(p, url)) < 0) {
             fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
         }
+        yonder_tile_t tile;
+        const flow_box_t *in = b == walk->owner && walk->root != NULL ? walk->root : b;
+        if (k >= 0 && picture_tile(p, &p->pics[k], &l, yonder_box_edge(in, in->rect, l.origin), 0, 0, &tile))
+            picture_drawn_at(p, k, tile.at.w, tile.at.h, b->style->pixelated);
     }
     return fresh;
 }
 
 // After a layout: every picture the laid-out boxes' sheets put behind them
 // is sent for, once — a resize whose media query brings a new one fetches
-// it then. The frame here must stay small (css_pictures_of says why).
-static bool css_pictures_under(Page *p, const flow_box_t *b)
+// it then — and every picture's need is found. The frame here must stay
+// small (css_pictures_of says why).
+static bool css_pictures_under(Page *p, const flow_box_t *b, const PictureWalk *walk)
 {
     bool fresh = false;
     for (; b != NULL; b = b->next) {
         if (b->node != NULL)
-            fresh |= css_pictures_of(p, b);
-        fresh |= css_pictures_under(p, b->first);
+            fresh |= css_pictures_of(p, b, walk);
+        fresh |= css_pictures_under(p, b->first, walk);
     }
     return fresh;
 }
 
+static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
+                           const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip);
+
+// PICTURE_SIZES.md's rules, against each picture's need from the last walk
+// (css_pictures). A shown still raster kept at twice the area it is drawn at, or
+// more, is owed a resample smaller (not at less than twice: a window
+// dragged narrower, or a zoom stepped, would decode the page again for
+// pixels it can spare); one drawn bigger than it is kept, on either axis,
+// is owed one bigger, if the page's memory has room. One past the memory
+// kept is owed one at the size it is drawn when that fits. A picture with
+// a resample out is judged when it lands; one whose resample at this need
+// came back refused (Picture.refused_w/h) is not owed it again while its
+// need stays that one — any other need lets the refusal go, so a zoom out
+// and back in asks again; and one no layout draws keeps what it has. The
+// shown page's alone: a picture arrives only to it.
+static void pictures_judge(Page *p)
+{
+    if (p != &g.page)
+        return;
+    for (int32_t k = 0; k < p->npics; k++) {
+        Picture *pic = &p->pics[k];
+        if (pic->resampling)
+            continue;
+        if (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)
+            pic->refused_w = pic->refused_h = 0;
+        bool owed = false;
+        if (pic->kind == YONDER_PICTURE_RASTER && pic->need_w > 0 && pic->need_h > 0 &&
+            (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)) {
+            uint64_t need = (uint64_t)pic->need_w * pic->need_h;
+            size_t bytes = (size_t)need * 4u;
+            if (pic->state == PIC_SHOWN) {
+                uint64_t have = (uint64_t)pic->image.width * pic->image.height;
+                bool grow = pic->need_w > pic->image.width || pic->need_h > pic->image.height;
+                owed = have >= 2 * need ||
+                       (grow && bytes <= PICTURES_KEPT_MAX - p->kept_bytes + pic->cost);
+            } else if (pic->state == PIC_NOT_KEPT) {
+                owed = bytes <= PICTURES_KEPT_MAX - p->kept_bytes;
+            }
+        }
+        if (owed) {
+            pic->want_w = pic->need_w;
+            pic->want_h = pic->need_h;
+            if (!pic->resample_owed) {
+                pic->resample_owed = true;
+                p->resample_owed++;
+            }
+        } else if (pic->resample_owed) {
+            pic->resample_owed = false;
+            p->resample_owed--;
+        }
+    }
+}
+
 // Without workers too: pictures_feed names each one it cannot hand over.
+// The size every picture is drawn at is found afresh by the walk, and the
+// shown page's are judged against what they keep (pictures_judge), which
+// pays what the shown page's arrivals were owed (pictures_judge_owed).
 static void css_pictures(Page *p)
 {
-    if (p->tree != NULL && p->sheets_ready > 0) {
-        bool fresh = css_pictures_under(p, flow_root(p->tree));
-        pictures_feed(p);
-        if (fresh && p->waiting == 0)
-            diag_pictures_in(p);
-    }
+    if (p == &g.page)
+        g.pictures_judge_owed = false;
+    if (p->tree == NULL)
+        return;
+    const yonder_verbs_t asking = {.backdrop = glass_backdrop};
+    PictureWalk walk = {yonder_canvas_owner(p->tree, &asking), flow_root(p->tree), p->sheets_ready > 0};
+    for (int32_t k = 0; k < p->npics; k++)
+        p->pics[k].need_w = p->pics[k].need_h = 0;
+    bool fresh = css_pictures_under(p, walk.root, &walk);
+    pictures_judge(p);
+    pictures_feed(p);
+    if (fresh && p->waiting == 0)
+        diag_pictures_in(p);
 }
 
 // Gathers the page's pictures and the pictures behind its boxes, one per
@@ -4962,15 +5221,40 @@ static void pictures_start(Page *p)
     p->nbackground_map = nb;
     // A picture moves the page when any element naming it leaves its box
     // to the picture; a background never does, being painted, not laid out.
+    // One not yet asked for is asked to cover the largest box layout has
+    // already fixed for it, where fill, contain or cover draws it inside
+    // that box's cover (PICTURE_SIZES.md); any other use, and one drawn
+    // pixelated (picture_drawn_at says why), asks for it whole.
     bool fresh = false;             // a refusal the record had not met
+    for (int32_t k = 0; k < p->npics; k++)
+        if (p->pics[k].state == PIC_QUEUED) {
+            p->pics[k].cover_w = p->pics[k].cover_h = 0;
+            p->pics[k].cover_whole = false;
+        }
     for (int32_t i = 0; i < n; i++) {
         const os64_page_image_t *img = os64_page_image(model, i);
         int32_t k = picture_for(p, img->src.url);
         p->pic_of[i] = k;
         if (k < 0)
             fresh |= picture_unasked(p, img->src.url, written_attr(img->node, "src"), img->src.refused);
-        if (k >= 0 && !picture_sized(p, img->node))
+        bool sized = k >= 0 && picture_sized(p, img->node);
+        if (k >= 0 && !sized)
             p->pics[k].moves = true;
+        if (k >= 0 && p->pics[k].state == PIC_QUEUED) {
+            const flow_box_t *b = sized ? flow_box_for(p->tree, img->node) : NULL;
+            flow_object_fit_t fit = b != NULL ? b->style->object_fit : FLOW_OBJECT_NONE;
+            os64_gui_rect_t c = b != NULL ? yonder_box_edge(b, b->rect, FLOW_EDGE_CONTENT)
+                                          : (os64_gui_rect_t){0, 0, 0, 0};
+            if (c.w <= 0 || c.h <= 0 || b->style->pixelated ||
+                (fit != FLOW_OBJECT_FILL && fit != FLOW_OBJECT_CONTAIN && fit != FLOW_OBJECT_COVER)) {
+                p->pics[k].cover_whole = true;
+            } else {
+                if ((uint32_t)c.w > p->pics[k].cover_w)
+                    p->pics[k].cover_w = (uint32_t)c.w;
+                if ((uint32_t)c.h > p->pics[k].cover_h)
+                    p->pics[k].cover_h = (uint32_t)c.h;
+            }
+        }
     }
     for (int32_t i = 0; i < nb; i++) {
         const os64_page_background_t *bg = os64_page_background(model, i);
@@ -4978,6 +5262,8 @@ static void pictures_start(Page *p)
         if (p->bg_of[i] < 0)
             fresh |= picture_unasked(p, bg->src.url, written_attr(bg->node, "background"),
                                      bg->src.refused);
+        else if (p->pics[p->bg_of[i]].state == PIC_QUEUED)
+            p->pics[p->bg_of[i]].cover_whole = true;
     }
     pictures_feed(p);
     // A refusal met with nothing out to write the record when it comes in
@@ -4986,14 +5272,19 @@ static void pictures_start(Page *p)
         diag_pictures_in(p);
 }
 
-// The page is being left: its pictures in the pool are cancelled, and the
-// pool lets their inputs and products go; those not handed over are never
-// asked for.
+// The page is being left: its pictures in the pool are cancelled, resamples
+// too, and the pool lets their inputs and products go; those not handed
+// over are never asked for.
 static void pictures_leave(Page *p)
 {
-    for (int32_t i = 0; i < p->npics; i++)
+    for (int32_t i = 0; i < p->npics; i++) {
         if (p->pics[i].state == PIC_WAITING && g.pool != NULL)
             os64_work_cancel(g.pool, p->pics[i].id);
+        if (p->pics[i].resampling && g.pool != NULL)
+            os64_work_cancel(g.pool, p->pics[i].resample_id);
+        p->pics[i].resampling = p->pics[i].resample_owed = false;
+    }
+    p->resample_owed = 0;
     p->waiting = p->in_flight = 0;
     p->next_pic = p->npics;
 }
@@ -5080,6 +5371,8 @@ static void pictures_orphaned(Page *p)
 {
     bool any = false;
     for (int32_t i = 0; i < p->npics; i++) {
+        // A resample that will not land leaves its picture as it was.
+        p->pics[i].resampling = false;
         if (p->pics[i].state != PIC_WAITING)
             continue;
         p->pics[i].state = PIC_FAILED;
@@ -5131,11 +5424,76 @@ static void picture_failed(Page *p, const char *url, const yonder_picture_t *pro
     badge_follow();
 }
 
+static void pictures_judge(Page *p);
+
+// A note on the page's record about picture `pic`, keyed by its address.
+static void picture_fact(const Picture *pic, const char *what)
+{
+    char key[OS64_FETCH_URL_MAX + 16], name[128];
+    os64_snprintf(key, sizeof(key), "picture %s", picture_name(pic->url, name, sizeof(name)));
+    yonder_diag_fact(g.page.diag, key, what);
+}
+
+// A shown picture's pixels asked for again at the size it is drawn
+// (PICTURE_SIZES.md), or one past the memory kept asked for at that size:
+// the new pixels replace the old, and kept_bytes moves by the difference.
+// One that did not come, or will not fit, leaves the picture as it was — a
+// worse copy is never traded for none — and is a fact, not a failure: the
+// picture is still shown (or still past the memory). One that came back the
+// size already kept changes nothing, and is not asked for at that need
+// again: asking again would answer the same, and the page would ask
+// forever. Either way its need is judged again, since it may have moved
+// while this one was out.
+static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *product)
+{
+    Picture *pic = &g.page.pics[job->index];
+    if (!pic->resampling)
+        return;
+    pic->resampling = false;
+    g.page.in_flight--;
+    bool shown = pic->state == PIC_SHOWN;
+    size_t old = shown ? pic->cost : 0;
+    if (product == NULL || product->status != OS64_IMAGE_OK || product->kind != YONDER_PICTURE_RASTER ||
+        (!shown && pic->state != PIC_NOT_KEPT)) {
+        picture_fact(pic, "could not be had again at the size it is drawn");
+        pic->refused_w = job->cover_w;
+        pic->refused_h = job->cover_h;
+    } else if (product->cost > PICTURES_KEPT_MAX - (g.page.kept_bytes - old)) {
+        if (shown)
+            picture_fact(pic, "past the memory kept at the size it is drawn; kept at the size it was");
+        pic->refused_w = job->cover_w;
+        pic->refused_h = job->cover_h;
+    } else if (shown && product->image.width == pic->image.width &&
+               product->image.height == pic->image.height) {
+        pic->refused_w = job->cover_w;
+        pic->refused_h = job->cover_h;
+    } else {
+        layout_revision(&s_layout_resources.pictures);
+        pic->origin_clean = product->origin_clean;
+        os64_image_free(&pic->image);
+        pic->image = product->image;
+        os64_memset(&product->image, 0, sizeof(product->image));
+        g.page.kept_bytes = g.page.kept_bytes - old + product->cost;
+        pic->cost = product->cost;
+        if (!shown) {
+            pic->state = PIC_SHOWN;
+            g.page.not_kept--;
+            picture_fact(pic, "kept at the size it is drawn: whole, it was past the memory kept");
+        }
+        mark_whole(WHOLE_PICTURE, false);
+    }
+    pictures_judge(&g.page);
+}
+
 static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product)
 {
     if (job->generation != g.page_serial || job->index < 0 || job->index >= g.page.npics)
         return;                     // a page no longer on screen
     diag_cookies_short(g.page.diag, &job->hooks.cookies_short);
+    if (job->resample) {
+        picture_resampled(job, product);
+        return;
+    }
     Picture *pic = &g.page.pics[job->index];
     if (pic->state != PIC_WAITING)
         return;
@@ -5146,29 +5504,34 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         picture_failed(&g.page, pic->url, product, NULL);
         return;
     }
+    layout_revision(&s_layout_resources.pictures);
+    pic->origin_clean = product->origin_clean;
+    pic->kind = product->kind;
+    pic->width = product->width;
+    pic->height = product->height;
     size_t bytes = product->cost;
     if (bytes > PICTURES_KEPT_MAX - g.page.kept_bytes) {
         // Not a failure: what the page's pictures may cost is spent. Named
-        // all the same, so every picture not shown is on the record.
+        // all the same, so every picture not shown is on the record. Its
+        // size is kept: its frame is laid out at it, and a still raster is
+        // asked for again at the size that frame draws it (pictures_judge).
         pic->state = PIC_NOT_KEPT;
         g.page.not_kept++;
-        char key[OS64_FETCH_URL_MAX + 16], name[128];
-        os64_snprintf(key, sizeof(key), "picture %s", picture_name(pic->url, name, sizeof(name)));
-        yonder_diag_fact(g.page.diag, key, "past the memory kept for the page's pictures");
+        picture_fact(pic, "past the memory kept for the page's pictures");
+        if (picture_moves_page(&g.page, job->index))
+            g.pictures_moved = true;
+        if (pic->kind == YONDER_PICTURE_RASTER)
+            g.pictures_judge_owed = true;
         return;
     }
-    layout_revision(&s_layout_resources.pictures);
-    pic->kind = product->kind;
-    pic->origin_clean=product->origin_clean;
     pic->svg = product->svg;
     product->svg = NULL;
-    pic->width = product->width;
-    pic->height = product->height;
     pic->image = product->image;
     os64_memset(&product->image, 0, sizeof(product->image));
     pic->moving = product->sequence;
     product->sequence = NULL;
     pic->state = PIC_SHOWN;
+    pic->cost = bytes;
     g.page.kept_bytes += bytes;
     if (pic->moving != NULL) {
         pic->playing = true;
@@ -5177,6 +5540,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     }
     if (picture_moves_page(&g.page, job->index))
         g.pictures_moved = true;
+    if (pic->kind == YONDER_PICTURE_RASTER)
+        g.pictures_judge_owed = true;
     mark_whole(WHOLE_PICTURE, false);
 }
 
@@ -6408,7 +6773,7 @@ static bool paint_lines(DiagText *t, DiagText *u)
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).
     uint64_t per = rate * 100;
     uint64_t inner = 0;
-    for (int32_t s = PS_BACKGROUNDS; s <= PS_WARPS; s++)
+    for (int32_t s = PS_BACKGROUNDS; s <= PS_FILTERS; s++)
         inner += s_cost.total[s];
     uint64_t window = s_cost.total[PS_RENDER] > s_cost.total[PS_VIEW] ? s_cost.total[PS_RENDER] - s_cost.total[PS_VIEW] : 0;
     uint64_t rest = s_cost.total[PS_VIEW] > inner ? s_cost.total[PS_VIEW] - inner : 0;
@@ -6609,6 +6974,10 @@ static void pictures_settle(void)
         if (now_ok)
             relayout(true);
     }
+    // Pictures that arrived moving nothing are judged at the size they are
+    // drawn now; a layout still owed runs the same walk when it comes.
+    if (g.pictures_judge_owed && !g.pictures_moved && !s_web.moved)
+        css_pictures(&g.page);
     // A face the layout's own feed moved (webfonts_move) is owed the next
     // batch, not dropped with the deadline this pass started from.
     if (s_web.moved && due == YONDER_NEVER)
@@ -7035,15 +7404,18 @@ typedef struct {
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 
 // The shown page has nothing more coming of its own accord: it has
-// streamed and arrived, its pictures and fonts are in and its record is
-// not owed, and no script of its is waiting to run or still being fetched
-// (a `src` script, or a module script's graph: one slower than the quiet
-// would otherwise be cut off). What a running script fetches for itself
-// is not waited for, since a page that polls would never settle; its
-// answer comes back as a job, which restarts the quiet.
+// streamed and arrived, its pictures and fonts are in — kept at the size
+// they are drawn too, no resample out or owed (with none waiting, every
+// job in flight is a resample) — and its record is not owed, and no
+// script of its is waiting to run or still being fetched (a `src` script,
+// or a module script's graph: one slower than the quiet would otherwise
+// be cut off). What a running script fetches for itself is not waited
+// for, since a page that polls would never settle; its answer comes back
+// as a job, which restarts the quiet.
 static bool exit_settled(void)
 {
     return g.page.tree != NULL && !g.stream.active && !g.coming.active && g.page.waiting == 0 &&
+           g.page.in_flight == 0 && g.page.resample_owed == 0 && !g.pictures_judge_owed &&
            !g.page.record_owed && s_web.waiting == 0 && !yonder_scripts_pending(g.page.scripts) &&
            !yonder_scripts_fetching(g.page.scripts);
 }
@@ -7387,12 +7759,43 @@ static void paint_counted(const os64_gui_rect_t *damage, uint32_t count, WholeBy
         s_cost.rects_most = count;
 }
 
+// A backdrop blurs what lies within its reach of anything that changed,
+// so before libui paints, each part of the view it will paint is joined
+// with every backdrop box that part reaches (flow_backdrop_damage;
+// FILTER.md § 7). It is done here, over libui's own list, because not
+// every part comes through mark_part: libui marks a form control's part
+// itself, when it is hovered or focused.
+static void backdrop_damage(void)
+{
+    if (g.page.tree == NULL || !g.ui.any_dirty)
+        return;
+    os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+    uint32_t n = g.ui.damage_count;
+    os64_memcpy(list, g.ui.damage, (size_t)n * sizeof(list[0]));
+    const os64_gui_rect_t v = g.view.bounds;
+    flow_point_t scroll = scroll_now();
+    for (uint32_t i = 0; i < n; i++) {
+        os64_gui_rect_t in;
+        if (!os64_rect_intersect(list[i], v, &in))
+            continue;
+        os64_gui_rect_t page = {in.x - v.x + g.sx, in.y - v.y + g.sy, in.w, in.h};
+        os64_gui_rect_t wide = flow_backdrop_damage(g.page.tree, page, scroll);
+        if (wide.x == page.x && wide.y == page.y && wide.w == page.w && wide.h == page.h)
+            continue;
+        os64_ui_widget_t part = {0};
+        os64_gui_rect_t at = {v.x + wide.x - g.sx, v.y + wide.y - g.sy, wide.w, wide.h};
+        if (os64_rect_intersect(at, v, &part.bounds))
+            os64_ui_mark_dirty(&g.ui, &part);
+    }
+}
+
 // libui's paint, timed (s_cost): its render, then each dirty rectangle
 // handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
-// again here.
+// again here. Each part is first widened to the backdrops it reaches.
 static void glass_paint(void)
 {
+    backdrop_damage();
     os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
     WholeBy by = s_whole_by;
     os64_gui_rect_t reach = s_parts_reach;
@@ -8374,7 +8777,8 @@ static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_
     for(const flow_box_t *b=box;b;b=b->parent) {
         const flow_style_t *s=b->style;
         if(s->opacity!=1000 || s->transform || s->translate || s->rotate || s->scale ||
-           s->will_change || s->animating){mark_part(view);return;}
+           s->will_change || s->animating || s->nfilter || s->nbackdrop_filter ||
+           s->mix_blend!=FLOW_BLEND_NORMAL || s->isolate){mark_part(view);return;}
     }
     os64_gui_rect_t content=yonder_content_rect(box);
     flow_point_t offset=flow_box_doc_offset(box,scroll_now());
@@ -12015,6 +12419,9 @@ typedef struct {
     int32_t dx, dy;             // page -> window
     os64_gui_rect_t clip;       // what is being painted, in window coordinates
     GlassGroups *groups;
+    // The page view, in window coordinates, which a backdrop reads no
+    // farther than (pane_backdrop_filter); empty on a group's sheets.
+    os64_gui_rect_t whole;
 } Glass;
 
 static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
@@ -12298,18 +12705,14 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     }
     if (k < 0 || p->pics[k].state != PIC_SHOWN)
         return true;
+    // A sheet's picture is sized and placed in the origin box the painter
+    // names; an attribute's is tiled from (ox, oy) at its zoomed size. The
+    // tiler scales the pixels kept, whatever their size, to the tile.
+    yonder_tile_t tile;
+    if (!picture_tile(p, &p->pics[k], layer >= 0 ? &l : NULL, origin, ox, oy, &tile))
+        return true;
     uint32_t w, h;
     const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
-    // A picture's own size is in CSS pixels, so at the page's zoom it is
-    // that many device pixels times the zoom, as every CSS length is: an
-    // `auto` size and an attribute's tile are its size zoomed, and the
-    // tiler scales the picture to it.
-    uint32_t zw = zoomed_px(w, p->laid_zoom), zh = zoomed_px(h, p->laid_zoom);
-    // A sheet's picture is sized and placed in the origin box the painter
-    // names; an attribute's is tiled from (ox, oy) at its zoomed size.
-    yonder_tile_t tile = {{ox, oy, (int32_t)zw, (int32_t)zh}, true, true};
-    if (layer >= 0 && !yonder_background_tile(&l, origin, zw, zh, &tile))
-        return true;
     yonder_svg_pixels_t vector_pixels = {0};
     if (p->pics[k].kind == YONDER_PICTURE_SVG) {
         if (!svg_picture_pixels(&p->pics[k], tile.at, &vector_pixels))
@@ -12343,10 +12746,9 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     if (i >= 0 && i < p->nimage_map && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
         uint32_t w, h;
         const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
-        // Placed by object-fit and object-position at its size at the
-        // page's zoom, and cut to its content box (CSS Images 3 § 4.5).
-        os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(w, p->laid_zoom),
-                                                zoomed_px(h, p->laid_zoom));
+        // Placed by object-fit and object-position, and cut to its content
+        // box; the pixels kept, whatever their size, are scaled to it.
+        os64_gui_rect_t at = picture_object_rect(p, &p->pics[p->pic_of[i]], b, c);
         os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
         os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
         if (!os64_rect_intersect(cut, content, &cut))
@@ -12581,17 +12983,27 @@ static void box_bars(Glass *gl, os64_gui_rect_t view)
 }
 
 // The verbs a page is painted through: each drawn into every target being
-// painted — the window, or, inside a group laid through its matrix, that
-// group's two SHEETS, the same verb on black and on white, which warp.c
-// lays onto the targets outside at the close (PILE3.md § Transforms, the
-// painter). Each target keeps its own opacity groups. A group laid so is
-// at most SHEET_SIDE a side and SHEET_PIXELS in all, at most
-// GLASS_THROUGHS nest, and it lies within half of what a 32-bit
-// coordinate can say; one past those, or that finds no memory, is
-// refused, and the painter draws it upright.
+// painted — the window, or, inside a group laid through its matrix or a
+// filtered or blended group, that group's two SHEETS, the same verb on
+// black and on white, which warp.c (or filter.c) lays onto the targets
+// outside at the close (PILE3.md § Transforms, the painter; FILTER.md,
+// MIX_BLEND.md). Each target keeps its own opacity groups. A laid group's
+// sheets are at most SHEET_SIDE a side and SHEET_PIXELS in all, a layer's
+// FILTER_SHEET_SIDE and FILTER_SHEET_PIXELS, at most GLASS_THROUGHS pairs
+// nest, laid groups and layers together, and they lie within half of what
+// a 32-bit coordinate can say; sheets past those, or that find no memory,
+// are refused, and the painter draws a laid group upright and a layer's
+// group plain.
 #define GLASS_THROUGHS 16
 #define SHEET_SIDE 4096
 #define SHEET_PIXELS 2097152
+// A layer's sheets (a filtered or blended group's) are what the painter
+// has already cut to the view grown by the filter's spread (at most 3 x
+// FLOW_FILTER_BLUR_MAX a side), so they are bounded by the window, not by
+// a matrix: the window's size, its spread, and room for a 4K one, so a
+// page-wide filter (`html { filter: grayscale(1) }`) is drawn.
+#define FILTER_SHEET_SIDE 8192
+#define FILTER_SHEET_PIXELS 16777216
 
 typedef struct {
     Glass sheet[2];
@@ -12599,9 +13011,9 @@ typedef struct {
     os64_gui_surface_t surf[2];
     Glass *was[2];
     int32_t was_n;
-    double m[6];                // the sheets' page coordinates -> those painted before
-    os64_gui_rect_t clip;       // the coordinates painted before
-    os64_gui_rect_t bounds;     // the sheets' page coordinates
+    double m[6];                // a laid group's: its sheets' coordinates -> those painted before
+    os64_gui_rect_t clip;       // a laid group's: in the coordinates painted before
+    os64_gui_rect_t bounds;     // the sheets' coordinates
 } GlassThrough;
 
 // A TEXT CLIP (PILE3.md § The text clip): a mask the clip's text is drawn
@@ -12805,31 +13217,33 @@ static void through_free(GlassThrough *t)
     os64_free(t);
 }
 
-// The two sheets of a group laid through its matrix, `bounds` of its own
-// coordinates, black and white, made the targets until its close.
-static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
-                              os64_gui_rect_t clip)
+// Two sheets, `bounds` of the coordinates painted inside them, black and
+// white, made the targets until the close: a group laid through its
+// matrix's, or a filtered or blended group's (pane_layer_open), each at most `side`
+// a side and `most` pixels. NULL, and nothing changed, when they cannot
+// be made.
+static GlassThrough *pane_sheets_open(GlassPane *gp, os64_gui_rect_t bounds, int32_t side,
+                                      int64_t most)
 {
-    GlassPane *gp = ctx;
     // A sheet's offset is its origin negated, and every verb adds it to a
     // coordinate in 32 bits: a sheet lying past half of what a coordinate
-    // can say is refused, so neither can overflow, and drawn upright.
+    // can say is refused, so neither can overflow.
     const int64_t half = INT32_MAX / 2;
-    if (gp->depth >= GLASS_THROUGHS || bounds.w <= 0 || bounds.h <= 0 || bounds.w > SHEET_SIDE ||
-        bounds.h > SHEET_SIDE || (int64_t)bounds.w * bounds.h > SHEET_PIXELS ||
+    if (gp->depth >= GLASS_THROUGHS || bounds.w <= 0 || bounds.h <= 0 || bounds.w > side ||
+        bounds.h > side || (int64_t)bounds.w * bounds.h > most ||
         bounds.x < -half || bounds.y < -half || (int64_t)bounds.x + bounds.w > half ||
         (int64_t)bounds.y + bounds.h > half)
-        return false;
+        return NULL;
     GlassThrough *t = os64_malloc(sizeof(*t));
     if (t == NULL)
-        return false;
+        return NULL;
     os64_memset(t, 0, sizeof(*t));
     size_t n = (size_t)bounds.w * (size_t)bounds.h;
     for (int k = 0; k < 2; k++) {
         t->surf[k].pixels = glass_take(n * sizeof(uint32_t));
         if (t->surf[k].pixels == NULL) {
             through_free(t);
-            return false;
+            return NULL;
         }
         t->surf[k].width = t->surf[k].pitch_px = (uint32_t)bounds.w;
         t->surf[k].height = (uint32_t)bounds.h;
@@ -12837,10 +13251,9 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
         for (size_t i = 0; i < n; i++)
             t->surf[k].pixels[i] = paper;
         t->sheet[k] = (Glass){&t->surf[k], -bounds.x, -bounds.y,
-                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &t->groups[k]};
+                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &t->groups[k],
+                              (os64_gui_rect_t){0, 0, 0, 0}};
     }
-    os64_memcpy(t->m, m, sizeof(t->m));
-    t->clip = clip;
     t->bounds = bounds;
     t->was_n = gp->n;
     for (int32_t k = 0; k < gp->n; k++)
@@ -12849,6 +13262,32 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
     gp->now[0] = &t->sheet[0];
     gp->now[1] = &t->sheet[1];
     gp->n = 2;
+    return t;
+}
+
+// The sheets closed: the targets outside them the targets again, and the
+// sheets handed back to be laid and freed.
+static GlassThrough *pane_sheets_close(GlassPane *gp)
+{
+    if (gp->depth <= 0)
+        return NULL;
+    GlassThrough *t = gp->open[--gp->depth];
+    gp->n = t->was_n;
+    for (int32_t k = 0; k < t->was_n; k++)
+        gp->now[k] = t->was[k];
+    return t;
+}
+
+// The two sheets of a group laid through its matrix, `bounds` of its own
+// coordinates (pane_sheets_open). Refused, the painter draws it upright.
+static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
+                              os64_gui_rect_t clip)
+{
+    GlassThrough *t = pane_sheets_open(ctx, bounds, SHEET_SIDE, SHEET_PIXELS);
+    if (t == NULL)
+        return false;
+    os64_memcpy(t->m, m, sizeof(t->m));
+    t->clip = clip;
     return true;
 }
 
@@ -12859,12 +13298,9 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
 static void pane_through_close(void *ctx, uint8_t alpha)
 {
     GlassPane *gp = ctx;
-    if (gp->depth <= 0)
+    GlassThrough *t = pane_sheets_close(gp);
+    if (t == NULL)
         return;
-    GlassThrough *t = gp->open[--gp->depth];
-    gp->n = t->was_n;
-    for (int32_t k = 0; k < t->was_n; k++)
-        gp->now[k] = t->was[k];
     yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, t->bounds.w, t->bounds.h};
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
@@ -12876,6 +13312,100 @@ static void pane_through_close(void *ctx, uint8_t alpha)
             (void)yonder_warp(on->surf->pixels, on->surf->pitch_px, cut, &s, lay, back, alpha);
     }
     through_free(t);
+}
+
+// A layer's two sheets — a filtered or blended group's (FILTER.md,
+// MIX_BLEND.md) — `bounds` of the coordinates being painted, which stay
+// those (pane_sheets_open).
+static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
+{
+    return pane_sheets_open(ctx, bounds, FILTER_SHEET_SIDE, FILTER_SHEET_PIXELS) != NULL;
+}
+
+// Its pixels recovered from the two sheets, into the black one, filtered
+// (filter.h) and laid onto each target outside at `alpha` by `mode`: a
+// sheet pixel (i, j) is the coordinates' (i + bounds.x, j + bounds.y), the
+// target's offset taking that onto its pixels, inside what the target
+// paints. Laid normal where the targets outside are a group's sheets,
+// which a blend would leave unable to recover their group (MIX_BLEND.md §
+// 4) — the painter drops such a blend before it opens a layer, so this is
+// the backstop for what it cannot see, a text clip's — and with no memory
+// for the filter's work, laid unfiltered; either counted once
+// (yonder_paint_layers_refused).
+static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                             uint8_t alpha, flow_blend_t mode)
+{
+    GlassPane *gp = ctx;
+    GlassThrough *t = pane_sheets_close(gp);
+    if (t == NULL)
+        return;
+    int32_t w = t->bounds.w, h = t->bounds.h;
+    uint32_t *layer = t->surf[0].pixels;
+    yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, w, h};
+    yonder_layer_recover(&s, layer);
+    bool plain = false;         // counted once, whichever half is dropped
+    if (n > 0) {
+        void *work = glass_take(yonder_filter_work_bytes(w, h, filter, n));
+        if (work != NULL) {
+            yonder_filter_run(layer, w, h, filter, n, current, work);
+            glass_give(work);
+        } else {
+            plain = true;
+        }
+    }
+    if (mode != FLOW_BLEND_NORMAL && (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)) {
+        mode = FLOW_BLEND_NORMAL;
+        plain = true;
+    }
+    if (plain)
+        yonder_paint_layers_refused++;
+    for (int32_t k = 0; k < gp->n; k++) {
+        const Glass *on = gp->now[k];
+        yonder_layer_lay(on->surf->pixels, on->surf->pitch_px, on->clip, layer, w, h,
+                         t->bounds.x + on->dx, t->bounds.y + on->dy, alpha, mode);
+    }
+    through_free(t);
+}
+
+// A backdrop (FILTER.md § 7) on the window: `rect` and its list's reach
+// round it read from the window — mirrored, as a filter's layer is cut —
+// no farther than the page view, filtered as an opaque layer, and laid
+// back inside `rect` at `cover`. Refused on a group's sheets, where what
+// is behind is not the page; with no memory; and for a layer past
+// FILTER_SHEET_SIDE or FILTER_SHEET_PIXELS, or lying past half of what a
+// coordinate can say, or with no page view to read.
+static bool pane_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
+                                 const flow_filter_t *filter, int32_t n, uint32_t current)
+{
+    GlassPane *gp = ctx;
+    if (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)
+        return false;
+    const Glass *on = gp->now[0];
+    int32_t d[4];
+    flow_filter_list_reach(filter, n, d);
+    // In window pixels: the box, and what it reads round it.
+    os64_gui_rect_t box = {rect.x + on->dx, rect.y + on->dy, rect.w, rect.h};
+    int64_t x0 = (int64_t)box.x - d[FLOW_RIGHT], y0 = (int64_t)box.y - d[FLOW_BOTTOM];
+    int64_t w = (int64_t)box.w + d[FLOW_LEFT] + d[FLOW_RIGHT];
+    int64_t h = (int64_t)box.h + d[FLOW_TOP] + d[FLOW_BOTTOM];
+    os64_gui_rect_t whole = {0, 0, (int32_t)on->surf->width, (int32_t)on->surf->height};
+    if (!os64_rect_intersect(whole, on->whole, &whole) || w > FILTER_SHEET_SIDE ||
+        h > FILTER_SHEET_SIDE || w * h > FILTER_SHEET_PIXELS || x0 < INT32_MIN / 2 ||
+        y0 < INT32_MIN / 2)
+        return false;
+    uint32_t *layer = glass_take((size_t)(w * h) * sizeof(uint32_t));
+    void *work = glass_take(yonder_filter_work_bytes((int32_t)w, (int32_t)h, filter, n));
+    bool drawn = layer != NULL && work != NULL &&
+                 yonder_backdrop_take(on->surf->pixels, on->surf->pitch_px, whole, (int32_t)x0,
+                                      (int32_t)y0, (int32_t)w, (int32_t)h, layer);
+    if (drawn) {
+        yonder_filter_run(layer, (int32_t)w, (int32_t)h, filter, n, current, work);
+        yonder_backdrop_put(on->surf->pixels, on->surf->pitch_px, on->clip, layer, (int32_t)w,
+                            (int32_t)h, (int32_t)x0, (int32_t)y0, box, cover);
+    }
+    glass_give(work);
+    glass_give(layer);
+    return drawn;
 }
 
 static void clip_free(GlassClip *c)
@@ -12915,7 +13445,8 @@ static bool pane_clip_open(void *ctx, os64_gui_rect_t bounds)
         for (size_t i = 0; i < n; i++)
             c->surf[k].pixels[i] = paper;
         c->sheet[k] = (Glass){&c->surf[k], -bounds.x, -bounds.y,
-                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &c->groups[k]};
+                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &c->groups[k],
+                              (os64_gui_rect_t){0, 0, 0, 0}};
     }
     c->bounds = bounds;
     c->was_n = gp->n;
@@ -13019,6 +13550,31 @@ static void timed_through_close(void *ctx, uint8_t alpha)
     cost_end(PS_WARPS);
 }
 
+static bool timed_layer_open(void *ctx, os64_gui_rect_t bounds)
+{
+    cost_begin(PS_FILTERS);
+    bool open = pane_layer_open(ctx, bounds);
+    cost_end(PS_FILTERS);
+    return open;
+}
+
+static void timed_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                              uint8_t alpha, flow_blend_t mode)
+{
+    cost_begin(PS_FILTERS);
+    pane_layer_close(ctx, filter, n, current, alpha, mode);
+    cost_end(PS_FILTERS);
+}
+
+static bool timed_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
+                                  const flow_filter_t *filter, int32_t n, uint32_t current)
+{
+    cost_begin(PS_FILTERS);
+    bool drawn = pane_backdrop_filter(ctx, rect, cover, filter, n, current);
+    cost_end(PS_FILTERS);
+    return drawn;
+}
+
 static void timed_mask(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour)
 {
     cost_begin(PS_LAID);
@@ -13040,7 +13596,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     if (!os64_rect_intersect(w->bounds, g.ui.dirty, &part))
         return;
     GlassGroups groups = {.depth = 0};
-    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups};
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups, w->bounds};
     if (g.page.tree == NULL) {
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | (s_dark ? kDark.paper : PAGE_PAPER));
         return;
@@ -13049,7 +13605,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
-                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL};
+                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL,
+                        timed_layer_open, timed_layer_close, timed_backdrop_filter};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
@@ -13066,6 +13623,11 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         g.paint_scratch = yonder_scratch_new();
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
                  g.paint_scratch, &v);
+    // Filtered and blended groups, and backdrops, painted plain (FILTER.md
+    // § 6, MIX_BLEND.md § 4), the most any one paint did.
+    if (yonder_paint_layers_refused > 0 && g.page.diag != NULL)
+        yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain",
+                                 yonder_paint_layers_refused);
     if (pane.canvas_label.run != NULL)
         os64_text_run_release(pane.canvas_label.run);
     yonder_paint_stage = NULL;

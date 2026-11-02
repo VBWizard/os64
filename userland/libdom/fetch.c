@@ -2,7 +2,7 @@
 #include "os64/fmt.h"
 
 /* fetch() and its objects (the Fetch Standard, § 5): Headers, Request,
- * Response, the body they share and a minimal stream over it. The request
+ * Response and the body they share. The request
  * goes to the HOST (dom.h § A SCRIPT'S REQUESTS), which makes every judgement
  * of origins and CORS (libway's origin.c) and hands back a filtered
  * response; what this file judges is what a page may write into a request:
@@ -14,10 +14,19 @@
  * again after anything that can run page code. Its sort-and-combine, which
  * iteration reads at every step, is kept until the list changes, so a walk
  * is n log n and not quadratic. A body is the bytes whole: the host reads a
- * response to its end before it answers, so a stream hands over the body
- * as one chunk. The requests out are the registry's fourth list. */
+ * response to its end before it answers.
+ *
+ * A body's STREAM is the Streams standard's (streams.c), made when first
+ * needed (the first ask of `body`, or a clone an abort can still reach), or
+ * given by the page to `new Response(stream)`. Until it
+ * exists, nothing has observed the body as a stream, and the bytes and
+ * `used` here are its whole state. From the moment it exists, the stream
+ * alone says whether the body is usable (disturbed, locked), and a body
+ * method reads it to its end; a Response's bytes move into it, and a
+ * Request keeps its own as Fetch's body source, which is what the host is
+ * sent. The requests out are the registry's fourth list. */
 
-static JSClassID headers_slot, headers_iterator_slot, request_slot, response_slot, stream_slot, reader_slot;
+static JSClassID headers_slot, headers_iterator_slot, request_slot, response_slot;
 
 enum { G_NONE, G_REQUEST, G_REQUEST_NO_CORS, G_RESPONSE, G_IMMUTABLE };
 
@@ -43,13 +52,14 @@ typedef struct {
 } DHeadersIterator;
 
 typedef struct {
-    uint8_t *bytes;
+    uint8_t *bytes;             /* NULL once a Response's have moved into its stream, or when it never had any */
     size_t length;
     bool has;                   /* a body, not null */
+    /* Before the stream exists: */
     bool used;                  /* disturbed: read, or read from */
     bool consumed;              /* read whole by a body method, whose reader keeps the stream locked */
-    JSValue stream;             /* made at the first ask, [SameObject] */
     JSValue aborted;            /* the abort reason a fetch's signal gave it, or undefined */
+    JSValue stream;             /* undefined until made; [SameObject], and the body's state from then on */
 } DBody;
 
 typedef struct {
@@ -84,26 +94,13 @@ typedef struct {
      * abort.c clears `abort_signal` when the signal goes first. */
     JSValue signal;
     void *abort_signal;
+    /* The stream an abort errors: the body's own, as first made. A clone
+     * tees it and the body then holds a branch, so erroring the source is
+     * what reaches the clone too (the standard's one teed stream). */
+    JSValue source;
 } DResp;
 
 static void response_settled(JSContext *ctx, DResp *r);
-
-enum { ST_READABLE, ST_CLOSED, ST_ERRORED };
-
-typedef struct {
-    JSValue owner;              /* the Request or Response whose body this is, or undefined */
-    uint8_t *bytes;             /* without an owner, its own */
-    size_t length;
-    int state;
-    bool locked, delivered;
-    JSValue reader;
-    JSValue error;
-} DStream;
-
-typedef struct {
-    JSValue stream;             /* undefined once released */
-    JSValue closed, closed_resolve, closed_reject;
-} DReader;
 
 uint64_t d_request_steps;
 
@@ -1050,33 +1047,39 @@ static DBody *body_of(JSValueConst value)
     return r != NULL ? &r->body : NULL;
 }
 
-static DStream *stream_state(JSValueConst value)
+static bool body_streamed(const DBody *b)
 {
-    return JS_GetOpaque(value, os64_js_class_id(&stream_slot));
+    return !JS_IsUndefined(b->stream);
 }
 
-/* § 5.3 "unusable": a body that is disturbed or locked. */
-static bool body_unusable(const DBody *b)
+/* § 5.3 "unusable": a body that is disturbed or locked. 1, 0, or -1 with
+ * the exception pending. */
+static int body_unusable(os64_dom_t *dom, JSContext *ctx, const DBody *b)
 {
-    if (!b->has) return false;
-    if (b->used) return true;
-    DStream *s = JS_IsUndefined(b->stream) ? NULL : stream_state(b->stream);
-    return s != NULL && s->locked;
+    if (!b->has) return 0;
+    if (!body_streamed(b)) return b->used;
+    int disturbed = d_stream_disturbed(dom, ctx, b->stream);
+    if (disturbed != 0) return disturbed;
+    return d_stream_locked(dom, ctx, b->stream);
 }
 
-/* A body read whole by something that keeps its reader: a body method's
- * "fully read", or a Request made from this one (whose body is a proxy
- * reading this one's stream to its end). Disturbed, and the stream, made
- * now or later, closed and locked. */
-static void body_take(DBody *b)
+/* bodyUsed: disturbed. */
+static JSValue body_used(os64_dom_t *dom, JSContext *ctx, const DBody *b)
 {
+    if (!b->has || !body_streamed(b)) return JS_NewBool(ctx, b->has && b->used);
+    int disturbed = d_stream_disturbed(dom, ctx, b->stream);
+    return disturbed < 0 ? JS_EXCEPTION : JS_NewBool(ctx, disturbed);
+}
+
+/* A body taken whole by a Request made from this one, whose body is a
+ * proxy reading this one's stream to its end: disturbed, and the stream,
+ * made now or later, locked. 0, or -1. */
+static int body_take(os64_dom_t *dom, JSContext *ctx, DBody *b)
+{
+    if (body_streamed(b)) return d_stream_take(dom, ctx, b->stream);
     b->used = b->has;
     b->consumed = b->has;
-    DStream *s = JS_IsUndefined(b->stream) ? NULL : stream_state(b->stream);
-    if (s != NULL) {
-        s->locked = true;
-        s->state = ST_CLOSED;
-    }
+    return 0;
 }
 
 int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *out, bool *has_type)
@@ -1122,7 +1125,11 @@ int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *
         }
         return 1;
     }
-    if (JS_IsObject(value) && JS_GetOpaque(value, os64_js_class_id(&stream_slot)) != NULL) {
+    /* A Response takes a stream before it asks here (response_constructor);
+     * a request's body that streams is booked (STREAMS.md). */
+    int stream = d_stream_is(dom, ctx, value);
+    if (stream < 0) return -1;
+    if (stream > 0) {
         JS_ThrowTypeError(ctx, "A stream as a request body is not supported");
         return -1;
     }
@@ -1189,311 +1196,124 @@ static JSValue json_parse(JSContext *ctx, const uint8_t *bytes, size_t length)
 
 enum { BODY_TEXT, BODY_JSON, BODY_ARRAY_BUFFER, BODY_BLOB, BODY_FORM_DATA, BODY_BYTES, BODY_USED, BODY_STREAM };
 
+/* The bytes of a body as `kind` asks them handed back, or JS_EXCEPTION:
+ * consume body's "convertBytesToJSValue". `headers` gives blob() and
+ * formData() their MIME type. */
+static JSValue body_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst headers, int kind,
+                            const uint8_t *bytes, size_t length)
+{
+    switch (kind) {
+    case BODY_TEXT: return d_utf8_decode(ctx, bytes, length);
+    case BODY_JSON: return json_parse(ctx, bytes, length);
+    case BODY_ARRAY_BUFFER: return JS_NewArrayBufferCopy(ctx, bytes, length);
+    case BODY_BYTES: return d_uint8_array(ctx, bytes, length);
+    case BODY_BLOB: {
+        DBytes copy = {js_malloc(ctx, length + 1), length, body_type(ctx, headers)};
+        if (copy.bytes == NULL || copy.type == NULL) {
+            d_bytes_free(ctx, &copy);
+            return JS_EXCEPTION;
+        }
+        if (length != 0) os64_memcpy(copy.bytes, bytes, length);
+        for (char *t = copy.type; *t != '\0'; t++) *t = lower(*t);
+        return d_blob_new(dom, ctx, &copy);
+    }
+    case BODY_FORM_DATA: {
+        char *type = body_type(ctx, headers);
+        if (type == NULL) return JS_EXCEPTION;
+        JSValue form = d_form_data_parse(dom, ctx, bytes, length, type);
+        js_free(ctx, type);
+        return form;
+    }
+    default: return JS_UNDEFINED;
+    }
+}
+
+/* What a streamed body's read hands its bytes to: data[1] is the Request or
+ * Response, magic the kind. */
+static JSValue body_converted(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const uint8_t *bytes;
+    size_t length;
+    if (argc < 1 || d_buffer_source(dom, ctx, argv[0], &bytes, &length) <= 0)
+        return JS_ThrowTypeError(ctx, "A body's read did not answer bytes");
+    DReq *q = request_state(data[1]);
+    DResp *r = q == NULL ? response_state(data[1]) : NULL;
+    /* Read to its end: an abort reaches the body no more. Until here it
+     * could, and errored the read. */
+    response_settled(ctx, r);
+    JSValueConst headers = q != NULL ? q->headers : r != NULL ? r->headers : JS_UNDEFINED;
+    return body_convert(dom, ctx, headers, magic, length != 0 ? bytes : (const uint8_t *)"", length);
+}
+
 /* § 5.3 "consume body": the body taken whole and handed back as `kind`, in
  * a promise. */
 static JSValue body_consume(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DBody *b, JSValueConst headers, int kind)
 {
+    if (body_streamed(b)) {
+        int unusable = body_unusable(dom, ctx, b);
+        if (unusable != 0) {
+            if (unusable > 0) JS_ThrowTypeError(ctx, "The body has already been read");
+            return d_promise_settled(ctx, JS_EXCEPTION);
+        }
+        JSValue data[2] = {dom->anchor->value, (JSValue)self};
+        JSValue convert = JS_NewCFunctionData(ctx, body_converted, 1, kind, 2, data);
+        if (JS_IsException(convert)) return d_promise_settled(ctx, convert);
+        JSValue promise = d_stream_read_all_then(dom, ctx, b->stream, convert);
+        JS_FreeValue(ctx, convert);
+        return JS_IsException(promise) ? d_promise_settled(ctx, promise) : promise;
+    }
     /* A body an abort errored answers its reason however often it is
      * asked. */
     if (!JS_IsUndefined(b->aborted)) {
         b->used = true;
         return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, b->aborted)));
     }
-    if (body_unusable(b)) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The body has already been read"));
+    if (b->has && b->used) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The body has already been read"));
     /* "Fully read" takes a reader it never releases. */
-    body_take(b);
+    b->used = b->has;
+    b->consumed = b->has;
     response_settled(ctx, response_state(self));
     const uint8_t *bytes = b->bytes != NULL ? b->bytes : (const uint8_t *)"";
     size_t length = b->has ? b->length : 0;
-    (void)self;
-    switch (kind) {
-    case BODY_TEXT: return d_promise_settled(ctx, d_utf8_decode(ctx, bytes, length));
-    case BODY_JSON: return d_promise_settled(ctx, json_parse(ctx, bytes, length));
-    case BODY_ARRAY_BUFFER: return d_promise_settled(ctx, JS_NewArrayBufferCopy(ctx, bytes, length));
-    case BODY_BYTES: return d_promise_settled(ctx, d_uint8_array(ctx, bytes, length));
-    case BODY_BLOB: {
-        DBytes copy = {js_malloc(ctx, length + 1), length, body_type(ctx, headers)};
-        if (copy.bytes == NULL || copy.type == NULL) {
-            d_bytes_free(ctx, &copy);
-            return d_promise_settled(ctx, JS_EXCEPTION);
-        }
-        if (length != 0) os64_memcpy(copy.bytes, bytes, length);
-        for (char *t = copy.type; *t != '\0'; t++) *t = lower(*t);
-        return d_promise_settled(ctx, d_blob_new(dom, ctx, &copy));
-    }
-    case BODY_FORM_DATA: {
-        char *type = body_type(ctx, headers);
-        if (type == NULL) return d_promise_settled(ctx, JS_EXCEPTION);
-        JSValue form = d_form_data_parse(dom, ctx, bytes, length, type);
-        js_free(ctx, type);
-        return d_promise_settled(ctx, form);
-    }
-    default: return JS_UNDEFINED;
-    }
+    return d_promise_settled(ctx, body_convert(dom, ctx, headers, kind, bytes, length));
 }
-
-static JSValue stream_make(os64_dom_t *dom, JSContext *ctx, JSValueConst owner, const uint8_t *bytes, size_t length);
 
 /* body's getter: the stream, made once, or null for no body. */
 static JSValue body_stream(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DBody *b)
 {
     if (!b->has) return JS_NULL;
-    if (JS_IsUndefined(b->stream)) {
-        JSValue stream = stream_make(dom, ctx, self, NULL, 0);
+    if (!body_streamed(b)) {
+        /* A body read already is a stream read already: closed and
+         * disturbed, and locked when a body method kept its reader. One an
+         * abort reached is made errored instead, below. */
+        bool aborted = !JS_IsUndefined(b->aborted);
+        JSValue stream = b->used && !aborted ? d_stream_spent(dom, ctx, b->consumed)
+                                             : d_stream_new(dom, ctx, b->bytes, b->length);
         if (JS_IsException(stream)) return stream;
         b = body_of(self);
         b->stream = stream;
-        /* A body already read is a stream already closed, and so is one
-         * with no bytes (enqueued whole, nothing to enqueue, then closed);
-         * one a body method read is locked by the reader it took. */
-        if (b->used || b->length == 0) stream_state(stream)->state = ST_CLOSED;
-        if (b->consumed) stream_state(stream)->locked = true;
+        /* An abort that reached the body before its stream was made errors
+         * it now (an abort reaches only a body with bytes, whose stream is
+         * readable until read); a body method that read the aborted body
+         * since then holds its reader, so the stream is locked too. */
+        if (aborted) {
+            if (d_stream_error(dom, ctx, stream, b->aborted) < 0) return JS_EXCEPTION;
+            if (b->used && d_stream_take(dom, ctx, stream) < 0) return JS_EXCEPTION;
+        }
+        /* The stream is the body's state from here; a Response's bytes are
+         * its, and a Request keeps its own as the source it sends. */
+        DResp *r = response_state(self);
+        if (r != NULL) {
+            js_free(ctx, b->bytes);
+            b->bytes = NULL;
+            JS_FreeValue(ctx, r->source);
+            r->source = JS_DupValue(ctx, stream);
+        }
     }
     return JS_DupValue(ctx, b->stream);
-}
-
-/* ── The stream (minimal: one chunk, then done) ──────────────────────── */
-
-static void stream_finalizer(JSRuntime *rt, JSValue value)
-{
-    DStream *s = stream_state(value);
-    if (s == NULL) return;
-    JS_FreeValueRT(rt, s->owner);
-    JS_FreeValueRT(rt, s->reader);
-    JS_FreeValueRT(rt, s->error);
-    js_free_rt(rt, s->bytes);
-    js_free_rt(rt, s);
-}
-
-static void stream_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
-{
-    DStream *s = stream_state(value);
-    if (s == NULL) return;
-    JS_MarkValue(rt, s->owner, mark);
-    JS_MarkValue(rt, s->reader, mark);
-    JS_MarkValue(rt, s->error, mark);
-}
-
-static DReader *reader_state(JSValueConst value)
-{
-    return JS_GetOpaque(value, os64_js_class_id(&reader_slot));
-}
-
-static void reader_finalizer(JSRuntime *rt, JSValue value)
-{
-    DReader *r = reader_state(value);
-    if (r == NULL) return;
-    JS_FreeValueRT(rt, r->stream);
-    JS_FreeValueRT(rt, r->closed);
-    JS_FreeValueRT(rt, r->closed_resolve);
-    JS_FreeValueRT(rt, r->closed_reject);
-    js_free_rt(rt, r);
-}
-
-static void reader_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
-{
-    DReader *r = reader_state(value);
-    if (r == NULL) return;
-    JS_MarkValue(rt, r->stream, mark);
-    JS_MarkValue(rt, r->closed, mark);
-    JS_MarkValue(rt, r->closed_resolve, mark);
-    JS_MarkValue(rt, r->closed_reject, mark);
-}
-
-static JSValue stream_make(os64_dom_t *dom, JSContext *ctx, JSValueConst owner, const uint8_t *bytes, size_t length)
-{
-    (void)dom;
-    JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&stream_slot));
-    if (JS_IsException(object)) return object;
-    DStream *s = js_mallocz(ctx, sizeof(*s));
-    uint8_t *copy = s != NULL && JS_IsUndefined(owner) ? js_malloc(ctx, length + 1) : NULL;
-    if (s == NULL || (JS_IsUndefined(owner) && copy == NULL)) {
-        js_free(ctx, s);
-        JS_FreeValue(ctx, object);
-        return JS_EXCEPTION;
-    }
-    if (copy != NULL && length != 0) os64_memcpy(copy, bytes, length);
-    s->owner = JS_DupValue(ctx, owner);
-    s->bytes = copy;
-    s->length = length;
-    s->reader = JS_UNDEFINED;
-    s->error = JS_UNDEFINED;
-    JS_SetOpaque(object, s);
-    return object;
-}
-
-JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length)
-{
-    JSValue stream = stream_make(dom, ctx, JS_UNDEFINED, bytes, length);
-    /* No bytes: closed at creation, as a body's is. */
-    if (!JS_IsException(stream) && length == 0) stream_state(stream)->state = ST_CLOSED;
-    return stream;
-}
-
-/* Settles a reader's `closed`: resolved (`error` undefined) or rejected. */
-static void reader_closed(JSContext *ctx, DReader *r, JSValueConst error)
-{
-    JSValueConst fn = JS_IsUndefined(error) ? r->closed_resolve : r->closed_reject;
-    if (!JS_IsUndefined(fn)) {
-        JSValue done = JS_Call(ctx, fn, JS_UNDEFINED, 1, &error);
-        JS_FreeValue(ctx, done);
-        /* A settle that failed is no failure of the caller's; one the
-         * runtime must stop at is left pending, uncatchable. */
-        if (JS_IsException(done) && d_exception_catchable(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
-    }
-    JS_FreeValue(ctx, r->closed_resolve);
-    JS_FreeValue(ctx, r->closed_reject);
-    r->closed_resolve = r->closed_reject = JS_UNDEFINED;
-}
-
-/* Whether the stream is errored. A body an abort errored after the answer
- * errors its stream (the Response's abort steps); the stream learns it
- * here, the first time anything asks, rejecting a reader's `closed` (`r`,
- * NULL for none). */
-static bool stream_errored(JSContext *ctx, DStream *s, DReader *r)
-{
-    DBody *b = body_of(s->owner);
-    if (s->state == ST_READABLE && b != NULL && !JS_IsUndefined(b->aborted)) {
-        s->state = ST_ERRORED;
-        JS_FreeValue(ctx, s->error);
-        s->error = JS_DupValue(ctx, b->aborted);
-        if (r != NULL) reader_closed(ctx, r, s->error);
-    }
-    return s->state == ST_ERRORED;
-}
-
-enum { S_LOCKED, S_GET_READER, S_CANCEL, S_TEE, R_READ, R_RELEASE, R_CLOSED, R_CANCEL };
-
-static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
-{
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (dom == NULL) return JS_EXCEPTION;
-    JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
-    if (magic >= R_READ) {
-        DReader *r = reader_state(self);
-        if (r == NULL) {
-            JSValue error = JS_ThrowTypeError(ctx, "Expected a ReadableStreamDefaultReader");
-            return magic == R_RELEASE ? error : d_promise_settled(ctx, error);
-        }
-        if (magic == R_CLOSED) return JS_DupValue(ctx, r->closed);
-        DStream *s = JS_IsUndefined(r->stream) ? NULL : stream_state(r->stream);
-        if (magic == R_RELEASE) {
-            if (s == NULL) return JS_UNDEFINED;
-            s->locked = false;
-            JS_FreeValue(ctx, s->reader);
-            s->reader = JS_UNDEFINED;
-            JS_FreeValue(ctx, r->stream);
-            r->stream = JS_UNDEFINED;
-            /* Streams' ReadableStreamReaderGenericRelease rejects a pending
-             * `closed` with a TypeError. (It also replaces a settled one
-             * with a rejected promise, and marks either handled; libjs has
-             * no verb to mark a promise handled, so neither is done:
-             * DEBTS.md § A script's requests.) */
-            JS_ThrowTypeError(ctx, "The reader was released");
-            JSValue error = JS_GetException(ctx);
-            reader_closed(ctx, r, error);
-            JS_FreeValue(ctx, error);
-            return JS_UNDEFINED;
-        }
-        if (s == NULL) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The reader has been released"));
-        if (magic == R_CANCEL) {
-            /* ReadableStreamCancel: an errored stream answers its error. */
-            if (stream_errored(ctx, s, r)) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
-            if (s->state == ST_READABLE) {
-                s->state = ST_CLOSED;
-                DBody *b = body_of(s->owner);
-                if (b != NULL) b->used = true;
-                response_settled(ctx, response_state(s->owner));
-                reader_closed(ctx, r, JS_UNDEFINED);
-            }
-            return d_promise_settled(ctx, JS_UNDEFINED);
-        }
-        /* read(): the whole body as one chunk, then done. */
-        if (stream_errored(ctx, s, r)) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
-        DBody *b = body_of(s->owner);
-        if (s->state == ST_CLOSED || s->delivered) {
-            if (s->state != ST_CLOSED) {
-                s->state = ST_CLOSED;
-                reader_closed(ctx, r, JS_UNDEFINED);
-            }
-            return d_promise_settled(ctx, result_object(ctx, JS_UNDEFINED, true));
-        }
-        s->delivered = true;
-        const uint8_t *bytes = b != NULL ? b->bytes : s->bytes;
-        size_t length = b != NULL ? b->length : s->length;
-        if (b != NULL) b->used = true;
-        response_settled(ctx, response_state(s->owner));
-        if (length == 0) {
-            s->state = ST_CLOSED;
-            reader_closed(ctx, r, JS_UNDEFINED);
-            return d_promise_settled(ctx, result_object(ctx, JS_UNDEFINED, true));
-        }
-        /* The body was enqueued whole and closed, so taking its one chunk
-         * empties the queue and closes the stream (Streams' default
-         * controller's pull steps: close requested, queue empty): `closed`
-         * resolves now, not at a read that finds it done. */
-        JSValue chunk = result_object(ctx, d_uint8_array(ctx, bytes != NULL ? bytes : (const uint8_t *)"", length), false);
-        if (JS_IsException(chunk)) return d_promise_settled(ctx, chunk);
-        s->state = ST_CLOSED;
-        reader_closed(ctx, r, JS_UNDEFINED);
-        return d_promise_settled(ctx, chunk);
-    }
-    DStream *s = stream_state(self);
-    if (s == NULL) {
-        JSValue error = JS_ThrowTypeError(ctx, "Expected a ReadableStream");
-        return magic == S_CANCEL ? d_promise_settled(ctx, error) : error;
-    }
-    switch (magic) {
-    case S_LOCKED: return JS_NewBool(ctx, s->locked);
-    case S_TEE: return d_dom_exception(dom, ctx, "NotSupportedError", "tee() is not supported by this browser");
-    case S_CANCEL:
-        if (s->locked) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The stream is locked"));
-        /* ReadableStreamCancel: an errored stream answers its error. */
-        if (stream_errored(ctx, s, NULL)) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
-        if (s->state == ST_READABLE) {
-            s->state = ST_CLOSED;
-            DBody *b = body_of(s->owner);
-            if (b != NULL) b->used = true;
-            response_settled(ctx, response_state(s->owner));
-        }
-        return d_promise_settled(ctx, JS_UNDEFINED);
-    case S_GET_READER: {
-        if (JS_IsObject(arg)) {
-            JSValue mode = JS_GetPropertyStr(ctx, arg, "mode");
-            if (JS_IsException(mode)) return mode;
-            bool byob = !JS_IsUndefined(mode);
-            JS_FreeValue(ctx, mode);
-            if (byob) return JS_ThrowRangeError(ctx, "Only the default reader is supported");
-            s = stream_state(self);
-        }
-        if (s->locked) return JS_ThrowTypeError(ctx, "The stream is locked");
-        JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&reader_slot));
-        DReader *r = JS_IsException(object) ? NULL : js_mallocz(ctx, sizeof(*r));
-        if (r == NULL) {
-            JS_FreeValue(ctx, object);
-            return JS_EXCEPTION;
-        }
-        r->stream = r->closed = r->closed_resolve = r->closed_reject = JS_UNDEFINED;
-        JS_SetOpaque(object, r);
-        JSValue resolving[2];
-        JSValue closed = JS_NewPromiseCapability(ctx, resolving);
-        if (JS_IsException(closed)) {
-            JS_FreeValue(ctx, object);
-            return closed;
-        }
-        r->closed = closed;
-        r->closed_resolve = resolving[0];
-        r->closed_reject = resolving[1];
-        r->stream = JS_DupValue(ctx, self);
-        s->locked = true;
-        JS_FreeValue(ctx, s->reader);
-        s->reader = JS_DupValue(ctx, object);
-        if (s->state == ST_CLOSED) reader_closed(ctx, r, JS_UNDEFINED);
-        else if (s->state == ST_ERRORED) reader_closed(ctx, r, s->error);
-        return object;
-    }
-    default: return JS_UNDEFINED;
-    }
 }
 
 /* ── Request ─────────────────────────────────────────────────────────── */
@@ -1526,6 +1346,7 @@ static void response_finalizer(JSRuntime *rt, JSValue value)
     if (r == NULL) return;
     if (r->abort_signal != NULL) d_signal_fetch_settled(rt, r->abort_signal, &r->abort_signal);
     JS_FreeValueRT(rt, r->signal);
+    JS_FreeValueRT(rt, r->source);
     body_free(rt, &r->body);
     js_free_rt(rt, r->status_text);
     js_free_rt(rt, r->url);
@@ -1552,6 +1373,7 @@ static void response_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     body_mark(rt, &r->body, mark);
     JS_MarkValue(rt, r->headers, mark);
     JS_MarkValue(rt, r->signal, mark);
+    JS_MarkValue(rt, r->source, mark);
 }
 
 static const char *const kModes[] = {"cors", "same-origin", "no-cors"};          /* way_mode_t */
@@ -1938,20 +1760,24 @@ static int request_init(os64_dom_t *dom, JSContext *ctx, JSValueConst object, JS
             js_free(ctx, extracted.type);
         }
     } else if (result == 0 && input_body) {
-        if (body_unusable(&in->body)) {
-            JS_ThrowTypeError(ctx, "The input request's body has already been read");
+        int unusable = body_unusable(dom, ctx, &in->body);
+        if (unusable != 0) {
+            if (unusable > 0) JS_ThrowTypeError(ctx, "The input request's body has already been read");
             result = -1;
         } else {
             q->body.bytes = js_malloc(ctx, in->body.length + 1);
             if (q->body.bytes == NULL) result = -1;
             else {
+                /* A Request keeps its bytes beside its stream (the source
+                 * it sends), so they are here either way. */
                 if (in->body.length != 0) os64_memcpy(q->body.bytes, in->body.bytes, in->body.length);
                 q->body.length = in->body.length;
                 q->body.has = true;
                 /* The new body is a proxy reading the input's stream to
                  * its end: the input's is disturbed, and its stream locked,
                  * one made later included. */
-                body_take(&in->body);
+                in = request_state(input);
+                if (body_take(dom, ctx, &in->body) < 0) result = -1;
             }
         }
     }
@@ -1982,17 +1808,31 @@ enum {
     Q_BODY_BASE = 100,
 };
 
-/* A copy of a body for a clone, or -1. */
-static int body_clone(JSContext *ctx, const DBody *from, DBody *to)
+/* A body for a clone, or -1: Fetch's "clone a body". A body whose stream
+ * exists is teed, the original keeping one branch and the clone taking the
+ * other, so what errors the original's source reaches both; one whose
+ * stream does not exist yet is copied (bytes, and an abort's reason). Bytes
+ * a Request keeps as its source are copied either way. */
+static int body_clone(os64_dom_t *dom, JSContext *ctx, DBody *from, DBody *to)
 {
     to->stream = to->aborted = JS_UNDEFINED;
     to->has = from->has;
     if (!from->has) return 0;
-    to->bytes = js_malloc(ctx, from->length + 1);
-    if (to->bytes == NULL) return -1;
-    if (from->length != 0) os64_memcpy(to->bytes, from->bytes, from->length);
-    to->length = from->length;
-    to->aborted = JS_DupValue(ctx, from->aborted);
+    if (from->bytes != NULL || !body_streamed(from)) {
+        to->bytes = js_malloc(ctx, from->length + 1);
+        if (to->bytes == NULL) return -1;
+        if (from->length != 0) os64_memcpy(to->bytes, from->bytes, from->length);
+        to->length = from->length;
+    }
+    if (!body_streamed(from)) {
+        to->aborted = JS_DupValue(ctx, from->aborted);
+        return 0;
+    }
+    JSValue branches[2];
+    if (d_stream_tee(dom, ctx, from->stream, branches) < 0) return -1;
+    JS_FreeValue(ctx, from->stream);
+    from->stream = branches[0];
+    to->stream = branches[1];
     return 0;
 }
 
@@ -2008,7 +1848,7 @@ static JSValue request_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     }
     if (magic >= Q_BODY_BASE) {
         int kind = magic - Q_BODY_BASE;
-        if (kind == BODY_USED) return JS_NewBool(ctx, q->body.used);
+        if (kind == BODY_USED) return body_used(dom, ctx, &q->body);
         if (kind == BODY_STREAM) return body_stream(dom, ctx, self, &q->body);
         return body_consume(dom, ctx, self, &q->body, q->headers, kind);
     }
@@ -2031,7 +1871,9 @@ static JSValue request_member(JSContext *ctx, JSValueConst self, int argc, JSVal
     case Q_DUPLEX: return JS_NewString(ctx, "half");
     case Q_HISTORY_NAVIGATION: case Q_RELOAD_NAVIGATION: return JS_FALSE;
     case Q_CLONE: {
-        if (body_unusable(&q->body)) return JS_ThrowTypeError(ctx, "The request's body has already been read");
+        int unusable = body_unusable(dom, ctx, &q->body);
+        if (unusable != 0) return unusable > 0 ? JS_ThrowTypeError(ctx, "The request's body has already been read")
+                                               : JS_EXCEPTION;
         JSValue prototype = JS_GetPrototype(ctx, self);
         if (JS_IsException(prototype)) return prototype;
         JSValue object = request_alloc(ctx, prototype);
@@ -2043,7 +1885,7 @@ static JSValue request_member(JSContext *ctx, JSValueConst self, int argc, JSVal
         c->body = (DBody){0};
         c->url = c->referrer = c->integrity = NULL;
         c->headers = c->signal = JS_UNDEFINED;
-        int result = body_clone(ctx, &q->body, &c->body);
+        int result = body_clone(dom, ctx, &q->body, &c->body);
         c->url = result == 0 ? engine_dup(ctx, q->url, os64_strlen(q->url)) : NULL;
         c->referrer = c->url != NULL ? engine_dup(ctx, q->referrer, os64_strlen(q->referrer)) : NULL;
         c->integrity = c->referrer != NULL ? engine_dup(ctx, q->integrity, os64_strlen(q->integrity)) : NULL;
@@ -2091,7 +1933,7 @@ static JSValue response_alloc(JSContext *ctx, JSValueConst prototype)
         JS_FreeValue(ctx, object);
         return JS_EXCEPTION;
     }
-    r->body.stream = r->body.aborted = r->headers = r->signal = JS_UNDEFINED;
+    r->body.stream = r->body.aborted = r->headers = r->signal = r->source = JS_UNDEFINED;
     r->status_text = text;
     r->url = url;
     r->type = WAY_TYPE_DEFAULT;
@@ -2203,7 +2045,13 @@ static JSValue response_constructor(JSContext *ctx, JSValueConst new_target, int
     JSValueConst body = argc > 0 ? argv[0] : JS_UNDEFINED;
     DBytes extracted = {0};
     bool has_type = false, has_body = !JS_IsUndefined(body) && !JS_IsNull(body);
-    if (has_body && d_body_extract(dom, ctx, body, &extracted, &has_type) < 0) return JS_EXCEPTION;
+    /* A stream is the body as given (Fetch's "extract" of a ReadableStream):
+     * no bytes, no type, and refused when it is disturbed or locked, which
+     * is asked after `init` is read (WebIDL converts the arguments before
+     * the constructor's steps run, and a getter in `init` can lock it). */
+    int streamed = has_body ? d_stream_is(dom, ctx, body) : 0;
+    if (streamed < 0) return JS_EXCEPTION;
+    if (!streamed && has_body && d_body_extract(dom, ctx, body, &extracted, &has_type) < 0) return JS_EXCEPTION;
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
     JSValue object = JS_IsException(prototype) ? JS_EXCEPTION : response_alloc(ctx, prototype);
     JS_FreeValue(ctx, prototype);
@@ -2214,6 +2062,16 @@ static JSValue response_constructor(JSContext *ctx, JSValueConst new_target, int
         return JS_EXCEPTION;
     }
     d_bytes_free(ctx, &extracted);
+    if (streamed) {
+        int disturbed = d_stream_disturbed(dom, ctx, body);
+        int locked = disturbed == 0 ? d_stream_locked(dom, ctx, body) : 0;
+        if (disturbed != 0 || locked != 0) {
+            if (disturbed > 0 || locked > 0) JS_ThrowTypeError(ctx, "The stream is disturbed or locked");
+            JS_FreeValue(ctx, object);
+            return JS_EXCEPTION;
+        }
+        response_state(object)->body.stream = JS_DupValue(ctx, body);
+    }
     return object;
 }
 
@@ -2302,7 +2160,7 @@ static JSValue response_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     }
     if (magic >= R_BODY_BASE) {
         int kind = magic - R_BODY_BASE;
-        if (kind == BODY_USED) return JS_NewBool(ctx, r->body.used);
+        if (kind == BODY_USED) return body_used(dom, ctx, &r->body);
         if (kind == BODY_STREAM) return body_stream(dom, ctx, self, &r->body);
         return body_consume(dom, ctx, self, &r->body, r->headers, kind);
     }
@@ -2315,7 +2173,17 @@ static JSValue response_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case R_STATUS_TEXT: return d_byte_text(ctx, r->status_text, os64_strlen(r->status_text));
     case R_HEADERS: return JS_DupValue(ctx, r->headers);
     case R_CLONE: {
-        if (body_unusable(&r->body)) return JS_ThrowTypeError(ctx, "The response's body has already been read");
+        int unusable = body_unusable(dom, ctx, &r->body);
+        if (unusable != 0) return unusable > 0 ? JS_ThrowTypeError(ctx, "The response's body has already been read")
+                                               : JS_EXCEPTION;
+        /* A body an abort can still reach is teed, not copied, so the
+         * abort reaches the clone through their one source. */
+        if (r->body.has && !body_streamed(&r->body) && !JS_IsUndefined(r->signal)) {
+            JSValue made = body_stream(dom, ctx, self, &r->body);
+            if (JS_IsException(made)) return made;
+            JS_FreeValue(ctx, made);
+            r = response_state(self);
+        }
         JSValue prototype = JS_GetPrototype(ctx, self);
         if (JS_IsException(prototype)) return prototype;
         JSValue object = response_alloc(ctx, prototype);
@@ -2326,7 +2194,7 @@ static JSValue response_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         c->type = r->type;
         c->status = r->status;
         c->redirected = r->redirected;
-        int result = body_clone(ctx, &r->body, &c->body);
+        int result = body_clone(dom, ctx, &r->body, &c->body);
         char *text = result == 0 ? engine_dup(ctx, r->status_text, os64_strlen(r->status_text)) : NULL;
         char *url = text != NULL ? engine_dup(ctx, r->url, os64_strlen(r->url)) : NULL;
         if (url == NULL) {
@@ -2464,23 +2332,29 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
         d_request_end(dom, request, true);
         return;
     }
-    /* Answered: a body not yet read is read as the reason; an empty one
-     * reads as empty, its stream closed from its creation (body_stream),
-     * so there is nothing for the abort to error. */
+    /* Answered: a body not yet read is read as the reason. Once the
+     * stream exists, its source is errored (the body's own stream, which a
+     * clone's tee reads from), which leaves one closed alone: one with no
+     * bytes is closed from its creation, and one whose chunk a reader took
+     * closed behind it (streams.js's fromBytes). Before the stream exists,
+     * the reason waits here for a body method or the stream. */
     DResp *r = answered;
-    if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
+    JSValue target = JS_UNDEFINED;
+    if (r != NULL && r->body.has && body_streamed(&r->body)) {
+        target = JS_DupValue(ctx, JS_IsUndefined(r->source) ? r->body.stream : r->source);
+    } else if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);
-        DStream *s = JS_IsUndefined(r->body.stream) ? NULL : stream_state(r->body.stream);
-        if (s != NULL && s->state == ST_READABLE && !s->delivered) {
-            s->state = ST_ERRORED;
-            JS_FreeValue(ctx, s->error);
-            s->error = JS_DupValue(ctx, reason);
-            DReader *rd = JS_IsUndefined(s->reader) ? NULL : reader_state(s->reader);
-            if (rd != NULL) reader_closed(ctx, rd, reason);
-        }
     }
-    /* Reached by the abort, or read already: settled either way. */
+    /* Reached by the abort, or read already: settled either way. Settled
+     * BEFORE the stream is errored, and `r` is not touched after: erroring
+     * runs streams.js, a collection it triggers can finalize the Response,
+     * and nothing holds the Response but the page. The stream is held here. */
     response_settled(ctx, r);
+    if (!JS_IsUndefined(target)) {
+        if (d_stream_error(dom, ctx, target, reason) < 0 && d_exception_catchable(ctx))
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, target);
+    }
 }
 
 /* The request as the host takes it. */
@@ -2648,21 +2522,16 @@ int d_fetch_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     static const JSClassDef request_class = {.class_name = "Request", .finalizer = request_finalizer, .gc_mark = request_mark};
     static const JSClassDef response_class = {.class_name = "Response", .finalizer = response_finalizer,
                                               .gc_mark = response_mark};
-    static const JSClassDef stream_class = {.class_name = "ReadableStream", .finalizer = stream_finalizer,
-                                            .gc_mark = stream_mark};
-    static const JSClassDef reader_class = {.class_name = "ReadableStreamDefaultReader", .finalizer = reader_finalizer,
-                                            .gc_mark = reader_mark};
-    JSClassID ids[6] = {os64_js_class_id(&headers_slot), os64_js_class_id(&headers_iterator_slot),
-                        os64_js_class_id(&request_slot), os64_js_class_id(&response_slot),
-                        os64_js_class_id(&stream_slot), os64_js_class_id(&reader_slot)};
-    const JSClassDef *defs[6] = {&headers_class, &iterator_class, &request_class, &response_class, &stream_class, &reader_class};
-    DValue *protos[6];
+    JSClassID ids[4] = {os64_js_class_id(&headers_slot), os64_js_class_id(&headers_iterator_slot),
+                        os64_js_class_id(&request_slot), os64_js_class_id(&response_slot)};
+    const JSClassDef *defs[4] = {&headers_class, &iterator_class, &request_class, &response_class};
+    DValue *protos[4];
     JSValue global_iterator = JS_GetPropertyStr(ctx, global, "Iterator");
     JSValue iterator_parent = JS_IsException(global_iterator) ? JS_EXCEPTION
                             : JS_GetPropertyStr(ctx, global_iterator, "prototype");
     JS_FreeValue(ctx, global_iterator);
     if (JS_IsException(iterator_parent)) return -1;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 4; i++) {
         if (class_of(dom, ids[i], defs[i]) < 0) {
             JS_FreeValue(ctx, iterator_parent);
             return -1;
@@ -2700,14 +2569,6 @@ int d_fetch_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"status", R_STATUS, 0, true}, {"ok", R_OK, 0, true}, {"statusText", R_STATUS_TEXT, 0, true},
         {"headers", R_HEADERS, 0, true}, {"clone", R_CLONE, 0, false},
     };
-    static const Member kStream[] = {
-        {"locked", S_LOCKED, 0, true}, {"getReader", S_GET_READER, 0, false}, {"cancel", S_CANCEL, 0, false},
-        {"tee", S_TEE, 0, false},
-    };
-    static const Member kReader[] = {
-        {"read", R_READ, 0, false}, {"releaseLock", R_RELEASE, 0, false}, {"closed", R_CLOSED, 0, true},
-        {"cancel", R_CANCEL, 0, false},
-    };
     Member body_for_request[8], body_for_response[8];
     for (int i = 0; i < 8; i++) {
         body_for_request[i] = kBody[i];
@@ -2720,24 +2581,15 @@ int d_fetch_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         methods(dom, ctx, protos[2]->value, request_member, kRequest, 17) < 0 ||
         methods(dom, ctx, protos[2]->value, request_member, body_for_request, 8) < 0 ||
         methods(dom, ctx, protos[3]->value, response_member, kResponse, 8) < 0 ||
-        methods(dom, ctx, protos[3]->value, response_member, body_for_response, 8) < 0 ||
-        methods(dom, ctx, protos[4]->value, stream_member, kStream, 4) < 0 ||
-        methods(dom, ctx, protos[5]->value, stream_member, kReader, 4) < 0)
+        methods(dom, ctx, protos[3]->value, response_member, body_for_response, 8) < 0)
         return -1;
-    /* Headers' [Symbol.iterator] is entries; the iterator and the stream's
-     * objects say what they are. */
+    /* Headers' [Symbol.iterator] is entries; the iterator says what it is. */
     JSAtom iterator_atom = JS_ValueToAtom(ctx, dom->iterator_symbol->value);
     JSValue entries = iterator_atom == JS_ATOM_NULL ? JS_EXCEPTION : JS_GetPropertyStr(ctx, protos[0]->value, "entries");
     int linked = JS_IsException(entries) ? -1
         : JS_DefinePropertyValue(ctx, protos[0]->value, iterator_atom, entries, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
     if (iterator_atom != JS_ATOM_NULL) JS_FreeAtom(ctx, iterator_atom);
-    if (linked < 0 || d_string_tag(ctx, protos[1]->value, "Headers Iterator") < 0 ||
-        d_string_tag(ctx, protos[4]->value, "ReadableStream") < 0 ||
-        d_string_tag(ctx, protos[5]->value, "ReadableStreamDefaultReader") < 0)
-        return -1;
-    /* ReadableStream is no global: a stream here is only a body's, and a
-     * `new ReadableStream(source)` this browser cannot honour would be a
-     * name a page detects and then finds broken. */
+    if (linked < 0 || d_string_tag(ctx, protos[1]->value, "Headers Iterator") < 0) return -1;
     static const struct { const char *name; int length; JSCFunction *constructor; int proto; } kInterfaces[] = {
         {"Headers", 0, headers_constructor, 0}, {"Request", 1, request_constructor, 2},
         {"Response", 0, response_constructor, 3},

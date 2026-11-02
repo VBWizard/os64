@@ -1,0 +1,140 @@
+# WPT's streams/transform-streams in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh streams/transform-streams --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+backpressure.any.html	backpressure allows no transforms with a default identity transform and no reader
+backpressure.any.html	backpressure only allows one transform() with a identity transform with a readable HWM of 1 and no reader
+backpressure.any.html	blocking transform() should cause backpressure
+backpressure.any.html	calling pull() before the first write() with backpressure should work
+backpressure.any.html	cancelling the readable should cause a pending write to resolve
+backpressure.any.html	cancelling the readable side of a TransformStream should abort a full pipe
+backpressure.any.html	cancelling the readable side of a TransformStream should abort an empty pipe
+backpressure.any.html	cancelling the readable side of a TransformStream should abort an empty pipe after startup
+backpressure.any.html	transform() should be able to read the chunk it just enqueued
+backpressure.any.html	transform() should keep being called as long as there is no backpressure
+backpressure.any.html	writer.closed should resolve after readable is canceled during start
+backpressure.any.html	writer.closed should resolve after readable is canceled with backpressure
+backpressure.any.html	writer.closed should resolve after readable is canceled with no backpressure
+backpressure.any.html	writes should resolve as soon as transform completes
+cancel.any.html	aborting the writable side should call transformer.abort()
+cancel.any.html	aborting the writable side should reject if transformer.cancel() throws
+cancel.any.html	cancelling the readable side should call transformer.cancel()
+cancel.any.html	cancelling the readable side should reject if transformer.cancel() throws
+cancel.any.html	closing the writable side should reject if a parallel transformer.cancel() throws
+cancel.any.html	readable.cancel() and a parallel writable.close() should reject if a transformer.cancel() calls controller.error()
+cancel.any.html	readable.cancel() should not call cancel() again when already called from writable.abort()
+cancel.any.html	readable.cancel() should not call cancel() when flush() is already called from writable.close()
+cancel.any.html	writable.abort() and readable.cancel() should reject if a transformer.cancel() calls controller.error()
+cancel.any.html	writable.abort() should not call cancel() again when already called from readable.cancel()
+cancel.any.html	writable.close() should not call flush() when cancel() is already called from readable.cancel()
+errors.any.html	TransformStream constructor should throw when start does
+errors.any.html	TransformStream errors thrown in flush put the writable and readable in an errored state
+errors.any.html	TransformStream errors thrown in transform put the writable and readable in an errored state
+errors.any.html	TransformStream transformer.start() rejected promise should error the stream
+errors.any.html	a write() that was waiting for backpressure should reject if the writable is aborted
+errors.any.html	abort should set the close reason for the writable when it happens before cancel during start, and cancel should reject
+errors.any.html	abort should set the close reason for the writable when it happens before cancel during underlying sink write, but cancel should still succeed
+errors.any.html	an exception from transform() should error the stream if terminate has been requested but not completed
+errors.any.html	cancelling the readable side should error the writable
+errors.any.html	controller.error() should close writable immediately after readable.cancel()
+errors.any.html	controller.error() should do nothing after a transformer method has thrown an exception
+errors.any.html	controller.error() should do nothing after readable.cancel() resolves
+errors.any.html	controller.error() should do nothing after writable.abort() has completed
+errors.any.html	controller.error() should do nothing the second time it is called
+errors.any.html	errored TransformStream should not enqueue new chunks
+errors.any.html	erroring during write with backpressure should result in the write failing
+errors.any.html	it should be possible to error the readable between close requested and complete
+errors.any.html	the readable should be errored with the reason passed to the writable abort() method
+errors.any.html	when controller.error is followed by a rejection, the error reason should come from controller.error
+errors.any.html	when strategy.size calls controller.error() then throws, the constructor should throw the first error
+errors.any.html	when strategy.size throws inside start(), the constructor should throw the same error
+flush.any.html	TransformStream flush gets a chance to enqueue more into the readable
+flush.any.html	TransformStream flush gets a chance to enqueue more into the readable, and can then async close
+flush.any.html	TransformStream flush is called after all queued writes finish, once the writable is closed
+flush.any.html	TransformStream flush is called immediately when the writable is closed, if no writes are queued
+flush.any.html	closing the writable side should call transformer.flush() and a parallel readable.cancel() should not reject
+flush.any.html	error() during flush should cause writer.close() to reject
+general.any.html	Identity TransformStream: can read from readable what is put into writable
+general.any.html	Subclassing TransformStream should work
+general.any.html	Transform stream should call transformer methods as methods
+general.any.html	TransformStream can be constructed with a transform function
+general.any.html	TransformStream can be constructed with no transform function
+general.any.html	TransformStream start, transform, and flush should be strictly ordered
+general.any.html	TransformStream writable starts in the writable state
+general.any.html	TransformStream: by default, closing the writable closes the readable (when there are no queued writes)
+general.any.html	TransformStream: by default, closing the writable closes the readable after async enqueues and async done
+general.any.html	TransformStream: by default, closing the writable closes the readable after sync enqueues and async done
+general.any.html	TransformStream: by default, closing the writable waits for transforms to finish before closing both
+general.any.html	Uppercaser async TransformStream: can read from readable transformed version of what is put into writable
+general.any.html	Uppercaser sync TransformStream: can read from readable transformed version of what is put into writable
+general.any.html	Uppercaser-doubler async TransformStream: can read both chunks put into the readable
+general.any.html	Uppercaser-doubler sync TransformStream: can read both chunks put into the readable
+general.any.html	closing the writable should close the readable when there are no queued chunks, even with backpressure
+general.any.html	controller.terminate() should do nothing the second time it is called
+general.any.html	enqueue() should throw after controller.terminate()
+general.any.html	enqueue() should throw after readable.cancel()
+general.any.html	it should be possible to call transform() synchronously
+general.any.html	methods should not not have .apply() or .call() called
+general.any.html	specifying a defined readableType should throw
+general.any.html	specifying a defined writableType should throw
+general.any.html	start() should not be called twice
+general.any.html	terminate() should abort writable immediately after readable.cancel()
+general.any.html	terminate() should do nothing after readable.cancel() resolves
+lipfuzz.any.html	testing "" (length 0)
+lipfuzz.any.html	testing "" (length 1)
+lipfuzz.any.html	testing "z{{in1}}" (length 1)
+lipfuzz.any.html	testing "{" (length 1)
+lipfuzz.any.html	testing "{," (length 2)
+lipfuzz.any.html	testing "{,{,i,n,1,},}" (length 7)
+lipfuzz.any.html	testing "{,{in1}}" (length 2)
+lipfuzz.any.html	testing "{{,in1}" (length 2)
+lipfuzz.any.html	testing "{{,in1}}" (length 2)
+lipfuzz.any.html	testing "{{bogusPartial}}" (length 1)
+lipfuzz.any.html	testing "{{bogusPartial}}}" (length 1)
+lipfuzz.any.html	testing "{{in1,}}" (length 2)
+lipfuzz.any.html	testing "{{in1}}" (length 1)
+lipfuzz.any.html	testing "{{in1}}q" (length 1)
+lipfuzz.any.html	testing "{{in1}}{{in1}" (length 1)
+lipfuzz.any.html	testing "{{in1}}{{in1},}" (length 2)
+lipfuzz.any.html	testing "{{in1}}{{in2}}{{in1}}" (length 1)
+lipfuzz.any.html	testing "{{quine}}" (length 1)
+lipfuzz.any.html	testing "{{wron,g}}" (length 2)
+lipfuzz.any.html	testing "{{wrong}}" (length 1)
+patched-global.any.html	TransformStream constructor should not call setters for highWaterMark or size
+patched-global.any.html	TransformStream should use the original value of ReadableStream and WritableStream
+properties.any.html	transformer method flush should be called even when it's located on the prototype chain
+properties.any.html	transformer method flush should be called with the right number of arguments
+properties.any.html	transformer method start should be called even when it's located on the prototype chain
+properties.any.html	transformer method start should be called with the right number of arguments
+properties.any.html	transformer method transform should be called even when it's located on the prototype chain
+properties.any.html	transformer method transform should be called with the right number of arguments
+reentrant-strategies.any.html	desiredSize inside size() should work
+reentrant-strategies.any.html	enqueue() inside size() should work
+reentrant-strategies.any.html	error() inside size() should work
+reentrant-strategies.any.html	pipeTo() inside size() should work
+reentrant-strategies.any.html	read() inside of size() should work
+reentrant-strategies.any.html	readable cancel() inside size() should work
+reentrant-strategies.any.html	synchronous writer.write() inside size() should work
+reentrant-strategies.any.html	terminate() inside size() should work
+reentrant-strategies.any.html	writer.abort() inside size() should work
+reentrant-strategies.any.html	writer.close() inside size() should work
+reentrant-strategies.any.html	writer.write() inside size() should work
+strategies.any.html	a RangeError should be thrown for an invalid highWaterMark
+strategies.any.html	a bad readableStrategy size function should cause writer.write() to reject on an identity transform
+strategies.any.html	a bad readableStrategy size function should error the stream on enqueue even when transformer.transform() catches the exception
+strategies.any.html	default readable strategy should be equivalent to { highWaterMark: 0 }
+strategies.any.html	default writable strategy should be equivalent to { highWaterMark: 1 }
+strategies.any.html	readableStrategy highWaterMark should be converted to a number
+strategies.any.html	readableStrategy highWaterMark should work
+strategies.any.html	writable should have the correct size() function
+strategies.any.html	writableStrategy highWaterMark should be converted to a number
+strategies.any.html	writableStrategy highWaterMark should work
+terminate.any.html	controller.enqueue() should throw after controller.terminate()
+terminate.any.html	controller.error() after controller.terminate() with queued chunk should error the readable
+terminate.any.html	controller.error() after controller.terminate() without queued chunk should do nothing
+terminate.any.html	controller.terminate() inside flush() should not prevent writer.close() from succeeding
+terminate.any.html	controller.terminate() should error pipeTo()
+terminate.any.html	controller.terminate() should prevent remaining chunks from being processed

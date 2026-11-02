@@ -155,14 +155,20 @@ static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap
     fixture.runtime = create_fixture(&config);
     return fixture;
 }
-static DomFixture fixture_new(const os64_dom_options_t *options)
+/* A binding over a runtime capped at `engine_cap` bytes (0: the fixture's
+ * default). */
+static DomFixture fixture_new_capped(const os64_dom_options_t *options, size_t engine_cap)
 {
-    DomFixture fixture=fixture_base(0,0,0);
+    DomFixture fixture=fixture_base(0,0,engine_cap);
     if(fixture.runtime&&fixture.state){
         os64_js_outcome_t outcome;
         fixture.binding=os64_dom_create(fixture.runtime,fixture.document,fixture.state,options,&outcome);
     }
     return fixture;
+}
+static DomFixture fixture_new(const os64_dom_options_t *options)
+{
+    return fixture_new_capped(options, 0);
 }
 
 static void fixture_free(DomFixture *fixture)

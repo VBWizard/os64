@@ -1,0 +1,158 @@
+# A compile whose bytecode buffer is refused memory, freed safely
+# (Fable's review: LIBJS_0017_REVIEW.md). yonder's scripted-page host found
+# the first two faults below, its allocation sweep cutting an event
+# handler's compile in resolve_labels; the review found the rest of them.
+#
+# 1. A DynBuf marked errored kept the room it had, so a later put that
+#    still fit succeeded and left a hole where the refused bytes belong.
+#    free_bytecode_atoms then walked the holed bytes as instructions and
+#    read an operand as an atom. An errored buffer now has no room
+#    (cutils.h's dbuf_set_error, which dbuf_claim's refused growth calls
+#    too, the one door to an error): every later put is refused, and the
+#    buffer holds exactly what was written before its error.
+#
+# 2. resolve_labels recorded a relocation for a jump emitted after an
+#    error at "the end less its operand", inside the last instruction
+#    written, and the label's patch wrote the jump's distance over that
+#    instruction's atom (an `n` became an unrelated `hasFeature`, freed one
+#    time too many). Nothing is patched once bc_out has errored.
+#
+# 3. A refused relocation (add_reloc) took upstream's `fail:` ("XXX: not
+#    safe"), which walked the input after the loop had freed the atoms of
+#    instructions it dropped, and leaked the relocations of every label not
+#    yet reached. It now marks bc_out errored and the loop runs on (only
+#    the OP_label case frees relocations); `fail:` is gone.
+#
+# After an error the loop's output is kept as the code the definition's
+# free walks, and the compile fails before the patching passes.
+--- a/cutils.h
++++ b/cutils.h
+@@ -322,9 +322,16 @@
+ static inline BOOL dbuf_error(DynBuf *s) {
+     return s->error;
+ }
++/* os64: an errored buffer has no room. Every put asks the room left before
++   it writes, so a buffer with none refuses every put after its error, and
++   holds exactly what was written before it: a put that still fit would
++   leave a hole where the refused bytes belong, and a reader of the buffer
++   (free_bytecode_atoms over a cut-short compile) would take what follows
++   the hole for something else. Every error goes through here. */
+ static inline void dbuf_set_error(DynBuf *s)
+ {
+     s->error = TRUE;
++    s->allocated_size = s->size;
+ }
+ 
+ #define UTF8_CHAR_LEN_MAX 6
+--- a/cutils.c
++++ b/cutils.c
+@@ -118,7 +118,8 @@
+             new_size = size;
+         new_buf = s->realloc_func(s->opaque, s->buf, new_size);
+         if (!new_buf) {
+-            s->error = TRUE;
++            /* os64: dbuf_set_error, so the buffer has no room after it. */
++            dbuf_set_error(s);
+             return -1;
+         }
+         s->buf = new_buf;
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -35165,6 +35165,19 @@
+                 for(re = ls->first_reloc; re != NULL; re = re_next) {
+                     int diff = ls->addr - re->addr;
+                     re_next = re->next;
++                    /* os64: once bc_out has errored (a write or a
++                       relocation refused), nothing is patched. A jump
++                       emitted after the error put no bytes, but its
++                       relocation was still recorded at "the end less its
++                       operand", inside the last instruction written, and
++                       patching it wrote the jump's distance over that
++                       instruction's atom. The output is never run (the
++                       compile fails below the loop), and a jump's operand
++                       holds no atom, so a patch skipped loses nothing. */
++                    if (dbuf_error(&bc_out)) {
++                        js_free(ctx, re);
++                        continue;
++                    }
+                     switch (re->size) {
+                     case 4:
+                         put_u32(bc_out.buf + re->addr, diff);
+@@ -35304,7 +35317,7 @@
+                     dbuf_putc(&bc_out, OP_if_false8 + (op - OP_if_false));
+                     dbuf_putc(&bc_out, 0);
+                     if (!add_reloc(ctx, ls, bc_out.size - 1, 1))
+-                        goto fail;
++                        dbuf_set_error(&bc_out);    /* os64: see below the loop */
+                     break;
+                 }
+                 if (diff < 32768 && op == OP_goto) {
+@@ -35313,7 +35326,7 @@
+                     dbuf_putc(&bc_out, OP_goto16);
+                     dbuf_put_u16(&bc_out, 0);
+                     if (!add_reloc(ctx, ls, bc_out.size - 2, 2))
+-                        goto fail;
++                        dbuf_set_error(&bc_out);    /* os64: see below the loop */
+                     break;
+                 }
+             } else {
+@@ -35339,7 +35352,7 @@
+             if (ls->addr == -1) {
+                 /* unresolved yet: create a new relocation entry */
+                 if (!add_reloc(ctx, ls, bc_out.size - 4, 4))
+-                    goto fail;
++                    dbuf_set_error(&bc_out);    /* os64: see below the loop */
+             }
+             break;
+         case OP_with_get_var:
+@@ -35373,7 +35386,7 @@
+                 if (ls->addr == -1) {
+                     /* unresolved yet: create a new relocation entry */
+                     if (!add_reloc(ctx, ls, bc_out.size - 4, 4))
+-                        goto fail;
++                        dbuf_set_error(&bc_out);    /* os64: see below the loop */
+                 }
+                 dbuf_putc(&bc_out, is_with);
+             }
+@@ -35838,6 +35851,30 @@
+         }
+     }
+ 
++    /* os64: bc_out errored inside the loop: a write refused, or a jump's
++       relocation (add_reloc) refused, which marks it errored too
++       (dbuf_set_error), in place of upstream's `fail:` ("XXX: not safe"),
++       which kept the input to be walked after the loop had already freed
++       the atoms of instructions it dropped, and leaked the relocations of
++       every label not yet reached. The loop runs on to its end after an
++       error, every put refused, because only the OP_label case frees a
++       label's relocations. Then bc_out is the code: the patching passes
++       below would patch and move bytes it does not hold, so the compile
++       fails here, and bc_out's instructions (short opcodes) are what the
++       definition's free walks; they own their atoms. Every atom-bearing
++       instruction after the error was never copied into bc_out, and the
++       input is freed without a walk, so those references stay until the
++       runtime's teardown frees every atom whatever its count: bounded by
++       the page's runtime, and the input cannot be walked instead, because
++       the loop consumed some of its atoms before their (refused) puts. */
++    if (dbuf_error(&bc_out)) {
++        dbuf_free(&s->byte_code);
++        s->byte_code = bc_out;
++        s->use_short_opcodes = TRUE;
++        JS_ThrowOutOfMemory(ctx);
++        return -1;
++    }
++
+     /* check that there were no missing labels */
+     for(i = 0; i < s->label_count; i++) {
+         assert(label_slots[i].first_reloc == NULL);
+@@ -35936,10 +35973,6 @@
+         return -1;
+     }
+     return 0;
+- fail:
+-    /* XXX: not safe */
+-    dbuf_free(&bc_out);
+-    return -1;
+ }
+ 
+ /* compute the maximum stack size needed by the function */

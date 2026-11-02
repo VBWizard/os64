@@ -177,6 +177,14 @@ static void window_frame_case(void) {
                             "at onclick onclick attribute:2:5 (1)"),
         "window: a place in no script the binding named is the engine's own name for it");
     loop_drop();
+    /* A throw inside the Streams standard's own script is marked as the
+     * browser's place, whoever is at fault (STREAMS.md § 4, rule 4). */
+    loop_page("<script>ReadableStream.prototype.getReader.call({})</script>");
+    check(loop_settle(),"window: a page that calls a stream's method on another object arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: (in os64-streams) TypeError: "
+                            "Illegal invocation, at getReader os64-streams:"),
+        "window: a throw inside streams.js is marked as inside it");
+    loop_drop();
 }
 
 /* The text of the element with `id`, or "(none)", for a case to say. */

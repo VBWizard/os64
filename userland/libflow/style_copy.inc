@@ -2,7 +2,7 @@
  * sharing within the new arena; no pointer into the old tree is retained. */
 // Size changes require reviewing both the copy and equality inventories.
 // This tripwire does not replace checking pointer fields in a same-size edit.
-_Static_assert(sizeof(flow_style_t) == 1264, "review style copy/equality fields");
+_Static_assert(sizeof(flow_style_t) == 1296, "review style copy/equality fields");
 typedef struct { void *data; size_t bytes; } FCopySlice;
 typedef struct { FArena *arena; FMap slices; size_t bytes; bool budget; } FStyleCopy;
 static void *style_copy_bytes(FStyleCopy *c, const void *from, size_t bytes, bool *fresh)
@@ -92,6 +92,16 @@ static bool style_copy_value(FStyleCopy *c, flow_style_t *s)
     COPY(backgrounds.clip,s->backgrounds.nclip);
     COPY(box_shadows,s->nbox_shadows);
     COPY(text_shadows,s->ntext_shadows);
+    COPY(filter,s->nfilter);
+    if(fresh)for(int32_t i=0;i<s->nfilter;i++) {
+        flow_filter_t *f=(flow_filter_t *)&s->filter[i];
+        if(!style_copy_string(c,&f->url,f->url_len))return false;
+    }
+    COPY(backdrop_filter,s->nbackdrop_filter);
+    if(fresh)for(int32_t i=0;i<s->nbackdrop_filter;i++) {
+        flow_filter_t *f=(flow_filter_t *)&s->backdrop_filter[i];
+        if(!style_copy_string(c,&f->url,f->url_len))return false;
+    }
     COPY(grid_template_columns.tracks,s->grid_template_columns.n);
     COPY(grid_template_rows.tracks,s->grid_template_rows.n);
     COPY(grid_auto_columns.tracks,s->grid_auto_columns.n);
@@ -135,6 +145,15 @@ static bool style_string_equal(const char *a,const char *b,size_t n)
 {
     return (!a && !b) || (a && b && style_bytes_equal(a,b,n));
 }
+static bool style_filters_equal(const flow_filter_t *a,const flow_filter_t *b,int32_t n)
+{
+    if(!a || !b)return a==b;
+    for(int32_t i=0;i<n;i++) {
+        flow_filter_t x=a[i],y=b[i];x.url=y.url=NULL;
+        if(os64_memcmp(&x,&y,sizeof(x)) || !style_string_equal(a[i].url,b[i].url,a[i].url_len))return false;
+    }
+    return true;
+}
 static bool style_transforms_equal(const flow_transform_t *a,const flow_transform_t *b,int32_t n,int depth)
 {
     if(!a || !b)return a==b;
@@ -170,6 +189,8 @@ bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
     x.backgrounds.clip=y.backgrounds.clip=NULL;
     x.box_shadows=y.box_shadows=NULL;
     x.text_shadows=y.text_shadows=NULL;
+    x.filter=y.filter=NULL;
+    x.backdrop_filter=y.backdrop_filter=NULL;
     x.grid_template_columns.tracks=y.grid_template_columns.tracks=NULL;
     x.grid_template_rows.tracks=y.grid_template_rows.tracks=NULL;
     x.grid_auto_columns.tracks=y.grid_auto_columns.tracks=NULL;
@@ -192,6 +213,8 @@ bool f_style_equal(const flow_style_t *a,const flow_style_t *b)
     x.rotate=y.rotate=NULL;
     x.scale=y.scale=NULL;
     if(os64_memcmp(&x,&y,sizeof(x)))return false;
+    if(!style_filters_equal(a->filter,b->filter,a->nfilter) ||
+       !style_filters_equal(a->backdrop_filter,b->backdrop_filter,a->nbackdrop_filter))return false;
     if(!style_bytes_equal(a->backgrounds.repeat,b->backgrounds.repeat,(size_t)(a->backgrounds.nrepeat)*sizeof(*a->backgrounds.repeat)))return false;
     if(!style_bytes_equal(a->backgrounds.x,b->backgrounds.x,(size_t)(a->backgrounds.nx)*sizeof(*a->backgrounds.x)))return false;
     if(!style_bytes_equal(a->backgrounds.y,b->backgrounds.y,(size_t)(a->backgrounds.ny)*sizeof(*a->backgrounds.y)))return false;

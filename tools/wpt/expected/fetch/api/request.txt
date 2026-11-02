@@ -454,6 +454,7 @@ request-disturbed.any.html	Input request used for creating new request became di
 request-disturbed.any.html	Input request used for creating new request with a new body is not disturbed
 request-disturbed.any.html	Request construction failure should not set "bodyUsed"
 request-disturbed.any.html	Request without body cannot be disturbed
+request-disturbed.any.html	Request's body: initial state
 request-error.any.html	Bad cache init parameter value
 request-error.any.html	Bad credentials init parameter value
 request-error.any.html	Bad mode init parameter value
@@ -622,6 +623,9 @@ request-init-priority.any.html	new Request() with a 'low' priority does not thro
 request-init-stream.any.html	Constructing a Request with a Request on which body.getReader() is called
 request-init-stream.any.html	Constructing a Request with a Request on which body.getReader().read() is called
 request-init-stream.any.html	Constructing a Request with a Request on which read() and releaseLock() are called
+request-init-stream.any.html	Constructing a Request with a stream on which getReader() is called
+request-init-stream.any.html	Constructing a Request with a stream on which read() and releaseLock() are called
+request-init-stream.any.html	Constructing a Request with a stream on which read() is called
 request-init-stream.any.html	It is OK to omit .duplex when the body is a Blob.
 request-init-stream.any.html	It is OK to omit .duplex when the body is a Uint8Array.
 request-init-stream.any.html	It is OK to omit .duplex when the body is a string.
@@ -630,12 +634,15 @@ request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is a
 request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is a Uint8Array.
 request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is a string.
 request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is null.
+request-init-stream.any.html	It is error to omit .duplex when the body is a ReadableStream.
 request-init-stream.any.html	It is error to set .duplex = 'full' when the body is a Blob.
+request-init-stream.any.html	It is error to set .duplex = 'full' when the body is a ReadableStream.
 request-init-stream.any.html	It is error to set .duplex = 'full' when the body is a Uint8Array.
 request-init-stream.any.html	It is error to set .duplex = 'full' when the body is a string.
 request-init-stream.any.html	It is error to set .duplex = 'full' when the body is null.
 request-keepalive-quota.html?include=fast	A Keep-Alive fetch() with a body over the Quota Limit should reject.
 request-keepalive.any.html	keepalive flag
+request-keepalive.any.html	keepalive flag with stream body
 request-structure.any.html	Check bodyUsed attribute
 request-structure.any.html	Check cache attribute
 request-structure.any.html	Check credentials attribute

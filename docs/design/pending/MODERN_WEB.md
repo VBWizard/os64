@@ -417,11 +417,12 @@ Chris promotes it by name.
   (YONDER_HONEY_DO.md's selection model). Oracle: WPT `dom/ranges/`.
   Opus.
 - **Streams.** A `ReadableStream` a page builds itself, and bodies that
-  stream, the Streams standard whole (DEBTS.md's row; a body is read whole
-  today, `response.body` a one-chunk stream). A social site's sign-in
-  pages die on `'ReadableStream' is not defined` before they draw, and
-  GitHub's bundles name it after `MutationObserver`. A design pass before
-  code, since it is the Streams standard. Oracle: WPT `streams/`. Opus.
+  stream, the Streams standard whole. A social site's sign-in pages die on
+  `'ReadableStream' is not defined` before they draw, and GitHub's bundles
+  name it after `MutationObserver`. STREAMS.md is the design, in three
+  cuts: S1 (the standard without byte streams, self-hosted) is built; S2
+  (byte streams) and S3 (bodies that stream) are DEBTS.md's row. Oracle:
+  WPT `streams/`. Opus.
 
 ## How the slices run side by side (2026-10-21)
 

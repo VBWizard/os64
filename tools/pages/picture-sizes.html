@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- Pictures kept at the size they are drawn (PICTURE_SIZES.md). Four big
+     JPEGs (2400x1600, 1600x2400 and 3000x2000: about 70 MB of pixels kept
+     whole) drawn mostly as thumbnails. Every card should show its picture,
+     the same as before the slice; what changes is the page's record, whose
+     `picture sizes:` line counts the pictures kept smaller and what that
+     spared. Zoom in (Ctrl+=) and the thumbnails are asked for again bigger;
+     zoom back out and they shrink again. Card 4's rings fade smoothly to
+     grey at the edge when averaged; sampled, they break into false rings.
+     The pictures are made by ~/os64-opus-kit/gen_picture_sizes.py. -->
+<html lang="en"><head><meta charset="utf-8"><title>picture sizes</title>
+<style>
+body { margin:24px; background:#eef0f4; color:#232a36; font:16px sans-serif; }
+h2 { font-size:18px; margin:0 0 8px; }
+.card { display:inline-block; vertical-align:top; width:260px; margin:0 16px 20px 0; padding:12px;
+        background:white; border:1px solid #c8cfdb; border-radius:10px; }
+.tile { width:240px; height:160px; background:url(sizes-sea.jpg) center / cover; }
+.auto { width:240px; }
+.wide { display:block; width:100%; }
+p { margin:6px 0 0; font-size:14px; }
+</style></head><body>
+<h1>Pictures kept at the size they are drawn</h1>
+<div class="card"><h2>1. A fixed box</h2>
+<img src="sizes-dawn.jpg" width="240" height="160">
+<p>Asked for at 240x160 from the start.</p></div>
+<div class="card"><h2>2. Tall, fixed</h2>
+<img src="sizes-moss.jpg" width="107" height="160">
+<p>Asked for at the box's size; its shape kept.</p></div>
+<div class="card"><h2>3. A sheet's picture</h2>
+<div class="tile"></div>
+<p>Asked for whole, then kept at its tile once laid out.</p></div>
+<div class="card"><h2>4. Width only</h2>
+<img class="auto" src="sizes-dusk.jpg">
+<p>Its height waits on the picture: whole first, then judged.</p></div>
+<h2>5. The same picture, wide</h2>
+<img class="wide" src="sizes-dusk.jpg">
+<p>Card 4's picture, drawn larger here: the larger use is what is kept.</p>
+</body></html>

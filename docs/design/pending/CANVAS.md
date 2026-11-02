@@ -728,3 +728,7 @@ Clip creation and bounded image draws now rasterize their intersecting bounds;
 `draw2d_paint_image_at` preserves device-space sampling for destination
 sub-surfaces. Gradient and destination-clearing composite paths retain their
 full-target coverage. See [UV validation](../../canvas-evidence/phoria-uv.md).
+
+The combined userland/Canvas regression pass and merge resolutions are recorded
+in [integration regression](../../canvas-evidence/integration-regression.md).
+Hardware regression of the frozen combined candidate precedes the userland merge.

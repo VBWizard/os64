@@ -94,6 +94,31 @@ typedef struct {
     void (*clip_close)(void *ctx);
     // Optional retained Canvas pixels; absent, the stand-in route applies.
     void (*canvas)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
+    // A LAYER: a filtered or blended group (flow_style_t.filter,
+    // .mix_blend; FILTER.md, MIX_BLEND.md). Everything painted until its
+    // close goes into a layer, `bounds` of the coordinates being painted,
+    // which do not change; at the close the list `filter` (n functions,
+    // none a URL; 0 for none) is run over it (filter.h) and the result is
+    // laid onto what was under it at `alpha` of 255 by `mode`, `current`
+    // the colour of a drop shadow in currentColor. A face that cannot
+    // blend there — what is under the layer is a group's sheets, not the
+    // page — lays it normal and counts it (yonder_paint_layers_refused).
+    // False when it cannot be made (no memory, too large): the painter
+    // paints the group plain. Either NULL: no layer is drawn.
+    bool (*layer_open)(void *ctx, os64_gui_rect_t bounds);
+    void (*layer_close)(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
+                        uint8_t alpha, flow_blend_t mode);
+    // A BACKDROP (flow_style_t.backdrop_filter; FILTER.md § 7): what is
+    // painted under `rect` (a border box cut to the view, in the
+    // coordinates being painted) — read with the list's reach round it —
+    // filtered by `filter` (n functions, none a URL; `current` a drop
+    // shadow's currentColor) and laid back inside `rect`, at the coverage
+    // `cover` gives each of its pixels (rect.w a row; NULL for all of it).
+    // False, and nothing changed, when it cannot be drawn: no memory, a
+    // layer past the face's limits, or nothing behind it that is the page
+    // (inside a group's sheets). NULL: no backdrop is filtered.
+    bool (*backdrop_filter)(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
+                            const flow_filter_t *filter, int32_t n, uint32_t current);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has
@@ -178,6 +203,15 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
+// How many filtered or blended groups and backdrops the last yonder_paint
+// drew plain: past its
+// budget for filter layers — YONDER_FILTER_AREA_VIEWS times the
+// viewport's pixels, each layer charged the pixels it shows in the
+// viewport, FILTER.md § 6 — or a layer the verbs refused or found no
+// memory to filter. The caller's to name in the record; the verbs count
+// what they refuse at the close themselves.
+extern uint32_t yonder_paint_layers_refused;
+#define YONDER_FILTER_AREA_VIEWS 2
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,

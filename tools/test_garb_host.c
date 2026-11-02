@@ -1103,9 +1103,9 @@ static int sweep_cascade(const char *what, const char *text, size_t len)
 // (props.c's shadow_list and Layers), so their failure is said by hand:
 // each allocation of reading such a declaration failed alone, the read must
 // be the whole one or say it is incomplete — never an invalid declaration
-// with the sheet calling itself whole (Quinn, #203). A transform's lists
-// are kept in the arena, and are swept beside them as the other lists a
-// declaration builds of its own.
+// with the sheet calling itself whole (Quinn, #203). A transform's and a
+// filter's lists are kept in the arena, and are swept beside them as the
+// other lists a declaration builds of its own.
 static int sweep_grown_lists(void)
 {
     static const char *const decls[] = {"box-shadow: 1px 1px red",
@@ -1124,7 +1124,10 @@ static int sweep_grown_lists(void)
                                         "animation: a 1s, b 2s steps(2, end), c 3s ease-in 2",
                                         "animation-timing-function: cubic-bezier(0, 0, 1, 1), "
                                         "steps(3), ease",
-                                        "will-change: transform, opacity, left"};
+                                        "will-change: transform, opacity, left",
+                                        "filter: blur(2px) grayscale(50%) hue-rotate(90deg) "
+                                        "drop-shadow(red 1px 2px 3px) url(#f)",
+                                        "backdrop-filter: blur(4px) saturate(2)"};
     int failures = 0;
     for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
         garb_set_t sets[GARB_SETS_MAX];
@@ -1160,7 +1163,7 @@ static int sweep_grown_lists(void)
             garb_free(&r);
         }
     }
-    printf("libgarb sweep, shadow, layer and transform lists: every allocation of the read failed alone, %s\n",
+    printf("libgarb sweep, shadow, layer, transform and filter lists: every allocation of the read failed alone, %s\n",
            failures == 0 ? "each the whole read or marked incomplete" : "FAILED");
     return failures;
 }

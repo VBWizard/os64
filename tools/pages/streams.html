@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Streams</title>
+<style>body{font:20px sans-serif;margin:20px;background:#f4f1ea}h1{font-size:28px}
+p{margin:4px 0}.pass{color:#16733a}.fail{color:#b3261e;font-weight:bold}</style></head>
+<body><h1>The Streams standard, in yonder</h1><div id="out"></div>
+<script>
+const out = document.getElementById('out');
+function say(ok, what) { const p = document.createElement('p'); p.className = ok ? 'pass' : 'fail'; p.textContent = (ok ? 'PASS  ' : 'FAIL  ') + what; out.appendChild(p); }
+async function run(name, f) { try { const r = await f(); say(r === true, name + (r === true ? '' : ' (got ' + r + ')')); } catch (e) { say(false, name + ' threw ' + e); } }
+// A data: address, because a script may not fetch a file: one and this page
+// is opened from the disk; its answer is a fetched body like any other.
+const DATA = 'data:text/plain,abcdefghijklmnopqrstuvwxyz';
+(async () => {
+  say(typeof ReadableStream === 'function' && typeof WritableStream === 'function' && typeof TransformStream === 'function', 'the three globals exist');
+  await run('a pulled stream, read by for await', async () => {
+    let n = 0; const rs = new ReadableStream({pull(c) { n++; if (n > 3) c.close(); else c.enqueue(n); }});
+    const got = []; for await (const x of rs) got.push(x); return got.join() === '1,2,3' || got.join(); });
+  await run('pipeThrough an upper-casing transform, into a sink', async () => {
+    const seen = []; await ReadableStream.from(['a', 'b', 'c']).pipeThrough(new TransformStream({transform(ch, c) { c.enqueue(ch.toUpperCase()); }}))
+      .pipeTo(new WritableStream({write(ch) { seen.push(ch); }})); return seen.join('') === 'ABC' || seen.join(''); });
+  await run('tee gives two equal branches', async () => {
+    const [a, b] = ReadableStream.from(['x']).tee(); const ra = await a.getReader().read(), rb = await b.getReader().read();
+    return ra.value === 'x' && rb.value === 'x'; });
+  await run('new Response(stream).text()', async () => {
+    const enc = new TextEncoder(); const rs = new ReadableStream({start(c) { c.enqueue(enc.encode('hello ')); c.enqueue(enc.encode('streams')); c.close(); }});
+    const t = await new Response(rs).text(); return t === 'hello streams' || t; });
+  await run('a fetched body, read chunk by chunk', async () => {
+    const r = await fetch(DATA); const reader = r.body.getReader(); let bytes = 0, chunks = 0;
+    for (;;) { const {done, value} = await reader.read(); if (done) break; chunks++; bytes += value.length; }
+    return (bytes === 26 && r.bodyUsed) || ('bytes ' + bytes + ' chunks ' + chunks); });
+  await run('a clone of a fetched body reads the same', async () => {
+    const r = await fetch(DATA); const c = r.clone(); const [x, y] = [await r.text(), await c.text()]; return x === y && x.length === 26; });
+  await run('backpressure: desiredSize falls as writes queue', async () => {
+    const ws = new WritableStream({write() { return new Promise(res => setTimeout(res, 10)); }}, new CountQueuingStrategy({highWaterMark: 2}));
+    const w = ws.getWriter(); const before = w.desiredSize; w.write(1); w.write(2); const after = w.desiredSize; await w.close(); return (before === 2 && after === 0) || (before + '/' + after); });
+  await run('an abort signal stops a pipe', async () => {
+    const ac = new AbortController(); const p = new ReadableStream({pull(c) { return new Promise(res => setTimeout(() => { try { c.enqueue(1); } catch (e) {} res(); }, 5)); }})
+      .pipeTo(new WritableStream(), {signal: ac.signal}); ac.abort('stop'); try { await p; return 'resolved'; } catch (e) { return e === 'stop'; } });
+  const done = document.createElement('p'); done.textContent = 'done'; out.appendChild(done);
+})();
+</script></body></html>

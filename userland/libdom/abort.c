@@ -27,8 +27,8 @@
  * once answered, the Response it errors, known by C pointer both ways
  * (d_signal_fetch_answered/d_signal_fetch_settled): the Response holds the signal
  * until its body settles, the algorithm points at the Response, and each
- * side's finalizer clears the other's pointer. The list is taken whole
- * before it runs, so nothing a run does can change what is walked. */
+ * side's finalizer clears the other's pointer. An abort walks the list as
+ * it stands (abort_steps says why that is the safe order). */
 
 static JSClassID signal_slot, controller_slot;
 
@@ -308,24 +308,32 @@ static bool mark_aborted(os64_dom_t *dom, JSContext *ctx, DSignal *s, JSValue re
     return true;
 }
 
-/* A signal's abort steps: its fetches aborted, then its `abort` event. The
- * list is taken whole: what a run adds goes nowhere, since an aborted
- * signal never runs again. -1 when the runtime is finished with. */
+/* A signal's abort steps: its fetches aborted, then its `abort` event.
+ * The list is walked as it stands, first entry first, each entry taken off
+ * before its algorithm runs. An algorithm can run streams.js (a body's
+ * stream errored), and a collection that script triggers can finalize a
+ * Response further down the list; that Response's finalizer takes its own
+ * entry off (d_signal_fetch_settled), so the walk never reaches a Response
+ * that is gone. Nothing joins the list meanwhile: fetch() refuses an
+ * aborted signal before it adds an algorithm. -1 when the runtime is
+ * finished with. */
 static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
 {
     DSignal *s = signal_state(signal);
     if (s == NULL) return 0;
-    DAlgorithm *list = s->algorithms;
-    size_t count = s->count;
-    s->algorithms = NULL;
-    s->count = s->cap = 0;
     JSValue reason = JS_DupValue(ctx, s->reason);
-    for (size_t i = 0; i < count; i++) {
+    while (s->count > 0) {
+        DAlgorithm a = s->algorithms[0];
+        s->count--;
+        os64_memmove(s->algorithms, s->algorithms + 1, s->count * sizeof(s->algorithms[0]));
         /* The Response no longer keeps a pointer to this signal's list. */
-        if (list[i].back != NULL) *list[i].back = NULL;
-        d_fetch_abort(dom, ctx, list[i].token, list[i].answered, reason);
+        if (a.back != NULL) *a.back = NULL;
+        d_fetch_abort(dom, ctx, a.token, a.answered, reason);
+        s = signal_state(signal);
     }
-    js_free(ctx, list);
+    js_free(ctx, s->algorithms);
+    s->algorithms = NULL;
+    s->cap = 0;
     JS_FreeValue(ctx, reason);
     JSValue event = d_event_new(dom, ctx, "abort", false, false, true);
     if (JS_IsException(event)) return -1;
