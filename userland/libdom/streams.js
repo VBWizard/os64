@@ -71,9 +71,8 @@ const TypeError_ = I.TypeError;
 const RangeError_ = I.RangeError;
 const Uint8Array_ = I.Uint8Array;
 const uint8Set = I.Uint8Array_set;
-// %TypedArray%.prototype's toStringTag and byteLength getters, which read
-// a typed array's internal slots: taken from the captures at load, which
-// is the realm's start.
+// %TypedArray%.prototype's getters, which read a typed array's internal
+// slots: taken from the captures at load, which is the realm's start.
 const typedArrayPrototype = getPrototypeOf(Uint8Array_.prototype);
 const typedArrayTag = getOwnPropertyDescriptor(typedArrayPrototype, I.Symbol_toStringTag).get;
 const typedArrayByteLength = getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get;
@@ -998,9 +997,9 @@ function readableStreamCancel(stream, reason) {
     return transformPromise(sourceCancelPromise, noop, undefined);
 }
 
-// A BYOB reader's read-into requests are not ended here: a cancel ends
-// them, and otherwise the byte controller answers them (a closed stream's
-// next respond, or a read into a stream already closed).
+// A BYOB reader's read-into requests are not ended here: the byte
+// controller answers them after a close (its source's respond of 0), and
+// a cancel, an error or the reader's release ends them.
 function readableStreamClose(stream) {
     stream.state = 'closed';
     const reader = stream.reader;
@@ -1324,9 +1323,10 @@ class ViewFacts {
 
 // The facts of a typed array or DataView, undefined for anything else. A
 // DataView over a detached buffer has no readable length (its getters
-// throw), and is described as empty, as a typed array over one reads:
-// every caller refuses an empty view and a detached buffer alike, with a
-// TypeError.
+// throw), and is described as empty, as a typed array over one reads. A
+// page's view reaches here only through convertView, and each public
+// method that takes one checks its buffer for detachment as the standard
+// orders; a view streams.js made itself is read while it alone holds it.
 function viewFacts(v) {
     if (!isObject(v)) return undefined;
     const tag = apply(typedArrayTag, v, []);
@@ -2066,8 +2066,8 @@ function readableByteStreamTee(stream) {
     }
 
     function pullAgainIfAsked() {
-        if (readAgainForBranch1) pull1Algorithm();
-        else if (readAgainForBranch2) pull2Algorithm();
+        if (readAgainForBranch1) setHandled(pull1Algorithm());
+        else if (readAgainForBranch2) setHandled(pull2Algorithm());
     }
 
     function pullWithDefaultReader() {
@@ -2158,29 +2158,32 @@ function readableByteStreamTee(stream) {
         }));
     }
 
-    function pull1Algorithm() {
+    // The standard's pulls cannot fail, but a branch's close can, though
+    // its close steps write it as one that cannot: a BYOB read pending on
+    // the branch that holds part of an element when the source ends under
+    // it. The close errors the branch first; caught here, the throw
+    // reaches the page as its read's rejection, not as a throw out of the
+    // read() that pulled.
+    function pullBranch(forBranch2) {
         if (reading) {
-            readAgainForBranch1 = true;
+            if (forBranch2) readAgainForBranch2 = true;
+            else readAgainForBranch1 = true;
             return resolvedWith(undefined);
         }
         reading = true;
-        const byobRequest = rbsControllerGetBYOBRequest(branch1.controller);
-        if (byobRequest === null) pullWithDefaultReader();
-        else pullWithBYOBReader(byobRequest.view, false);
+        try {
+            const byobRequest = rbsControllerGetBYOBRequest((forBranch2 ? branch2 : branch1).controller);
+            if (byobRequest === null) pullWithDefaultReader();
+            else pullWithBYOBReader(byobRequest.view, forBranch2);
+        } catch (e) {
+            return rejectedWith(e);
+        }
         return resolvedWith(undefined);
     }
 
-    function pull2Algorithm() {
-        if (reading) {
-            readAgainForBranch2 = true;
-            return resolvedWith(undefined);
-        }
-        reading = true;
-        const byobRequest = rbsControllerGetBYOBRequest(branch2.controller);
-        if (byobRequest === null) pullWithDefaultReader();
-        else pullWithBYOBReader(byobRequest.view, true);
-        return resolvedWith(undefined);
-    }
+    function pull1Algorithm() { return pullBranch(false); }
+
+    function pull2Algorithm() { return pullBranch(true); }
 
     function cancel1Algorithm(reason) {
         canceled1 = true;
@@ -3484,15 +3487,24 @@ defineProperty(asyncIteratorPrototype, toStringTag,
 // BYOB reader. Zero bytes are a stream closed from its creation.
 // Otherwise the bytes are handed over at the first pull, as one chunk
 // (the Uint8Array d_stream_new made for this stream alone, whose buffer
-// the stream takes), and the
-// stream closes behind them: until a reader asks, the stream is readable,
-// so a fetch's abort that lands after the answer but before the body is
-// read still errors it (the Response's abort steps).
+// the stream takes), and the stream closes behind them: until a reader
+// asks, the stream is readable, so a fetch's abort that lands after the
+// answer but before the body is read still errors it (the Response's
+// abort steps).
+//
+// As "set up with byte reading support" says, the pull turns a throw into
+// a rejected promise. The close throws when a pending BYOB read holds part of an
+// element (a Uint16Array read of an odd-length body), after erroring the
+// stream; the page's read then rejects instead of throwing.
 function doorFromBytes(bytes) {
     let stream;
     function pullAlgorithm() {
-        rbsControllerEnqueue(stream.controller, viewFacts(bytes));
-        rbsCloseForOthers(stream.controller);
+        try {
+            rbsControllerEnqueue(stream.controller, viewFacts(bytes));
+            rbsCloseForOthers(stream.controller);
+        } catch (e) {
+            return rejectedWith(e);
+        }
         return resolvedWith(undefined);
     }
     stream = createReadableByteStream(noop, pullAlgorithm, resolvedUndefined);

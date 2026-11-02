@@ -247,7 +247,17 @@ verb. Where the build departs from §§ 3–7, or says what they left open:
   Uint8Array, so the stream may take its buffer, and the door closes the
   stream the way the standard's "close" for other specifications does:
   a read still pending is answered with the bytes it has (a respond of
-  0), not left waiting for a source that is done.
+  0), not left waiting for a source that is done. A read holding part of
+  an element (a `Uint16Array` read of an odd-length body) cannot be
+  answered so; the close errors the stream, and the read rejects with a
+  TypeError, the pull's throw made a rejection as "set up with byte
+  reading support" says.
+- **A byte tee's branch pulls turn a throw into a rejection** too. The
+  standard writes a branch's close as one that cannot fail, but it fails
+  for the same partial element when the source ends under a branch's
+  BYOB read; the branch is errored, and the page's read rejects instead of
+  throwing out of `read()`. A page's own byte source that ends outside a
+  pull still hears the TypeError from the call that ended it (DEBTS).
 - **The buffers are the engine's.** The standard's buffer operations
   (TransferArrayBuffer, IsDetachedBuffer, a view's slots) go through
   `ArrayBuffer.prototype.transfer`, the `detached` getter and the view

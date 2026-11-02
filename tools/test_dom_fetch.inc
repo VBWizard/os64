@@ -436,6 +436,19 @@ static void dom_fetch_object_cases(void)
         "stream: a body read with a BYOB reader");
     dom_script(&f, FETCH_ASSERT "assert(blog.join()==='false:120.121,false:122,true:0',blog.join());",
                "stream: a BYOB reader reads a body's bytes into its buffers");
+    /* A body that ends inside an element of a BYOB read (one byte, a
+     * Uint16Array) errors its stream: the read rejects with a TypeError and
+     * never throws out of read(), on the body and on a clone's branch (a
+     * body whose stream exists is teed by clone()). */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.olog=[];var p1=new Response('x').body.getReader({mode:'byob'}).read(new Uint16Array(1));"
+        "p1.then(()=>olog.push('body:read'),e=>olog.push('body:'+e.name));"
+        "var oc=new Response('xyz');oc.body;oc.clone();var orr=oc.body.getReader({mode:'byob'});"
+        "orr.read(new Uint16Array(1)).then(()=>orr.read(new Uint16Array(1)))"
+        ".then(()=>olog.push('clone:read'),e=>olog.push('clone:'+e.name));",
+        "stream: a BYOB read past a body's last whole element");
+    dom_script(&f, FETCH_ASSERT "assert(olog.join()==='body:TypeError,clone:TypeError',olog.join());",
+               "stream: a partial element rejects the read, on a body and on a clone");
     /* The body is enqueued whole and closed: taking its one chunk closes
      * the stream, so `closed` resolves with no further read. */
     dom_script(&f,

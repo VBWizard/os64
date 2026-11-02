@@ -126,7 +126,9 @@ static const struct {
     {"Uint8Array", "Uint8Array", VALUE},
     {"Uint8Array_set", "Uint8Array.prototype.set", VALUE},
     /* A byte stream's buffers and views: streams.js takes the getters and
-     * transfer() it needs from these constructors' prototypes. */
+     * transfer() it needs from ArrayBuffer's and DataView's prototypes,
+     * and builds the view a BYOB read is answered with from these
+     * constructors. */
     {"ArrayBuffer", "ArrayBuffer", VALUE},
     {"DataView", "DataView", VALUE},
     {"Int8Array", "Int8Array", VALUE},
