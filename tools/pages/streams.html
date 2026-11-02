@@ -30,6 +30,13 @@ const DATA = 'data:text/plain,abcdefghijklmnopqrstuvwxyz';
     return (bytes === 26 && r.bodyUsed) || ('bytes ' + bytes + ' chunks ' + chunks); });
   await run('a clone of a fetched body reads the same', async () => {
     const r = await fetch(DATA); const c = r.clone(); const [x, y] = [await r.text(), await c.text()]; return x === y && x.length === 26; });
+  await run('a fetched body, read into my own buffer (BYOB)', async () => {
+    const r = await fetch(DATA); const reader = r.body.getReader({mode: 'byob'}); let buf = new ArrayBuffer(10), bytes = 0, reads = 0;
+    for (;;) { const {done, value} = await reader.read(new Uint8Array(buf)); if (done) break; reads++; bytes += value.length; buf = value.buffer; }
+    return (bytes === 26 && reads === 3) || ('bytes ' + bytes + ' reads ' + reads); });
+  await run('a byte source answers a BYOB request', async () => {
+    let n = 0; const rs = new ReadableStream({type: 'bytes', autoAllocateChunkSize: 4, pull(c) { const v = c.byobRequest.view; if (n === 3) { c.close(); c.byobRequest.respond(0); return; } v[0] = 65 + n++; c.byobRequest.respond(1); }});
+    const t = await new Response(rs).text(); return t === 'ABC' || t; });
   await run('backpressure: desiredSize falls as writes queue', async () => {
     const ws = new WritableStream({write() { return new Promise(res => setTimeout(res, 10)); }}, new CountQueuingStrategy({highWaterMark: 2}));
     const w = ws.getWriter(); const before = w.desiredSize; w.write(1); w.write(2); const after = w.desiredSize; await w.close(); return (before === 2 && after === 0) || (before + '/' + after); });

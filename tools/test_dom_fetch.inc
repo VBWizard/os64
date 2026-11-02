@@ -422,11 +422,38 @@ static void dom_fetch_object_cases(void)
         "r.text().catch(e=>log.push('locked:'+e.name));throws('TypeError',()=>r.clone());"
         "rd.read().then(a=>{log.push(a.done+':'+new TextDecoder().decode(a.value));return rd.read()})"
         ".then(a=>{log.push(a.done+':'+a.value);rd.releaseLock();log.push(s.locked)});"
-        "assert(s instanceof ReadableStream);"
-        /* A body's stream has no byte controller, so a BYOB reader is
-         * refused as the standard's getReader refuses one. */
-        "throws('TypeError',()=>new Response('x').body.getReader({mode:'byob'}));",
+        "assert(s instanceof ReadableStream);",
         "stream: one chunk, then done");
+    /* A body's stream is a byte stream: a BYOB reader reads it into the
+     * page's own buffers, a piece at a time, then reads done with an empty
+     * view of the last buffer. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.blog=[];var by=new Response('xyz').body.getReader({mode:'byob'});"
+        "assert(by instanceof ReadableStreamBYOBReader);"
+        "by.read(new Uint8Array(2)).then(a=>{blog.push(a.done+':'+a.value.join('.'));return by.read(new Uint8Array(2))})"
+        ".then(a=>{blog.push(a.done+':'+a.value.join('.'));return by.read(new Uint8Array(2))})"
+        ".then(a=>blog.push(a.done+':'+a.value.byteLength));",
+        "stream: a body read with a BYOB reader");
+    dom_script(&f, FETCH_ASSERT "assert(blog.join()==='false:120.121,false:122,true:0',blog.join());",
+               "stream: a BYOB reader reads a body's bytes into its buffers");
+    /* A body that ends inside an element of a BYOB read (one byte, a
+     * Uint16Array) errors its stream: the read rejects with a TypeError and
+     * never throws out of read(), on the body and on a clone's branch (a
+     * body whose stream exists is teed by clone()). */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.olog=[];var p1=new Response('x').body.getReader({mode:'byob'}).read(new Uint16Array(1));"
+        "p1.then(()=>olog.push('body:read'),e=>olog.push('body:'+e.name));"
+        "var oc=new Response('xyz');oc.body;oc.clone();var orr=oc.body.getReader({mode:'byob'});"
+        "orr.read(new Uint16Array(1)).then(()=>orr.read(new Uint16Array(1)))"
+        ".then(()=>olog.push('clone:read'),e=>olog.push('clone:'+e.name));"
+        /* The tee goes on past the failed branch close: a cancelled
+         * clone's cancel() still settles. */
+        "var ox=new Response('x');ox.body;var oxc=ox.clone();oxc.body.cancel().then(()=>olog.push('cancel:settled'));"
+        "ox.body.getReader({mode:'byob'}).read(new Uint16Array(1)).catch(e=>olog.push('teed:'+e.name));",
+        "stream: a BYOB read past a body's last whole element");
+    dom_script(&f, FETCH_ASSERT
+        "assert(olog.sort().join()==='body:TypeError,cancel:settled,clone:TypeError,teed:TypeError',olog.join());",
+        "stream: a partial element rejects the read, on a body and on a clone");
     /* The body is enqueued whole and closed: taking its one chunk closes
      * the stream, so `closed` resolves with no further read. */
     dom_script(&f,

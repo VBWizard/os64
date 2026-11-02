@@ -234,3 +234,48 @@ Where the build departs from §§ 3–7, and why:
   standard's; both crashed the sweep, so the slice could not pass without
   them. Fable reviewed 0017 (LIBJS_0017_REVIEW.md, untracked), and it
   pays the whole of that item, the unsafe `add_reloc` path included.
+
+## 9. S2, as built
+
+streams.js gained the byte streams (§ 4.4, § 4.7, § 4.8, § 4.9.5 and the
+byte tee); streams.c gained captures and three interface names, and no
+verb. Where the build departs from §§ 3–7, or says what they left open:
+
+- **A body's stream is a byte stream**, Fetch's and the File API's "set up
+  with byte reading support": `response.body`, `request.body` and
+  `blob.stream()` take a BYOB reader. The door's chunk is its own fresh
+  Uint8Array, so the stream may take its buffer, and the door closes the
+  stream the way the standard's "close" for other specifications does:
+  a read still pending is answered with the bytes it has (a respond of
+  0), not left waiting for a source that is done. A read holding part of
+  an element (a `Uint16Array` read of an odd-length body) cannot be
+  answered so; the close errors the stream, and the read rejects with a
+  TypeError, the pull's throw made a rejection as "set up with byte
+  reading support" says.
+- **A byte tee's branch close may fail, and the tee goes on.** The
+  standard's byte tee writes a branch's close as a step that cannot fail,
+  but it fails for the same partial element when the source ends under a
+  branch's BYOB read. The close has errored the branch by then, so its
+  read rejects with the TypeError; the tee drops the throw and runs the
+  rest of its close steps, so the other branch still closes and a
+  cancelled branch's `cancel()` still settles, whoever's call ended the
+  source.
+- **The buffers are the engine's.** The standard's buffer operations
+  (TransferArrayBuffer, IsDetachedBuffer, a view's slots) go through
+  `ArrayBuffer.prototype.transfer`, the `detached` getter and the view
+  getters, taken at load from the captured `ArrayBuffer`, `DataView` and
+  typed-array constructors, so a page that replaces any of them changes
+  nothing a stream does. A view's element size and constructor come from
+  its `[[TypedArrayName]]` (the typed arrays' own toStringTag getter),
+  never from `view.constructor`.
+- **Kinds are fields, never `instanceof`**: a controller's record says
+  whether it is a byte controller and a reader's whether it is a BYOB
+  reader, because `instanceof` looks up `Symbol.hasInstance`, which a page
+  can define on `Function.prototype`.
+- **The compiled script grew from 65 KB to 92.5 KB** (source stripped),
+  and still fits the 128 KiB buffer every later realm reads it from.
+- **WPT `streams/readable-byte-streams`: 245 of 249** (S1: 8 of 233). The
+  four left need `WebAssembly`, whose memory is a buffer that cannot be
+  transferred; os64 has no WebAssembly. Nothing lost in the other
+  `streams/` directories or in `fetch/api`, and a BYOB reader now reads
+  every kind of Response body (`response-consume-stream`).

@@ -1034,8 +1034,9 @@ engine memory, read whole. A body's stream is the Streams standard's
 (streams.js, self-hosted, through streams.c's door; STREAMS.md): made when
 first needed (the first ask of `body`, or a clone an abort can still
 reach), or given to `new Response(stream)`, and from then on the only
-answer to whether the body is usable; a fetched body's bytes
-are handed over as one chunk at the first read. `integrity` fails closed.
+answer to whether the body is usable. It is a byte stream, so a page may
+read it with a BYOB reader; a fetched body's bytes are handed over as one
+chunk at the first read. `integrity` fails closed.
 `fetch()` hands the request to the host (`os64_dom_set_network`) and its
 answer comes back as one task (`os64_dom_fetched`), copied into the
 runtime's memory: a body past the runtime's limit is the sticky LIMIT, as

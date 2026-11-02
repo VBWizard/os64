@@ -93,6 +93,7 @@ count-queuing-strategy-integration.any.html	Correctly governs a ReadableStreamCo
 count-queuing-strategy-integration.any.html	Correctly governs a ReadableStreamController's desiredSize property (HWM = 1)
 count-queuing-strategy-integration.any.html	Correctly governs a ReadableStreamController's desiredSize property (HWM = 4)
 crashtests/garbage-collection.any.html	Garbage-collecting a stream along with its reader should not crash
+crashtests/garbage-collection.any.html	Garbage-collecting a stream with a pending BYOB read should not crash
 crashtests/garbage-collection.any.html	Garbage-collecting a stream with a pending read should not crash
 default-reader.any.html	Cannot use an already-released reader to unlock a stream again
 default-reader.any.html	Constructing a ReadableStreamDefaultReader directly should be OK if the stream is closed
