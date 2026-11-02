@@ -268,13 +268,26 @@ calls is not evidence that the site's initialization, loading and events work.
 Exercise signature export locally; automated testing does not submit a real
 signature to the public wall.
 
-Completion requires the signature wall/editor and scratch-off game to work
-on the P5 with scheduled drawing and pointer interaction. Record frame cost,
-layout count, dirty pixel area and memory peaks. A bitmap-only animation must
-not cause whole-document layout, and a covered/idle window must not accumulate
-unbounded frame work. Preserve the existing small frozen-bundle handoff for
-hardware tests. Video playback and a particular external game's broader API
-requirements are outside this Canvas acceptance claim.
+The original completion targets were Danlegt's signature wall/editor and
+scratch-off game. The 2026-11-01 acceptance decision above replaces full-site
+Danlegt support as a release gate with Curran's examples and the subsequent
+Phoria checks. Local signature and scratch fixtures remain regression coverage
+for drawing, export, scheduled frames and pointer interaction. Record frame
+cost, layout count, dirty pixel area and memory peaks when investigating those
+paths. A bitmap-only animation must not cause whole-document layout, and a
+covered/idle window must not accumulate unbounded frame work. Preserve the
+existing small frozen-bundle handoff for hardware tests. Video playback and a
+particular external game's broader API requirements are outside this Canvas
+acceptance claim.
+
+Closeout decision, 2026-11-01: finish the reviewed Phoria and heap work, then
+regression-test the combined integration candidate against current userland
+before merging. Cover shared SVG/Canvas drawing, browser loading and input,
+resize/zoom, frame teardown and covered-window behavior, plus ordinary
+userland allocation workloads. Known site-startup dependencies and the
+JavaScript-heavy software-triangle performance work remain follow-ups. New
+regressions found in this pass must be investigated; improving every demo to
+another browser's speed is not a prerequisite for this milestone.
 
 ## C1 native foundation
 
@@ -432,7 +445,9 @@ join semantics.
 Drawing state contains the transform, solid stroke style, line width/cap/join,
 miter limit, normalized dash list/offset, composite operator and a reference to
 an immutable clip mask. Save/restore retains that mask; a new clip intersects it
-without changing saved masks. Reset discards paths, clips and the save stack.
+without changing saved masks. Clip coverage is packed inside conservative
+bitmap-clamped device bounds; an empty retained clip still rejects all pixels.
+Reset discards paths, clips and the save stack.
 Geometry and coverage are prepared before a draw touches retained pixels. An
 allocation or work refusal leaves the prior pixels and clip intact. Appends
 reserve their command storage before changing the current path.
@@ -702,3 +717,14 @@ separates these outcomes from full-site support. Acceptance is not a fixed
 count of remaining PRs.
 
 See [C6a validation and target checkpoint](../../canvas-evidence/c6a-validation.md).
+
+The first two Phoria Canvas 2D demos extend live-site acceptance. The textured
+cube exposed missing natural-size fallback in `HTMLImageElement.width` and
+`height`; [the Phoria checkpoint](../../canvas-evidence/phoria-images.md) records
+the focused fix and the separate basic-cube timing investigation.
+
+The Phoria UV scene exposed full-canvas work per small textured triangle.
+Clip creation and bounded image draws now rasterize their intersecting bounds;
+`draw2d_paint_image_at` preserves device-space sampling for destination
+sub-surfaces. Gradient and destination-clearing composite paths retain their
+full-target coverage. See [UV validation](../../canvas-evidence/phoria-uv.md).

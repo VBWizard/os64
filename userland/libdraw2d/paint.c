@@ -195,7 +195,8 @@ static draw2d_pixel_t sample(const draw2d_image_t *image,double x,double y)
 }
 static draw2d_status_t paint_mask(const draw2d_surface_t *s,const uint8_t *coverage,
     const uint8_t *clip,size_t length,draw2d_solid_t source,draw2d_composite_t op,
-    uint64_t max_pixels,draw2d_damage_t *damage,const draw2d_image_t *image,const draw2d_shader_t *shader)
+    uint64_t max_pixels,draw2d_damage_t *damage,const draw2d_image_t *image,const draw2d_shader_t *shader,
+    uint32_t origin_x,uint32_t origin_y)
 {
     if(damage)*damage=(draw2d_damage_t){0};
     draw2d_status_t status=draw2d_surface_validate(s);
@@ -222,7 +223,7 @@ static draw2d_status_t paint_mask(const draw2d_surface_t *s,const uint8_t *cover
             if(y+1>touched.y1)touched.y1=y+1;
             draw2d_pixel_t d=s->format==DRAW2D_ARGB16_PREMULTIPLIED?((draw2d_pixel_t *)row)[x]:draw2d_unpack(((uint32_t *)row)[x]);
             draw2d_pixel_t r=op.operation==DRAW2D_CLEAR?draw2d_scale(d,65535-cv):
-                composite_pixel(image ? draw2d_scale(draw2d_scale(sample(image,x+.5,y+.5),op.opacity),cv) :
+                composite_pixel(image ? draw2d_scale(draw2d_scale(sample(image,(double)origin_x+x+.5,(double)origin_y+y+.5),op.opacity),cv) :
                     draw2d_color(shader?shader->sample(shader->context,x+.5,y+.5):source.argb,op.opacity,cv),d,op.operation);
             if(cl!=65535)r=sum(draw2d_scale(r,cl),draw2d_scale(d,65535-cl));
             if(s->format==DRAW2D_ARGB16_PREMULTIPLIED)((draw2d_pixel_t *)row)[x]=r;
@@ -236,9 +237,9 @@ static draw2d_status_t paint_mask(const draw2d_surface_t *s,const uint8_t *cover
 draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *s,const uint8_t *coverage,
     const uint8_t *clip,size_t length,draw2d_solid_t source,draw2d_composite_t op,
     uint64_t max_pixels,draw2d_damage_t *damage)
-{ return paint_mask(s,coverage,clip,length,source,op,max_pixels,damage,NULL,NULL); }
-draw2d_status_t draw2d_paint_image(const draw2d_surface_t *s,const uint8_t *coverage,
-    const uint8_t *clip,size_t length,const draw2d_image_t *image,draw2d_composite_t op,
+{ return paint_mask(s,coverage,clip,length,source,op,max_pixels,damage,NULL,NULL,0,0); }
+draw2d_status_t draw2d_paint_image_at(const draw2d_surface_t *s,const uint8_t *coverage,
+    const uint8_t *clip,size_t length,const draw2d_image_t *image,uint32_t origin_x,uint32_t origin_y,draw2d_composite_t op,
     uint64_t max_pixels,draw2d_damage_t *damage)
 {
     if(damage)*damage=(draw2d_damage_t){0};
@@ -249,10 +250,17 @@ draw2d_status_t draw2d_paint_image(const draw2d_surface_t *s,const uint8_t *cove
     const os64_geometry_map_t *m=&image->device_to_source;
     if(!isfinite(m->a)||!isfinite(m->b)||!isfinite(m->c)||!isfinite(m->d)||
        !isfinite(m->tx)||!isfinite(m->ty))return DRAW2D_BAD_ARGUMENT;
-    double bx=fabs(m->a)*s->width+fabs(m->c)*s->height+fabs(m->tx);
-    double by=fabs(m->b)*s->width+fabs(m->d)*s->height+fabs(m->ty);
+    double bx=fabs(m->a)*((double)origin_x+s->width)+fabs(m->c)*((double)origin_y+s->height)+fabs(m->tx);
+    double by=fabs(m->b)*((double)origin_x+s->width)+fabs(m->d)*((double)origin_y+s->height)+fabs(m->ty);
     if(!isfinite(bx)||!isfinite(by))return DRAW2D_LIMIT;
-    return paint_mask(s,coverage,clip,length,(draw2d_solid_t){0},op,max_pixels,damage,image,NULL);
+    return paint_mask(s,coverage,clip,length,(draw2d_solid_t){0},op,max_pixels,damage,image,NULL,origin_x,origin_y);
+}
+
+draw2d_status_t draw2d_paint_image(const draw2d_surface_t *s,const uint8_t *coverage,
+    const uint8_t *clip,size_t length,const draw2d_image_t *image,draw2d_composite_t op,
+    uint64_t max_pixels,draw2d_damage_t *damage)
+{
+    return draw2d_paint_image_at(s,coverage,clip,length,image,0,0,op,max_pixels,damage);
 }
 
 draw2d_status_t draw2d_paint_shader(const draw2d_surface_t *s,const uint8_t *coverage,const uint8_t *clip,
@@ -260,5 +268,5 @@ draw2d_status_t draw2d_paint_shader(const draw2d_surface_t *s,const uint8_t *cov
 {
     if(damage)*damage=(draw2d_damage_t){0};
     if(!shader||!shader->sample)return DRAW2D_BAD_ARGUMENT;
-    return paint_mask(s,coverage,clip,length,(draw2d_solid_t){0},op,max_pixels,damage,NULL,shader);
+    return paint_mask(s,coverage,clip,length,(draw2d_solid_t){0},op,max_pixels,damage,NULL,shader,0,0);
 }

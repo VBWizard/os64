@@ -160,6 +160,11 @@ typedef struct
 
 static heap_region_t *gRegions;      // the ledger, newest first
 static heap_free_t   *gFreeList;     // one list, first-fit (Chris's ruling)
+// An exact maximum and an upper bound on the other free blocks. Removing
+// the maximum leaves it unresolved until a replacement meets that bound
+// or report_end scans the list. The report's generation is odd meanwhile.
+static heap_free_t   *gLargestFree;
+static uint64_t       gOtherFreeUpper;
 static bool           gInited;
 static bool           gCheckAlways;  // HEAPCHECK=1 in the environment
 static os64_lock_t gLock = OS64_LOCK_INIT;
@@ -168,6 +173,7 @@ static os64_lock_t gLock = OS64_LOCK_INIT;
 // registered, so it must be a plain global: .bss, fixed for the life of the
 // program, and (being written before any thread exists) safe to publish once.
 static os64_heap_report_t gReport;
+static void free_list_rescan_largest(void);
 
 // ── The lock ────────────────────────────────────────────────────────────────
 //
@@ -337,9 +343,12 @@ static inline void report_begin(void)
 // there is no third counter to drift out of step with the other two — and
 // what is left over, bytes_virgin, is tracked by the three places that
 // actually move the frontier, so the audit identity in os64/heap.h is a real
-// check rather than an arithmetic tautology.
+// check rather than an arithmetic tautology. Resolve a pending maximum before
+// making the generation even, so readers get an exact fragmentation figure.
 static inline void report_end(void)
 {
+	if (gLargestFree == NULL)
+		free_list_rescan_largest();
 	gReport.bytes_overhead =
 	      (gReport.blocks_live + gReport.blocks_free) * sizeof(heap_block_t)
 	    + gReport.region_pools * (sizeof(heap_pool_t) + sizeof(heap_block_t))
@@ -350,11 +359,9 @@ static inline void report_end(void)
 
 // ── Free list ───────────────────────────────────────────────────────────────
 //
-// One doubly-linked list, first fit. Size-class bins were presented in the
-// design conversation and ruled OVERHEAD for this OS ("verdict delivered from
-// the floor, laughing" — MALLOC.md). Knuth's own baseline ran the world's
-// timesharing systems on exactly this, and the day regret arrives the bins
-// can be added without any caller noticing.
+// One doubly-linked list, first fit. Maximum tracking preserves this list's
+// allocation order while skipping scans when a replacement is provably
+// maximal. Size-class search is planned in docs/design/pending/HEAP_BINS.md.
 
 static void free_list_insert(heap_free_t *f)
 {
@@ -392,22 +399,45 @@ static void free_list_insert(heap_free_t *f)
 	uint64_t payload = block_size(&f->hdr) - sizeof(heap_block_t);
 	gReport.blocks_free++;
 	gReport.bytes_free += payload;
-	if (payload > gReport.largest_free)
+	if (gLargestFree == NULL)
+	{
+		// Splitting or coalescing the maximum usually supplies its successor
+		// in this transaction. A bound avoids a scan for each temporary unlink.
+		if (payload >= gOtherFreeUpper)
+		{
+			gLargestFree = f;
+			gReport.largest_free = payload;
+		}
+	}
+	else if (payload > gReport.largest_free)
+	{
+		gOtherFreeUpper = gReport.largest_free;
+		gLargestFree = f;
 		gReport.largest_free = payload;
+	}
+	else if (payload > gOtherFreeUpper)
+		gOtherFreeUpper = payload;
 }
 
-// Recompute the largest free block. Called ONLY when the reigning largest is
-// removed — every other path maintains it incrementally, so a /proc reader
-// never sees a stale fragmentation figure.
+// Resolve the maximum before publishing an even report generation. The
+// second-largest size bounds the survivors if that maximum is removed later.
 static void free_list_rescan_largest(void)
 {
 	uint64_t largest = 0;
+	gLargestFree = NULL;
+	gOtherFreeUpper = 0;
 
 	for (heap_free_t *f = gFreeList; f != NULL; f = f->next)
 	{
 		uint64_t s = block_size(&f->hdr) - sizeof(heap_block_t);
 		if (s > largest)
+		{
+			gOtherFreeUpper = largest;
 			largest = s;
+			gLargestFree = f;
+		}
+		else if (s > gOtherFreeUpper)
+			gOtherFreeUpper = s;
 	}
 	gReport.largest_free = largest;
 }
@@ -426,8 +456,8 @@ static void free_list_remove(heap_free_t *f)
 	uint64_t payload = block_size(&f->hdr) - sizeof(heap_block_t);
 	gReport.blocks_free--;
 	gReport.bytes_free -= payload;
-	if (payload >= gReport.largest_free)
-		free_list_rescan_largest();
+	if (f == gLargestFree)
+		gLargestFree = NULL;
 }
 
 // ── Regions ─────────────────────────────────────────────────────────────────
@@ -709,6 +739,9 @@ void os64_heap_init(void)
 static uint64_t heap_verify_locked(void)
 {
 	uint64_t problems = 0;
+	uint64_t free_count = 0, largest = 0, other_largest = 0;
+	uint64_t tracked_payload = 0;
+	bool tracked_found = false;
 
 	for (heap_region_t *r = gRegions; r != NULL; r = r->next)
 	{
@@ -783,6 +816,19 @@ static uint64_t heap_verify_locked(void)
 			}
 			if (!block_in_use(b))
 			{
+				uint64_t payload = size - sizeof(heap_block_t);
+				free_count++;
+				if (payload > largest)
+					largest = payload;
+				// Compare identities during the validated physical walk; a
+				// corrupt cached pointer must not become a verifier dereference.
+				if ((heap_free_t *)b == gLargestFree)
+				{
+					tracked_found = true;
+					tracked_payload = payload;
+				}
+				else if (payload > other_largest)
+					other_largest = payload;
 				uint64_t footer = *(uint64_t *)((char *)b + size - sizeof(uint64_t));
 				if (footer != size)
 				{
@@ -802,6 +848,31 @@ static uint64_t heap_verify_locked(void)
 		if (walked != p->frontier && problems == 0)
 		{
 			heap_complain("block walk overshot the frontier", p, walked);
+			problems++;
+		}
+	}
+
+	// These callers observe resolved cache state: explicit verification holds
+	// the lock outside mutation, and HEAPCHECK runs before mutation (although
+	// report_begin has already made its generation odd). Skip derived checks
+	// after a damaged physical walk rather than report an invented maximum.
+	if (problems == 0)
+	{
+		if (gReport.blocks_free != free_count)
+		{
+			heap_complain("free-block count disagrees with pool walk", &gReport, free_count);
+			problems++;
+		}
+		if ((gLargestFree == NULL && free_count != 0)
+		    || (gLargestFree != NULL && (!tracked_found || tracked_payload != largest))
+		    || gReport.largest_free != largest)
+		{
+			heap_complain("cached largest free block disagrees with pool walk", gLargestFree, largest);
+			problems++;
+		}
+		if (other_largest > gOtherFreeUpper)
+		{
+			heap_complain("other-free bound is below a free block", &gOtherFreeUpper, other_largest);
 			problems++;
 		}
 	}

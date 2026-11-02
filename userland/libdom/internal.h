@@ -38,6 +38,7 @@ canvas_status_t d_canvas_prepare(DValue *);
 os64_geometry_status_t d_canvas_allocate(void *,size_t,void **);
 void d_canvas_release(void *,void *,size_t);
 void d_image_changed(os64_dom_t *,const os64_html_change_t *);
+JSValue d_image_dimension(os64_dom_t *, JSContext *, const os64_html_node_t *, bool height);
 int d_canvas_images_install(os64_dom_t *,JSContext *,JSValueConst);
 JSValue d_canvas_result(JSContext *,canvas_status_t);
 int d_canvas_text_install(os64_dom_t *,JSContext *,JSValueConst,JSValueConst);

@@ -430,20 +430,28 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
     }
     draw2d_damage_t box={0,0,c->surface.width,c->surface.height};
     draw2d_operator_t op=mode==1?DRAW2D_CLEAR:c->state.composite;
-    /* Solid paints can use a sub-surface without changing source coordinates.
-     * Clip creation and source/image shaders retain the full target; operators
-     * that clear beyond the shape must also keep that complete coverage. */
-    bool compact=mode!=3 && !gradient && !image && b->bounds &&
-        draw2d_zero_coverage_preserves_destination(op);
+    /* Clips and bounded paints rasterize only their intersecting bounds.
+     * Image sampling retains device coordinates through the sub-surface's
+     * origin. Gradients and clearing composites keep full-target coverage. */
+    bool compact=b->bounds && (mode==3 || (!gradient &&
+        draw2d_zero_coverage_preserves_destination(op)));
     if(status==CANVAS_OK && compact) {
         os64_geometry_bounds_t bounds={.empty=true};
         if(outline)status=c_geometry_status(b->bounds(geometry,outline,&map,0,0,&bounds));
         if(status==CANVAS_OK)status=coverage_box(c,bounds,&box);
     }
+    if(compact && c->clip) {
+        draw2d_damage_t old=c->clip->bounds;
+        if(box.x0<old.x0)box.x0=old.x0;
+        if(box.y0<old.y0)box.y0=old.y0;
+        if(box.x1>old.x1)box.x1=old.x1;
+        if(box.y1>old.y1)box.y1=old.y1;
+        if(box.x1<=box.x0 || box.y1<=box.y0)box=(draw2d_damage_t){0};
+    }
     uint32_t width=box.x1-box.x0,height=box.y1-box.y0;
     size_t covered=(size_t)width*height;
     uint8_t *coverage=NULL,*clip_copy=NULL;
-    const uint8_t *clip=c->clip?c->clip->pixels:NULL;
+    const uint8_t *clip=NULL;
     if(status==CANVAS_OK && covered)status=c_allocate(c,covered,(void **)&coverage);
     if(status==CANVAS_OK && covered) {
         for(size_t i=0;i<covered;++i)coverage[i]=0;
@@ -452,12 +460,12 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
     }
     if(outline)b->release(geometry,outline);
     b->destroy(geometry);
-    if(status==CANVAS_OK && !covered)goto done;
-    if(status==CANVAS_OK && compact && clip) {
+    if(status==CANVAS_OK && !covered && mode!=3)goto done;
+    if(status==CANVAS_OK && mode!=3 && c->clip) {
         status=c_allocate(c,covered,(void **)&clip_copy);
         if(status==CANVAS_OK) {
             for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<width;++x)
-                clip_copy[(size_t)y*width+x]=clip[(size_t)(box.y0+y)*c->surface.width+box.x0+x];
+                clip_copy[(size_t)y*width+x]=c_clip_at(c->clip,box.x0+x,box.y0+y);
             clip=clip_copy;
         }
     }
@@ -469,17 +477,20 @@ static canvas_status_t render(canvas_context_t *c,const Path *path,int mode,bool
     }
     if(status==CANVAS_OK && mode==3) {
         Clip *clip;
-        status=c_allocate(c,sizeof(*clip)+pixels,(void **)&clip);
+        status=c_allocate(c,sizeof(*clip)+covered,(void **)&clip);
         if(status==CANVAS_OK) {
-            clip->references=1;clip->bytes=sizeof(*clip)+pixels;
-            for(size_t i=0;i<pixels;++i)clip->pixels[i]=c->clip?
-                ((unsigned)coverage[i]*c->clip->pixels[i]+127)/255:coverage[i];
+            clip->references=1;clip->bytes=sizeof(*clip)+covered;
+            clip->bounds=box;
+            for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<width;++x) {
+                size_t i=(size_t)y*width+x;
+                clip->pixels[i]=((unsigned)coverage[i]*c_clip_at(c->clip,box.x0+x,box.y0+y)+127)/255;
+            }
             c_clip_release(c,c->clip);c->clip=clip;
         }
     } else if(status==CANVAS_OK) {
         draw2d_damage_t damage;
         draw2d_status_t result=gradient?draw2d_paint_shader(&surface,coverage,clip,covered,&shader,
-            (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},c->options.max_draw_pixels,&damage):image?draw2d_paint_image(&surface,coverage,clip,covered,image,
+            (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},c->options.max_draw_pixels,&damage):image?draw2d_paint_image_at(&surface,coverage,clip,covered,image,box.x0,box.y0,
             (draw2d_composite_t){c->state.composite,(uint16_t)(c->state.global_alpha*65535+.5)},
             c->options.max_draw_pixels,&damage):draw2d_paint_mask(&surface,coverage,clip,covered,
             (draw2d_solid_t){mode==2?c->state.stroke_argb:c->state.fill_argb},

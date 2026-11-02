@@ -265,7 +265,7 @@ static void outside_fills(void)
 #include "test_canvas_retained_path.inc"
 int main(void)
 {
-    canvas_baseline_main();outside_fills();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();paints();
+    canvas_baseline_main();outside_fills();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();compact_images();image_region_contract();clipped_image_refusals();paints();
     shadows();retained_paths();shadow_refusal();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }
