@@ -422,11 +422,20 @@ static void dom_fetch_object_cases(void)
         "r.text().catch(e=>log.push('locked:'+e.name));throws('TypeError',()=>r.clone());"
         "rd.read().then(a=>{log.push(a.done+':'+new TextDecoder().decode(a.value));return rd.read()})"
         ".then(a=>{log.push(a.done+':'+a.value);rd.releaseLock();log.push(s.locked)});"
-        "assert(s instanceof ReadableStream);"
-        /* A body's stream has no byte controller, so a BYOB reader is
-         * refused as the standard's getReader refuses one. */
-        "throws('TypeError',()=>new Response('x').body.getReader({mode:'byob'}));",
+        "assert(s instanceof ReadableStream);",
         "stream: one chunk, then done");
+    /* A body's stream is a byte stream: a BYOB reader reads it into the
+     * page's own buffers, a piece at a time, then reads done with an empty
+     * view of the last buffer. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.blog=[];var by=new Response('xyz').body.getReader({mode:'byob'});"
+        "assert(by instanceof ReadableStreamBYOBReader);"
+        "by.read(new Uint8Array(2)).then(a=>{blog.push(a.done+':'+a.value.join('.'));return by.read(new Uint8Array(2))})"
+        ".then(a=>{blog.push(a.done+':'+a.value.join('.'));return by.read(new Uint8Array(2))})"
+        ".then(a=>blog.push(a.done+':'+a.value.byteLength));",
+        "stream: a body read with a BYOB reader");
+    dom_script(&f, FETCH_ASSERT "assert(blog.join()==='false:120.121,false:122,true:0',blog.join());",
+               "stream: a BYOB reader reads a body's bytes into its buffers");
     /* The body is enqueued whole and closed: taking its one chunk closes
      * the stream, so `closed` resolves with no further read. */
     dom_script(&f,
