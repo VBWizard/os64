@@ -19,8 +19,10 @@ the four channel tables occupy 4 KiB on the call's stack, with no retained cache
 Small spans and 16-bit surfaces keep their arithmetic paths. Native-size browser
 presentation walks source rows directly while preserving alpha and clipping.
 
-Script frames retain their 20 ms DOM deadline, measured after callbacks finish,
-and leave a fixed 10 ms pause after painting. The pause admits input and eligible
+At this slice, script frames retained their 20 ms DOM deadline, measured after
+callbacks finished, and left a fixed 10 ms pause after painting. The subsequent
+[deadline follow-up](integration-regression.md#animation-deadline-follow-up)
+counts callback work toward the interval. The pause admits input and eligible
 idle work without repeating an expensive frame's elapsed time as a mandatory
 rest. This is not a CPU percentage cap. Covered-window handling, batch ownership,
 missed-frame coalescing and geometry limits retain their contracts.

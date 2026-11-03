@@ -786,8 +786,10 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * when empty). fire runs one due snapshot in request order, with one shared
  * performance-clock timestamp and runtime budget, checkpointing after each
  * callback. Requests made during it wait for another frame; cancellations
- * apply immediately. The host calls between tasks on its rendering step,
- * suppresses frames while covered, and presents once after the batch. */
+ * apply immediately. The successor's deadline counts from this batch's now,
+ * clamped to completion on overrun; missed intervals do not accumulate. The
+ * host calls between tasks on its rendering step, suppresses frames while
+ * covered, and presents once after the batch, yielding to input before another. */
 uint64_t os64_dom_animation_next(const os64_dom_t *dom);
 bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 

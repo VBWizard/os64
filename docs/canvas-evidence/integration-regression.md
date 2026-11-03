@@ -118,6 +118,34 @@ Validation: 1,234,865 Canvas assertions and 1,835,108 SVG painting assertions
 pass with ASan, UBSan and LeakSanitizer. Backend ownership, cancellation,
 limits and rendering checks pass. The added Canvas cases cover convergence,
 overlap at half alpha, nonuniform scale, and each allocation refusal before
-successful rendering. The native FreeType library builds; live-site P5
-confirmation is pending. The delivery reuses the combined regression cohort
+successful rendering. The native FreeType library builds; the user confirmed
+the live rainbow works correctly on the P5. The delivery reuses the combined regression cohort
 and replaces only `libfreetype.so`.
+
+## Animation deadline follow-up
+
+2026-11-03: Phoria `test8.html` advances its ships and comet by fixed increments
+per frame. The P5 record at a 1539 by 602 layout viewport reported 162 paints
+in 6.6 seconds, 58% main-loop utilization, 19.7 ms per script task and 2.1 ms
+per paint. There was one layout and no animation layouts. These are aggregate
+counters, not isolated per-frame CPU samples. They are consistent with callback
+work followed by the binding's additional 20 ms wait slowing this frame-based
+simulation.
+
+The binding now measures the nominal 20 ms interval from the batch's actual
+start. Callback and microtask execution count toward it. An overrun clamps the
+deadline to completion, without accumulating missed frames. Yonder retains its
+10 ms post-paint input/idle opportunity and its unpainted/covered-window gates.
+The clocks are not display synchronization, and this change does not promise
+Chrome's frame rate or alter the demo's physics.
+
+Fake-clock tests fail on the preceding scheduler and pass with the change.
+They exercise zero, 12 ms and 80 ms batches, callback/microtask work, early
+wake refusal, successor delivery and a long host absence without catch-up.
+Both target-engine and sanitized-engine profiles pass 92 animation checks;
+their message/idle/clone probes pass 647 and 6,665 checks respectively. The complete scripted-browser suite passes
+16,251 checks, including input, timer and idle work between frames. ASan,
+UBSan and LeakSanitizer remain enabled. The native DOM library builds.
+
+The frozen candidate reuses the accepted rainbow cohort and replaces only
+`libdom.so`. P5 performance and responsiveness confirmation remain pending.

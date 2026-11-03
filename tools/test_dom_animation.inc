@@ -6,8 +6,47 @@ static void animation_spend(void *opaque,const char *text,size_t length)
     dom_clock+=600000;
 }
 
+static uint64_t animation_elapsed_ms;
+static void animation_clock_spend(void *opaque,const char *text,size_t length)
+{
+    (void)opaque;(void)text;(void)length;
+    p2b_advance(animation_elapsed_ms);
+}
+static void animation_deadlines(void)
+{
+    const uint64_t costs[]={0,6,40};
+    for(unsigned i=0;i<sizeof(costs)/sizeof(*costs);++i) {
+        p2b_ms=1000;p2b_us=1000000;animation_elapsed_ms=costs[i];
+        os64_dom_options_t options=p2b_options(P2B_URL);options.alert=animation_clock_spend;
+        DomFixture f=fixture_new(&options);if(!fixture_ready(&f))return;
+        p2b_script(&f,"globalThis.n=0;function frame(){++n;alert('work');"
+            "requestAnimationFrame(frame);Promise.resolve().then(()=>alert('checkpoint'))}"
+            "requestAnimationFrame(frame)","frame pacing: work and checkpoint consume fake time");
+        p2b_advance(20);os64_js_outcome_t out;
+        check(os64_dom_animation_fire(f.binding,p2b_ms,&out)&&out.status==OS64_JS_OK,
+              "frame pacing: timed batch runs");
+        p2b_script(&f,"assert(n===1,String(n))","frame pacing: nested request waits through checkpoint");
+        uint64_t expected=costs[i]*2>20?p2b_ms:1040;
+        check(os64_dom_animation_next(f.binding)==expected,
+              "frame pacing: work counts toward cadence, overrun is ready without historical debt");
+        check(!os64_dom_animation_fire(f.binding,expected-1,&out),"frame pacing: deadline is not early");
+        p2b_ms=expected;p2b_us=expected*1000;
+        check(os64_dom_animation_fire(f.binding,p2b_ms,&out)&&out.status==OS64_JS_OK,
+              "frame pacing: next batch runs at its deadline");
+        p2b_script(&f,"assert(n===2,String(n))","frame pacing: exactly one successor runs");
+        p2b_advance(3000);uint64_t began=p2b_ms;
+        check(os64_dom_animation_fire(f.binding,p2b_ms,&out)&&out.status==OS64_JS_OK,
+              "frame pacing: delayed host resumes one batch");
+        p2b_script(&f,"assert(n===3,String(n))","frame pacing: no catch-up callback burst");
+        check(os64_dom_animation_next(f.binding)==(costs[i]*2>20?p2b_ms:began+20),
+              "frame pacing: resumed cadence uses the actual start, not an old deadline");
+        fixture_free(&f);
+    }
+}
+
 static void dom_animation_cases(void)
 {
+    animation_deadlines();
     p2b_ms=1000;p2b_us=1000000;
     os64_dom_options_t options=p2b_options(P2B_URL);
     DomFixture f=fixture_new(&options);

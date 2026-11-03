@@ -14,9 +14,8 @@ struct DAnimation {
 #define FRAME_INTERVAL_MS 20
 #define FRAME_CALLBACKS_MAX 1024
 
-static uint64_t frame_after(const os64_dom_t *dom)
+static uint64_t frame_after(uint64_t now)
 {
-    uint64_t now=dom->options.now_ms?dom->options.now_ms(dom->options.host_opaque):0;
     return now>=UINT64_MAX-FRAME_INTERVAL_MS?UINT64_MAX-1:now+FRAME_INTERVAL_MS;
 }
 
@@ -56,7 +55,11 @@ static JSValue animation_method(JSContext *ctx,JSValueConst self,int argc,
     if(!entry)return d_error(ctx,"QuotaExceededError","DOM animation callback quota exceeded");
     *entry=(DAnimation){.callback=JS_DupValue(ctx,argv[0]),.handle=++dom->animation_handle,.script=script};
     if(dom->animation_last)dom->animation_last->next=entry;
-    else {dom->animations=entry;dom->animation_due=frame_after(dom);}
+    else {
+        dom->animations=entry;
+        uint64_t now=dom->options.now_ms?dom->options.now_ms(dom->options.host_opaque):0;
+        dom->animation_due=frame_after(now);
+    }
     dom->animation_last=entry;dom->animation_count++;
     return JS_NewUint32(ctx,entry->handle);
 }
@@ -72,6 +75,7 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
     if(!out||!dom||dom->closed||dom->animation_running||!dom->animations||dom->animation_due>now)return false;
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name,sizeof(name),"%.*s#animation-frame",(int)(sizeof(name)-20),dom->url?dom->url:"about:blank");
+    uint64_t next=frame_after(now);
     uint32_t last=dom->animation_handle;
     double timestamp=d_performance_now(dom);
     dom->animation_running=true;
@@ -99,7 +103,12 @@ bool os64_dom_animation_fire(os64_dom_t *dom,uint64_t now,os64_js_outcome_t *out
         d_task_finish(dom,out);
     }
     dom->animation_running=false;
-    dom->animation_due=frame_after(dom);
+    /* Callback/checkpoint work counts toward the interval. An overrun makes
+     * one successor ready, not a debt of missed frames. The host still gates
+     * that successor on presentation and an opportunity to handle input. */
+    uint64_t finished=dom->options.now_ms?dom->options.now_ms(dom->options.host_opaque):now;
+    if(finished==UINT64_MAX)finished=UINT64_MAX-1;
+    dom->animation_due=next>finished?next:finished;
     d_task_close(dom,name,out);
     return true;
 }
