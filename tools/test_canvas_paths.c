@@ -52,6 +52,45 @@ static void paths(void)
     OK(canvas_stroke(c));pixel(c,16,16,0);
     OK(canvas_destroy(c));CHECK(!o.live);
 }
+/* A cursor trail can converge to a nonzero path smaller than the backend's
+ * fixed-point grid. It still has round caps until it is exactly zero. */
+static void converging_round_stroke(void)
+{
+    Owner o={0};canvas_context_t *c=drawing(&o);
+    os64_geometry_stroke_t pen={3,10,OS64_GEOMETRY_ROUND_CAP,OS64_GEOMETRY_ROUND_JOIN};
+    OK(canvas_set_line(c,&pen));
+    for(double length=1;length>1e-13;length*=.4) {
+        OK(canvas_clear_rect(c,0,0,32,32));OK(canvas_begin_path(c));move(c,16,16);
+        for(unsigned i=1;i<14;++i)line(c,16+length*i/13,16+length*i/26);
+        canvas_status_t status=canvas_stroke(c);
+        if(status!=CANVAS_OK)fprintf(stderr,"converging stroke: length=%.17g status=%d\n",length,status);
+        OK(status);pixel(c,16,16,0xff000000);
+    }
+    /* A mixed path must merge the ordinary stroke and the quantized round
+     * tip before applying alpha. */
+    OK(canvas_clear_rect(c,0,0,32,32));OK(canvas_begin_path(c));
+    OK(canvas_set_alpha(c,.5));move(c,16,16);line(c,16.000001,16);
+    move(c,8,16);line(c,24,16);OK(canvas_stroke(c));pixel(c,16,16,0x80000000);
+    OK(canvas_reset(c,32,32));OK(canvas_set_line(c,&pen));
+    os64_geometry_map_t map={4,0,0,1,0,0};OK(canvas_transform(c,&map,true));
+    move(c,4,16);line(c,4.000001,16);OK(canvas_stroke(c));
+    pixel(c,16,16,0xff000000);pixel(c,12,16,0xff000000);pixel(c,16,19,0);
+    OK(canvas_destroy(c));CHECK(!o.live);
+    for(unsigned refusal=0;refusal<2;++refusal)for(size_t cut=1;cut<128;++cut) {
+        o=(Owner){0};c=drawing(&o);OK(canvas_set_line(c,&pen));
+        move(c,16,16);line(c,16.000001,16);OK(canvas_ack_damage(c));
+        o.limit=refusal;o.fail_at=o.calls+cut;
+        canvas_status_t status=canvas_stroke(c);o.fail_at=0;
+        if(status!=CANVAS_OK) {
+            CHECK(status==CANVAS_NO_MEMORY||status==CANVAS_LIMIT);
+            for(unsigned i=0;i<1024;++i)CHECK(bitmap(c).pixels[i]==0);
+            draw2d_damage_t damage;OK(canvas_damage(c,&damage));CHECK(damage.x1==0);
+        } else pixel(c,16,16,0xff000000);
+        OK(canvas_destroy(c));CHECK(!o.live);
+        if(status==CANVAS_OK)break;
+        CHECK(cut<127);
+    }
+}
 static void clips(void)
 {
     Owner o={0};canvas_context_t *c=drawing(&o);
@@ -265,7 +304,7 @@ static void outside_fills(void)
 #include "test_canvas_retained_path.inc"
 int main(void)
 {
-    canvas_baseline_main();outside_fills();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();compact_images();image_region_contract();clipped_image_refusals();paints();
+    canvas_baseline_main();converging_round_stroke();outside_fills();compact_coverage();compact_reference();compact_clip_refusal();paths();clips();composite_oracles();refusal();clip_refusal();images();image_refusals();compact_images();image_region_contract();clipped_image_refusals();paints();
     shadows();retained_paths();shadow_refusal();
     printf("Canvas paths: %zu total assertions passed\n",checks);return 0;
 }

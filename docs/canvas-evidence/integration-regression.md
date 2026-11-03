@@ -97,3 +97,27 @@ performance acceptance campaign. Hardware acceptance remains pending.
 
 Software-triangle JavaScript throughput and previously recorded external-site
 startup dependencies remain follow-ups. They are not new merge gates.
+
+## Rainbow cursor follow-up
+
+2026-11-03: the rainbow cursor on danlegt.com draws open paths with round
+caps and joins. As its points converge on a stationary mouse, a nonzero
+centerline becomes smaller than the native stroker's working grid. The
+backend returned `UNSUPPORTED`; Canvas exposed `NotSupportedError`, and the
+script stopped before scheduling its next animation frame. A standalone
+converging polyline reproduces the refusal at length 0.0016384 pixels.
+
+The shared geometry backend retains a round tip for a discarded, nonzero,
+open round-cap/round-join contour whose quantized control points remain within
+one working unit of its start. It appends the tip to the stroke's combined
+outline, preserving transformed bounds, clipping and single-pass alpha
+composition. Exact degeneracies, closed contours, square caps, miter joins
+and discarded curves that drift farther retain their existing contract.
+
+Validation: 1,234,865 Canvas assertions and 1,835,108 SVG painting assertions
+pass with ASan, UBSan and LeakSanitizer. Backend ownership, cancellation,
+limits and rendering checks pass. The added Canvas cases cover convergence,
+overlap at half alpha, nonuniform scale, and each allocation refusal before
+successful rendering. The native FreeType library builds; live-site P5
+confirmation is pending. The delivery reuses the combined regression cohort
+and replaces only `libfreetype.so`.
