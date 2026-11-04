@@ -31,13 +31,23 @@ enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
 
 /* An Event's state lives in engine memory and its references are traced by
  * the collector, because a script may keep an event long after its dispatch:
- * nothing native is owned, so its finalizer frees only engine storage. */
+ * nothing native outlives a dispatch, so its finalizer frees only engine
+ * storage. */
 typedef struct {
     JSValue target, current;
     char *type;
     double time;
     uint8_t phase;
     bool bubbles, cancelable, canceled, stop, stop_now, dispatching, initialized, trusted;
+    /* The path a dispatch walks, as composedPath reads it (DOM § 2.9): its
+     * nodes innermost first, each held, and whether the window ends it.
+     * Set and let go by the dispatch, binding memory. No nodes for a target
+     * that is no node, whose path is the target alone, nor for the window's
+     * own events, whose path is the window (its load's target the
+     * document). */
+    const os64_html_node_t **path_nodes;
+    uint32_t path_count;
+    bool path_window;
     /* A ProgressEvent's (XHR § 4): its three attributes. */
     bool progress, length_computable;
     double loaded, total;
@@ -753,6 +763,39 @@ static bool element_has_handler(const os64_dom_t *dom, const os64_html_node_t *n
         !(body_like(node) && window_reflecting(kind)) && handler_attribute(node, kind) != NULL;
 }
 
+/* The wrapper a path node's listeners are on: its own, or a new one when it
+ * has the event's handler attribute, which the wrapper compiles; NULL for a
+ * node with neither, on which nothing can be invoked. -1 with an exception
+ * pending when a wrapper could not be made. */
+static int path_entry(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *at, int kind, DValue **out)
+{
+    DValue *entry = d_find(dom, at);
+    if (entry == NULL && element_has_handler(dom, at, kind)) {
+        JSValue wrapper = d_wrap(dom, ctx, at);
+        if (JS_IsException(wrapper)) return -1;
+        JS_FreeValue(ctx, wrapper);
+        entry = d_find(dom, at);
+    }
+    *out = entry;
+    return 0;
+}
+
+/* invoke_target at path[i]. A node that had no wrapper when the path was
+ * built is looked at again as the dispatch reaches it: a listener before it
+ * may have reached it (composedPath, parentNode) and given it a listener,
+ * which DOM runs. A wrapper that cannot be made then is reported and the
+ * node passed, as a handler attribute that will not compile is. */
+static int invoke_at(Dispatch *d, DValue **path, const os64_html_node_t *const *nodes, size_t depth, size_t i,
+                     uint8_t phase, bool capture)
+{
+    if (path[i] == NULL && i < depth &&
+        path_entry(d->dom, d->ctx, nodes[i], d_event_kind(d->event->type), &path[i]) < 0) {
+        report_pending(d->dom, d->ctx);
+        return 0;
+    }
+    return invoke_target(d, path[i], phase, capture);
+}
+
 /* MouseEvent and PointerEvent clicks run DOM activation at the target or
  * its nearest activating ancestor. Native pointer packets opt in here;
  * legacy host clicks still perform their defaults in the browser. */
@@ -780,13 +823,17 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     JSContext *ctx = d->ctx;
     DEvent *event = d->event;
     int kind = d_event_kind(event->type);
-    size_t length = d->plain != NULL ? 1 : 0;
+    size_t length = d->plain != NULL ? 1 : 0, depth = 0;
     const os64_html_node_t *top = node;
     if (d->plain != NULL) node = NULL;
-    for (const os64_html_node_t *at = node; at != NULL; at = at->parent) { length++; top = at; }
+    for (const os64_html_node_t *at = node; at != NULL; at = at->parent) { depth++; top = at; }
+    length += depth;
     bool to_window = d->plain == NULL && (node == NULL || (top == document_node(dom) && kind != D_EVENT_LOAD));
     if (to_window) length++;
-    DValue **path = d_alloc(dom, length * sizeof(*path));
+    /* The wrappers the listeners are invoked on, then the path's nodes for
+     * composedPath, which an ancestor with no wrapper is in too. */
+    DValue **path = d_alloc(dom, length * sizeof(*path) + depth * sizeof(const os64_html_node_t *));
+    const os64_html_node_t **nodes = path != NULL ? (const os64_html_node_t **)(path + length) : NULL;
     if (path == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM event path quota exceeded");
         return -1;
@@ -800,16 +847,18 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     size_t count = 0;
     if (d->plain != NULL) path[count++] = d->plain;
     for (const os64_html_node_t *at = node; at != NULL; at = at->parent) {
-        DValue *entry = d_find(dom, at);
-        if (entry == NULL && element_has_handler(dom, at, kind)) {
-            JSValue wrapper = d_wrap(dom, ctx, at);
-            if (JS_IsException(wrapper)) { JS_FreeValue(ctx, target); d_free(dom, path); return -1; }
-            JS_FreeValue(ctx, wrapper);
-            entry = d_find(dom, at);
-        }
+        DValue *entry;
+        if (path_entry(dom, ctx, at, kind, &entry) < 0) { JS_FreeValue(ctx, target); d_free(dom, path); return -1; }
+        nodes[count - (d->plain != NULL)] = at;
         path[count++] = entry;
     }
     if (to_window) path[count++] = dom->window;
+    /* Held for as long as the path is: a listener may take a subtree out of
+     * the tree, and an ancestor with no wrapper would go with it. */
+    for (size_t i = 0; i < depth; i++) os64_html_hold(dom->document, nodes[i]);
+    event->path_nodes = nodes;
+    event->path_count = (uint32_t)depth;
+    event->path_window = to_window;
     JS_FreeValue(ctx, event->target);
     event->target = target;
     DActiveEvent active = {dom->current_event, JS_DupValue(ctx,d->object)};
@@ -824,11 +873,11 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     int result = activation != NULL && d_activation_before(dom, ctx, activation, &saved) < 0 ? -1 : 0;
     saved.native = event->native_activation && event->trusted && d->host != NULL;
     for (size_t i = count; result == 0 && i > 1; i--)
-        result = invoke_target(d, path[i - 1], PHASE_CAPTURING, true);
-    if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, true);
-    if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, false);
+        result = invoke_at(d, path, nodes, depth, i - 1, PHASE_CAPTURING, true);
+    if (result == 0) result = invoke_at(d, path, nodes, depth, 0, PHASE_AT_TARGET, true);
+    if (result == 0) result = invoke_at(d, path, nodes, depth, 0, PHASE_AT_TARGET, false);
     for (size_t i = 1; result == 0 && event->bubbles && i < count; i++)
-        result = invoke_target(d, path[i], PHASE_BUBBLING, false);
+        result = invoke_at(d, path, nodes, depth, i, PHASE_BUBBLING, false);
     dom->current_event = active.previous;
     JS_FreeValue(ctx,active.value);
     dom->dispatching--;
@@ -837,6 +886,10 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->stop = event->stop_now = false;
     JS_FreeValue(ctx, event->current);
     event->current = JS_NULL;
+    for (size_t i = 0; i < depth; i++) os64_html_release(dom->document, nodes[i]);
+    event->path_nodes = NULL;
+    event->path_count = 0;
+    event->path_window = false;
     d_free(dom, path);
     sweep(dom);
     /* sweep walks the registry; a collectable target is not on it. */
@@ -1671,6 +1724,52 @@ int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, event_interface);
     if (JS_IsException(interface)) return -1;
     return JS_DefinePropertyValueStr(ctx, global, "CustomEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+/* composedPath() (DOM § 2.9): the path the dispatch walks, innermost first,
+ * the window last when the path ends there; a new empty array outside a
+ * dispatch. The path's nodes are as the dispatch found them, whatever its
+ * listeners have moved since. § 2.9 hides from a listener the nodes inside
+ * a closed shadow tree it is outside of; with no shadow trees here
+ * (DEBTS.md) nothing is hidden, so this is the whole path, and shadow roots
+ * must change it when they come. */
+static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    DEvent *event = event_of(dom, ctx, self);
+    if (event == NULL) return JS_EXCEPTION;
+    JSValue array = JS_NewArray(ctx);
+    if (JS_IsException(array) || !event->dispatching) return array;
+    uint32_t at = 0;
+    int status = 0;
+    /* A target that is no node is its path alone. */
+    if (event->path_count == 0 && !event->path_window)
+        status = JS_DefinePropertyValueUint32(ctx, array, at++, JS_DupValue(ctx, event->target), JS_PROP_C_W_E);
+    for (uint32_t i = 0; status >= 0 && i < event->path_count; i++) {
+        JSValue node = d_wrap(dom, ctx, event->path_nodes[i]);
+        status = JS_IsException(node) ? -1 : JS_DefinePropertyValueUint32(ctx, array, at++, node, JS_PROP_C_W_E);
+    }
+    if (status >= 0 && event->path_window)
+        status = JS_DefinePropertyValueUint32(ctx, array, at++, JS_DupValue(ctx, dom->window->value), JS_PROP_C_W_E);
+    if (status < 0) {
+        JS_FreeValue(ctx, array);
+        return JS_EXCEPTION;
+    }
+    return array;
+}
+
+/* The Modern Web table's row for Event's own members (modern.c); a member
+ * of Event's prototype and none of window's. */
+int d_event_path_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    (void)global;
+    JSValue prototype = JS_GetClassProto(ctx, dom->event_class);
+    int status = d_method(dom, ctx, prototype, "composedPath", composed_path, 0, 0);
+    JS_FreeValue(ctx, prototype);
+    return status;
 }
 
 int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id,

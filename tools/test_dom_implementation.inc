@@ -249,6 +249,58 @@ static void implementation_owner_cases(void)
     fixture_free(&f);
 }
 
+/* importNode and adoptNode (DOM § 4.5): a copy in the receiver's document,
+ * shallow unless `deep` converts to true, the original left where it was;
+ * the node itself moved, out of its parent, with its descendants and its
+ * Attrs; an Attr either way; and the refusals. */
+static void implementation_import_adopt_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, IMPL_ASSERT
+        "var d=document.implementation.createHTMLDocument('');"
+        "var div=d.body.appendChild(d.createElement('div'));div.appendChild(d.createElement('span'));"
+        "var shallow=[document.importNode(div),document.importNode(div,undefined),document.importNode(div,false),"
+        "document.importNode(div,0)];"
+        "assert(shallow.every(c=>c.ownerDocument===document&&c.firstChild===null&&c!==div),'shallow');"
+        "var deep=document.importNode(div,'yes');"
+        "assert(deep.ownerDocument===document&&deep.firstChild.ownerDocument===document,'deep');"
+        "assert(div.parentNode===d.body&&div.ownerDocument===d&&div.firstChild.ownerDocument===d,'the original stays');"
+        "var t=document.createElement('template');t.innerHTML='<p id=x><b>y</b></p>text';"
+        "var got=document.importNode(t.content,true);"
+        "assert(got.nodeType===11&&got.ownerDocument===document&&got.firstChild.id==='x'&&"
+        "got.firstChild.firstChild.textContent==='y'&&got.lastChild.data==='text','a template\\'s contents');"
+        "assert(t.content.childNodes.length===2,'the template keeps its contents');"
+        "var a=d.createAttributeNS('http://example.com/','p:name');a.value='value';var ia=document.importNode(a);"
+        "assert(ia!==a&&ia.prefix==='p'&&ia.namespaceURI==='http://example.com/'&&ia.localName==='name'&&"
+        "ia.value==='value'&&ia.ownerElement===null&&ia.ownerDocument===document&&a.ownerDocument===d,'an Attr');"
+        "d.body.setAttribute('k','on');var on=d.body.getAttributeNode('k'),io=document.importNode(on);"
+        "assert(io.value==='on'&&io.ownerElement===null&&io.ownerDocument===document&&on.ownerElement===d.body,"
+        "'an Attr on an element, copied');"
+        "throws('NotSupportedError',()=>document.importNode(d));"
+        "throws('TypeError',()=>document.importNode({}));throws('TypeError',()=>document.importNode());"
+        "throws('TypeError',()=>document.importNode.call(document.body,div));"
+        /* adoptNode */
+        "var y=d.createElement('y');y.setAttribute('data-a','1');var ya=y.getAttributeNode('data-a');"
+        "y.appendChild(d.createTextNode('t'));d.body.appendChild(y);"
+        "assert(document.adoptNode(y)===y&&y.parentNode===null&&y.ownerDocument===document&&"
+        "y.firstChild.ownerDocument===document,'moved out of its parent');"
+        "assert(y.getAttributeNode('data-a')===ya&&ya.ownerDocument===document,'its Attrs with it');"
+        "document.body.appendChild(y);assert(y.ownerDocument===document&&y.parentNode===document.body);"
+        "assert(document.adoptNode(y)===y&&y.parentNode===null&&y.ownerDocument===document,'the same document');"
+        "var dt=document.doctype;assert(document.adoptNode(dt)===dt&&dt.parentNode===null&&"
+        "dt.ownerDocument===document&&document.doctype===null,'a doctype');document.insertBefore(dt,document.firstChild);"
+        "var on=document.createElement('i');on.setAttribute('k','v');var at=on.getAttributeNode('k');"
+        "assert(d.adoptNode(at)===at&&at.ownerElement===null&&!on.hasAttribute('k')&&at.value==='v'&&"
+        "at.ownerDocument===d,'an Attr on an element comes off it');"
+        "var free=document.createAttribute('f');assert(d.adoptNode(free)===free&&free.ownerDocument===d);"
+        "throws('NotSupportedError',()=>document.adoptNode(d));throws('NotSupportedError',()=>d.adoptNode(document));"
+        "throws('TypeError',()=>document.adoptNode('x'));"
+        "throws('TypeError',()=>document.adoptNode.call(y,y));",
+        "importNode and adoptNode: copies, moves, Attrs and refusals");
+    fixture_free(&f);
+}
+
 /* A document with no window: everything that would reach the host or the
  * page's parser does nothing, or says why not. */
 static void implementation_windowless_cases(void)
@@ -455,6 +507,9 @@ static void implementation_allocation_cases(void)
         "var d=document.implementation.createHTMLDocument('');document.body.appendChild(d.createElement('p'))",
         "var d=document.implementation.createHTMLDocument('');var p=d.createElement('p');d.body.appendChild(p);"
         "p.remove();p.ownerDocument;p.cloneNode(true)",
+        "var t=document.createElement('template');t.innerHTML='<p><b>x</b></p>';document.importNode(t.content,true)",
+        "var d=document.implementation.createHTMLDocument('');var p=d.createElement('p');d.body.appendChild(p);"
+        "p.setAttribute('a','b');document.adoptNode(p.getAttributeNode('a'));document.adoptNode(p)",
         "document.doctype.name",
     };
     binding_sweep("implementation", kOperations, sizeof(kOperations) / sizeof(kOperations[0]), NULL);
@@ -488,6 +543,7 @@ static void dom_implementation_cases(void)
     implementation_shape_cases();
     implementation_html_document_cases();
     implementation_owner_cases();
+    implementation_import_adopt_cases();
     implementation_windowless_cases();
     implementation_reflection_cases();
     implementation_connected_cases();

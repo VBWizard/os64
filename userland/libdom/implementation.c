@@ -25,8 +25,9 @@
  * taken out) remembers the document it was made in or last left on its
  * root's wrapper (DValue.document). Every verb that takes a node out of a
  * tree records first the document it leaves (d_leaving), and every node a
- * document of its own makes or a clone copies is recorded as it is made
- * (d_made_in), so a root that has a wrapper always says. One that has none (a child innerHTML replaced,
+ * document of its own makes, a clone copies or adoptNode moves is recorded
+ * as it is made or moved (d_made_in), so a root that has a wrapper always
+ * says. One that has none (a child innerHTML replaced,
  * never handed to a script) says nothing, and reads as the window's: a
  * script reaches it only through a descendant it held before. While no
  * document of its own exists every node is the window's, and none of this
@@ -401,7 +402,7 @@ int d_implementation_classic(os64_dom_t *dom, JSContext *ctx)
  * element_namespace allows, in the document it is called on. React makes
  * every SVG element so, and Svelte every element. `options` (a customized
  * built-in's `is`) is converted, as WebIDL converts it, and changes nothing:
- * there are no custom elements. */
+ * customized built-ins are not supported (custom.c). */
 static JSValue create_element_ns(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                  JSValue *data)
 {
@@ -456,6 +457,46 @@ static JSValue create_element_ns(JSContext *ctx, JSValueConst self, int argc, JS
     d_string_free(dom, &ns);
     d_string_free(dom, &name);
     return result;
+}
+
+enum { T_IMPORT, T_ADOPT };
+
+/* importNode(node, deep) and adoptNode(node) (DOM § 4.5): a copy of the
+ * node whose node document is this one, or the node itself taken out of
+ * its parent and moved here, its custom elements owed adoptedCallback when
+ * it changed documents. Both are [CEReactions] (custom.c wraps them). A
+ * Document is a NotSupportedError for either. `deep` is a boolean: DOM's
+ * newer ImportNodeOptions dictionary is not read, so `{selfOnly: true}`
+ * converts to true as a boolean. */
+static JSValue document_take(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *document = d_node(dom, ctx, self);
+    if (document == NULL) return JS_EXCEPTION;
+    if (document->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Expected a document");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Missing node argument");
+    int deep = magic == T_IMPORT && argc > 1 ? JS_ToBool(ctx, argv[1]) : 0;
+    if (deep < 0) return JS_EXCEPTION;
+    if (d_is_attr(dom, argv[0])) {
+        if (magic == T_IMPORT) return d_attr_import(dom, ctx, argv[0], document);
+        return d_attr_adopt(dom, ctx, argv[0], document) < 0 ? JS_EXCEPTION : JS_DupValue(ctx, argv[0]);
+    }
+    const os64_html_node_t *node = d_node(dom, ctx, argv[0]);
+    if (node == NULL) return JS_EXCEPTION;
+    if (node->kind == OS64_HTML_DOCUMENT)
+        return d_error(ctx, "NotSupportedError", magic == T_IMPORT ? "A document cannot be imported" :
+                                                                   "A document cannot be adopted");
+    if (magic == T_IMPORT) return d_node_clone(dom, ctx, node, deep != 0, document);
+    const os64_html_node_t *from = d_node_document(dom, node);
+    if (node->parent != NULL && d_tree_change(dom, ctx, D_REMOVE, node->parent, node, NULL) < 0)
+        return JS_EXCEPTION;
+    if (from != document) {
+        d_made_in(dom, node, document);
+        d_custom_adopted(dom, node, from, document);
+    }
+    return JS_DupValue(ctx, argv[0]);
 }
 
 /* ── DOMParser (HTML § 8.5.1), HTML only ──────────────────────────────── */
@@ -530,7 +571,9 @@ int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
                                 JS_UNDEFINED);
     if (JS_IsException(f) ||
         JS_DefinePropertyValueStr(ctx, global, "DOMImplementation", f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ||
-        d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createElementNS", create_element_ns, 2, 0) < 0)
+        d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createElementNS", create_element_ns, 2, 0) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "importNode", document_take, 1, T_IMPORT) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "adoptNode", document_take, 1, T_ADOPT) < 0)
         return -1;
     static const JSClassDef parser_definition = {.class_name = "DOMParser"};
     JSClassID id = os64_js_class_id(&parser_slot);

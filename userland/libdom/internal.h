@@ -853,6 +853,11 @@ int d_index_names(JSContext *ctx, size_t count, JSPropertyEnum **table, uint32_t
 int d_iterable(JSContext *ctx, JSValueConst prototype, bool node_list);
 int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_t *parent,
             const os64_html_node_t *child, const os64_html_node_t *other);
+/* DOM § 4.4's "clone a node": `node`, and with `deep` its descendants,
+ * copied into a new wrapper whose node document is `document`, its
+ * elements with a definition upgraded when that is the window's. */
+JSValue d_node_clone(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool deep,
+                     const os64_html_node_t *document);
 JSValue d_select(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
                  JSValueConst text, bool all);
 JSValue d_selector_test(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
@@ -1405,6 +1410,8 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
  * (event.c). LIBDOM.md § P1-Da's rows is the record. ── */
 int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* Event.prototype.composedPath (event.c). */
+int d_event_path_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* ── The node row (0f's P1a and after; INTERFACES_FORMS.md): Node's
  * getRootNode, baseURI and normalize, Text's own members and Element's
  * names (mixin.c), and Attr's answers to Node's three beside them
@@ -1609,6 +1616,11 @@ int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *na
                    const char *value, size_t length, bool remove);
 /* Whether a value is an Attr of this binding. */
 bool d_is_attr(os64_dom_t *dom, JSValueConst value);
+/* importNode's and adoptNode's Attr halves (DOM § 4.5): a detached copy
+ * whose node document is `document`, or the Attr itself, detached and
+ * moved there; -1 (or JS_EXCEPTION) with the exception thrown. */
+JSValue d_attr_import(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const os64_html_node_t *document);
+int d_attr_adopt(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const os64_html_node_t *document);
 /* An Attr as Node's comparisons read it: the entry that is its identity,
  * its element (NULL while detached), its qualified name, namespace (NULL:
  * none) and local name, and its value, `length` bytes. Read at the call,
@@ -1663,6 +1675,10 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
 /* A clone's elements with a definition, upgraded before the clone is
  * handed back. 0, or -1 with an exception pending. */
 int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *copy);
+/* adoptNode moved `root`'s tree from document `from` to `to`: each custom
+ * element in it is owed an adoptedCallback. */
+void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *from,
+                      const os64_html_node_t *to);
 /* Teardown: the listener taken away with the engine's values; the
  * records and definitions' memory after the engine. */
 void d_custom_free(os64_dom_t *dom);

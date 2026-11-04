@@ -315,7 +315,9 @@ listeners come and go (the AbortSignal's GC clause is its one reader).
 Each listener's callback is a C-held engine value, the registry's second
 list, released by drain. An Event's own state is engine memory traced by the
 collector (`gc_mark`), because a script may keep an event long after its
-dispatch: its finalizer frees engine storage and nothing native.
+dispatch: its finalizer frees engine storage and nothing native, since the
+one native thing it points at, its dispatch's path, is let go when the
+dispatch ends.
 
 **Dispatch** is the DOM Standard's: the path is the target and its ancestors,
 then window past the document (except for `load`), and a plain target,
@@ -327,6 +329,14 @@ listener removed during it does not run (its record is swept when the last
 dispatch leaves). `once` listeners are removed before they run. A listener
 that throws is reported (with the switch on, as the window's error event,
 § P2a's rows) and the next one runs.
+
+**`composedPath()`** (a Modern Web row) is that path as an array,
+innermost first: the nodes as the dispatch found them, whatever a listener
+moves meanwhile, so the dispatch holds each one while it runs (an ancestor
+no script has a wrapper for would otherwise be reclaimed when a listener
+takes it out of the tree) and wraps them only when asked. Outside a
+dispatch it is empty. There are no shadow trees (DEBTS.md), so no listener
+has nodes hidden from it, and every listener reads the whole path.
 
 Two callers, two shapes. **The host** (`os64_dom_dispatch`) opens a libjs
 task, runs each listener as one `os64_js_call` followed by a checkpoint, and
@@ -563,12 +573,26 @@ a fragment is.
 
 **Which document a node belongs to** is the document its tree hangs from;
 a tree that hangs from none remembers the document it was made in, copied
-from, or last taken out of, on its root's wrapper (`DValue.document`,
-written by `d_made_in` and `d_leaving`). A root with no wrapper (a child
+into, adopted by or last taken out of, on its root's wrapper
+(`DValue.document`, written by `d_made_in` and `d_leaving`). A root with no wrapper (a child
 innerHTML replaced, never handed to a script) says nothing and reads as
 the window's: a script reaches it only through a descendant it held
 before. While no document of its own exists, every node is the window's
 and none of this runs.
+
+**`importNode(node, deep)` and `adoptNode(node)`** (Modern Web members of
+Document) are the explicit doors to the same record. importNode is
+cloneNode's copy (`d_node_clone`) with the receiver as the copy's
+document, so a template's contents imported into the page come back with
+their custom elements upgraded, which they never were inside the
+template; `deep` is a boolean (DOM's newer `{selfOnly}` dictionary is not
+read). adoptNode takes the node out of its parent and records the
+receiver; when that is another document, each custom element in it is
+owed an `adoptedCallback`, queued behind the removal's disconnections in
+the [CEReactions] queue, and a later insertion there is no second
+adoption. An Attr on an element is taken off it first, as other browsers
+do, since an attached Attr's document here is its element's. A Document is
+a NotSupportedError for either.
 
 **It has no window.** Its `location` is null and assigning to it throws;
 it is cookie-averse; `write`, `writeln` and `open` throw
@@ -594,8 +618,8 @@ document's would (`nodeName` uppercased, a tag query and attribute names
 folded, selectors case-blind), since the binding asks an element's
 namespace and not its document (DEBTS.md). libhtml's tree holds elements of the HTML, SVG and MathML
 namespaces only, so an element in no namespace, or another, is a
-NotSupportedError, from `createDocument` and from such a document's
-`createElement`; `createElementNS` is not built. A new document is in
+NotSupportedError, from `createDocument`, from such a document's
+`createElement` and from `createElementNS`. A new document is in
 no-quirks mode in a browser; here a query or a style attribute in it reads
 with the window's mode, which a quirks page's class selectors show.
 

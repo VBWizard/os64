@@ -825,10 +825,70 @@ static void dom_resolve_matches_page(void)
             fixture_free(&f);
         }
 }
+/* composedPath (DOM § 2.9): the dispatch's path, innermost first, the
+ * window last; the same to every listener on the path and to a host's
+ * dispatch; empty outside a dispatch; the target alone for one that is no
+ * node, the window alone for the window, and no window for a detached
+ * tree; the path as the dispatch found it, its nodes kept, after a listener
+ * has taken an ancestor no script ever held out of the tree; and a
+ * listener a listener gave an ancestor no script had held, which runs. */
+static void dom_event_path_cases(void)
+{
+    DomFixture f = event_fixture(event_html, "http://example.test/dir/page.html?q=1#top");
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, DOM_ASSERT "globalThis.log=[];"
+        "globalThis.names=p=>p.map(n=>n===window?'window':n.id||n.nodeName).join(',');"
+        "const link=document.getElementById('link');"
+        "link.addEventListener('click',e=>log.push('t '+names(e.composedPath())));"
+        "window.addEventListener('click',e=>log.push('w '+names(e.composedPath())));"
+        "document.getElementById('outer').addEventListener('click',e=>log.push('o '+names(e.composedPath())),true);",
+        "event-path-setup.js");
+    bool prevented = true;
+    check(host_dispatch(&f, "link", "click", &prevented) == OS64_JS_OK, "a host click with path readers");
+    dom_script(&f, DOM_ASSERT
+        "var full='link,inner,outer,BODY,HTML,#document,window';"
+        LOG_IS("'o '+full+'|t '+full+'|w '+full")
+        "var kept;document.getElementById('inner').addEventListener('ping',e=>{kept=e;log.push(names(e.composedPath()))});"
+        "var ping=new Event('ping',{bubbles:true});link.dispatchEvent(ping);"
+        LOG_IS("'link,inner,outer,BODY,HTML,#document,window'")
+        "var after=kept.composedPath();assert(Array.isArray(after)&&after.length===0,'empty after the dispatch');"
+        "assert(kept.composedPath()!==after,'a new array each time');"
+        "assert(new Event('x').composedPath().length===0,'never dispatched');"
+        "var t=new EventTarget();t.addEventListener('x',e=>log.push(e.composedPath().length+' '+(e.composedPath()[0]===t)));"
+        "t.dispatchEvent(new Event('x'));" LOG_IS("'1 true'")
+        "window.addEventListener('w',e=>log.push(names(e.composedPath())));window.dispatchEvent(new Event('w'));"
+        LOG_IS("'window'")
+        "var root=document.createElement('section'),leaf=root.appendChild(document.createElement('i'));"
+        "leaf.addEventListener('d',e=>log.push(names(e.composedPath())));leaf.dispatchEvent(new Event('d'));"
+        LOG_IS("'I,SECTION'")
+        "throws('TypeError',()=>Event.prototype.composedPath.call({}));"
+        /* Only `t` is ever wrapped: the listener takes it out, then empties
+         * the box, which leaves its old ancestors a subtree nothing else
+         * holds. */
+        "var box=document.getElementById('outer');"
+        "box.insertAdjacentHTML('beforeend','<section><div><b id=t></b></div></section>');"
+        "var b=document.getElementById('t');"
+        "b.addEventListener('gone',e=>{b.remove();box.textContent='';});"
+        "b.addEventListener('gone',e=>log.push(names(e.composedPath())));"
+        "b.dispatchEvent(new Event('gone'));"
+        LOG_IS("'t,DIV,SECTION,outer,BODY,HTML,#document,window'")
+        "assert(b.parentNode===null&&box.firstChild===null,'the tree as the listener left it');"
+        /* `deep`'s ancestors are never wrapped before the dispatch reaches
+         * them: the first listener gives its parent one as it bubbles by */
+        "document.body.insertAdjacentHTML('beforeend','<div id=a><span><b id=deep>x</b></span></div>');"
+        "var deep=document.getElementById('deep');"
+        "deep.addEventListener('late',e=>e.composedPath()[1].addEventListener('late',()=>log.push('span')));"
+        "deep.dispatchEvent(new Event('late',{bubbles:true}));"
+        LOG_IS("'span'"),
+        "event-path.js");
+    fixture_free(&f);
+}
+
 static void dom_event_cases(void)
 {
     dom_resolve_matches_page();
     dom_event_dispatch_cases();
+    dom_event_path_cases();
     dom_event_handler_cases();
     dom_event_window_order_cases();
     dom_event_listens_cases();
