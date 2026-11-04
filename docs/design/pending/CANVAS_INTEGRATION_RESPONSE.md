@@ -33,9 +33,10 @@ written. This document records the dispositions and subsequent integration.
    boolean dirty query; its Yonder wrapper is unused too. Remove both and
    their declarations. Presentation continues through the damage visitor
    and paint acknowledgement, which retain pending reset semantics.
-6. **Test the combined build.** Chris tested S2 and S3 on userland. He will
-   test the Canvas/S3 combination before its merge to userland. This is a
-   functional browsing check, not another timed performance campaign.
+6. **Test the combined build.** Chris tested S2 and S3 on userland and
+   accepted the combined Canvas/S3 cohort at `94c1c55d` on 2026-11-04.
+   The checked streaming and Canvas pages worked correctly. This was
+   functional browsing acceptance, not another timed performance campaign.
 
 ## Merge before cleanup
 
@@ -62,4 +63,5 @@ need another turn.
 
 Verification results and the final frozen cohort are recorded in
 [integration regression](../../canvas-evidence/integration-regression.md).
-P5 acceptance of the combined S3/Canvas candidate remains pending.
+Chris accepted the combined S3/Canvas candidate on 2026-11-04. Final Codex
+review of the merge and follow-ups remains the step before merging to userland.

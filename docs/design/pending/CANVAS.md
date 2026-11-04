@@ -736,5 +736,5 @@ The user accepted the frozen combined candidate and the rainbow/frame-deadline
 follow-ups on the P5. Fable's architectural
 review recommends merging; the dispositions and subsequent Streams S3 merge
 are tracked in [the review response](CANVAS_INTEGRATION_RESPONSE.md).
-The integration remains unmerged to userland pending the combined P5 check
-and final acceptance.
+Chris accepted the combined S3/Canvas P5 check on 2026-11-04 at `94c1c55d`.
+The integration remains unmerged to userland pending final Codex review.

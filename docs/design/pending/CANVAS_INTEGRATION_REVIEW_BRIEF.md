@@ -8,7 +8,8 @@ is to merge. [The response](CANVAS_INTEGRATION_RESPONSE.md) records each
 finding and the subsequent userland S3 merge (`afad35b5`, merged as
 `43b60349`). The original review scope and S2 evidence below are historical;
 compare `afad35b5...canvas-integration` for the current candidate. The
-combined S3/Canvas P5 check is pending.
+combined S3/Canvas P5 check passed on 2026-11-04 at `94c1c55d`; final Codex
+review of the merge and follow-ups precedes the userland merge.
 
 Chris has accepted the Canvas 2D functionality and his browsing regression.
 This review asks whether the combined architecture is ready to land in

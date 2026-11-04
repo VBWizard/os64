@@ -209,6 +209,8 @@ The frozen P5 cohort preserves unchanged files from the accepted
 frame-deadline delivery, updates changed runtime dependencies and the Streams
 fixture, and includes source metadata and a SHA-256 manifest. Earlier native
 QEMU evidence remains evidence for its recorded cohorts; no new QEMU run is
-claimed for S3. Chris has tested S2/S3 separately on userland and will test
-this combined cohort before the final merge to userland. That acceptance is
-pending; this is a functional browsing check, not another timed campaign.
+claimed for S3. On 2026-11-04 Chris accepted the combined cohort built from
+`94c1c55d`: the pages he checked worked correctly for both streaming and
+Canvas. This was functional browsing acceptance, not a new timed campaign.
+The tested bundle remains frozen. A final Codex review of the S3 merge and
+review follow-ups precedes the merge to userland.
