@@ -9127,6 +9127,13 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
                       length);
 }
 
+// navigator.cookieEnabled: false while Settings has cookies off.
+static bool script_cookies_enabled(void *opaque)
+{
+    (void)opaque;
+    return !way_jar_refusing(g.way.jar);
+}
+
 static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
 static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
@@ -9207,7 +9214,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .referrer = referrer, .last_modified = modified, .focus = script_focus};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
-    const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
+    const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host, script_cookies_enabled};
     yonder_scripts_set_cookies(host, &cookies);
     return host;
 }

@@ -1298,7 +1298,10 @@ int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
  * the objects none of their own; Location's stay on the location
  * ([LegacyUnforgeable]), made unconfigurable, with its own valueOf and
  * Symbol.toPrimitive (HTML's "Location object setup"), and its prototype
- * holds no member. Each interface object is an Illegal constructor. */
+ * holds no member. Each interface object is an Illegal constructor. The
+ * row also makes what three of Navigator's members answer: `languages`,
+ * and the two empty lists `plugins` and `mimeTypes` with their interfaces,
+ * PluginArray and MimeTypeArray. */
 
 /* WebIDL's names for a member's functions: an operation's its own, an
  * attribute's accessors "get href" and "set href" (WebIDL's operations and
@@ -1404,6 +1407,81 @@ static int interface_over(JSContext *ctx, JSValueConst global, const char *name,
     return JS_DefinePropertyValueStr(ctx, global, name, interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+enum { L_LENGTH, L_ITEM, L_NAMED_ITEM, L_REFRESH };
+/* Which of the two lists a member is, beside its kind. */
+#define L_PLUGINS 0x100
+
+/* PluginArray and MimeTypeArray (HTML § 8.9.1.6): navigator.plugins and
+ * navigator.mimeTypes. HTML fills them with its five PDF viewer entries
+ * when the browser has one; there is none here, so both are empty for
+ * good: length 0, item() and namedItem() null once their argument is
+ * converted, refresh() nothing, and no Plugin or MimeType ever made. */
+static JSValue empty_list(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                          JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    bool plugins = (magic & L_PLUGINS) != 0;
+    magic &= ~L_PLUGINS;
+    DValue *list = plugins ? dom->plugins : dom->mime_types;
+    if (!JS_IsObject(self) || JS_VALUE_GET_PTR(self) != JS_VALUE_GET_PTR(list->value))
+        return JS_ThrowTypeError(ctx, plugins ? "Expected the PluginArray" : "Expected the MimeTypeArray");
+    if (magic == L_LENGTH) return JS_NewInt32(ctx, 0);
+    if (magic == L_REFRESH) return JS_UNDEFINED;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Missing argument");
+    if (magic == L_ITEM) {
+        uint32_t index;
+        if (JS_ToUint32(ctx, &index, argv[0]) < 0) return JS_EXCEPTION;
+    } else {
+        const char *name = JS_ToCString(ctx, argv[0]);
+        if (name == NULL) return JS_EXCEPTION;
+        JS_FreeCString(ctx, name);
+    }
+    return JS_NULL;
+}
+
+/* One of the two lists and its interface: the members made on the list and
+ * moved to its prototype, as the navigator's are, so each is named and
+ * placed as WebIDL places it; iterable as an indexed list is. */
+static int empty_list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, const char *name, bool plugins,
+                              DValue **out)
+{
+    JSValue prototype = JS_NewObject(ctx);
+    if (JS_IsException(prototype)) return -1;
+    *out = d_retain(dom, ctx, JS_NewObjectProto(ctx, prototype));
+    int flag = plugins ? L_PLUGINS : 0;
+    JSValueConst list = *out != NULL ? (*out)->value : JS_UNDEFINED;
+    int result = *out == NULL ||
+        d_accessor(dom, ctx, list, "length", empty_list, L_LENGTH | flag, false) < 0 ||
+        d_method(dom, ctx, list, "item", empty_list, 1, L_ITEM | flag) < 0 ||
+        d_method(dom, ctx, list, "namedItem", empty_list, 1, L_NAMED_ITEM | flag) < 0 ||
+        (plugins && d_method(dom, ctx, list, "refresh", empty_list, 0, L_REFRESH | flag) < 0) ||
+        move_members(ctx, list, prototype) < 0 || d_iterable(ctx, prototype, false) < 0 ? -1 : 0;
+    if (result == 0) result = interface_over(ctx, global, name, JS_DupValue(ctx, prototype));
+    JS_FreeValue(ctx, prototype);
+    return result;
+}
+
+/* navigator.languages: the one locale (OS64_JS_LOCALE), a frozen array, the
+ * same one every read, since the person's languages never change here. */
+static int languages_install(os64_dom_t *dom, JSContext *ctx)
+{
+    JSValue array = JS_NewArray(ctx);
+    if (JS_IsException(array)) return -1;
+    JSAtom length = JS_NewAtom(ctx, "length");
+    int result = length == JS_ATOM_NULL ||
+        JS_DefinePropertyValueUint32(ctx, array, 0, JS_NewString(ctx, OS64_JS_LOCALE), JS_PROP_ENUMERABLE) < 0 ||
+        JS_DefineProperty(ctx, array, length, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_PROP_HAS_WRITABLE) < 0 ||
+        JS_PreventExtensions(ctx, array) < 0 ? -1 : 0;
+    if (length != JS_ATOM_NULL) JS_FreeAtom(ctx, length);
+    if (result < 0) {
+        JS_FreeValue(ctx, array);
+        return -1;
+    }
+    dom->languages = d_retain(dom, ctx, array);
+    return dom->languages != NULL ? 0 : -1;
+}
+
 int d_window_objects_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValueConst location = dom->location->value, history = dom->history->value,
@@ -1443,6 +1521,10 @@ int d_window_objects_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
             result = -1;
         JS_FreeValue(ctx, prototype);
     }
+    if (result == 0 && (languages_install(dom, ctx) < 0 ||
+                        empty_list_install(dom, ctx, global, "PluginArray", true, &dom->plugins) < 0 ||
+                        empty_list_install(dom, ctx, global, "MimeTypeArray", false, &dom->mime_types) < 0))
+        result = -1;
     return result;
 }
 

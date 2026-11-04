@@ -194,6 +194,11 @@ static void cookie_set(void *opaque, const char *text, size_t length)
     (void)opaque;
     snprintf(cookie_heard, sizeof(cookie_heard), "%.*s", (int)length, text);
 }
+static bool cookie_refusing(void *opaque)
+{
+    (void)opaque;
+    return false;
+}
 static void dom_cookie_cases(void)
 {
     DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
@@ -201,10 +206,17 @@ static void dom_cookie_cases(void)
         "assert(document.cookie==='','a cookie-averse document');"
         "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document),'cookie').get.call(document.body))",
         "cookie-averse.js");
-    os64_dom_cookies_t cookies={cookie_get,cookie_set,NULL};
+    dom_script(&f,DOM_ASSERT "assert(navigator.cookieEnabled===false,'no provider, no cookies');",
+        "cookie-averse-navigator.js");
+    os64_dom_cookies_t cookies={cookie_get,cookie_set,NULL,cookie_refusing};
+    os64_dom_set_cookies(f.binding,&cookies);
+    dom_script(&f,DOM_ASSERT "assert(navigator.cookieEnabled===false,'a jar that refuses');",
+        "cookie-refused-navigator.js");
+    cookies.enabled=NULL;
     os64_dom_set_cookies(f.binding,&cookies);
     cookie_heard[0]=0;
-    dom_script(&f,DOM_ASSERT "assert(document.cookie==='a=1; b=2','read');document.cookie='c=3; path=/';",
+    dom_script(&f,DOM_ASSERT "assert(navigator.cookieEnabled===true,'a provider that does not say');"
+        "assert(document.cookie==='a=1; b=2','read');document.cookie='c=3; path=/';",
         "cookie-provider.js");
     check(strcmp(cookie_heard,"c=3; path=/")==0,"document.cookie: an assignment reaches the provider whole");
     cookie_long=100000;
@@ -523,9 +535,11 @@ static void dom_budget_cases(void)
     for(int mode=0;mode<3;mode++){
         DomFixture f=fixture_base(mode==1?65536:0,mode==2?4096:0,0);
         os64_dom_options_t options=os64_dom_default_options();
-        /* Room for the binding's own installation, and less than the
-         * 100000 bytes the script then asks for. */
-        if(mode==0) options.max_bytes=131072;
+        /* Room for the binding's own installation, whose peak (the custom
+         * row's wrap list over everything kept before it) is near 128 KiB,
+         * and less than what it keeps plus the 100000 bytes the script then
+         * asks for. */
+        if(mode==0) options.max_bytes=163840;
         os64_js_outcome_t outcome;
         f.binding=os64_dom_create(f.runtime,f.document,f.state,&options,&outcome);
         if(!fixture_ready(&f))continue;

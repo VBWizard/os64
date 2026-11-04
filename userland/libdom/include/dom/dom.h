@@ -367,12 +367,15 @@ void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaq
  * false when more did not fit — the read then asks again with more room;
  * `set` hears one string a script assigned, as a Set-Cookie value. With no
  * provider the document is cookie-averse: it reads "" and an assignment
- * does nothing. The callbacks must not enter JS. NULL removes it; install
- * outside callbacks. */
+ * does nothing. `enabled`, which may be NULL, answers whether the browser
+ * keeps cookies at all, which is navigator.cookieEnabled: a provider whose
+ * jar refuses every cookie answers false. The callbacks must not enter JS.
+ * NULL removes it; install outside callbacks. */
 typedef struct {
     size_t (*get)(void *opaque, char *out, size_t cap, bool *whole);
     void (*set)(void *opaque, const char *text, size_t length);
     void *opaque;
+    bool (*enabled)(void *opaque);
 } os64_dom_cookies_t;
 void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
 

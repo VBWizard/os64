@@ -289,9 +289,13 @@ JSClassExoticMethods d_node_exotic = {
     .define_own_property = node_define, .delete_property = node_delete,
 };
 
+/* The navigator's members run from C_USER_AGENT to C_JAVA_ENABLED, one
+ * range, which the getter's brand check covers. */
 enum { C_IMAGES, C_FORMS, C_ELEMENTS, C_STYLE, C_TITLE, C_NAME, C_SRC, C_WIDTH, C_HEIGHT,
-       C_CAPTURE, C_IMAGE, C_NAVIGATOR, C_USER_AGENT, C_APP_NAME, C_APP_VERSION, C_PLATFORM, C_CURRENT_EVENT, C_LEGACY_ARGUMENTS,
-       C_COOKIE };
+       C_CAPTURE, C_IMAGE, C_NAVIGATOR, C_USER_AGENT, C_APP_NAME, C_APP_VERSION, C_PLATFORM,
+       C_APP_CODE_NAME, C_PRODUCT, C_PRODUCT_SUB, C_VENDOR, C_VENDOR_SUB, C_LANGUAGE, C_LANGUAGES, C_ON_LINE,
+       C_COOKIE_ENABLED, C_HARDWARE_CONCURRENCY, C_MAX_TOUCH_POINTS, C_PDF_VIEWER, C_PLUGINS, C_MIME_TYPES,
+       C_JAVA_ENABLED, C_CURRENT_EVENT, C_LEGACY_ARGUMENTS, C_COOKIE };
 
 /* The room a document.cookie read starts with, doubled until the whole
  * answer fits: a page's cookies are rarely more, and a jar may hold far more
@@ -351,20 +355,49 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         return value;
     }
     if (magic == C_CURRENT_EVENT) return dom->current_event != NULL ? JS_DupValue(ctx,dom->current_event->value) : JS_UNDEFINED;
-    if (magic >= C_USER_AGENT && magic <= C_PLATFORM) {
+    if (magic >= C_USER_AGENT && magic <= C_JAVA_ENABLED) {
         if (!JS_IsObject(self) || JS_VALUE_GET_PTR(self) != JS_VALUE_GET_PTR(dom->navigator->value))
-            return JS_ThrowTypeError(ctx, "Navigator getter requires navigator");
+            return JS_ThrowTypeError(ctx, "Navigator member requires navigator");
         const char *agent = dom->user_agent != NULL ? dom->user_agent(dom->user_agent_opaque) : NULL;
         if (agent == NULL) agent = "yonder/1.0 (os64)";
-        if (magic == C_USER_AGENT) return JS_NewString(ctx, agent);
-        if (magic == C_APP_NAME) return JS_NewString(ctx, "Netscape");
-        if (magic == C_APP_VERSION) {
+        switch (magic) {
+        case C_USER_AGENT: return JS_NewString(ctx, agent);
+        case C_APP_NAME: return JS_NewString(ctx, "Netscape");
+        case C_APP_VERSION: {
             const char *slash = os64_strchr(agent, '/');
             return JS_NewString(ctx, slash != NULL ? slash + 1 : "");
         }
-        const char *platform = contains(agent,"Windows") || contains(agent,"Win98") ? "Win32" :
-            contains(agent,"iPhone") ? "iPhone" : contains(agent,"Macintosh") ? "MacIntel" : "OS64 x86_64";
-        return JS_NewString(ctx, platform);
+        case C_PLATFORM:
+            return JS_NewString(ctx, contains(agent,"Windows") || contains(agent,"Win98") ? "Win32" :
+                contains(agent,"iPhone") ? "iPhone" : contains(agent,"Macintosh") ? "MacIntel" : "OS64 x86_64");
+        /* HTML § 8.9.1.1's constants for a browser not in Gecko's
+         * compatibility mode, which no agent yonder wears is; the vendor is
+         * the one the agent's browser reports, else none. */
+        case C_APP_CODE_NAME: return JS_NewString(ctx, "Mozilla");
+        case C_PRODUCT: return JS_NewString(ctx, "Gecko");
+        case C_PRODUCT_SUB: return JS_NewString(ctx, "20030107");
+        case C_VENDOR:
+            return JS_NewString(ctx, contains(agent,"Chrome/") ? "Google Inc." :
+                contains(agent,"Safari/") ? "Apple Computer, Inc." : "");
+        case C_VENDOR_SUB: return JS_NewString(ctx, "");
+        case C_LANGUAGE: return JS_NewString(ctx, OS64_JS_LOCALE);
+        case C_LANGUAGES: return JS_DupValue(ctx, dom->languages->value);
+        /* Nothing tells a page the network went away, so it never has. */
+        case C_ON_LINE: return JS_TRUE;
+        case C_COOKIE_ENABLED:
+            return JS_NewBool(ctx, dom->cookies.get != NULL &&
+                                   (dom->cookies.enabled == NULL || dom->cookies.enabled(dom->cookies.opaque)));
+        /* A page sizes a pool of workers by it, and there are no workers
+         * here, so it is a middling machine's count rather than this one's. */
+        case C_HARDWARE_CONCURRENCY: return JS_NewInt32(ctx, 4);
+        /* Pointer Events: a mouse, no touch screen. */
+        case C_MAX_TOUCH_POINTS: return JS_NewInt32(ctx, 0);
+        /* There is no PDF viewer, so HTML's plugin and MIME type lists are
+         * empty (§ 8.9.1.6). */
+        case C_PDF_VIEWER: case C_JAVA_ENABLED: return JS_FALSE;
+        case C_PLUGINS: return JS_DupValue(ctx, dom->plugins->value);
+        default: return JS_DupValue(ctx, dom->mime_types->value);
+        }
     }
     if (magic == C_IMAGE) {
         uint32_t width = 0, height = 0;
@@ -754,6 +787,19 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     const char *names[] = {"userAgent","appName","appVersion","platform"};
     for (unsigned i = 0; i < 4; i++)
         if (d_accessor(dom,ctx,object,names[i],classic,C_USER_AGENT + (int)i,false) < 0) return -1;
+    /* The rest of HTML's Navigator is the Modern Web's: the window objects
+     * row moves these to Navigator.prototype with the four above, and
+     * makes the lists `plugins` and `mimeTypes` and `languages` read. */
+    if (dom->options.modern) {
+        static const char *const kModern[] = {"appCodeName", "product", "productSub", "vendor", "vendorSub",
+            "language", "languages", "onLine", "cookieEnabled", "hardwareConcurrency", "maxTouchPoints",
+            "pdfViewerEnabled", "plugins", "mimeTypes"};
+        _Static_assert(sizeof(kModern) / sizeof(kModern[0]) == C_JAVA_ENABLED - C_APP_CODE_NAME,
+                       "a name for each Modern Web navigator attribute");
+        for (unsigned i = 0; i < sizeof(kModern) / sizeof(kModern[0]); i++)
+            if (d_accessor(dom,ctx,object,kModern[i],classic,C_APP_CODE_NAME + (int)i,false) < 0) return -1;
+        if (d_method(dom,ctx,object,"javaEnabled",classic,0,C_JAVA_ENABLED) < 0) return -1;
+    }
     if (d_accessor(dom,ctx,global,"navigator",classic,C_NAVIGATOR,false) < 0 ||
         d_accessor(dom,ctx,global,"event",classic,C_CURRENT_EVENT,false) < 0) return -1;
     JSValueConst doc = dom->prototypes[D_PROTO_DOCUMENT]->value;

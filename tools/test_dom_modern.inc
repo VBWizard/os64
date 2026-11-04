@@ -987,6 +987,36 @@ static void dom_modern_cases(void)
         "assert(throws(function(){new Location()},'TypeError')&&throws(function(){new History()},'TypeError')&&"
         "throws(function(){new Navigator()},'TypeError'),'no constructors');",
         "modern-on-window-objects");
+    /* HTML's Navigator past the classic four: the constants, the locale,
+     * the switches, and the two empty lists with their interfaces. */
+    dom_script(&f, MODERN_ASSERT
+        "function throws(f,name){try{f()}catch(x){return x.name===name}return false}"
+        "function own(o,n){return Object.prototype.hasOwnProperty.call(o,n)}"
+        "var n=navigator,N=Navigator.prototype;"
+        "assert(n.appCodeName==='Mozilla'&&n.product==='Gecko'&&n.productSub==='20030107'&&n.vendor===''&&"
+        "n.vendorSub===''&&n.onLine===true&&n.hardwareConcurrency===4&&n.maxTouchPoints===0&&"
+        "n.pdfViewerEnabled===false&&n.javaEnabled()===false,'the constants');"
+        "assert(n.language==='en-US'&&n.languages===n.languages&&n.languages.length===1&&"
+        "n.languages[0]==='en-US'&&Object.isFrozen(n.languages),'the locale, one frozen list');"
+        "['appCodeName','product','vendor','language','languages','onLine','cookieEnabled','hardwareConcurrency',"
+        "'maxTouchPoints','pdfViewerEnabled','plugins','mimeTypes'].forEach(function(k){"
+        "var d=Object.getOwnPropertyDescriptor(N,k);assert(d&&d.get.name==='get '+k&&!d.set&&d.enumerable,k);"
+        "assert(!own(n,k),k+' on the prototype');"
+        "assert(throws(function(){d.get.call({})},'TypeError'),k+'\\'s brand')});"
+        "assert(Object.getOwnPropertyDescriptor(N,'javaEnabled').enumerable&&N.javaEnabled.name==='javaEnabled'&&"
+        "throws(function(){N.javaEnabled.call({})},'TypeError'),'an operation');"
+        "var p=n.plugins,m=n.mimeTypes;"
+        "assert(p===n.plugins&&m===n.mimeTypes&&p instanceof PluginArray&&m instanceof MimeTypeArray,'[SameObject]');"
+        "assert(p.length===0&&p.item(0)===null&&p.namedItem('PDF Viewer')===null&&p.refresh()===undefined&&"
+        "p[0]===undefined&&Array.from(p).length===0&&[...m].length===0,'empty');"
+        "assert(m.length===0&&m.item(4294967296)===null&&m.namedItem('application/pdf')===null&&!('refresh' in m));"
+        "assert(Object.prototype.toString.call(p)==='[object PluginArray]'&&"
+        "Object.prototype.toString.call(m)==='[object MimeTypeArray]','tags');"
+        "assert(throws(function(){p.item()},'TypeError')&&throws(function(){PluginArray.prototype.item.call(m,0)},"
+        "'TypeError')&&throws(function(){new PluginArray()},'TypeError'),'refusals');"
+        "var told=0;p.item({valueOf:function(){told++;return 0}});m.namedItem({toString:function(){told++;return ''}});"
+        "assert(told===2,'arguments converted');",
+        "modern-on-navigator");
     dom_script(&f, MODERN_ASSERT
         "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
         /* checkValidity and reportValidity fire invalid: cancelable, not bubbling, trusted */
@@ -1317,6 +1347,9 @@ static void dom_modern_cases(void)
         "Object.prototype.hasOwnProperty.call(history,'back')&&"
         "Object.prototype.hasOwnProperty.call(navigator,'userAgent')&&"
         "Object.getOwnPropertyDescriptor(location,'href').configurable);"
+        "assert(!('onLine' in navigator)&&!('language' in navigator)&&!('plugins' in navigator)&&"
+        "!('javaEnabled' in navigator)&&typeof PluginArray==='undefined'&&typeof MimeTypeArray==='undefined',"
+        "'the rest of Navigator is the arc\\'s');"
         /* over a level of their own, so the chains' levels match the switch's */
         "[location,history,navigator].forEach(function(o){var p=Object.getPrototypeOf(o);"
         "assert(p!==Object.prototype&&Object.getPrototypeOf(p)===Object.prototype&&"

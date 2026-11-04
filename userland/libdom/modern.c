@@ -59,7 +59,8 @@ static const DModernRow kModern[] = {
      d_history_install},
     /* 0f's P7: location, history and navigator as their interfaces', after
      * the history row, whose members History.prototype takes. */
-    {(const char *const[]){"Location", "History", "Navigator", NULL}, d_window_objects_install},
+    {(const char *const[]){"Location", "History", "Navigator", "PluginArray", "MimeTypeArray", NULL},
+     d_window_objects_install},
     {(const char *const[]){"localStorage", "sessionStorage", "Storage", NULL}, d_storage_install},
     {(const char *const[]){"performance", "Performance", "PerformanceEntry", "PerformanceMark",
                            "PerformanceMeasure", "PerformanceTiming", "PerformanceNavigation", NULL},

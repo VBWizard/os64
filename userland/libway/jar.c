@@ -1425,6 +1425,16 @@ void way_jar_refuse(way_jar_t *jar, bool refuse)
     os64_lock_release(&jar->lock);
 }
 
+bool way_jar_refusing(way_jar_t *jar)
+{
+    if (jar == NULL)
+        return true;
+    os64_lock_acquire(&jar->lock);
+    bool refusing = jar->refusing;
+    os64_lock_release(&jar->lock);
+    return refusing;
+}
+
 // ── A hop's lines ───────────────────────────────────────────────────────
 
 int32_t way_hop_headers(way_jar_t *jar, const char *referrer, const os64_url_t *to,
