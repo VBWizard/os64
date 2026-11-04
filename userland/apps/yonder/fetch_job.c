@@ -559,14 +559,19 @@ static bool read_body(os64_fetch_t *f, uint64_t cap, uint8_t **out, size_t *len,
 }
 
 // A body from the network streamed down the job's pipe (fetch_pipe.h):
-// the pipe, whether a copy is kept for the cache, and what says the job
-// is cancelled.
+// the pipe, whether a copy is kept for the cache, what says the job is
+// cancelled, and the job and its request, whose cache entries an unsafe
+// method's answer invalidates before its head is published.
 typedef struct {
     yonder_fetch_pipe_t *pipe;
     bool keep;
     bool (*cancelled)(void *ctx);
     void *ctx;
+    const yonder_fetch_job_t *job;
+    const way_request_t *r;
 } Streaming;
+
+static void cache_invalidate(const yonder_fetch_job_t *job, const way_request_t *r, const yonder_fetched_t *got);
 
 // `got->body` grown to hold `more` bytes past `got->body_len`, up to `cap`
 // (`*size` its allocation). False when the copy cannot be kept: past the
@@ -600,8 +605,14 @@ static bool keep_grow(yonder_fetched_t *got, size_t *size, size_t more, uint64_t
 static bool stream_body(yonder_fetched_t *got, os64_fetch_t *f, const Streaming *s, uint64_t cap)
 {
     // The head is an answer's by now: everything that could make it a
-    // network error was judged before its body was read.
+    // network error was judged before its body was read. An unsafe
+    // method's answer invalidates what the cache keeps for the address
+    // now, as Fetch's HTTP-network-or-cache fetch does on the response:
+    // the page may ask for the address again before this body ends, and
+    // a body that then breaks part way leaves the request's answer a
+    // network error, which invalidates nothing.
     got->ok = true;
+    cache_invalidate(s->job, s->r, got);
     if (!yonder_fetch_pipe_head(s->pipe, got))
         return network_error(got, "out of memory"), false;
     got->streamed = true;
@@ -1430,7 +1441,7 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
                 continue;
             }
         }
-        Streaming s = {job->pipe, cached != NULL, cancelled, ctx};
+        Streaming s = {job->pipe, cached != NULL, cancelled, ctx, job, r};
         if (finish(got, r, current, head->status, head->reason, &resp, f, NULL, 0, max_body,
                    job->pipe != NULL ? &s : NULL)) {
             verdict = 1;

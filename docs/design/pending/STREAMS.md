@@ -319,7 +319,11 @@ build departs from §§ 4–7, or says what they left open:
   network said).
 - **The head is published only once it is final**: after the redirects,
   the CORS check and the filtering, so a page is never handed a head that
-  later becomes a network error. A break part way is the end, `ok` false:
+  later becomes a network error. An unsafe method's answer invalidates
+  what the cache keeps for its address before its head is published, as
+  Fetch does on the response: the page may ask again before the body
+  ends, and a body that breaks makes the request a network error, which
+  invalidates nothing. A break part way is the end, `ok` false:
   the body's stream errors with a TypeError, and the page's record has
   the request as a FAILED line.
 - **An abort reaches a body that is still arriving, whoever holds the

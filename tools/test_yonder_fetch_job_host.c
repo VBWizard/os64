@@ -1466,6 +1466,29 @@ static void streamed_cache_cases(const char *page)
     expect("streamed cache: and the old copy went with it", g != NULL && g->served == WAY_SERVED_NETWORK &&
            nfake_requests == before + 1, NULL);
     yonder_fetched_free(g);
+
+    // An unsafe method's answer invalidates the address before its head is
+    // published: the page may ask again before the body ends, and a body
+    // that then breaks leaves the request a network error.
+    fresh();
+    fake_answer("GET", "https://a.test/item", 200, "Cache-Control: max-age=600\r\n", "old");
+    fake_answer_t *posted = fake_answer("POST", "https://a.test/item", 200, "", "updated, then broken");
+    posted->piece = 4;
+    posted->cut = 8;
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/item"}));
+    g = run(&(Ask){page, "https://a.test/item"});
+    expect("streamed cache: the GET is kept", g != NULL && g->served == WAY_SERVED_KEPT, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run_piped(&(Ask){page, "https://a.test/item", "POST", NULL, "x"}, &pipe);
+    expect("streamed cache: the POST's body broke part way", g != NULL && !g->ok && g->streamed,
+           g ? g->why : NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/item"});
+    expect("streamed cache: the POST's head invalidated the kept GET", g != NULL && g->served == WAY_SERVED_NETWORK &&
+           nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
 }
 
 static void http_cache_cases(void)
