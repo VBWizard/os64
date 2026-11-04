@@ -430,7 +430,8 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
         }
         if(len>0 && line[0]=='#') { l.kind="index:comment"; return l; }
         /* A script's or a sheet's line: six fields (version 1), or seven,
-         * the job's identity last (version 2). */
+         * the job's identity last (version 2). A module's line is version
+         * 2's alone: seven fields. */
         for(const char *p=line; l.nf<8; ) {
             const char *t=memchr(p,'\t',(size_t)(end-p));
             if(l.nf==7) { l.nf++; break; }
@@ -438,8 +439,10 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
             if(t==NULL) break;
             p=t+1;
         }
-        l.why="a line that is not a script's or a sheet's whole";
-        if((l.nf!=6 && l.nf!=7) || !(rp_is(l.f[1],l.fl[1],"script") || rp_is(l.f[1],l.fl[1],"sheet")) || l.fl[2]==0 ||
+        l.why="a line that is not a script's, a sheet's or a module's whole";
+        bool module=l.nf>1 && rp_is(l.f[1],l.fl[1],"module");
+        if((l.nf!=6 && l.nf!=7) || (module && l.nf!=7) ||
+           !(rp_is(l.f[1],l.fl[1],"script") || rp_is(l.f[1],l.fl[1],"sheet") || module) || l.fl[2]==0 ||
            !(rp_is(l.f[3],l.fl[3],"came") || rp_is(l.f[3],l.fl[3],"failed")))
             return l;
         if(!rp_decimal(l.f[0],l.fl[0],&l.n[0]) || (l.nf==7 && !rp_decimal(l.f[6],l.fl[6],&l.n[1]))) {
@@ -709,8 +712,9 @@ typedef struct {
 typedef enum { RP_CAME, RP_FAILED, RP_UNKNOWN } RpKnown;
 typedef RpKnown (*rp_lookup_t)(void *ctx, uint32_t kind, const char *url, uint32_t id, RpAnswer *out);
 
-/* The index of a kept page's folder (diag.h): its lines of the kinds this
- * runner answers, each with its file's bytes when it came, and how often
+/* The index of a kept page's folder (diag.h): its lines, each with its
+ * file's bytes when it came (a module's line taken from the start, since
+ * this runner answers no module's fetch), and how often
  * each was handed out, so the second job for one address is given the
  * second line kept for it. A job past the last has no line of its own: the
  * page asked more often than where it was kept, and an answer made up from
@@ -778,14 +782,18 @@ static const char *rp_index_read(const char *folder, RpIndex *x, RpFault *fault)
             if(l.n[0]!=x->n+1) { bad="its index is damaged: its lines are not numbered 1 to N in order, each once"; break; }
             x->e=realloc(x->e,(x->n+1)*sizeof(*x->e));
             RpEntry *e=&x->e[x->n++]; memset(e,0,sizeof(*e));
-            e->kind=rp_is(l.f[1],l.fl[1],"script") ? YONDER_JOB_SCRIPT : YONDER_JOB_SHEET;
+            /* A module's line is read and never served (diag.h): it answers
+             * no job, so it is taken already and never "never asked for". */
+            bool module=rp_is(l.f[1],l.fl[1],"module");
+            e->kind=module ? YONDER_JOB_FETCH : rp_is(l.f[1],l.fl[1],"script") ? YONDER_JOB_SCRIPT : YONDER_JOB_SHEET;
+            e->used=module;
             e->n=l.n[0]; e->id=l.n[1]; e->any_id=l.nf==6;
             e->url=rp_unescape(l.f[2],l.fl[2],false);
             e->came=rp_is(l.f[3],l.fl[3],"came");
             e->final=rp_unescape(l.f[4],l.fl[4],false);
             e->label=rp_unescape(l.f[5],l.fl[5],false);
             if(e->came) {
-                char file[32]; snprintf(file,sizeof(file),"%u.%s",e->n,e->kind==YONDER_JOB_SCRIPT ? "js" : "css");
+                char file[32]; snprintf(file,sizeof(file),"%u.%s",e->n,e->kind==YONDER_JOB_SHEET ? "css" : "js");
                 char *file_at=rp_cat(folder,"/",file);
                 got=rp_fs_read(file_at,&e->bytes,&e->len,fault);
                 if(got==RP_FS_ABSENT) { snprintf(why,sizeof(why),"its index names %s, which is not there",file); bad=why; }
@@ -2502,10 +2510,10 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         {"/fulltable",RP_FULL_TABLE,"its record lost lines it could not keep"},
         {"/notarecord",RP_COPY,"it is not a page file: its first line is not `address: `"},
         {"/cut",RP_CUT,"its record has no `end`: it was cut short"},
-        {"/shortline",RP_SHORT_LINE,"its index is damaged: a line that is not a script's or a sheet's whole"},
+        {"/shortline",RP_SHORT_LINE,"its index is damaged: a line that is not a script's, a sheet's or a module's whole"},
         {"/cutbeforekept",RP_CUT_BEFORE_KEPT,"its record has no `end`: it was cut short"},
         {"/bigcount",RP_BIG_COUNT,"it is not a whole page file: a count no record holds"},
-        {"/oddline",RP_ODD_LINE,"its index is damaged: a line that is not a script's or a sheet's whole"},
+        {"/oddline",RP_ODD_LINE,"its index is damaged: a line that is not a script's, a sheet's or a module's whole"},
         {"/escapes",RP_ESCAPES,"it was kept not whole: "},
         {"/swapnumbers",RP_SWAP_NUMBERS,"its index is damaged: its lines are not numbered 1 to N in order, each once"},
         {"/biglines",RP_BIG_LINES,"it is not a whole page file: a count no record holds"},

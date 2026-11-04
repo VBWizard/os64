@@ -2498,6 +2498,15 @@ static void diag_keep(yonder_diag_t *d, yonder_diag_kept_t kind, uint32_t job, c
         diag_kept(yonder_diag_keep_resource(yonder_diag_claimed(d), kind, job, url, final, label, bytes, n));
 }
 
+// A module's fetch as the page's module map received it (scripts.h), kept
+// as a script is: its source as read, or a line saying it did not come.
+static void script_kept_module(void *opaque, yonder_diag_t *diag, uint32_t token, const char *url,
+                               const char *final, const char *source, size_t length)
+{
+    (void)opaque;
+    diag_keep(diag, YONDER_DIAG_KEPT_MODULE, token, url, final, "", source, length);
+}
+
 // The badge follows the shown page's counts; its width moves the status
 // line's edge, so a change lays the bar out again.
 static void badge_follow(void)
@@ -9195,6 +9204,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
+        .kept_module = script_kept_module,
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,

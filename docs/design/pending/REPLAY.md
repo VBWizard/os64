@@ -228,6 +228,7 @@ the rows that say so are the whole of what a replay fakes.
 | the cookie jar | the harness | — | stated: read-only, and it holds the record's string and nothing more; what the page sets with `document.cookie=`, a `Set-Cookie` from any fetch the page makes after the head (one its first script waits for included), a cookie the page still on screen set, and an expiry are not seen in a replay, so a script that read the jar after any of those where the page was kept reads the head's string here |
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
+| modules | not fetched | — | stated: a module's fetch, like any request the page makes, is not answered; its kept `module` line is read and not served (§ 4) |
 | the screen | the harness | — | stated: `screen`, and the device-width, device-height and device-aspect-ratio media features, answer libdom's default, 1024 × 768, not the display the page was kept on |
 | page storage | the harness | — | stated: `localStorage` and `sessionStorage` start empty and live in memory for the replay alone; no profile folder is read or written |
 | the system's randomness | the harness | — | stated: `crypto.getRandomValues` and `crypto.randomUUID` read a fixed sequence from a fixed seed, begun afresh for each page (each replays in a process of its own), not the bytes the page was given where it was kept |
@@ -326,7 +327,15 @@ comment  := "#" text      -- never beginning "# yonder kept index ": a line
 line     := count TAB kind TAB fields
 fields   := (script | sheet)   -- v2: address TAB came|failed TAB final TAB label TAB identity
                                -- v1: the same without identity
+          | module             -- v2 only: address TAB came|failed TAB final TAB label TAB identity,
+                               -- the identity the page's module map's token
 ```
+
+A `module` line is read and never served: a module's fetch is the page's
+own request, which a replay does not answer (§ 3), so the line answers no
+job and is never "never asked for". It is there for the census, which
+reads a page's sources from its folder; a module page's replay waits on
+its import and is UNFINISHED, as it was before modules were kept.
 
 Lines are numbered 1..N in order, each once; a number repeated, skipped
 or out of order is damage. A line of a kind the reader does not know is
@@ -442,4 +451,5 @@ Each is a row in DEBTS.md § The replay corpus.
 | keep_pages writes on the window's thread | browsing with it on visibly hitching while a page's scripts arrive |
 | a page that navigates replays only as far as going | pages that redirect by script often enough that their incomplete records hide what slices change |
 | pictures and fonts are not fetched on replay | a slice whose work is pictures or fonts wanting the corpus to judge it |
+| modules are kept but not served on replay | a slice whose proof is a module page's replay (a GitHub page drawing, Intl's A2) |
 | a form's reply replays as a GET | a kept page from a form whose scripts read what was posted |

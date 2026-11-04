@@ -44,6 +44,10 @@ typedef struct {
     // cache holds: its blob (libjs's, taken) to be kept where `where` says
     // (BYTECODE_CACHE.md). NULL keeps nothing.
     void (*keep_bytecode)(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
+    // A module's fetch for the page's record `diag` (yonder_modules_net_t's
+    // `kept`, which this hands on with the record). NULL keeps nothing.
+    void (*kept_module)(void *opaque, yonder_diag_t *diag, uint32_t token, const char *url, const char *final,
+                        const char *source, size_t length);
     void (*activate)(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what);
     // document.write: the stream's parser takes the text (os64_html_parser_
     // write) and answers its status. Asked only while the script the parse

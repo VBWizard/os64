@@ -253,9 +253,11 @@ def classify(line, index=False):
             if line.startswith(b'#'):
                 return 'index:comment', None
             f = line.split(b'\t')
-            if (len(f) not in (6, 7) or f[1] not in (b'script', b'sheet') or not f[2]
+            # A module's line is version 2's alone: seven fields.
+            if (len(f) not in (6, 7) or f[1] not in (b'script', b'sheet', b'module') or not f[2]
+                    or (f[1] == b'module' and len(f) != 7)
                     or f[3] not in (b'came', b'failed') or decimal(f[0]) < 1):
-                return 'index:REFUSED', 'a line that is not a script\'s or a sheet\'s whole'
+                return 'index:REFUSED', 'a line that is not a script\'s, a sheet\'s or a module\'s whole'
             if len(f) == 6:
                 return 'index:entry-v1', (decimal(f[0]), f[1], f[2], f[3] == b'came', f[4], f[5], None)
             return 'index:entry', (decimal(f[0]), f[1], f[2], f[3] == b'came', f[4], f[5], decimal(f[6]))

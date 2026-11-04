@@ -366,7 +366,67 @@ static void module_data_case(void) {
     request_drop();
 }
 
+/* The index line a kept page's folder holds for `url` of `kind` (diag.h):
+ * its number and whether it came, false when there is none. */
+static bool kept_line(const char *index, const char *kind, const char *url, unsigned *n, bool *came) {
+    char want[256];
+    snprintf(want,sizeof(want),"\t%s\t%s\t",kind,url);
+    const char *at=index!=NULL ? strstr(index,want) : NULL;
+    if(at==NULL) return false;
+    const char *start=at;
+    while(start>index && start[-1]!='\n') start--;
+    *n=(unsigned)strtoul(start,NULL,10);
+    *came=!strncmp(at+strlen(want),"came\t",5);
+    return true;
+}
+
+/* A page's modules KEPT (diag.h, a `module` line): an entry and its
+ * import as they land, a dynamic import fetched inside its task, and a
+ * module whose server refused it, each with the source the loader read,
+ * or a line and no file. Keeping is the census's view of a page; a replay
+ * reads the lines and serves none (REPLAY.md § 3). */
+static void module_keep_case(void) {
+    keep_begin(true);
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/a.js",200,MODULE_JS,"import {b} from './b.js';note('a'+b);");
+    fake_answer("GET","http://fixture.test/m/b.js",200,MODULE_JS,"export const b='B';");
+    fake_answer("GET","http://fixture.test/m/dyn.js",200,MODULE_JS,"export default 'dyn';");
+    fake_answer("GET","http://fixture.test/m/gone.js",404,MODULE_JS,"no such module");
+    module_page("<script type=module src=/m/a.js></script><script type=module src=/m/gone.js></script>"
+        "<script type=module>import('/m/dyn.js').then(m=>note(m.default))</script>");
+    check(loop_settle() && request_land("/m/a.js") && request_land("/m/gone.js") && request_land("/m/b.js") &&
+          loop_settle() && g.page.tree!=NULL && script_rebuild() && strstr(element_text("out"),"aB")!=NULL &&
+          strstr(element_text("out"),"dyn")!=NULL,
+          "module keep: the page's modules run, its dynamic import among them");
+    char base[64], path[128];
+    snprintf(base,sizeof(base),"/tmp/kept/fixture.test-%04u",(unsigned)yonder_diag_seq(g.page.diag));
+    snprintf(path,sizeof(path),"%s.d/index",base);
+    const char *index=fake_text(path);
+    unsigned n=0; bool came=false;
+    check(index!=NULL && has(index,"# script, sheet, module:") && has(index,"a replay does not serve modules"),
+          "module keep: the index's header names the module's line and that a replay serves none");
+    const struct { const char *url, *source; } kKept[]={
+        {"http://fixture.test/m/a.js","import {b} from './b.js';note('a'+b);"},
+        {"http://fixture.test/m/b.js","export const b='B';"},
+        {"http://fixture.test/m/dyn.js","export default 'dyn';"}};
+    for(size_t i=0;i<sizeof(kKept)/sizeof(kKept[0]);i++) {
+        bool found=kept_line(index,"module",kKept[i].url,&n,&came);
+        snprintf(path,sizeof(path),"%s.d/%u.js",base,n);
+        char what[160];
+        snprintf(what,sizeof(what),"module keep: %s has a line saying it came, and its source as a file",kKept[i].url);
+        check(found && came && fake_text(path)!=NULL && !strcmp(fake_text(path),kKept[i].source),what);
+    }
+    bool found=kept_line(index,"module","http://fixture.test/m/gone.js",&n,&came);
+    snprintf(path,sizeof(path),"%s.d/%u.js",base,n);
+    check(found && !came && fake_text(path)==NULL,"module keep: a module its server refused has a line and no file");
+    check(index!=NULL && has(index,"\tmodule\thttp://fixture.test/m/a.js\tcame\thttp://fixture.test/m/a.js\t\t2147483"),
+          "module keep: a line carries the map's token as the job's identity");
+    request_drop();
+    keep_end();
+}
+
 static void module_cases(void) {
+    module_keep_case();
     module_data_case();
     module_place_case();
     module_graph_case();

@@ -831,13 +831,21 @@ static void module_keep(void *opaque, const yonder_bytecode_t *where, uint8_t *b
     s->options.keep_bytecode(s->options.opaque, where, blob, length);
 }
 
+static void module_kept(void *opaque, uint32_t token, const char *url, const char *final, const char *source,
+                        size_t length)
+{
+    yonder_scripts_t *s = opaque;
+    s->options.kept_module(s->options.opaque, s->options.diag, token, url, final, source, length);
+}
+
 // The page's module map, with its network: what ensure_runtime makes with
 // the runtime.
 static yonder_modules_t *module_map_new(yonder_scripts_t *s)
 {
     const yonder_modules_net_t net = {s, module_start, net_cancel, module_run_now, module_release,
                                       module_document_base, module_script_base,
-                                      s->options.keep_bytecode != NULL ? module_keep : NULL};
+                                      s->options.keep_bytecode != NULL ? module_keep : NULL,
+                                      s->options.kept_module != NULL ? module_kept : NULL};
     return yonder_modules_new(s->runtime, &net, s->options.diag);
 }
 
