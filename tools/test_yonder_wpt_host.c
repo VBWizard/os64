@@ -848,6 +848,7 @@ static bool wpt_turns(void) {
         bool more=stream_turn();
         more=coming_turn() || more;
         more=script_turn() || more;
+        more=bodies_turn() || more;
         more=wpt_answer() || more;
         if(wpt_navigated || !more) return true;
     }

@@ -279,3 +279,73 @@ verb. Where the build departs from §§ 3–7, or says what they left open:
   transferred; os64 has no WebAssembly. Nothing lost in the other
   `streams/` directories or in `fetch/api`, and a BYOB reader now reads
   every kind of Response body (`response-consume-stream`).
+
+## 10. S3, as built
+
+A script's request answers in pieces: libdom's contract gained a head, a
+piece and an end (dom.h § A STREAMED ANSWER) and the network's `more`;
+yonder's fetch job writes a body from the network down a PIPE
+(`fetch_pipe.h`) that the window reads out as the page asks;
+TextDecoderStream and TextEncoderStream joined streams.js. Where the
+build departs from §§ 4–7, or says what they left open:
+
+- **The pipe is the backpressure, and the job never waits on a body under
+  16 MiB.** The writer holds off its next read while 16 MiB wait unread
+  (`YONDER_FETCH_PIPE_WINDOW`), and the job ends when the body is off the
+  wire, read or not: once the window reaps the job it hands the page
+  whatever the pipe still holds, unasked, and the body's stream queues it.
+  § 5 had the job wait on the page's `desiredSize`; that would hold a
+  pool worker for every body a page has not read yet, and a page that
+  fetches several bodies before it reads any would starve the pool and
+  wait on itself. Inside the job's life the page's reads pace what it is
+  handed (a piece per ask, up to 1 MiB); past it, the realm's memory is
+  the bound, as rule 3 says.
+- **The window paints between pieces.** A turn of the window's loop
+  hands each streamed request one step at most (its head, a piece, its
+  end), and takes no more steps once 16 ms are spent; what is left rings
+  the loop for the next turn. A request that asks for more the moment it
+  is handed a piece (an XMLHttpRequest always does) would otherwise be
+  handed every piece there was in one turn: a speed test's downloads,
+  several megabytes a second each, held the window for half a second at
+  a time.
+- **A body from the network streams; every other answer is whole.** A
+  cache hit, a 304 the cache confirms, a `data:` URL, a module's fetch
+  and a synchronous XMLHttpRequest answer whole, as before. A head with a
+  null body, or a network error before the head, is a whole answer too.
+- **A streamed body has no cap; the cache's copy has.** libfetch is given
+  no `max_body` for it. The job keeps a copy for the cache while the body
+  fits under `YONDER_FETCH_BODY_MAX` and drops it past that, and the cache
+  then keeps nothing for the address (what it held is older than what the
+  network said).
+- **The head is published only once it is final**: after the redirects,
+  the CORS check and the filtering, so a page is never handed a head that
+  later becomes a network error. A break part way is the end, `ok` false:
+  the body's stream errors with a TypeError, and the page's record has
+  the request as a FAILED line.
+- **An abort reaches a body that is still arriving, whoever holds the
+  Response.** The request holds the stream and the Response until the
+  body's end, and the signal's algorithm stays the request's: an abort
+  stops the host and errors the stream. At the end the body becomes an
+  answered fetch's (S1's rule: an abort errors it until it is read).
+  A body an abort errored answers its reason to every body method at
+  once, however often it is asked, as S1's body aborted before its stream
+  existed does; a stream always exists for a streamed body, and reading
+  the errored stream settled a tick late and answered a second call with
+  a TypeError, which lost seven passes in WPT `fetch/api/abort` until it
+  did. A stream the page's own reader holds is still unusable.
+- **The window rings itself only once it has a window.** A pipe's writer
+  rings `BELL_BODY` on a pool worker, and the loop rings it after a task
+  asked for more; both are syscalls, so the hosts that drive yonder's
+  window without one (the scripted-page host, the WPT runner) hand the
+  pieces over at the reap, and the scripted-page host turns the window
+  from libfetch's fake between reads to see them arrive.
+- **XHR follows "process response body" for a streamed answer**: each
+  piece fires LOADING, readystatechange and progress at most once in
+  50 ms, and the end fires its progress as a whole answer's does. A whole
+  answer keeps S1's single progress event.
+- **TextDecoderStream and TextEncoderStream** are the Streams standard's
+  "set up" of a TransformStream over the realm's own TextDecoder and
+  TextEncoder, captured at its start. A decoder's label and options are
+  TextDecoder's, read by its constructor; the encoder pairs a surrogate
+  split across chunks itself and leaves the rest of the scalar-value
+  conversion to TextEncoder.

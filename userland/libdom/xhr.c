@@ -8,9 +8,12 @@
  * request. While its request is out, the request holds it (the registry's
  * fourth list), as the standard keeps an object with pending activity.
  *
- * The host answers a request whole, so the body arrives as one chunk: the
- * readystatechange to LOADING fires for it, and the one progress event a
- * browser's 50 ms throttle leaves for a small body fires at its end.
+ * The host answers a request whole or streamed (dom.h). A whole answer's
+ * body is one chunk: the readystatechange to LOADING fires for it, and the
+ * one progress event a browser's 50 ms throttle leaves for a small body
+ * fires at its end. A streamed answer's body comes in pieces, and XHR's
+ * "process response body" runs for each: the bytes kept, and, at most once
+ * in 50 ms, LOADING, readystatechange and progress.
  *
  * Everything here is engine memory: the author headers, the answer's
  * header block and body. A header list is a C array a page never reaches,
@@ -47,11 +50,16 @@ typedef struct {
     char *override_type;        /* NULL: none */
     /* The response: `error` is a network error. */
     bool error, has_body, response_failed;
+    /* A streamed body's throttle: whether its chunk steps have fired yet,
+     * and when they last did (now_ms). */
+    bool chunked;
+    uint64_t chunk_ms;
     int32_t status;
     char *status_text, *response_url, *response_headers;
     size_t response_headers_length;
     uint8_t *body;
     size_t body_length;
+    size_t body_cap;            /* what `body` was allocated to hold */
     JSValue response_object;
 } DXhr;
 
@@ -92,7 +100,7 @@ static void response_reset(JSRuntime *rt, DXhr *x)
     js_free_rt(rt, x->body);
     x->status_text = x->response_url = x->response_headers = NULL;
     x->body = NULL;
-    x->response_headers_length = x->body_length = 0;
+    x->response_headers_length = x->body_length = x->body_cap = 0;
     JS_FreeValueRT(rt, x->response_object);
     x->response_object = JS_UNDEFINED;
 }
@@ -251,6 +259,7 @@ static int response_take(JSContext *ctx, DXhr *x, const os64_dom_response_t *in)
     x->response_headers_length = in->headers != NULL ? in->headers_length : 0;
     x->has_body = in->has_body;
     x->body_length = in->has_body ? in->body_length : 0;
+    x->body_cap = in->has_body ? x->body_length + 1 : 0;
     return 0;
 }
 
@@ -394,21 +403,102 @@ static int end_of_body(os64_dom_t *dom, JSContext *ctx, JSValueConst self, os64_
     return fire(dom, ctx, &x->target, "loadend", true, transmitted, length, outcome) < 0 ? -1 : 0;
 }
 
-/* The host's answer to an asynchronous request, as one task. */
-static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
-                         os64_js_outcome_t *outcome)
+/* The request is answered: forgotten with the host (it answered, so it is
+ * not cancelled), the timer stopped. */
+static void answered_end(os64_dom_t *dom, DXhr *x, DRequest *request)
 {
-    JSValue self = JS_DupValue(ctx, request->held[0]);
     d_request_end(dom, request, false);
-    DXhr *x = xhr_state(self);
-    if (x == NULL) {
-        JS_FreeValue(ctx, self);
-        return;
-    }
     x->token = 0;
     if (x->timer != 0) {
         d_timer_cancel(dom, x->timer);
         x->timer = 0;
+    }
+}
+
+/* A streamed answer's piece, or its end (`bytes` NULL). A piece is XHR §
+ * "process response body"'s processBodyChunk: the bytes kept; unless the
+ * steps ran within the last 50 ms, LOADING, readystatechange and progress;
+ * then the host is asked for more. The end is "handle response
+ * end-of-body", or the request error steps for a network error part way. */
+static void xhr_part(os64_dom_t *dom, JSContext *ctx, DRequest *request, const uint8_t *bytes, size_t length, bool ok,
+                     os64_js_outcome_t *outcome)
+{
+    uint32_t token = request->token;
+    JSValue self = JS_DupValue(ctx, request->held[0]);
+    DXhr *x = xhr_state(self);
+    if (x == NULL) {
+        d_request_end(dom, request, true);
+        JS_FreeValue(ctx, self);
+        return;
+    }
+    if (bytes == NULL) {
+        answered_end(dom, x, request);
+        if (!ok) (void)request_error(dom, ctx, self, "error", outcome);
+        else (void)end_of_body(dom, ctx, self, outcome);
+        JS_FreeValue(ctx, self);
+        return;
+    }
+    /* The bytes kept grow by half again, never past a Content-Length that
+     * holds them all, so a body is copied a handful of times as it arrives
+     * and not once a piece. */
+    size_t need = x->body_length + length + 1;
+    if (need > x->body_cap) {
+        size_t cap = x->body_cap + x->body_cap / 2;
+        if (cap < need) cap = need;
+        double declared = response_length(x);
+        if (declared + 1 >= (double)need && declared + 1 < (double)cap) cap = (size_t)declared + 1;
+        uint8_t *grown = js_realloc(ctx, x->body, cap);
+        if (grown == NULL) {
+            /* No room for the body: the runtime's memory limit, met as any
+             * allocation a script makes meets it. */
+            terminate(dom, x);
+            JS_FreeValue(ctx, self);
+            return;
+        }
+        x->body = grown;
+        x->body_cap = cap;
+    }
+    os64_memcpy(x->body + x->body_length, bytes, length);
+    x->body_length += length;
+    uint64_t now = now_ms(dom);
+    int failed = 0;
+    if (!x->chunked || now - x->chunk_ms >= 50) {
+        uint32_t generation = x->generation;
+        x->chunked = true;
+        x->chunk_ms = now;
+        if (x->state == HEADERS_RECEIVED) x->state = LOADING;
+        failed = fire(dom, ctx, &x->target, "readystatechange", false, 0, 0, outcome);
+        x = xhr_state(self);
+        if (failed == 0 && x->generation == generation)
+            failed = fire(dom, ctx, &x->target, "progress", true, (double)x->body_length, response_length(x), outcome);
+    }
+    /* A listener may have ended the request (abort(), open()): it is
+     * looked up again, by its token. */
+    request = failed == 0 ? d_request_find(dom, token) : NULL;
+    if (request != NULL) d_request_more(dom, request);
+    JS_FreeValue(ctx, self);
+}
+
+/* The host's answer to an asynchronous request, as one task: a whole
+ * answer, or a streamed one's head, which leaves the request out for its
+ * body (xhr_part). */
+static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
+                         os64_js_outcome_t *outcome)
+{
+    bool headed = request->headed;
+    uint32_t token = request->token;
+    JSValue self = JS_DupValue(ctx, request->held[0]);
+    DXhr *x = xhr_state(self);
+    if (x == NULL) {
+        d_request_end(dom, request, headed);
+        JS_FreeValue(ctx, self);
+        return;
+    }
+    if (headed) {
+        request->part = xhr_part;
+        x->chunked = false;
+    } else {
+        answered_end(dom, x, request);
     }
     uint32_t generation = x->generation;
     if (!response->ok) {
@@ -433,8 +523,15 @@ static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, con
                 failed = fire(dom, ctx, upload_target(x), "loadend", true, sent, sent, outcome);
         }
     }
-    /* processResponse: the response is the object's, then the headers. */
-    if (failed == 0 && xhr_state(self)->generation == generation && response_take(ctx, x, response) < 0) {
+    /* processResponse: the response is the object's, then the headers. A
+     * streamed head's has no bytes yet. */
+    os64_dom_response_t head = *response;
+    if (headed) {
+        head.body = NULL;
+        head.body_length = 0;
+    }
+    if (failed == 0 && xhr_state(self)->generation == generation && response_take(ctx, x, &head) < 0) {
+        terminate(dom, x);
         (void)request_error(dom, ctx, self, "error", outcome);
         JS_FreeValue(ctx, self);
         return;
@@ -442,6 +539,14 @@ static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, con
     if (failed == 0 && xhr_state(self)->generation == generation) {
         x->state = HEADERS_RECEIVED;
         failed = fire(dom, ctx, &x->target, "readystatechange", false, 0, 0, outcome);
+    }
+    /* A streamed body comes in pieces, the first when the host is asked;
+     * a listener that ended the request (abort(), open()) asks nothing. */
+    if (headed) {
+        request = failed == 0 ? d_request_find(dom, token) : NULL;
+        if (request != NULL) d_request_more(dom, request);
+        JS_FreeValue(ctx, self);
+        return;
     }
     /* The body's one chunk: LOADING. Its progress event waits for the end
      * of the body, as a browser's throttle holds one back for a small

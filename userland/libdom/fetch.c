@@ -13,8 +13,7 @@
  * C array, never a container a page can reach, read by index and looked up
  * again after anything that can run page code. Its sort-and-combine, which
  * iteration reads at every step, is kept until the list changes, so a walk
- * is n log n and not quadratic. A body is the bytes whole: the host reads a
- * response to its end before it answers.
+ * is n log n and not quadratic.
  *
  * A body's STREAM is the Streams standard's (streams.c), made when first
  * needed (the first ask of `body`, or a clone an abort can still reach), or
@@ -24,7 +23,14 @@
  * alone says whether the body is usable (disturbed, locked), and a body
  * method reads it to its end; a Response's bytes move into it, and a
  * Request keeps its own as Fetch's body source, which is what the host is
- * sent. The requests out are the registry's fourth list. */
+ * sent.
+ *
+ * A fetched body arrives whole (os64_dom_fetched: its bytes, as above) or
+ * STREAMED (os64_dom_fetch_head, then its pieces): the Response is made at
+ * the head with its stream, which the host fills as the bytes come and
+ * which asks the host for more as it is read (dom.h). The request stays
+ * out until the body's end, holding the stream. The requests out are the
+ * registry's fourth list. */
 
 static JSClassID headers_slot, headers_iterator_slot, request_slot, response_slot;
 
@@ -55,10 +61,14 @@ typedef struct {
     uint8_t *bytes;             /* NULL once a Response's have moved into its stream, or when it never had any */
     size_t length;
     bool has;                   /* a body, not null */
-    /* Before the stream exists: */
+    /* Before the stream exists (and, once an abort errored it, what a body
+     * method's answer to the abort did: body_consume): */
     bool used;                  /* disturbed: read, or read from */
     bool consumed;              /* read whole by a body method, whose reader keeps the stream locked */
-    JSValue aborted;            /* the abort reason a fetch's signal gave it, or undefined */
+    /* The abort reason a fetch's signal gave the body while it could still
+     * be read, before its stream was made or while its stream was
+     * readable; undefined for none. */
+    JSValue aborted;
     JSValue stream;             /* undefined until made; [SameObject], and the body's state from then on */
 } DBody;
 
@@ -148,6 +158,8 @@ DRequest *d_request_start(os64_dom_t *dom, JSContext *ctx, const os64_dom_reques
     if (++dom->request_token == 0) dom->request_token = 1;
     r->token = dom->request_token;
     r->answer = answer;
+    r->part = NULL;
+    r->headed = r->asked = false;
     for (int i = 0; i < 3; i++) r->held[i] = JS_UNDEFINED;
     r->id = dom->network.start(dom->network.opaque, request, r->token);
     if (r->id == 0) {
@@ -181,6 +193,13 @@ void d_request_end(os64_dom_t *dom, DRequest *request, bool cancel)
     if (cancel && dom->network.cancel != NULL) dom->network.cancel(dom->network.opaque, request->id);
     for (int i = 0; i < 3; i++) request_hold(dom, request, i, JS_UNDEFINED);
     d_free(dom, request);
+}
+
+void d_request_more(os64_dom_t *dom, DRequest *request)
+{
+    if (!request->headed || request->asked || dom->network.more == NULL) return;
+    request->asked = true;
+    dom->network.more(dom->network.opaque, request->id);
 }
 
 void d_fetch_drain(os64_dom_t *dom)
@@ -1252,6 +1271,20 @@ static JSValue body_converted(JSContext *ctx, JSValueConst self, int argc, JSVal
  * a promise. */
 static JSValue body_consume(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DBody *b, JSValueConst headers, int kind)
 {
+    /* A body an abort errored answers its reason however often it is
+     * asked, at once. Its stream, if made, is taken as a read would leave
+     * it, disturbed and locked; one the page's own reader locked is
+     * unusable, below. */
+    if (!JS_IsUndefined(b->aborted)) {
+        int locked = body_streamed(b) && !b->consumed ? d_stream_locked(dom, ctx, b->stream) : 0;
+        if (locked < 0) return d_promise_settled(ctx, JS_EXCEPTION);
+        if (locked == 0) {
+            if (body_streamed(b) && !b->consumed && d_stream_take(dom, ctx, b->stream) < 0)
+                return d_promise_settled(ctx, JS_EXCEPTION);
+            b->used = b->consumed = true;
+            return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, b->aborted)));
+        }
+    }
     if (body_streamed(b)) {
         int unusable = body_unusable(dom, ctx, b);
         if (unusable != 0) {
@@ -1264,12 +1297,6 @@ static JSValue body_consume(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
         JSValue promise = d_stream_read_all_then(dom, ctx, b->stream, convert);
         JS_FreeValue(ctx, convert);
         return JS_IsException(promise) ? d_promise_settled(ctx, promise) : promise;
-    }
-    /* A body an abort errored answers its reason however often it is
-     * asked. */
-    if (!JS_IsUndefined(b->aborted)) {
-        b->used = true;
-        return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, b->aborted)));
     }
     if (b->has && b->used) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The body has already been read"));
     /* "Fully read" takes a reader it never releases. */
@@ -2220,8 +2247,10 @@ static JSValue response_member(JSContext *ctx, JSValueConst self, int argc, JSVa
 
 /* ── fetch() ─────────────────────────────────────────────────────────── */
 
-/* held[0] resolve, held[1] reject, held[2] the request object. */
-enum { FETCH_RESOLVE, FETCH_REJECT, FETCH_REQUEST };
+/* held[0] resolve, held[1] reject, held[2] the request object; once a
+ * streamed answer's head came, held[0] the body's stream and held[1] the
+ * Response. */
+enum { FETCH_RESOLVE, FETCH_REJECT, FETCH_REQUEST, FETCH_BODY = 0, FETCH_RESPONSE = 1 };
 
 /* A network answer as the page's Response (engine memory: a body the
  * runtime has no room for fails here, as any allocation does). */
@@ -2277,12 +2306,170 @@ static void settle(os64_dom_t *dom, JSValueConst function, JSValue value, os64_j
     d_outcome_fold(outcome, &call);
 }
 
+/* A streamed body's request ended before its end came (the page cancelled
+ * the stream, or there was no memory for a piece): the host stops, and the
+ * signal's algorithm goes, with the Response's hold on the signal. The
+ * stream is cancelled or errored: nothing is left for an abort to reach. */
+static void body_stopped(os64_dom_t *dom, JSContext *ctx, DRequest *request)
+{
+    uint32_t token = request->token;
+    JSValue response = JS_DupValue(ctx, request->held[FETCH_RESPONSE]);
+    d_request_end(dom, request, true);
+    DResp *r = response_state(response);
+    if (r != NULL) {
+        d_signal_remove_fetch(ctx, r->signal, token);
+        response_settled(ctx, r);
+    }
+    JS_FreeValue(ctx, response);
+}
+
+/* A streamed body's stream speaking to the host: magic BODY_WANT, a read
+ * waits on it; BODY_CANCEL, the page cancelled it. data[1] is the
+ * request's token. A request that ended (the body's end, an abort) is
+ * asked nothing. */
+enum { BODY_WANT, BODY_CANCEL };
+
+static JSValue body_host(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)self; (void)argc; (void)argv;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    uint32_t token;
+    if (JS_ToUint32(ctx, &token, data[1]) < 0) return JS_EXCEPTION;
+    DRequest *request = d_request_find(dom, token);
+    if (request != NULL && request->headed) {
+        if (magic == BODY_WANT) d_request_more(dom, request);
+        else body_stopped(dom, ctx, request);
+    }
+    return JS_UNDEFINED;
+}
+
+/* The stream a streamed answer's body is, for request `token`. */
+static JSValue host_stream(os64_dom_t *dom, JSContext *ctx, uint32_t token)
+{
+    JSValue data[2] = {dom->anchor->value, JS_NewUint32(ctx, token)};
+    JSValue want = JS_NewCFunctionData(ctx, body_host, 0, BODY_WANT, 2, data);
+    if (JS_IsException(want)) return want;
+    JSValue cancel = JS_NewCFunctionData(ctx, body_host, 0, BODY_CANCEL, 2, data);
+    if (JS_IsException(cancel)) {
+        JS_FreeValue(ctx, want);
+        return cancel;
+    }
+    JSValue stream = d_stream_from_host(dom, ctx, want, cancel);
+    JS_FreeValue(ctx, want);
+    JS_FreeValue(ctx, cancel);
+    return stream;
+}
+
+/* A thrown exception dropped when the page may see it go; one that is not
+ * catchable (the runtime stopping) stays, for the task to report. */
+static void drop_catchable(JSContext *ctx)
+{
+    if (JS_HasException(ctx) && d_exception_catchable(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
+}
+
+/* A streamed body's piece, queued on its stream, or its end (`bytes`
+ * NULL). A stream that takes no more (the page cancelled it) stops the
+ * host, and so does a piece there was no memory to queue, which errors the
+ * stream with what was thrown. At a whole end the stream closes and the
+ * body is an answered fetch's: an abort reaches it through the Response
+ * (d_fetch_abort) until it is read. A network error part way errors the
+ * stream with a TypeError, and leaves nothing for an abort to reach. */
+static void fetch_part(os64_dom_t *dom, JSContext *ctx, DRequest *request, const uint8_t *bytes, size_t length,
+                       bool ok, os64_js_outcome_t *outcome)
+{
+    (void)outcome;
+    JSValue stream = JS_DupValue(ctx, request->held[FETCH_BODY]);
+    if (bytes != NULL) {
+        int taken = d_stream_enqueue(dom, ctx, stream, bytes, length);
+        if (taken < 0 && d_exception_catchable(ctx)) {
+            JSValue error = JS_GetException(ctx);
+            if (d_stream_error(dom, ctx, stream, error) < 0) drop_catchable(ctx);
+            JS_FreeValue(ctx, error);
+        }
+        if (taken <= 0) body_stopped(dom, ctx, request);
+        JS_FreeValue(ctx, stream);
+        return;
+    }
+    uint32_t token = request->token;
+    JSValue response = JS_DupValue(ctx, request->held[FETCH_RESPONSE]);
+    d_request_end(dom, request, false);
+    DResp *r = response_state(response);
+    if (ok) {
+        if (r != NULL) d_signal_fetch_answered(ctx, r->signal, token, r, &r->abort_signal);
+        if (d_stream_close(dom, ctx, stream) < 0) drop_catchable(ctx);
+    } else {
+        if (r != NULL) {
+            d_signal_remove_fetch(ctx, r->signal, token);
+            response_settled(ctx, r);
+        }
+        /* One fixed message: a network error tells the page nothing. */
+        JS_ThrowTypeError(ctx, "Failed to fetch");
+        JSValue error = JS_GetException(ctx);
+        if (d_stream_error(dom, ctx, stream, error) < 0) drop_catchable(ctx);
+        JS_FreeValue(ctx, error);
+    }
+    JS_FreeValue(ctx, response);
+    JS_FreeValue(ctx, stream);
+}
+
+/* A streamed answer's head: the Response, its body the stream the host
+ * fills. The request stays out for the body, holding the stream and the
+ * Response, and the signal's algorithm stays the request's: an abort
+ * before the body's end stops the host and errors the stream
+ * (d_fetch_abort), whoever still holds the Response. The promise settles
+ * as a whole answer's does. */
+static void fetch_headed(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
+                         os64_js_outcome_t *outcome)
+{
+    uint32_t token = request->token;
+    JSValue resolve = JS_DupValue(ctx, request->held[FETCH_RESOLVE]);
+    JSValue reject = JS_DupValue(ctx, request->held[FETCH_REJECT]);
+    JSValue object = JS_DupValue(ctx, request->held[FETCH_REQUEST]);
+    for (int i = 0; i < 3; i++) request_hold(dom, request, i, JS_UNDEFINED);
+    request->part = fetch_part;
+    DReq *q = request_state(object);
+    os64_dom_response_t head = *response;
+    head.has_body = false;
+    head.body = NULL;
+    head.body_length = 0;
+    bool ok = true;
+    JSValue value = response_from_network(dom, ctx, &head);
+    JSValue stream = JS_IsException(value) ? JS_EXCEPTION : host_stream(dom, ctx, token);
+    if (JS_IsException(stream)) {
+        ok = false;
+        JS_FreeValue(ctx, value);
+        value = JS_GetException(ctx);
+        d_request_end(dom, request, true);
+        if (q != NULL) d_signal_remove_fetch(ctx, q->signal, token);
+    } else {
+        /* Nothing above ran page code: the request is the one found. */
+        DResp *r = response_state(value);
+        r->body.has = true;
+        r->body.stream = JS_DupValue(ctx, stream);
+        r->source = JS_DupValue(ctx, stream);
+        if (q != NULL) r->signal = JS_DupValue(ctx, q->signal);
+        request_hold(dom, request, FETCH_BODY, stream);
+        request_hold(dom, request, FETCH_RESPONSE, JS_DupValue(ctx, value));
+    }
+    settle(dom, ok ? resolve : reject, value, outcome);
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, resolve);
+    JS_FreeValue(ctx, reject);
+    JS_FreeValue(ctx, object);
+}
+
 /* The fetch is ended before its promise settles: what settling runs (an
  * abort among it) then finds an answered fetch, never one still out, and
- * nothing it does can free what the call is using. */
+ * nothing it does can free what the call is using. A streamed answer's
+ * head is fetch_headed's. */
 static void fetch_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
                            os64_js_outcome_t *outcome)
 {
+    if (request->headed) {
+        fetch_headed(dom, ctx, request, response, outcome);
+        return;
+    }
     uint32_t token = request->token;
     JSValue resolve = JS_DupValue(ctx, request->held[FETCH_RESOLVE]);
     JSValue reject = JS_DupValue(ctx, request->held[FETCH_REJECT]);
@@ -2323,7 +2510,7 @@ static void fetch_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, c
 void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answered, JSValueConst reason)
 {
     DRequest *request = d_request_find(dom, token);
-    if (request != NULL) {
+    if (request != NULL && !request->headed) {
         /* Still out: the promise rejects with the reason, and the host
          * stops. */
         JSValue done = JS_Call(ctx, request->held[FETCH_REJECT], JS_UNDEFINED, 1, &reason);
@@ -2331,6 +2518,14 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
         if (JS_IsException(done) && d_exception_catchable(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
         d_request_end(dom, request, true);
         return;
+    }
+    /* A streamed body under way: the host stops, and the body is an
+     * answered one, below, its Response the one the request held. */
+    JSValue held = JS_UNDEFINED;
+    if (request != NULL) {
+        held = JS_DupValue(ctx, request->held[FETCH_RESPONSE]);
+        d_request_end(dom, request, true);
+        answered = response_state(held);
     }
     /* Answered: a body not yet read is read as the reason. Once the
      * stream exists, its source is errored (the body's own stream, which a
@@ -2342,19 +2537,27 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
     JSValue target = JS_UNDEFINED;
     if (r != NULL && r->body.has && body_streamed(&r->body)) {
         target = JS_DupValue(ctx, JS_IsUndefined(r->source) ? r->body.stream : r->source);
+        /* A body whose stream this abort errors answers its reason to
+         * every body method from here on (body_consume), as one aborted
+         * before its stream was made does. */
+        int readable = d_stream_readable(dom, ctx, target);
+        if (readable < 0) drop_catchable(ctx);
+        if (readable > 0 && JS_IsUndefined(r->body.aborted)) r->body.aborted = JS_DupValue(ctx, reason);
     } else if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);
     }
     /* Reached by the abort, or read already: settled either way. Settled
      * BEFORE the stream is errored, and `r` is not touched after: erroring
      * runs streams.js, a collection it triggers can finalize the Response,
-     * and nothing holds the Response but the page. The stream is held here. */
+     * and an answered Response is held by nothing but the page. The stream
+     * is held here. */
     response_settled(ctx, r);
     if (!JS_IsUndefined(target)) {
         if (d_stream_error(dom, ctx, target, reason) < 0 && d_exception_catchable(ctx))
             JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, target);
     }
+    JS_FreeValue(ctx, held);
 }
 
 /* The request as the host takes it. */
@@ -2449,12 +2652,16 @@ static JSValue fetch_function(JSContext *ctx, JSValueConst self, int argc, JSVal
     return promise;
 }
 
-os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *response,
-                                  os64_js_outcome_t *outcome)
+/* The host's answers, each one task: a whole answer, a streamed one's
+ * head, a piece of its body, its end. */
+enum { STEP_WHOLE, STEP_HEAD, STEP_PIECE, STEP_END };
+
+static os64_js_status_t request_step(os64_dom_t *dom, uint32_t token, int step, const os64_dom_response_t *response,
+                                     const uint8_t *bytes, size_t length, bool ok, os64_js_outcome_t *outcome)
 {
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
     os64_memset(outcome, 0, sizeof(*outcome));
-    if (dom == NULL || response == NULL) {
+    if (dom == NULL || (step <= STEP_HEAD && response == NULL) || (step == STEP_PIECE && bytes == NULL)) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return outcome->status;
     }
@@ -2463,7 +2670,13 @@ os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_do
         return outcome->status;
     }
     DRequest *request = d_request_find(dom, token);
-    if (request == NULL) return OS64_JS_OK;
+    /* Nothing waits on the token, or the answer is out of its order: a
+     * whole answer or a head for a request whose head came, a piece or an
+     * end for one whose head did not. An empty piece is no piece. */
+    bool body = step == STEP_PIECE || step == STEP_END;
+    if (request == NULL || request->headed != body || (body && request->part == NULL) ||
+        (step == STEP_PIECE && length == 0))
+        return OS64_JS_OK;
     os64_js_outcome_t begin;
     if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, "fetch", &begin) != OS64_JS_OK) {
         *outcome = begin;
@@ -2472,10 +2685,15 @@ os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_do
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
     if (ctx != NULL) {
-        request->answer(dom, ctx, request, response, outcome);
-        /* Answered is ended; an answer may have ended it itself, so it is
-         * looked up again, by its token. */
-        request = d_request_find(dom, token);
+        bool whole = step == STEP_WHOLE || (step == STEP_HEAD && (!response->ok || !response->has_body));
+        if (step == STEP_HEAD && !whole) request->headed = true;
+        if (step == STEP_PIECE) request->asked = false;
+        if (!body) request->answer(dom, ctx, request, response, outcome);
+        else request->part(dom, ctx, request, step == STEP_PIECE ? bytes : NULL, length, ok, outcome);
+        /* A whole answer ends its request; the answer may have ended it
+         * itself, so it is looked up again, by its token. A head leaves
+         * it out for its body, and the body's end ends it. */
+        request = whole ? d_request_find(dom, token) : NULL;
         if (request != NULL) d_request_end(dom, request, false);
         if (JS_HasException(ctx)) {
             /* A runtime that must stop is the task's failure, which
@@ -2486,6 +2704,29 @@ os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_do
         }
     }
     return d_task_finish(dom, outcome);
+}
+
+os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *response,
+                                  os64_js_outcome_t *outcome)
+{
+    return request_step(dom, token, STEP_WHOLE, response, NULL, 0, false, outcome);
+}
+
+os64_js_status_t os64_dom_fetch_head(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *head,
+                                     os64_js_outcome_t *outcome)
+{
+    return request_step(dom, token, STEP_HEAD, head, NULL, 0, false, outcome);
+}
+
+os64_js_status_t os64_dom_fetch_body(os64_dom_t *dom, uint32_t token, const void *bytes, size_t length,
+                                     os64_js_outcome_t *outcome)
+{
+    return request_step(dom, token, STEP_PIECE, NULL, bytes, length, false, outcome);
+}
+
+os64_js_status_t os64_dom_fetch_end(os64_dom_t *dom, uint32_t token, bool ok, os64_js_outcome_t *outcome)
+{
+    return request_step(dom, token, STEP_END, NULL, NULL, 0, ok, outcome);
 }
 
 /* ── Installation ────────────────────────────────────────────────────── */

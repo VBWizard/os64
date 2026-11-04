@@ -24,6 +24,7 @@
 // them only through these same calls.
 
 #include "fetch_job.h"
+#include "fetch_pipe.h"
 
 #include "os64/date.h"
 #include "os64/fmt.h"
@@ -476,6 +477,7 @@ void yonder_fetch_release(void *job, void *product)
     yonder_fetch_job_t *j = job;
     yonder_fetched_free(product);
     if (j != NULL) {
+        yonder_fetch_pipe_release(j->pipe);
         os64_free(j->url);
         os64_free(j->headers);
         os64_free(j->body);
@@ -553,6 +555,98 @@ static bool read_body(os64_fetch_t *f, uint64_t cap, uint8_t **out, size_t *len,
     }
     *out = buf;
     *len = at;
+    return true;
+}
+
+// A body from the network streamed down the job's pipe (fetch_pipe.h):
+// the pipe, whether a copy is kept for the cache, and what says the job
+// is cancelled.
+typedef struct {
+    yonder_fetch_pipe_t *pipe;
+    bool keep;
+    bool (*cancelled)(void *ctx);
+    void *ctx;
+} Streaming;
+
+// `got->body` grown to hold `more` bytes past `got->body_len`, up to `cap`
+// (`*size` its allocation). False when the copy cannot be kept: past the
+// cap, or no memory.
+static bool keep_grow(yonder_fetched_t *got, size_t *size, size_t more, uint64_t cap)
+{
+    size_t need = got->body_len + more;
+    if ((uint64_t)need > cap)
+        return false;
+    if (need <= *size)
+        return true;
+    size_t want = *size != 0 ? *size : YONDER_FETCH_PIECE;
+    while (want < need)
+        want *= 2;
+    if ((uint64_t)want > cap)
+        want = (size_t)cap;
+    uint8_t *grown = os64_realloc(got->body, want);
+    if (grown == NULL)
+        return false;
+    got->body = grown;
+    *size = want;
+    return true;
+}
+
+// The body streamed: the head published, then each read off the wire
+// written down the pipe as it comes, once the reader has room for it. A
+// copy is kept for the cache while it fits under `cap`; past that, none
+// is. The pipe's end says how the body ended. False, with the reason in
+// `got`, when it did not end whole, or the head could not be published
+// (then nothing was, and the answer is a network error, whole).
+static bool stream_body(yonder_fetched_t *got, os64_fetch_t *f, const Streaming *s, uint64_t cap)
+{
+    // The head is an answer's by now: everything that could make it a
+    // network error was judged before its body was read.
+    got->ok = true;
+    if (!yonder_fetch_pipe_head(s->pipe, got))
+        return network_error(got, "out of memory"), false;
+    got->streamed = true;
+    got->body = NULL;
+    got->body_len = 0;
+    uint8_t *buf = os64_malloc(YONDER_FETCH_PIECE);
+    bool keep = s->keep;
+    size_t size = 0;
+    char why[256] = "";
+    if (buf == NULL)
+        os64_strcopy(why, sizeof(why), "out of memory");
+    while (why[0] == '\0') {
+        if (!yonder_fetch_pipe_room(s->pipe, s->cancelled, s->ctx)) {
+            os64_strcopy(why, sizeof(why), "cancelled");
+            break;
+        }
+        int64_t n = os64_fetch_read(f, buf, YONDER_FETCH_PIECE);
+        if (n <= 0) {
+            if (os64_fetch_status(f) != OS64_FETCH_OK)
+                os64_snprintf(why, sizeof(why), "%s", os64_fetch_reason(f));
+            break;
+        }
+        if (keep && keep_grow(got, &size, (size_t)n, cap)) {
+            os64_memcpy(got->body + got->body_len, buf, (size_t)n);
+        } else if (keep) {
+            keep = false;
+            os64_free(got->body);
+            got->body = NULL;
+        }
+        if (!yonder_fetch_pipe_write(s->pipe, buf, (size_t)n)) {
+            os64_strcopy(why, sizeof(why), "no memory for the body, or the page went");
+            break;
+        }
+        got->body_len += (size_t)n;
+    }
+    os64_free(buf);
+    yonder_fetch_pipe_end(s->pipe, why[0] == '\0');
+    // An empty body kept is a buffer of its own, as a whole one's is.
+    if (keep && got->body == NULL && why[0] == '\0')
+        got->body = os64_malloc(1);
+    if (why[0] != '\0') {
+        os64_free(got->body);
+        got->body = NULL;
+        return network_error(got, why), false;
+    }
     return true;
 }
 
@@ -648,12 +742,13 @@ static bool preflight(Hop *h, yonder_fetch_job_t *job, way_request_t *r, const c
 // ── The final response ──────────────────────────────────────────────────
 
 // The final response, filtered for the page: from the network (`f`, whose
-// body is read here) or from the cache (`kept`, `kept_len`, `f` NULL) — the
-// same filtering either way, so a page cannot tell them apart. False, with
-// the reason in `got`, when it could not be had.
+// body is read here, whole, or streamed down the pipe `s` names when it is
+// not NULL) or from the cache (`kept`, `kept_len`, `f` NULL) — the same
+// filtering either way, so a page cannot tell them apart. False, with the
+// reason in `got`, when it could not be had.
 static bool finish(yonder_fetched_t *got, way_request_t *r, const char *current, int32_t status,
                    const char *reason, const way_response_t *resp, os64_fetch_t *f, const uint8_t *kept,
-                   size_t kept_len, uint64_t max_body)
+                   size_t kept_len, uint64_t max_body, const Streaming *s)
 {
     way_type_t type = way_response_type(r);
     got->type = type;
@@ -671,7 +766,10 @@ static bool finish(yonder_fetched_t *got, way_request_t *r, const char *current,
         return network_error(got, "the answer's headers did not fit"), false;
     // An opaque body is never read: what was never read cannot leak.
     got->has_body = way_response_has_body(r, type, status);
-    if (got->has_body && f != NULL) {
+    if (got->has_body && f != NULL && s != NULL) {
+        if (!stream_body(got, f, s, max_body))
+            return false;
+    } else if (got->has_body && f != NULL) {
         bool limit;
         if (!read_body(f, max_body, &got->body, &got->body_len, &limit)) {
             char text[256];
@@ -887,7 +985,7 @@ static bool serve_kept(Cached *c, way_request_t *r, const char *current, const w
     way_response_t resp = {c->e.status, b->headers, b->headers_len, b->omitted, b->omitted_len};
     if (r->tainting == WAY_TAINT_CORS && !way_cors_check(r, &resp))
         return false;
-    finish(got, r, current, c->e.status, "OK", &resp, NULL, c->body, c->len, max_body);
+    finish(got, r, current, c->e.status, "OK", &resp, NULL, c->body, c->len, max_body, NULL);
     got->served = how;
     return true;
 }
@@ -1027,8 +1125,9 @@ static bool cache_confirmed(const yonder_fetch_job_t *job, way_request_t *r, con
 static void cache_store(const yonder_fetch_job_t *job, Cached *c, const way_request_t *r, const Hop *h,
                         const os64_fetch_head_t *head, const yonder_fetched_t *got)
 {
+    // A streamed body past max_body has no copy to keep (fetch_job.h).
     bool keep = job->cache_mode != WAY_CACHE_ONLY_IF_CACHED && r->urls == 1 && head->status == 200 &&
-                got->type != WAY_TYPE_OPAQUE && got->has_body;
+                got->type != WAY_TYPE_OPAQUE && got->has_body && got->body != NULL;
     way_entry_t *e = keep ? os64_calloc(1, sizeof(*e)) : NULL;
     char *headers = e != NULL ? os64_malloc(h->len + 1) : NULL;
     char *vary = headers != NULL ? os64_malloc(OS64_FETCH_EXTRA_MAX) : NULL;
@@ -1223,7 +1322,8 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         }
         hop_reset(&h, current, false);
         os64_fetch_options_t opt;
-        opt_base(&opt, &h, job, max_body);
+        // A body streamed has no cap (fetch_job.h).
+        opt_base(&opt, &h, job, job->pipe != NULL ? 0 : max_body);
         opt.method_name = r->method;
         opt.accept = fields->accept;
         // Fetch's own `*/*`, when the page set none, is the preset's list
@@ -1330,7 +1430,9 @@ static int64_t fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
                 continue;
             }
         }
-        if (finish(got, r, current, head->status, head->reason, &resp, f, NULL, 0, max_body)) {
+        Streaming s = {job->pipe, cached != NULL, cancelled, ctx};
+        if (finish(got, r, current, head->status, head->reason, &resp, f, NULL, 0, max_body,
+                   job->pipe != NULL ? &s : NULL)) {
             verdict = 1;
             // Kept, when the cache may keep it; a new answer it may not keep
             // is still newer than what it held, which must not be served.

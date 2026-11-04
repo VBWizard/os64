@@ -57,6 +57,7 @@
 #include "diag.h"
 #include "script_job.h"
 #include "fetch_job.h"
+#include "fetch_pipe.h"
 #include "modules.h"
 #include "geometry.h"
 #include "events.h"
@@ -172,6 +173,7 @@ static yonder_cookies_mode_t s_cookies_asked;
 #define BELL_DOWNLOAD (1u << 3)   // a download's bytes arrived: its meter moves
 #define BELL_SCRIPTS (1u << 4)    // a page has another script or timer to run
 #define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
+#define BELL_BODY (1u << 6)       // a script's request has more of its answer: bodies_turn hands it over
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
@@ -3167,6 +3169,9 @@ static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *
                        void *stop_ctx, os64_dom_response_t *response);
 static void script_release(void *opaque, os64_dom_response_t *response);
 static void request_arrived(const yonder_fetch_job_t *job, yonder_fetched_t *got);
+static void streamed_cancel(uint64_t id);
+static void script_more(void *opaque, uint64_t id);
+static void streamed_orphaned(void);
 static bool scripts_live(void);
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
                         int32_t x, int32_t y, uint8_t was);
@@ -8594,6 +8599,7 @@ static void script_cancel(void *opaque, uint64_t job)
     (void)opaque;
     if (g.pool != NULL)
         os64_work_cancel(g.pool, job);
+    streamed_cancel(job);
 }
 
 static uint64_t script_now(void *opaque)
@@ -8705,7 +8711,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
-        .request = script_request, .run = script_run, .release = script_release,
+        .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
@@ -8961,18 +8967,245 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     return job;
 }
 
+// ── A script's requests whose answers stream (fetch_pipe.h) ─────────────
+//
+// A page's fetch() or asynchronous XMLHttpRequest goes out with a pipe,
+// whose reading side is an entry here from its submit until its answer is
+// done with: the body's end handed to the page, or the request
+// cancelled. Once its job is reaped, whatever the pipe still holds is
+// handed over unasked, a piece a turn, so it leaves the pipe within a few
+// turns of the job (the pipe's backpressure is what lets the job end
+// first), while the window paints between them. A module's request
+// answers whole: its map compiles it without a task.
+
+typedef struct Streamed {
+    struct Streamed *next;
+    uint64_t serial;            // the page
+    uint32_t token;             // its request
+    os64_work_id_t id;          // the job
+    yonder_fetch_pipe_t *pipe;  // the window's hold on it
+    bool head_given;            // the page has been handed the head
+    bool asked;                 // the page asked for more and has not been given it
+    // Its job was reaped: what the pipe still holds is handed over unasked,
+    // a piece a turn, then the end.
+    bool reaped;
+    // A step is running a task for it, which can cancel it: the cancel
+    // marks it `cancelled`, and the step lets it go once it returns.
+    bool busy, cancelled;
+    uint64_t turn;              // the last bodies_turn that handed it a step
+} Streamed;
+
+static Streamed *s_streamed;
+// A page asked for more of a body since bodies_turn last ran, or the turn
+// left steps owed: the loop rings itself, so they are taken next turn.
+static bool s_bodies_asked;
+static uint64_t s_bodies_turns;
+// A turn of bodies_turn gives each request one step at most, and stops
+// taking steps past this much time, so the window paints between pieces
+// however fast they come (a speed test's downloads ask as fast as they
+// are handed pieces).
+#define BODIES_TURN_US 16000
+// The window rings itself, and a pipe's writer rings it, only once main
+// has made the window: a host that drives pages without one never rings.
+static bool s_bells;
+
+// A pipe's writer, on a pool worker: the window has news to look at.
+static void body_bell(void *ctx)
+{
+    (void)ctx;
+    (void)os64_gui_event_ring(g.win, BELL_BODY);
+}
+
+static void streamed_free(Streamed *e)
+{
+    for (Streamed **link = &s_streamed; *link != NULL; link = &(*link)->next)
+        if (*link == e) {
+            *link = e->next;
+            break;
+        }
+    yonder_fetch_pipe_release(e->pipe);
+    os64_free(e);
+}
+
+static Streamed *streamed_by_id(uint64_t id)
+{
+    for (Streamed *e = s_streamed; e != NULL; e = e->next)
+        if (e->id == id && !e->cancelled)
+            return e;
+    return NULL;
+}
+
+static void streamed_cancel(uint64_t id)
+{
+    Streamed *e = streamed_by_id(id);
+    if (e == NULL)
+        return;
+    if (e->busy)
+        e->cancelled = true;
+    else
+        streamed_free(e);
+}
+
+// The workers stopped: no job will write to or be reaped for a pipe whose
+// job was still out. One reaped already has all it will get, and is still
+// handed over.
+static void streamed_orphaned(void)
+{
+    for (Streamed *e = s_streamed, *next; e != NULL; e = next) {
+        next = e->next;
+        if (!e->reaped)
+            streamed_free(e);
+    }
+}
+
+// The binding asks for the next bytes of job `id`'s body: given by
+// bodies_turn, never inside the task that asked.
+static void script_more(void *opaque, uint64_t id)
+{
+    (void)opaque;
+    Streamed *e = streamed_by_id(id);
+    if (e == NULL)
+        return;
+    e->asked = true;
+    yonder_fetch_pipe_ask(e->pipe);
+    s_bodies_asked = true;
+}
+
+static void request_response(const yonder_fetched_t *got, os64_dom_response_t *out);
+static const os64_html_document_t *scripts_doc(const yonder_scripts_t *host);
+
+enum { BODY_HEAD, BODY_PIECE, BODY_END };
+
+// One step of a streamed answer handed to its page as a task: the head, a
+// piece, the end. What the task asked of the widgets is performed after
+// it, as request_arrived's is. False when nothing ran (the page went, or
+// waits on the request no more), or when the task cancelled the request;
+// either way the caller is done with the entry.
+static bool body_step(Streamed *e, int step, const uint8_t *bytes, size_t length, bool ok)
+{
+    yonder_scripts_t *host = scripts_for(e->serial);
+    if (host == NULL)
+        return false;
+    os64_js_outcome_t out;
+    int64_t began = task_begin(host);
+    e->busy = true;
+    bool ran;
+    if (step == BODY_HEAD) {
+        os64_dom_response_t head;
+        request_response(yonder_fetch_pipe_headed(e->pipe), &head);
+        ran = yonder_scripts_head(host, e->token, &head, &out);
+    } else if (step == BODY_PIECE) {
+        ran = yonder_scripts_piece(host, e->token, bytes, length, &out);
+    } else {
+        ran = yonder_scripts_end(host, e->token, ok, &out);
+    }
+    e->busy = false;
+    if (ran) {
+        task_said(host, true, "request", &out, began);
+        const os64_html_document_t *doc = scripts_doc(host);
+        if (host != g.page.scripts)
+            asks_perform(host, doc, false);
+        else if (script_rebuild())
+            asks_perform(host, doc, true);
+    }
+    return ran && !e->cancelled;
+}
+
+// The next piece the pipe holds handed to the page. Bytes there is no
+// memory to copy out end the body as a network error part way, so the
+// page's read is answered. False when the entry is done with.
+static bool body_piece(Streamed *e)
+{
+    uint8_t *bytes;
+    size_t n = yonder_fetch_pipe_take(e->pipe, YONDER_FETCH_PIPE_TAKE_MAX, &bytes);
+    if (n == 0) {
+        (void)body_step(e, BODY_END, NULL, 0, false);
+        return false;
+    }
+    e->asked = false;
+    bool going = body_step(e, BODY_PIECE, bytes, n, false);
+    os64_free(bytes);
+    return going;
+}
+
+// Each streamed request's news handed to its page: the head when it came,
+// a piece when the page asked (or its job was reaped) and one is there,
+// the end once every byte was taken; one step a request, within
+// BODIES_TURN_US. True when a step was left owed, which also rings the
+// loop for the next turn. A step can run a task that cancels any request,
+// so the walk starts over after each one. A turn of the loop's; a
+// writer's bell (BELL_BODY) is what wakes the loop for it.
+static bool bodies_turn(void)
+{
+    s_bodies_asked = false;
+    bool owed = false;
+    uint64_t turn = ++s_bodies_turns;
+    int64_t began = os64_micros();
+    for (bool again = true; again;) {
+        again = false;
+        for (Streamed *e = s_streamed; e != NULL; e = e->next) {
+            yonder_fetch_pipe_state_t st;
+            yonder_fetch_pipe_look(e->pipe, &st);
+            bool head = st.headed && !e->head_given;
+            bool piece = e->head_given && (e->asked || e->reaped) && st.unread != 0;
+            // A reaped job's pipe always has its end; one without is no
+            // whole body.
+            bool end = e->head_given && st.unread == 0 && (st.ended || e->reaped);
+            if (!head && !piece && !end)
+                continue;
+            if (e->turn == turn || os64_micros() - began > BODIES_TURN_US) {
+                owed = s_bodies_asked = true;
+                continue;
+            }
+            e->turn = turn;
+            bool going;
+            if (head) {
+                e->head_given = true;
+                going = body_step(e, BODY_HEAD, NULL, 0, false);
+            } else if (piece) {
+                going = body_piece(e);
+            } else {
+                // The end is the entry's last step.
+                (void)body_step(e, BODY_END, NULL, 0, st.ended && st.ok);
+                going = false;
+            }
+            if (!going)
+                streamed_free(e);
+            again = true;
+            break;
+        }
+    }
+    return owed;
+}
+
 static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, const os64_dom_request_t *q)
 {
     (void)opaque;
     yonder_fetch_job_t *job = g.pool != NULL ? request_job(serial, token, q) : NULL;
     if (job == NULL)
         return 0;
+    // No memory for a pipe answers whole.
+    Streamed *e = !job->module ? os64_calloc(1, sizeof(*e)) : NULL;
+    yonder_fetch_pipe_t *pipe = e != NULL ? yonder_fetch_pipe_new(s_bells ? body_bell : NULL, NULL) : NULL;
+    if (pipe == NULL) {
+        os64_free(e);
+        e = NULL;
+    }
+    job->pipe = pipe;
     os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job,
                         job->module ? YONDER_FETCH_MODULE_RESERVE : YONDER_FETCH_RESERVE};
     job->submitted_us = os64_micros();
     os64_work_id_t id = os64_work_submit(g.pool, &work);
-    if (id == 0)
+    if (id == 0) {
         yonder_fetch_release(job, NULL);
+        yonder_fetch_pipe_release(pipe);
+        os64_free(e);
+        return 0;
+    }
+    if (e != NULL) {
+        *e = (Streamed){.next = s_streamed, .serial = serial, .token = token, .id = id, .pipe = pipe};
+        s_streamed = e;
+    }
     return id;
 }
 
@@ -9053,13 +9286,29 @@ static const os64_html_document_t *scripts_doc(const yonder_scripts_t *host)
 
 // A request's job was reaped: its answer is the page's task, as a timer's
 // is, and what the task asked of the widgets is performed after it. A
-// module's compiled form is the page's module map's now.
+// module's compiled form is the page's module map's now. An answer whose
+// head went down its pipe is handed over from there by bodies_turn: the
+// head if the page has not had it, every byte left, and the end.
 static void request_arrived(const yonder_fetch_job_t *job, yonder_fetched_t *got)
 {
+    Streamed *e = NULL;
+    for (Streamed *at = s_streamed; at != NULL && job->pipe != NULL; at = at->next)
+        if (at->pipe == job->pipe && !at->cancelled)
+            e = at;
     yonder_scripts_t *host = scripts_for(job->page);
-    if (host == NULL)
+    if (host == NULL) {
+        if (e != NULL)
+            streamed_free(e);
         return;
+    }
     request_record(host, job, got, false);
+    if (e != NULL && yonder_fetch_pipe_headed(e->pipe) != NULL) {
+        e->reaped = true;
+        s_bodies_asked = true;
+        return;
+    }
+    if (e != NULL)
+        streamed_free(e);
     os64_dom_response_t response;
     request_response(got, &response);
     yonder_bytecode_t *bytecode = got != NULL ? got->bytecode : NULL;
@@ -11874,6 +12123,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
             g.nav.id = 0;
             os64_work_pool_destroy(g.pool);
             g.pool = NULL;
+            streamed_orphaned();
             pictures_orphaned(&g.page);
             webfonts_orphaned();
             downloads_orphaned();
@@ -15181,6 +15431,7 @@ int main(int argc, char **argv)
         os64_printf("yonder: no window (is the desktop running?)\n");
         return 1;
     }
+    s_bells = true;
     os64_strcopy(s_title_worn, sizeof(s_title_worn), title);
     if (os64_draw_ctx_init(&g.ctx, g.win) != 0) {
         os64_gui_window_destroy(g.win);
@@ -15370,6 +15621,7 @@ int main(int argc, char **argv)
         bool stream_more = stream_turn();
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
+        bodies_turn();
         storage_turn();
         cookies_turn();
         children_turn();
@@ -15383,6 +15635,8 @@ int main(int argc, char **argv)
             glass_paint();
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
+        if (s_bodies_asked)
+            (void)os64_gui_event_ring(g.win, BELL_BODY);
         if (coming_more || (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran ||
                                               yonder_scripts_idle_next(g.page.scripts) <= yonder_now_ms())))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);

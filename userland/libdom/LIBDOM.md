@@ -1030,25 +1030,33 @@ writes itself (a body's Content-Type, a redirect's Location) goes through
 the guarded append, so a no-cors request never carries a Content-Type
 that is not safelisted. RequestInit and ResponseInit are read in WebIDL's
 order; a record init converts each key before its value. Bodies are
-engine memory, read whole. A body's stream is the Streams standard's
+engine memory. A body's stream is the Streams standard's
 (streams.js, self-hosted, through streams.c's door; STREAMS.md): made when
 first needed (the first ask of `body`, or a clone an abort can still
 reach), or given to `new Response(stream)`, and from then on the only
 answer to whether the body is usable. It is a byte stream, so a page may
-read it with a BYOB reader; a fetched body's bytes are handed over as one
-chunk at the first read. `integrity` fails closed.
+read it with a BYOB reader; a body that arrived whole is handed over as
+one chunk at the first read. `integrity` fails closed.
 `fetch()` hands the request to the host (`os64_dom_set_network`) and its
-answer comes back as one task (`os64_dom_fetched`), copied into the
-runtime's memory: a body past the runtime's limit is the sticky LIMIT, as
-any allocation a script makes. A network error is `ok` false and nothing
-else, and the page sees one fixed TypeError, "Failed to fetch".
+answer comes back whole, as one task (`os64_dom_fetched`), or streamed: a
+task for the head, which settles the promise with a Response whose body
+is a stream, one for each piece of the body, which the stream asks the
+host for (`more`) as it is read, and one for the end
+(`os64_dom_fetch_head`, `_body`, `_end`). Every byte is copied into the
+runtime's memory: a body or a piece past the runtime's limit is the sticky
+LIMIT, as any allocation a script makes. A network error is `ok` false and
+nothing else, and the page sees one fixed TypeError, "Failed to fetch",
+at the head or, part way, from the body's stream.
 
 **`XMLHttpRequest`, `XMLHttpRequestEventTarget`, `XMLHttpRequestUpload`,
 `ProgressEvent`** (`xhr.c`, `event.c`): the XHR standard over the same
 host request; the request out holds its object, as the standard keeps one
-with pending activity. The host answers whole, so readystatechange to
-LOADING fires for the one chunk and the one progress event at the end of
-the body (the order WPT's event-order tests hold). A synchronous request
+with pending activity. A whole answer's body is one chunk:
+readystatechange to LOADING fires for it, and the one progress event at
+the end of the body (the order WPT's event-order tests hold). A streamed
+answer's body runs XHR's "process response body" for each piece: the
+bytes kept, and at most once in 50 ms LOADING, readystatechange and
+progress, then the end as a whole answer's. A synchronous request
 is the host's `run`, handed a `stop` that is the script task's own budget
 (`os64_js_check_budget`): it ends when the task would, and a task it
 outlives ends LIMIT, as any script out of time does. `responseType`
