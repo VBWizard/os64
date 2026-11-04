@@ -41,8 +41,10 @@ typedef struct {
     bool bubbles, cancelable, canceled, stop, stop_now, dispatching, initialized, trusted;
     /* The path a dispatch walks, as composedPath reads it (DOM § 2.9): its
      * nodes innermost first, each held, and whether the window ends it.
-     * Set and let go by the dispatch, binding memory; empty for a target
-     * that is no node, whose path is the target alone. */
+     * Set and let go by the dispatch, binding memory. No nodes for a target
+     * that is no node, whose path is the target alone, nor for the window's
+     * own events, whose path is the window (its load's target the
+     * document). */
     const os64_html_node_t **path_nodes;
     uint32_t path_count;
     bool path_window;
@@ -761,6 +763,39 @@ static bool element_has_handler(const os64_dom_t *dom, const os64_html_node_t *n
         !(body_like(node) && window_reflecting(kind)) && handler_attribute(node, kind) != NULL;
 }
 
+/* The wrapper a path node's listeners are on: its own, or a new one when it
+ * has the event's handler attribute, which the wrapper compiles; NULL for a
+ * node with neither, on which nothing can be invoked. -1 with an exception
+ * pending when a wrapper could not be made. */
+static int path_entry(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *at, int kind, DValue **out)
+{
+    DValue *entry = d_find(dom, at);
+    if (entry == NULL && element_has_handler(dom, at, kind)) {
+        JSValue wrapper = d_wrap(dom, ctx, at);
+        if (JS_IsException(wrapper)) return -1;
+        JS_FreeValue(ctx, wrapper);
+        entry = d_find(dom, at);
+    }
+    *out = entry;
+    return 0;
+}
+
+/* invoke_target at path[i]. A node that had no wrapper when the path was
+ * built is looked at again as the dispatch reaches it: a listener before it
+ * may have reached it (composedPath, parentNode) and given it a listener,
+ * which DOM runs. A wrapper that cannot be made then is reported and the
+ * node passed, as a handler attribute that will not compile is. */
+static int invoke_at(Dispatch *d, DValue **path, const os64_html_node_t *const *nodes, size_t depth, size_t i,
+                     uint8_t phase, bool capture)
+{
+    if (path[i] == NULL && i < depth &&
+        path_entry(d->dom, d->ctx, nodes[i], d_event_kind(d->event->type), &path[i]) < 0) {
+        report_pending(d->dom, d->ctx);
+        return 0;
+    }
+    return invoke_target(d, path[i], phase, capture);
+}
+
 /* MouseEvent and PointerEvent clicks run DOM activation at the target or
  * its nearest activating ancestor. Native pointer packets opt in here;
  * legacy host clicks still perform their defaults in the browser. */
@@ -812,13 +847,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     size_t count = 0;
     if (d->plain != NULL) path[count++] = d->plain;
     for (const os64_html_node_t *at = node; at != NULL; at = at->parent) {
-        DValue *entry = d_find(dom, at);
-        if (entry == NULL && element_has_handler(dom, at, kind)) {
-            JSValue wrapper = d_wrap(dom, ctx, at);
-            if (JS_IsException(wrapper)) { JS_FreeValue(ctx, target); d_free(dom, path); return -1; }
-            JS_FreeValue(ctx, wrapper);
-            entry = d_find(dom, at);
-        }
+        DValue *entry;
+        if (path_entry(dom, ctx, at, kind, &entry) < 0) { JS_FreeValue(ctx, target); d_free(dom, path); return -1; }
         nodes[count - (d->plain != NULL)] = at;
         path[count++] = entry;
     }
@@ -843,11 +873,11 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     int result = activation != NULL && d_activation_before(dom, ctx, activation, &saved) < 0 ? -1 : 0;
     saved.native = event->native_activation && event->trusted && d->host != NULL;
     for (size_t i = count; result == 0 && i > 1; i--)
-        result = invoke_target(d, path[i - 1], PHASE_CAPTURING, true);
-    if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, true);
-    if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, false);
+        result = invoke_at(d, path, nodes, depth, i - 1, PHASE_CAPTURING, true);
+    if (result == 0) result = invoke_at(d, path, nodes, depth, 0, PHASE_AT_TARGET, true);
+    if (result == 0) result = invoke_at(d, path, nodes, depth, 0, PHASE_AT_TARGET, false);
     for (size_t i = 1; result == 0 && event->bubbles && i < count; i++)
-        result = invoke_target(d, path[i], PHASE_BUBBLING, false);
+        result = invoke_at(d, path, nodes, depth, i, PHASE_BUBBLING, false);
     dom->current_event = active.previous;
     JS_FreeValue(ctx,active.value);
     dom->dispatching--;

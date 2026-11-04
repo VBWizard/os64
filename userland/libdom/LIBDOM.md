@@ -332,7 +332,7 @@ that throws is reported (with the switch on, as the window's error event,
 
 **`composedPath()`** (a Modern Web row) is that path as an array,
 innermost first: the nodes as the dispatch found them, whatever a listener
-moves meanwhile, so the event holds each one for the dispatch (an ancestor
+moves meanwhile, so the dispatch holds each one while it runs (an ancestor
 no script has a wrapper for would otherwise be reclaimed when a listener
 takes it out of the tree) and wraps them only when asked. Outside a
 dispatch it is empty. There are no shadow trees (DEBTS.md), so no listener

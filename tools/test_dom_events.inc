@@ -828,9 +828,10 @@ static void dom_resolve_matches_page(void)
 /* composedPath (DOM § 2.9): the dispatch's path, innermost first, the
  * window last; the same to every listener on the path and to a host's
  * dispatch; empty outside a dispatch; the target alone for one that is no
- * node, and no window for a detached tree or a window's load; and the path
- * as the dispatch found it, its nodes kept, after a listener has taken an
- * ancestor no script ever held out of the tree. */
+ * node, the window alone for the window, and no window for a detached
+ * tree; the path as the dispatch found it, its nodes kept, after a listener
+ * has taken an ancestor no script ever held out of the tree; and a
+ * listener a listener gave an ancestor no script had held, which runs. */
 static void dom_event_path_cases(void)
 {
     DomFixture f = event_fixture(event_html, "http://example.test/dir/page.html?q=1#top");
@@ -871,7 +872,14 @@ static void dom_event_path_cases(void)
         "b.addEventListener('gone',e=>log.push(names(e.composedPath())));"
         "b.dispatchEvent(new Event('gone'));"
         LOG_IS("'t,DIV,SECTION,outer,BODY,HTML,#document,window'")
-        "assert(b.parentNode===null&&box.firstChild===null,'the tree as the listener left it');",
+        "assert(b.parentNode===null&&box.firstChild===null,'the tree as the listener left it');"
+        /* `deep`'s ancestors are never wrapped before the dispatch reaches
+         * them: the first listener gives its parent one as it bubbles by */
+        "document.body.insertAdjacentHTML('beforeend','<div id=a><span><b id=deep>x</b></span></div>');"
+        "var deep=document.getElementById('deep');"
+        "deep.addEventListener('late',e=>e.composedPath()[1].addEventListener('late',()=>log.push('span')));"
+        "deep.dispatchEvent(new Event('late',{bubbles:true}));"
+        LOG_IS("'span'"),
         "event-path.js");
     fixture_free(&f);
 }
