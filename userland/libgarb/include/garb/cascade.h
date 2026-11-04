@@ -290,6 +290,17 @@ int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t ca
 // parse is false (`not all`).
 bool garb_media_matches(const garb_value_t *v, int32_t n, garb_env_t env);
 bool garb_media_text_matches(const char *text, garb_env_t env);
+
+// CSS.supports (CSS Conditional 3 § 6.1), judged as the cascade judges an
+// `@supports` rule, read as `how` reads: `text` a <supports-condition>, or,
+// when that is not true, the same text in parentheses (a bare
+// declaration); or a property's name (a custom property's by the string
+// test, `--` and anything after it) and a value of its grammar alone (no
+// `!important`). 1 or 0, or -1 when the parse had no memory; a text past
+// the parser's depth or size is 0, as the same condition in a sheet is.
+int32_t garb_supports(const char *text, size_t len, garb_reading_t how);
+int32_t garb_supports_property(const char *property, size_t plen, const char *value, size_t vlen,
+                               garb_reading_t how);
 // The same list as CSSOM serialises it, which is what a MediaQueryList's
 // `media` reads (CSSOM § Serializing media queries): the queries joined by
 // `, `; each one that is not a query's shape, an empty one included, as

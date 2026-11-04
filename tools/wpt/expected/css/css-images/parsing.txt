@@ -22,21 +22,11 @@ object-position-valid.html	e.style['object-position'] = "left center" should set
 object-position-valid.html	e.style['object-position'] = "right 30% top 60px" should set the property value
 object-position-valid.html	e.style['object-position'] = "right 40%" should set the property value
 [excluded]
-# Pages whose tests ask CSS.supports first (css/support/computed-
-# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
-# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
-# scripting books CSS.supports.
-gradient-interpolation-method-computed.html	needs CSS.supports
-gradient-position-computed.html	needs CSS.supports
-image-function-computed.html	needs CSS.supports
-image-orientation-computed.html	needs CSS.supports
-image-rendering-computed.html	needs CSS.supports
-object-fit-computed.html	needs CSS.supports
-object-position-computed.html	needs CSS.supports
 [passing]
 conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "linear-gradient(red calc(50% + 30deg), blue)" should not set the property value
 conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "radial-gradient(red calc(50% + 30deg), blue)" should not set the property value
 conic-gradient-calc-angle-percentage-valid.html	e.style['background-image'] = "conic-gradient(red calc(100% - 45deg), blue)" should set the property value
+gradient-interpolation-method-computed.html	Property background-image value 'linear-gradient(30deg, red, blue)'
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "linear-gradient(, red, blue)" should not set the property value
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "linear-gradient(45deg in, black, transparent)" should not set the property value
 gradient-interpolation-method-invalid.html	e.style['background-image'] = "linear-gradient(90deg in hsl longer, black, transparent)" should not set the property value
@@ -275,6 +265,8 @@ image-orientation-invalid.html	e.style['image-orientation'] = "flip from-image" 
 image-orientation-invalid.html	e.style['image-orientation'] = "flip" should not set the property value
 image-orientation-invalid.html	e.style['image-orientation'] = "from-image 0deg" should not set the property value
 image-orientation-invalid.html	e.style['image-orientation'] = "from-image flip" should not set the property value
+image-rendering-computed.html	Property image-rendering value 'auto'
+image-rendering-computed.html	Property image-rendering value 'pixelated'
 image-rendering-invalid.html	e.style['image-rendering'] = "high-quality crisp-edges" should not set the property value
 image-rendering-invalid.html	e.style['image-rendering'] = "none" should not set the property value
 image-rendering-valid.html	e.style['image-rendering'] = "auto" should set the property value
@@ -287,6 +279,11 @@ image-resolution-invalid.html	e.style['image-resolution'] = "2" should not set t
 image-resolution-invalid.html	e.style['image-resolution'] = "3dpi snap from-image" should not set the property value
 image-resolution-invalid.html	e.style['image-resolution'] = "auto" should not set the property value
 image-resolution-invalid.html	e.style['image-resolution'] = "from-image snap 4dppx" should not set the property value
+object-fit-computed.html	Property object-fit value 'contain'
+object-fit-computed.html	Property object-fit value 'cover'
+object-fit-computed.html	Property object-fit value 'fill'
+object-fit-computed.html	Property object-fit value 'none'
+object-fit-computed.html	Property object-fit value 'scale-down'
 object-fit-invalid.html	e.style['object-fit'] = "auto" should not set the property value
 object-fit-invalid.html	e.style['object-fit'] = "contain cover" should not set the property value
 object-fit-invalid.html	e.style['object-fit'] = "contain fill" should not set the property value
@@ -297,6 +294,22 @@ object-fit-valid.html	e.style['object-fit'] = "cover" should set the property va
 object-fit-valid.html	e.style['object-fit'] = "fill" should set the property value
 object-fit-valid.html	e.style['object-fit'] = "none" should set the property value
 object-fit-valid.html	e.style['object-fit'] = "scale-down" should set the property value
+object-position-computed.html	Property object-position value '-20% -30px'
+object-position-computed.html	Property object-position value '10% center'
+object-position-computed.html	Property object-position value '30px center'
+object-position-computed.html	Property object-position value '40px top'
+object-position-computed.html	Property object-position value 'center 50px'
+object-position-computed.html	Property object-position value 'center bottom'
+object-position-computed.html	Property object-position value 'center center'
+object-position-computed.html	Property object-position value 'center top'
+object-position-computed.html	Property object-position value 'center'
+object-position-computed.html	Property object-position value 'left bottom'
+object-position-computed.html	Property object-position value 'left center'
+object-position-computed.html	Property object-position value 'right 20% bottom 10%'
+object-position-computed.html	Property object-position value 'right 20px bottom 10px'
+object-position-computed.html	Property object-position value 'right 30% top 60px'
+object-position-computed.html	Property object-position value 'right 40%'
+object-position-computed.html	Property object-position value 'right bottom'
 object-position-invalid.html	e.style['object-position'] = "1px 2px 3px" should not set the property value
 object-position-invalid.html	e.style['object-position'] = "auto" should not set the property value
 object-position-invalid.html	e.style['object-position'] = "bottom 10% top 20%" should not set the property value

@@ -2089,8 +2089,75 @@ static int media_depth(void)
 
 #include "test_garb_updates.inc"
 
+// CSS.supports's doors (garb_supports, garb_supports_property): the same
+// judgment as a sheet's @supports, in both of CSSOM's forms, the second
+// form wrapping a bare declaration in parentheses, a property's value
+// held to its grammar alone, and the Modern Web mark honoured.
+static int supports_doors(void)
+{
+    static const struct { const char *text; int32_t want; } kConditions[] = {
+        {"(display: grid)", 1}, {"display: grid", 1}, {"(display: grid-ish)", 0},
+        {"not (display: grid-ish)", 1}, {"(display: grid) and (color: red)", 1},
+        {"(display: grid) and (color: 12q)", 0}, {"(display: grid-ish) or (color: red)", 1},
+        {"selector(div > p)", 1}, {"selector(div >>> p)", 0}, {"", 0}, {"display", 0},
+        {"(--custom: anything at all)", 1}, {"(display: grid", 1}, {"(--custom: a !important)", 1},
+        {"(--custom: a ! b)", 0},
+        // The grammar failing is false, `not` before it included; a
+        // parenthesis or a function of anything is <general-enclosed>,
+        // valid and false.
+        {"not", 0}, {"not foo", 0}, {"not not (display: grid)", 0}, {"(color: red) or", 0},
+        {"(color: red) and", 0}, {"not (foo)", 1}, {"not foo(1)", 1}, {"[display: grid]", 0},
+        {"(display: grid) and (color: red) or (color: blue)", 0},
+    };
+    static const struct { const char *property, *value; int32_t want; } kPairs[] = {
+        {"display", "grid", 1}, {"DISPLAY", "flex", 1}, {"display", "grid-ish", 0},
+        {"color", "red !important", 0}, {"no-such-property", "1px", 0}, {" display", "grid", 0},
+        {"display:grid;color", "red", 0}, {"--x", "{ whatever }", 1}, {"color", "", 0},
+        // A custom property's name is a string test; nothing else may
+        // become one in the reading.
+        {"--a.b", "1", 1}, {"--a b", "1", 1}, {" --\\0", "x", 0}, {"--x", "a;b", 0}, {"--x", "a)", 0},
+        // At any depth, but for `;` and `!`, which a function or block may
+        // hold.
+        {"--x", "foo(url(a b))", 0}, {"--x", "foo(])", 0}, {"--x", "foo(a;b)", 1}, {"--x", "[a;b]", 1},
+        {"--x", "a ! b", 0}, {"--x", "a !ie", 0}, {"--x", "foo(a ! b)", 1}, {"--x", "{a ! b}", 1},
+    };
+    garb_reading_t how = {0};
+    int failed = 0;
+    for (size_t i = 0; i < sizeof(kConditions) / sizeof(kConditions[0]); i++) {
+        int32_t got = garb_supports(kConditions[i].text, strlen(kConditions[i].text), how);
+        if (got != kConditions[i].want) {
+            printf("libgarb supports: \"%s\" answered %d, not %d\n", kConditions[i].text, got, kConditions[i].want);
+            failed = 1;
+        }
+    }
+    for (size_t i = 0; i < sizeof(kPairs) / sizeof(kPairs[0]); i++) {
+        int32_t got = garb_supports_property(kPairs[i].property, strlen(kPairs[i].property), kPairs[i].value,
+                                             strlen(kPairs[i].value), how);
+        if (got != kPairs[i].want) {
+            printf("libgarb supports: (%s, %s) answered %d, not %d\n", kPairs[i].property, kPairs[i].value, got,
+                   kPairs[i].want);
+            failed = 1;
+        }
+    }
+    // The Modern Web mark: a property the arc added is supported, and with
+    // modern_off it is not (`inherit` fits every property).
+    const char *marked = NULL;
+    for (int32_t p = 0; p < GARB_NPROPS && marked == NULL; p++)
+        if (garb_prop_modern((garb_prop_t)p)) marked = garb_prop_name((garb_prop_t)p);
+    garb_reading_t off = {.modern_off = true};
+    if (marked == NULL || garb_supports_property(marked, strlen(marked), "inherit", 7, how) != 1 ||
+        garb_supports_property(marked, strlen(marked), "inherit", 7, off) != 0) {
+        printf("libgarb supports: the Modern Web mark not honoured (%s)\n", marked != NULL ? marked : "no marked property");
+        failed = 1;
+    }
+    printf("libgarb supports: %s\n", failed ? "FAILED" : "both forms answer as @supports does");
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--supports") == 0)
+        return supports_doors();
     if(argc==2 && !strcmp(argv[1],"--updates")) return cascade_updates();
     if (argc == 2 && strcmp(argv[1], "--media-depth") == 0)
         return media_depth();

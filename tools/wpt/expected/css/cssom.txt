@@ -187,7 +187,23 @@ idlharness.html	Window interface: window must inherit property "getComputedStyle
 idlharness.html	idl_test validation
 [excluded]
 [passing]
+CSS-escape-numeric-id.html	ID selector matches with CSS.escape()
 CSS-escape-numeric-id.html	Sanity check
+CSS-namespace-object-class-string.html	@@toStringTag exists on the namespace object with the appropriate descriptor
+CSS-namespace-object-class-string.html	Object.prototype.toString applied after deleting @@toStringTag
+CSS-namespace-object-class-string.html	Object.prototype.toString applied after modifying the namespace object's @@toStringTag
+CSS-namespace-object-class-string.html	Object.prototype.toString applied to the namespace object
+CSS-supports.html	CSS.supports and implementation: keyword
+CSS-supports.html	CSS.supports and implementation: min function
+CSS-supports.html	CSS.supports and shorthand / longhand
+CSS-supports.html	CSS.supports invalid value semi
+CSS-supports.html	CSS.supports() requires at least one argument
+CSS-supports.html	CSS.supports(conditionText) with logical operators
+CSS-supports.html	CSS.supports(conditionText) with parentheses
+CSS-supports.html	CSS.supports(conditionText) without parentheses
+CSS-supports.html	CSS.supports(property, value) edge cases
+CSS-supports.html	CSS.supports(property, value) with invalid inputs
+CSS-supports.html	CSS.supports(property, value) with valid inputs
 HTMLLinkElement-disabled-001.html	<link disabled> prevents the stylesheet from being in document.styleSheets (from parser)
 MutationObserver-style.html	Updating cssText triggers an observation callback even if the value is the same
 StyleSheet-properties.html	<link>: disabled is false initially
@@ -227,6 +243,16 @@ css-style-attr-decl-block.html	Expansion of all:unset and all:revert treated ide
 css-style-attr-decl-block.html	Style attribute should create CSS declaration block based on its content
 css-style-attribute-modifications.html	Mutating the style declaration doesn't remove the style attribute
 cssom-cssstyledeclaration-set.html	CSSStyleDeclaration on HTMLElement represents inline style changes
+cssom-getPropertyValue-common-checks.html	All aliases can serialize target property set to 'initial'
+cssom-getPropertyValue-common-checks.html	All aliases can serialize target property set to its initial value
+cssom-getPropertyValue-common-checks.html	All properties (except 'all') can serialize their initial value (specified)
+cssom-getPropertyValue-common-checks.html	All properties can serialize 'initial'
+cssom-getPropertyValue-common-checks.html	All shorthands (except 'all') can serialize their longhands set to their initial value
+cssom-getPropertyValue-common-checks.html	All shorthands can serialize their longhands set to 'initial'
+cssom-getPropertyValue-common-checks.html	Can't serialize shorthand set to 'initial' when some longhand is missing
+cssom-getPropertyValue-common-checks.html	Can't serialize shorthand set to initial value when some longhand is missing
+cssom-getPropertyValue-common-checks.html	Can't serialize shorthand when longhands are set to different css-wide keywords
+cssom-getPropertyValue-common-checks.html	Can't serialize shorthand when longhands have different priority
 cssom-setProperty-shorthand.html	shorthand background can be removed with removeProperty
 cssom-setProperty-shorthand.html	shorthand background can be removed with removeProperty even when set with !important
 cssom-setProperty-shorthand.html	shorthand background can be set with setProperty
@@ -318,6 +344,8 @@ cssstyledeclaration-csstext.html	uppercase property
 cssstyledeclaration-mutability.html	HTMLElement's CSSStyleDeclaration is mutable
 cssstyledeclaration-mutability.html	getComputedStyle's CSSStyleDeclaration is not mutable
 cssstyledeclaration-mutationrecord-001.html	CSSStyleDeclaration.setPropertyValue queues a mutation record when serialization is changed
+cssstyledeclaration-mutationrecord-002.html	CSSStyleDeclaration.setPropertyValue doesn't queue a mutation record when setting invalid values
+cssstyledeclaration-mutationrecord-005.html	CSSStyleDeclaration.setPropertyValue doesn't queue a mutation record when setting invalid values
 cssstyledeclaration-properties.html	CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames()
 cssstyledeclaration-removeProperty-all.html	CSSStyleDeclaration.removeProperty("all") 1
 cssstyledeclaration-setter-attr.html	Setting an invalid property via the declaration setter doesn't create a declaration
@@ -330,10 +358,25 @@ cssstyledeclaration-setter-form-controls.html	select element
 cssstyledeclaration-setter-form-controls.html	submit input element
 cssstyledeclaration-setter-form-controls.html	text input element
 cssstyledeclaration-setter-form-controls.html	textarea element
+escape.html	Dash number prefix
+escape.html	Double dash prefix
+escape.html	Letter number prefix
+escape.html	Null bytes
+escape.html	Number of arguments
+escape.html	Number prefix
+escape.html	Replacement character
+escape.html	String conversion
+escape.html	Surrogates
+escape.html	Various tests
+functional-values-comma.html	rgb(): already spaced input should remain correctly spaced
 getComputedStyle-basic.html	Sanity check
 getComputedStyle-basic.html	cssText
 getComputedStyle-basic.html	removeProperty
 getComputedStyle-basic.html	setProperty
+getComputedStyle-calc.html	getComputedStyle() returns computed value for calc(-1 * 8px)
+getComputedStyle-calc.html	getComputedStyle() returns computed value for calc(100% - 40px)
+getComputedStyle-calc.html	getComputedStyle() returns computed value for calc(8px * 2)
+getComputedStyle-calc.html	getComputedStyle() returns computed value for calc(var(--gap) - 4px)
 getComputedStyle-detached-subtree.html	getComputedStyle returns no style for detached element
 getComputedStyle-getter-v-properties.tentative.html	border
 getComputedStyle-getter-v-properties.tentative.html	border-bottom
@@ -639,8 +682,10 @@ getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-h
 getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="grid-item"
 getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="inline-with-degenerate-aspect-ratio"
 getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="inline-with-valid-aspect-ratio"
+getComputedStyle-style-element-updates.html	Inserting a new CSS element that overrides the old one updates the computed style
 getComputedStyle-style-element-updates.html	Removing the inserted CSS element updates the computed style back to original value
 getComputedStyle-style-element-updates.html	Sanity check: getComputedStyle works as expected
+getComputedStyle-style-element-updates.html	Updating the inserted CSS element changes the computed style
 getComputedStyle-visibility-nominal-case.html	Real check: getComputedStyle returns hidden visibility
 getComputedStyle-visibility-nominal-case.html	Sanity check: getComputedStyle returns apparent visibility
 getComputedStyle-visibility-override.html	Sanity check: Parent is actually visibly hidden
@@ -668,7 +713,14 @@ historical.html	Historical interface: CSSValue
 historical.html	Historical interface: CSSValueList
 historical.html	Historical interface: RGBColor
 historical.html	Historical interface: Rect
+idlharness.html	CSS namespace: [[Extensible]] is true
+idlharness.html	CSS namespace: [[Prototype]] is Object.prototype
 idlharness.html	CSS namespace: extended attributes
+idlharness.html	CSS namespace: has no length property
+idlharness.html	CSS namespace: has no name property
+idlharness.html	CSS namespace: operation escape(CSSOMString)
+idlharness.html	CSS namespace: property descriptor
+idlharness.html	CSS namespace: typeof is "object"
 idlharness.html	CSSStyleDeclaration interface object length
 idlharness.html	CSSStyleDeclaration interface object name
 idlharness.html	CSSStyleDeclaration interface: calling getPropertyPriority(CSSOMString) on style_element.style with too few arguments must throw TypeError
@@ -1283,6 +1335,12 @@ setproperty-null-undefined.html	Verify that setting a CSS property to undefined 
 shorthand-serialization.html	Shorthand serialization with 'initial' value, longhands set individually, one with important flag.
 shorthand-serialization.html	Shorthand serialization with 'initial' value.
 shorthand-serialization.html	Shorthand serialization with variable and variable from other shorthand.
+shorthand-values.html	The serialization of border-width: 1px; should be canonical.
+shorthand-values.html	The serialization of border: 1px red; should be canonical.
+shorthand-values.html	The serialization of border: 1px solid red; should be canonical.
+shorthand-values.html	The serialization of border: red; should be canonical.
+shorthand-values.html	The serialization of font-family: sans-serif; line-height: 2em; font-size: 3em; font-style: italic; font-weight: bold; should be canonical.
+shorthand-values.html	The serialization of list-style-type: lower-alpha; should be canonical.
 style-background-position.html	Invalid values
 style-background-position.html	Sanity check
 style-background-repeat.html	1 value
@@ -1294,6 +1352,7 @@ style-color-values.html	Global keyword
 style-color-values.html	Sanity check
 style-color.html	Setting a color with a decimal transparency should update the style
 style-color.html	Setting a mixed percent and value color should NOT update the style
+style-element-insertion-removal-computed.html	Styles should be recomputed correctly after a <style> element is inserted.
 style-element-insertion-removal-computed.html	Styles should be recomputed correctly after a <style> element is removed.
 style-global-variable.html	Setting CSS global variables
 style-sheet-interfaces-001.html	sheet_property

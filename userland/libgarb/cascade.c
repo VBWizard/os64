@@ -883,7 +883,7 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
 
 // ── Reading the sheets ──────────────────────────────────────────────────
 
-static bool supports(garb_cascade_t *c, garb_parsed_t *owner, const garb_value_t *v, int32_t n);
+static bool supports(garb_reading_t how, garb_parsed_t *owner, const garb_value_t *v, int32_t n);
 
 // Reads one declaration for a rule: kept raw when custom or pending, else
 // its longhands, else dropped (invalid, or a property not read here).
@@ -1159,7 +1159,7 @@ static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t
         // passed over here, @import among them: its sheet is the face's to
         // fetch, and joins at its place (GARB.md, G4).
         bool group = at(r, "media") ? garb_media_matches(r->prelude, r->nprelude, c->env)
-                   : at(r, "supports") ? supports(c, owner, r->prelude, r->nprelude)
+                   : at(r, "supports") ? supports(reading(c), owner, r->prelude, r->nprelude)
                    : at(r, "layer") && r->has_block;
         // What is read elsewhere is not passed over: @import's sheet is the
         // face's, @charset was the decoder's.
@@ -1198,72 +1198,197 @@ static bool sword(const garb_value_t *t, const char *w)
     return t != NULL && t->kind == GARB_IDENT && ieq(t->text, t->len, w);
 }
 
-static bool supports_condition(garb_cascade_t *c, garb_parsed_t *owner, SCur *s);
+static int supports_condition(garb_reading_t how, garb_parsed_t *owner, SCur *s);
 
-// ( condition ), ( declaration ), selector( … ): anything else is false.
-static bool supports_in_parens(garb_cascade_t *c, garb_parsed_t *owner, SCur *s)
+// Whether component values hold no closing bracket with nothing open, no
+// bad string and no bad URL, at any depth (a function's arguments and a
+// block's contents included), and, at the top only, no `;` and no `!` (a
+// trailing `!important` is the declaration's, not its value's: the parser
+// has taken it off). The parser bounds the depth this walks
+// (GARB_DEPTH_MAX).
+static bool declaration_tokens(const garb_value_t *v, int32_t n, bool top)
 {
-    const garb_value_t *t = speek(s);
-    if (t == NULL)
-        return false;
-    s->i++;
-    if (t->kind == GARB_FUNCTION && ieq(t->text, t->len, "selector")) {
-        return garb_selectors_parse(owner, t->children, t->nchildren, c->quirks,
-                                    c->env.modern_off) != NULL;
+    for (int32_t k = 0; k < n; k++) {
+        garb_kind_t kind = v[k].kind;
+        bool bang = kind == GARB_DELIM && v[k].len == 1 && v[k].text[0] == '!';
+        if ((top && (kind == GARB_SEMICOLON || bang)) || kind == GARB_UNMATCHED || kind == GARB_BAD_STRING ||
+            kind == GARB_BAD_URL)
+            return false;
+        if ((kind == GARB_FUNCTION || kind == GARB_BLOCK) &&
+            !declaration_tokens(v[k].children, v[k].nchildren, false))
+            return false;
     }
-    if (t->kind != GARB_BLOCK || t->open != '(')
-        return false;
-    SCur inner = {t->children, t->nchildren, 0};
-    const garb_value_t *first = speek(&inner);
-    if (first != NULL && (first->kind == GARB_BLOCK || sword(first, "not") ||
-                          first->kind == GARB_FUNCTION)) {
-        bool r = supports_condition(c, owner, &inner);
-        return r && speek(&inner) == NULL;
-    }
-    // A declaration: supported if its property is read here, its value fits
-    // (a custom property always does), and what it says is laid out as it
-    // says — a value read but laid out as something else is not supported,
-    // or a page would be told not to use the fallback it wrote for that.
-    garb_item_t *items;
-    int32_t n;
-    if (!garb_items_of(owner, t->children, t->nchildren, &items, &n) || n != 1 ||
-        items[0].kind != GARB_ITEM_DECL)
-        return false;
-    const garb_decl_t *d = &items[0].decl;
-    if (garb_decl_is_custom(d) || garb_decl_has_var(d)) {
+    return true;
+}
+
+// Whether a custom property's value is a <declaration-value> (Syntax 3
+// § 8.2): declaration_tokens over its value.
+static bool declaration_value(const garb_decl_t *d)
+{
+    return declaration_tokens(d->value, d->nvalue, true);
+}
+
+// A declaration, as @supports and CSS.supports ask after one: supported if
+// its property is read here, its value fits (a custom property's when it
+// is a <declaration-value>), and what it says is laid out as it says — a
+// value read but laid out as something else is not supported, or a page
+// would be told not to use the fallback it wrote for that.
+static bool supports_declaration(garb_reading_t how, garb_parsed_t *owner, const garb_decl_t *d)
+{
+    if (garb_decl_is_custom(d))
+        return declaration_value(d);
+    if (garb_decl_has_var(d)) {
         garb_prop_t props[GARB_SETS_MAX];
-        return garb_decl_is_custom(d) || prop_longhands(d->name, d->len, c->env.modern_off, props) > 0;
+        return prop_longhands(d->name, d->len, how.modern_off, props) > 0;
     }
     garb_set_t sets[GARB_SETS_MAX];
-    int32_t read = garb_read_declaration(owner, d, reading(c), sets);
+    int32_t read = garb_read_declaration(owner, d, how, sets);
     for (int32_t k = 0; k < read; k++)
         if (garb_set_approximated(&sets[k]))
             return false;
     return read > 0;
 }
 
-static bool supports_condition(garb_cascade_t *c, garb_parsed_t *owner, SCur *s)
+// A condition's answer is three-valued, because the grammar can fail where
+// a test is merely false: S_INVALID, which makes the whole condition false
+// (a `not` before it included), or false or true. Conditional 3 § 2.
+enum { S_INVALID = -1, S_FALSE = 0, S_TRUE = 1 };
+
+// ( condition ), ( declaration ), selector( … ): <supports-in-parens>. A
+// parenthesis or a function that is neither is <general-enclosed>, valid
+// and false; anything else (nothing, a bare word, another bracket) is not
+// one at all.
+static int supports_in_parens(garb_reading_t how, garb_parsed_t *owner, SCur *s)
+{
+    const garb_value_t *t = speek(s);
+    if (t == NULL)
+        return S_INVALID;
+    s->i++;
+    if (t->kind == GARB_FUNCTION && ieq(t->text, t->len, "selector")) {
+        return garb_selectors_parse(owner, t->children, t->nchildren,
+                                    how.quirks ? OS64_HTML_QUIRKS : OS64_HTML_NO_QUIRKS, how.modern_off) != NULL
+                   ? S_TRUE : S_FALSE;
+    }
+    if (t->kind == GARB_FUNCTION)
+        return S_FALSE;
+    if (t->kind != GARB_BLOCK || t->open != '(')
+        return S_INVALID;
+    SCur inner = {t->children, t->nchildren, 0};
+    const garb_value_t *first = speek(&inner);
+    if (first != NULL && (first->kind == GARB_BLOCK || sword(first, "not") ||
+                          first->kind == GARB_FUNCTION)) {
+        // Not a condition after all is a parenthesis of anything: false.
+        int r = supports_condition(how, owner, &inner);
+        return r == S_TRUE && speek(&inner) == NULL ? S_TRUE : S_FALSE;
+    }
+    garb_item_t *items;
+    int32_t n;
+    if (!garb_items_of(owner, t->children, t->nchildren, &items, &n) || n != 1 ||
+        items[0].kind != GARB_ITEM_DECL)
+        return S_FALSE;
+    return supports_declaration(how, owner, &items[0].decl) ? S_TRUE : S_FALSE;
+}
+
+static int supports_condition(garb_reading_t how, garb_parsed_t *owner, SCur *s)
 {
     if (sword(speek(s), "not")) {
         s->i++;
-        return !supports_in_parens(c, owner, s);
+        int r = supports_in_parens(how, owner, s);
+        return r == S_INVALID ? S_INVALID : r == S_TRUE ? S_FALSE : S_TRUE;
     }
-    bool r = supports_in_parens(c, owner, s);
+    int r = supports_in_parens(how, owner, s);
+    if (r == S_INVALID)
+        return S_INVALID;
     const garb_value_t *t = speek(s);
     bool ands = sword(t, "and"), ors = sword(t, "or");
     while ((ands && sword(speek(s), "and")) || (ors && sword(speek(s), "or"))) {
         s->i++;
-        bool next = supports_in_parens(c, owner, s);
-        r = ands ? r && next : r || next;
+        int next = supports_in_parens(how, owner, s);
+        if (next == S_INVALID)
+            return S_INVALID;
+        r = ands ? (r == S_TRUE && next == S_TRUE ? S_TRUE : S_FALSE)
+                 : (r == S_TRUE || next == S_TRUE ? S_TRUE : S_FALSE);
     }
     return r;
 }
 
-static bool supports(garb_cascade_t *c, garb_parsed_t *owner, const garb_value_t *v, int32_t n)
+static bool supports(garb_reading_t how, garb_parsed_t *owner, const garb_value_t *v, int32_t n)
 {
     SCur s = {v, n, 0};
-    bool r = supports_condition(c, owner, &s);
-    return r && speek(&s) == NULL;
+    int r = supports_condition(how, owner, &s);
+    return r == S_TRUE && speek(&s) == NULL;
+}
+
+// One condition text judged (garb_supports): 1 or 0, or -1 when the parse
+// had no memory. A text past the parser's depth or size answers 0, as the
+// same condition in a sheet does (its rule is read short and does not hold).
+static int32_t supports_text(const char *text, size_t len, garb_reading_t how)
+{
+    garb_parsed_t parsed = {0};
+    garb_status_t status = garb_parse_values(text, len, &parsed);
+    int32_t r = status == GARB_NO_MEMORY ? -1
+              : status != GARB_OK || parsed.incomplete ? 0
+              : supports(how, &parsed, parsed.values, parsed.nvalues) ? 1 : 0;
+    garb_free(&parsed);
+    return r;
+}
+
+int32_t garb_supports(const char *text, size_t len, garb_reading_t how)
+{
+    int32_t r = supports_text(text, len, how);
+    if (r != 0)
+        return r;
+    // The second form: the text in parentheses, which is how a bare
+    // declaration ("display: grid") is a condition.
+    if (len > SIZE_MAX - 3)
+        return -1;
+    char *wrapped = os64_malloc(len + 3);
+    if (wrapped == NULL)
+        return -1;
+    wrapped[0] = '(';
+    if (len != 0)
+        os64_memcpy(wrapped + 1, text, len);
+    wrapped[len + 1] = ')';
+    wrapped[len + 2] = '\0';
+    r = supports_text(wrapped, len + 2, how);
+    os64_free(wrapped);
+    return r;
+}
+
+int32_t garb_supports_property(const char *property, size_t plen, const char *value, size_t vlen,
+                               garb_reading_t how)
+{
+    // The name (§ 6.1): a custom property's is a string test, `--` and
+    // anything after it, so its value is read under a stand-in name; any
+    // other must be a property's name, all of it as written, read as one.
+    bool custom = plen >= 2 && property[0] == '-' && property[1] == '-';
+    const char *name = custom ? "--x" : property;
+    size_t nlen = custom ? 3 : plen;
+    if (nlen > SIZE_MAX - 3 || vlen > SIZE_MAX - 3 - nlen)
+        return -1;
+    char *text = os64_malloc(nlen + vlen + 3);
+    if (text == NULL)
+        return -1;
+    os64_memcpy(text, name, nlen);
+    text[nlen] = ':';
+    if (vlen != 0)
+        os64_memcpy(text + nlen + 1, value, vlen);
+    text[nlen + 1 + vlen] = '\0';
+    garb_parsed_t parsed = {0};
+    garb_status_t status = garb_parse_one_declaration(text, nlen + 1 + vlen, &parsed);
+    const garb_decl_t *d = &parsed.decl;
+    int32_t r;
+    if (status == GARB_NO_MEMORY)
+        r = -1;
+    else if (status != GARB_OK || parsed.incomplete || d->important)
+        r = 0;      // a value is the property's grammar alone, never `!important`
+    else if (custom)
+        r = garb_decl_is_custom(d) && supports_declaration(how, &parsed, d) ? 1 : 0;
+    else
+        r = d->len == plen && !garb_decl_is_custom(d) && supports_declaration(how, &parsed, d) ? 1 : 0;
+    garb_free(&parsed);
+    os64_free(text);
+    return r;
 }
 
 // ── @import (Cascade 4 § 2.1) ───────────────────────────────────────────
@@ -1352,7 +1477,7 @@ static bool sheet_applies(garb_cascade_t *c, const garb_sheet_in_t *sheets, int3
         paren.open = '(';
         paren.children = (garb_value_t *)im->supports;
         paren.nchildren = im->nsupports;
-        if (!supports(c, &c->self, &paren, 1))
+        if (!supports(reading(c), &c->self, &paren, 1))
             return false;
     }
     return sheet_applies(c, sheets, n, in->parent, depth + 1);

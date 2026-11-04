@@ -127,6 +127,44 @@ static void dom_modern_cases(void)
         "s.marginInlineStart='3px';assert(s.getPropertyValue('margin-inline-start')==='3px'&&s.marginLeft==='');"
         "s.setProperty('animation-name','spin');assert(s.getPropertyValue('animation-name')==='spin');",
         "modern-on-style-member");
+    /* The CSS namespace (css.c): its shape, and escape's rules, a code
+     * unit past U+0080 and a lone surrogate passed through as they came. */
+    dom_script(&f, MODERN_ASSERT
+        "var g=Object.getOwnPropertyDescriptor(globalThis,'CSS');"
+        "assert(g&&g.writable&&g.configurable&&!g.enumerable&&typeof CSS==='object');"
+        "assert(Object.getPrototypeOf(CSS)===Object.prototype&&Object.prototype.toString.call(CSS)==='[object CSS]');"
+        "var e=Object.getOwnPropertyDescriptor(CSS,'escape');"
+        "assert(e.writable&&e.enumerable&&e.configurable&&CSS.escape.length===1&&CSS.escape.name==='escape');"
+        "var threw=false;try{CSS.escape()}catch(x){threw=x instanceof TypeError}assert(threw,'no argument');"
+        "assert(CSS.escape('repo-app')==='repo-app'&&CSS.escape('1a')==='\\\\31 a'&&CSS.escape('-1')==='-\\\\31 ');"
+        "assert(CSS.escape('-')==='\\\\-'&&CSS.escape('--x')==='--x'&&CSS.escape('a b.c')==='a\\\\ b\\\\.c');"
+        "assert(CSS.escape('\\0')==='\\uFFFD'&&CSS.escape('\\x01\\x7f')==='\\\\1 \\\\7f ');"
+        "assert(CSS.escape('\\u00e9\\uD834\\uDF06')==='\\u00e9\\uD834\\uDF06'&&CSS.escape('\\uD834')==='\\uD834');"
+        "assert(CSS.escape(123)==='\\\\31 23'&&CSS.escape(null)==='null');",
+        "modern-on-css-escape");
+    /* CSS.supports: libgarb's @supports judgment, in both forms. */
+    dom_script(&f, MODERN_ASSERT
+        "var d=Object.getOwnPropertyDescriptor(CSS,'supports');"
+        "assert(d.writable&&d.enumerable&&d.configurable&&CSS.supports.length===1&&CSS.supports.name==='supports');"
+        "var threw=false;try{CSS.supports()}catch(x){threw=x instanceof TypeError}assert(threw,'no argument');"
+        "var cases=[[['display','grid'],true],[['DISPLAY','flex'],true],[['display','grid-ish'],false],"
+        "[['color','red !important'],false],[['no-such-property','1px'],false],[[' display','grid'],false],"
+        "[['display:grid;color','red'],false],[['--anything','{ whatever }'],true],[['(display: grid)'],true],"
+        "[['display: grid'],true],[['(display: grid) and (color: red)'],true],"
+        "[['(display: grid) and (color: 12q)'],false],[['not (display: grid-ish)'],true],"
+        "[['selector(div > p)'],true],[[''],false],[['display'],false],"
+        /* CSS Syntax closes a block the input leaves open, as other browsers do. */
+        "[['(display: grid'],true],"
+        /* The grammar failing is false, a `not` before it included. */
+        "[['not'],false],[['not foo'],false],[['(color: red) or'],false],[['not (foo)'],true],"
+        "[['--x','a)'],false],[['--a.b','1'],true]];"
+        "var wrong=cases.filter(c=>CSS.supports.apply(CSS,c[0])!==c[1]).map(c=>JSON.stringify(c[0]));"
+        "assert(wrong.length===0,'wrong: '+wrong.join(' '));"
+        /* style is [PutForwards=cssText]: assigning it sets the text. */
+        "var b=document.body;b.style='color: red';"
+        "assert(b.style.color==='red'&&b.getAttribute('style').indexOf('red')>=0,'style forwards to cssText');"
+        "b.style='';assert(b.style.color==='','and back');",
+        "modern-on-css-supports");
     dom_script(&f, MODERN_ASSERT
         "function tag(o){return Object.prototype.toString.call(o)}"
         "assert(tag(document.body)==='[object HTMLBodyElement]'&&tag(document)==='[object Document]');"

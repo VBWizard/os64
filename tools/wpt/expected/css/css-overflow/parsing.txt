@@ -7,20 +7,6 @@
 text-overflow-valid.html	e.style['text-overflow'] = "clip" should set the property value
 text-overflow-valid.html	e.style['text-overflow'] = "ellipsis" should set the property value
 [excluded]
-# Pages whose tests ask CSS.supports first (css/support/computed-
-# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
-# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
-# scripting books CSS.supports.
-getComputedStyle-scroll-button.html	needs CSS.supports
-overflow-clip-margin-computed.html	needs CSS.supports
-overflow-computed.html	needs CSS.supports
-scroll-axis-lock-computed.html	needs CSS.supports
-scroll-markers-computed.html	needs CSS.supports
-scroll-markers-computed.tentative.html	needs CSS.supports
-scroll-target-group-computed.html	needs CSS.supports
-text-overflow-computed.html	needs CSS.supports
-webkit-box-computed.html	needs CSS.supports
-webkit-line-clamp-computed.html	needs CSS.supports
 [passing]
 block-ellipsis-invalid.html	e.style['block-ellipsis'] = "\\"first\\" \\"second\\"" should not set the property value
 block-ellipsis-invalid.html	e.style['block-ellipsis'] = "\\"string\\" no-ellipsis" should not set the property value
@@ -42,6 +28,7 @@ continue-invalid.html	e.style['continue'] = "none" should not set the property v
 continue-invalid.html	e.style['continue'] = "normal -webkit-legacy" should not set the property value
 continue-invalid.html	e.style['continue'] = "normal collapse" should not set the property value
 continue-invalid.html	e.style['continue'] = "normal discard" should not set the property value
+getComputedStyle-scroll-button.html	getComputedStyle() with invalid argument falls back cleanly and does not crash
 line-clamp-invalid.html	e.style['line-clamp'] = "-5" should not set the property value
 line-clamp-invalid.html	e.style['line-clamp'] = "-webkit-legacy" should not set the property value
 line-clamp-invalid.html	e.style['line-clamp'] = "0 -webkit-legacy" should not set the property value
@@ -63,6 +50,12 @@ overflow-clip-margin.html	e.style['overflow-clip-margin'] = "calc(100% - 0.5em)"
 overflow-clip-margin.html	e.style['overflow-clip-margin'] = "calc(100% - 50px)" should not set the property value
 overflow-clip-margin.html	e.style['overflow-clip-margin'] = "inset(10px)" should not set the property value
 overflow-clip-margin.html	e.style['overflow-clip-margin'] = "margin-box" should not set the property value
+overflow-computed.html	Property overflow-x value 'hidden'
+overflow-computed.html	Property overflow-x value 'scroll'
+overflow-computed.html	Property overflow-x value 'visible'
+overflow-computed.html	Property overflow-y value 'auto'
+overflow-computed.html	Property overflow-y value 'clip'
+overflow-computed.html	Property overflow-y value 'visible'
 overflow-invalid.html	e.style['overflow'] = "none" should not set the property value
 overflow-invalid.html	e.style['overflow'] = "visible clip auto" should not set the property value
 overflow-invalid.html	e.style['overflow-block'] = "hidden scroll" should not set the property value
@@ -132,11 +125,18 @@ scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable auto" should
 scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable both force" should not set the property value
 scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable both" should not set the property value
 scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable force" should not set the property value
+text-overflow-computed.html	Property text-overflow value 'clip'
+text-overflow-computed.html	Property text-overflow value 'ellipsis'
 text-overflow-invalid.html	e.style['text-overflow'] = "\\"marker string\\" clip clip" should not set the property value
 text-overflow-invalid.html	e.style['text-overflow'] = "auto" should not set the property value
 text-overflow-invalid.html	e.style['text-overflow'] = "clip ellipsis clip" should not set the property value
 text-overflow-valid.html	e.style['text-overflow'] = "clip" should set the property value
 text-overflow-valid.html	e.style['text-overflow'] = "ellipsis" should set the property value
+webkit-box-computed.html	display: flex; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+webkit-box-computed.html	display: inline-flex; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+webkit-line-clamp-computed.html	Property -webkit-line-clamp serializes to empty when longhand block-ellipsis is not ellipsis
+webkit-line-clamp-computed.html	Property -webkit-line-clamp serializes to empty when longhand continue is not -webkit-legacy
+webkit-line-clamp-computed.html	Property -webkit-line-clamp serializes to empty when longhand max-lines is not an integer
 webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "-5" should not set the property value
 webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "0" should not set the property value
 webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "1 -webkit-legacy" should not set the property value

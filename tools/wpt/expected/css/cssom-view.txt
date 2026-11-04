@@ -594,10 +594,6 @@ scrollWidthHeight-negative-margin-001.html	scrollWidth/Height with negative marg
 scrollWidthHeight-negative-margin-001.html	scrollWidth/Height with negative margins: overflow: clip
 scrollWidthHeight-negative-margin-001.html	scrollWidth/Height with negative margins: overflow: hidden
 scrollWidthHeight-negative-margin-001.html	scrollWidth/Height with negative margins: overflow: visible
-scrollWidthHeight-negative-margin-002.html	scrollHeight with negative margins: display:flow-root;overflow:clip;flex-direction:row;
-scrollWidthHeight-negative-margin-002.html	scrollHeight with negative margins: display:flow-root;overflow:visible;flex-direction:row;
-scrollWidthHeight-negative-margin-002.html	scrollWidth with negative margins: display:flow-root;overflow:clip;flex-direction:row;
-scrollWidthHeight-negative-margin-002.html	scrollWidth with negative margins: display:flow-root;overflow:visible;flex-direction:row;
 scrollWidthHeight-not-scrollable-fractional-zoom.html	scrollWidth equals clientWidth for a non-scrollable 202.30769231px box with 'zoom: 1.3'
 scrollWidthHeight-not-scrollable-fractional-zoom.html	scrollWidth equals clientWidth for a non-scrollable 202.66666667px box with 'zoom: 0.75'
 scrollWidthHeight-not-scrollable-fractional-zoom.html	scrollWidth equals clientWidth for a non-scrollable 203.2px box with 'zoom: 1.25'
