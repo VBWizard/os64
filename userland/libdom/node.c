@@ -111,6 +111,33 @@ static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
     return JS_DupValue(ctx, entry->value);
 }
 
+JSValue d_node_clone(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool deep,
+                     const os64_html_node_t *document)
+{
+    int64_t status;
+    DValue *entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
+    if (entry == NULL) return JS_EXCEPTION;
+    os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep, &status);
+    /* HTML's cloning steps carry a script's ALREADY STARTED to its copy. */
+    if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0) {
+        JSValue made = wrapper_attach(dom, ctx, entry, copy);
+        d_made_in(dom, copy, document);
+        /* [CEReactions]: the copy's elements with a definition come back
+         * upgraded (custom.c), which asks the document just recorded. */
+        if (d_custom_cloned(dom, ctx, copy) < 0) {
+            JS_FreeValue(ctx, made);
+            return JS_EXCEPTION;
+        }
+        return made;
+    }
+    if (copy != NULL) status = OS64_HTML_NO_MEMORY;
+    dom->values = entry->next;
+    dom->retained--;
+    JS_FreeValue(ctx, entry->value);
+    d_free(dom, entry);
+    return d_html_error(ctx, status);
+}
+
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     return d_wrap_constructed(dom, ctx, node, JS_UNDEFINED);
@@ -513,29 +540,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     if (magic == D_CLONE) {
         int deep = argc > 0 ? JS_ToBool(ctx, argv[0]) : 0;
         if (deep < 0) return JS_EXCEPTION;
-        int64_t status;
-        DValue *entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
-        if (entry == NULL) return JS_EXCEPTION;
-        os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep != 0, &status);
-        /* HTML's cloning steps carry a script's ALREADY STARTED to its copy,
-         * and DOM's give the copy the original's node document. */
-        if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0) {
-            JSValue made = wrapper_attach(dom, ctx, entry, copy);
-            d_made_in(dom, copy, d_node_document(dom, node));
-            /* [CEReactions]: the copy's elements with a definition come
-             * back upgraded (custom.c). */
-            if (d_custom_cloned(dom, ctx, copy) < 0) {
-                JS_FreeValue(ctx, made);
-                return JS_EXCEPTION;
-            }
-            return made;
-        }
-        if (copy != NULL) status = OS64_HTML_NO_MEMORY;
-        dom->values = entry->next;
-        dom->retained--;
-        JS_FreeValue(ctx, entry->value);
-        d_free(dom, entry);
-        return d_html_error(ctx, status);
+        return d_node_clone(dom, ctx, node, deep != 0, d_node_document(dom, node));
     }
     if (magic == D_QUERY_ONE || magic == D_QUERY_ALL) {
         if (argc < 1 || (node->kind != OS64_HTML_DOCUMENT && node->kind != OS64_HTML_ELEMENT &&

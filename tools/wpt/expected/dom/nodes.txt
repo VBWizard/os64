@@ -992,7 +992,16 @@ DOMImplementation-hasFeature.html	hasFeature("xml", null)
 DOMImplementation-hasFeature.html	hasFeature()
 DOMImplementation-hasFeature.html	hasFeature(null, "")
 DOMImplementation-hasFeature.html	hasFeature(undefined, "")
+Document-adoptNode-DocumentFragment-with-host.window.html	adoptNode() nested <template> elements: all owner documents update
+Document-adoptNode-DocumentFragment-with-host.window.html	adoptNode() plain DocumentFragment (no host): adopts and returns it
+Document-adoptNode-DocumentFragment-with-host.window.html	adoptNode() template.content into browsing-context document
+Document-adoptNode-DocumentFragment-with-host.window.html	adoptNode() template.content: adopts fragment + children, returns it
 Document-adoptNode-DocumentFragment-with-host.window.html	appendChild() template.content: moves children, fragment ownerDocument stays
+Document-adoptNode.html	Adopting a Document should throw.
+Document-adoptNode.html	Adopting an Element called ':good:times:' should work.
+Document-adoptNode.html	Adopting an Element called 'x<' should work.
+Document-adoptNode.html	Adopting an Element should adopt its Attr nodes.
+Document-adoptNode.html	Explicitly adopting a DocumentType should work.
 Document-adoptNode.html	Inserting an Element into another document should adopt its Attr nodes.
 Document-contentType/contentType/createDocument.html	document.implementation.createDocument: document.contentType === 'application/xhtml+xml'
 Document-contentType/contentType/createHTMLDocument.html	document.implementation.createHTMLDocument: document.contentType === 'text/html'
@@ -1484,6 +1493,10 @@ Document-getElementsByTagName.html	getElementsByTagName('*')
 Document-getElementsByTagName.html	getElementsByTagName() should be a live collection
 Document-implementation.html	Getting implementation off different documents
 Document-implementation.html	Getting implementation off the same document
+Document-importNode.html	False 'deep' argument.
+Document-importNode.html	No 'deep' argument.
+Document-importNode.html	True 'deep' argument.
+Document-importNode.html	Undefined 'deep' argument.
 DocumentFragment-constructor.html	Create a valid document DocumentFragment
 DocumentFragment-constructor.html	Sets the owner document to the current global object associated document
 DocumentFragment-getElementById.html	Empty string ID values
@@ -3086,6 +3099,7 @@ attributes.html	If attr’s element is neither null nor element, throw an InUseA
 attributes.html	Own property correctness with basic attributes
 attributes.html	Replacing an attr by itself
 attributes.html	Specified attributes should be accessible.
+attributes.html	Toggling element with inline style should make inline style disappear
 attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (setAttribute)
 attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (toggleAttribute)
 attributes.html	setAttribute should not change the order of previously set attributes.

@@ -404,9 +404,18 @@ static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
     return JS_DupValue(ctx, rec->child_nodes->value);
 }
 
-/* cloneNode: a detached Attr of the same name, namespace and value, in the
- * original's node document (DOM § 4.4, "clone a node"). */
-static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
+/* An Attr's node document: its element's, or for a detached one the one it
+ * records, the window's when it records none. */
+static const os64_html_node_t *attr_document(os64_dom_t *dom, const DAttr *rec)
+{
+    const os64_html_node_t *element = rec->entry->target;
+    if (element != NULL) return d_node_document(dom, element);
+    return rec->document != NULL ? rec->document : window_document(dom);
+}
+
+/* DOM § 4.4, "clone a node": a detached Attr of the same name, namespace
+ * and value, whose node document is `document`. */
+static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)
 {
     const os64_html_node_t *element = rec->entry->target;
     const char *value = element != NULL ? os64_html_attr(element, rec->name)->value :
@@ -414,13 +423,35 @@ static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
     size_t length = element != NULL ? os64_strlen(value) : rec->length;
     char *copy = copy_bytes(dom, value, length);
     if (copy == NULL) return d_error(ctx, "QuotaExceededError", "DOM attribute quota exceeded");
-    const os64_html_node_t *document = element != NULL ? d_node_document(dom, element) : rec->document;
     DAttr *made = attr_make(dom, ctx, rec->name, rec->ns);
     if (made == NULL) { d_free(dom, copy); return JS_EXCEPTION; }
     made->value = copy;
     made->length = length;
     made->document = document != window_document(dom) ? document : NULL;
     return JS_DupValue(ctx, made->entry->value);
+}
+
+JSValue d_attr_import(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const os64_html_node_t *document)
+{
+    DAttr *rec = attr_receiver(ctx, value);
+    return rec != NULL ? attr_clone(dom, ctx, rec, document) : JS_EXCEPTION;
+}
+
+/* An Attr on an element is taken off it first, through the door, as other
+ * browsers adopt one; DOM's adopt leaves it on its element with another
+ * node document, which an attached Attr here cannot have (its document is
+ * its element's). */
+int d_attr_adopt(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const os64_html_node_t *document)
+{
+    DAttr *rec = attr_receiver(ctx, value);
+    if (rec == NULL) return -1;
+    const os64_html_node_t *element = rec->entry->target;
+    if (element != NULL) {
+        int64_t status = d_set_attr(dom, element, rec->name, NULL, 0, true);
+        if (status < 0) { d_html_error(ctx, status); return -1; }
+    }
+    rec->document = document != window_document(dom) ? document : NULL;
+    return 0;
 }
 
 static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
@@ -467,9 +498,7 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     case A_SPECIFIED: return JS_TRUE;
     case A_NODE_TYPE: return JS_NewInt32(ctx, 2);
     case A_NO_NODE: return JS_NULL;
-    case A_OWNER_DOCUMENT:
-        return d_wrap(dom, ctx, element != NULL ? d_node_document(dom, element) :
-                                rec->document != NULL ? rec->document : window_document(dom));
+    case A_OWNER_DOCUMENT: return d_wrap(dom, ctx, attr_document(dom, rec));
     case A_BASE_URI:
         return d_base_uri(dom, ctx, element != NULL ? element :
                                     rec->document != NULL ? rec->document : window_document(dom));
@@ -493,7 +522,7 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         int deep = JS_ToBool(ctx, arg);
         if (deep < 0) return JS_EXCEPTION;
         /* Converting `deep` runs no page code a boolean could not. */
-        return attr_clone(dom, ctx, rec);
+        return attr_clone(dom, ctx, rec, attr_document(dom, rec));
     }
     case A_CONTAINS:
         if (JS_IsNull(arg) || JS_IsUndefined(arg)) return JS_FALSE;

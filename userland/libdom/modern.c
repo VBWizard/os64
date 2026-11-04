@@ -100,6 +100,9 @@ static const DModernRow kModern[] = {
      * shape holds them instead (tools/test_dom_modern.inc). */
     {(const char *const[]){NULL}, d_document_install},
     {(const char *const[]){"CustomEvent", NULL}, d_custom_event_install},
+    /* Event's composedPath, a member of Event's prototype and none of
+     * window's (as P1-Da's row). */
+    {(const char *const[]){NULL}, d_event_path_install},
     /* P2b. The clone is read and written through the encoding row's
      * DataView, the blob row's File and the exception row's DOMException,
      * all installed above. */

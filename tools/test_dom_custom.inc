@@ -125,6 +125,7 @@ static void custom_reactions_cases(void)
         "Element.className", "Element.innerHTML", "Element.insertAdjacentHTML", "Element.insertAdjacentElement",
         "Element.before", "Element.after", "Element.remove", "Element.replaceWith", "Element.append",
         "Element.prepend", "Element.replaceChildren", "Document.createElement", "Document.createElementNS",
+        "Document.importNode", "Document.adoptNode",
         "Document.title", "DOMTokenList.add", "DOMTokenList.remove", "DOMTokenList.toggle", "DOMTokenList.replace",
         "DOMTokenList.value", "CSSStyleDeclaration.cssText", "CSSStyleDeclaration.setProperty",
         "CSSStyleDeclaration.removeProperty", "CSSStyleDeclaration.*", "Attr.value", "NamedNodeMap.setNamedItem",
@@ -416,6 +417,31 @@ static void dom_custom_cases(void)
     custom_script(&f, CE_ASSERT
         "assert(L.join('|')==='disc|adopted false false|conn true',L.join('|'));",
         "custom-adopted-back");
+    /* adoptNode: the removal's disconnection, then the adoption, both
+     * before it returns; a node moved to a document is not adopted again
+     * when it is put in that document, nor when it moves within it. */
+    custom_script(&f, CE_ASSERT
+        "L=[];var a=document.querySelector('x-ad');"
+        "assert(otherDoc.adoptNode(a)===a&&a.parentNode===null&&a.ownerDocument===otherDoc,'adopted');"
+        "assert(L.join('|')==='disc|adopted true true',L.join('|'));L=[];"
+        "otherDoc.body.appendChild(a);assert(L.join('|')==='conn false',L.join('|'));L=[];"
+        "otherDoc.adoptNode(a);assert(L.join('|')==='disc','the same document: '+L.join('|'));L=[];"
+        "assert(document.adoptNode(a)===a&&a.ownerDocument===document);"
+        "assert(L.join('|')==='adopted false false','detached, adopted back: '+L.join('|'));",
+        "custom-adopt-node");
+    /* importNode: a template's contents, which no definition reaches, come
+     * back upgraded in the window's document and plain in one with no
+     * registry. */
+    custom_script(&f, CE_ASSERT
+        "L=[];var t=document.createElement('template');"
+        "t.innerHTML='<x-ad></x-ad>';"
+        "assert(!(t.content.firstChild instanceof Ad),'a template\\'s contents are not upgraded');"
+        "var n=document.importNode(t.content,true);"
+        "assert(n.firstChild instanceof Ad&&n.firstChild.ownerDocument===document,'imported upgraded');"
+        "assert(!(t.content.firstChild instanceof Ad),'the original stays as it was');"
+        "assert(!(otherDoc.importNode(t.content,true).firstChild instanceof Ad),'nothing to upgrade by there');"
+        "assert(L.length===0,'a copy is not adopted: '+L.join('|'));",
+        "custom-import-node");
     /* whenDefined's promise is resolved before define's upgrades run, so
      * its handlers come before what a constructor queued (Codex #407). */
     custom_script(&f, CE_ASSERT

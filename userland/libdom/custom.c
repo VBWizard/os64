@@ -808,6 +808,18 @@ int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *cop
     return d_reactions_pop(dom, ctx);
 }
 
+/* Queued, not run: adoptNode is [CEReactions], and its own queue already
+ * holds the disconnectedCallbacks its removal queued, which run first. */
+void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *from,
+                      const os64_html_node_t *to)
+{
+    if (dom->custom == NULL || dom->custom->definitions == NULL) return;
+    const os64_html_node_t *documents[2] = {from, to};
+    for (const os64_html_node_t *at = root; at != NULL; at = d_walk_next(root, at))
+        if (at->kind == OS64_HTML_ELEMENT && at->ce == OS64_HTML_CE_CUSTOM)
+            enqueue_callback(dom, at, CB_ADOPTED, NULL, documents);
+}
+
 /* ── The registry (HTML § 4.13.4) ────────────────────────────────────── */
 
 enum { M_DEFINE, M_GET, M_GET_NAME, M_WHEN_DEFINED, M_UPGRADE };

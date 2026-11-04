@@ -504,6 +504,7 @@ EventTarget-add-listener-platform-object.html	addEventListener with a platform o
 EventTarget-add-remove-listener.any.html	Removing an event listener without explicit capture arg should succeed
 EventTarget-addEventListener.any.html	Adding a null event listener should succeed
 EventTarget-constructible.any.html	A constructed EventTarget can be used as expected
+EventTarget-constructible.any.html	A constructed EventTarget implements dispatch correctly
 EventTarget-constructible.any.html	EventTarget can be subclassed
 EventTarget-dispatchEvent-returnvalue.html	Return value of EventTarget.dispatchEvent() affected by preventDefault().
 EventTarget-dispatchEvent-returnvalue.html	Return value of EventTarget.dispatchEvent() affected by returnValue.
@@ -613,4 +614,5 @@ remove-all-listeners.html	Nested usage of once listeners should work.
 remove-all-listeners.html	Removing all listeners and then adding a new one should work.
 scrolling/scroll-event-fired-to-element.html	scrollTop and scrollLeft being set with invalid scroll offset.
 scrolling/scroll-event-fired-to-element.html	scrollTop and scrollLeft being set with the same value.
+window-composed-path.html	window target has an empty path after dispatch
 window-event-restored-after-throwing-onerror.html	window.event is restored after a throwing window.onerror handler
