@@ -476,6 +476,7 @@ void os64_dom_drain(os64_dom_t *dom)
     d_animation_drain(dom);
     d_pointer_drain(dom);
     d_observers_drain(dom);
+    d_intersections_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -506,6 +507,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_report_free(dom);
     d_custom_free(dom);
     d_observers_free(dom);
+    d_intersections_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);
@@ -527,9 +529,11 @@ size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes :
  * timer callbacks with their arguments, what the requests out hold, the
  * failures waiting for their events (report.c), the windows that posted
  * the messages waiting (message.c), idle callbacks (idle.c) and frame callbacks (animation.c),
- * and registered mutation observers (observer.c). */
+ * registered mutation observers (observer.c), and the intersection observers that observe
+ * something or have entries waiting (intersection.c). */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
     return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
-        dom->pending_held + dom->messages_held + dom->idle_live + dom->animation_count + dom->observers_held : 0;
+        dom->pending_held + dom->messages_held + dom->idle_live + dom->animation_count + dom->observers_held +
+        dom->intersections_held : 0;
 }

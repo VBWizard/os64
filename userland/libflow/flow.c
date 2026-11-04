@@ -3717,6 +3717,44 @@ const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *
     return tree != NULL ? f_map_get(&tree->first, node) : NULL;
 }
 
+const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_html_node_t *node)
+{
+    if (tree == NULL || node == NULL || node->kind != OS64_HTML_ELEMENT)
+        return NULL;
+    const FStyled *st = f_style_of(tree->styles, node);
+    const os64_html_node_t *parent = node->parent;
+    while (parent != NULL && parent->kind != OS64_HTML_ELEMENT)
+        parent = parent->kind == OS64_HTML_DOCUMENT ? NULL : parent->parent;
+    if (st == NULL || parent == NULL)
+        return NULL;
+    flow_position_t position = st->style.position;
+    if (position != FLOW_POSITION_ABSOLUTE && position != FLOW_POSITION_FIXED)
+        return parent;
+    // An absolute or fixed box's containing block is its parent's anchor
+    // (FStyled.anchor, fixed_anchor): the nearest element that can be one.
+    const FStyled *of = f_style_of(tree->styles, parent);
+    if (of == NULL)
+        return NULL;
+    return position == FLOW_POSITION_FIXED ? of->fixed_anchor : of->anchor;
+}
+
+bool flow_box_clips(const flow_box_t *box, bool x_axis)
+{
+    if (box == NULL || box->node == NULL || box->style == NULL || box->pseudo != 0 || box->parent == NULL)
+        return false;
+    if (box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_TEXT || box->kind == FLOW_BOX_LINE ||
+        box->kind == FLOW_BOX_MARKER)
+        return false;
+    // The root's overflow, and the body's when the root's is visible, is
+    // the viewport's (f_viewport_overflow): the box itself cuts nothing.
+    const flow_box_t *root = box->parent->parent == NULL ? box->parent : NULL;
+    if (root != NULL && box->node->kind == OS64_HTML_ELEMENT && box->node->tag == OS64_HTML_TAG_BODY &&
+        root->style != NULL && root->style->overflow_x == FLOW_OVERFLOW_VISIBLE &&
+        root->style->overflow_y == FLOW_OVERFLOW_VISIBLE)
+        return false;
+    return f_overflow_clips(x_axis ? box->style->overflow_x : box->style->overflow_y);
+}
+
 int32_t flow_nscrollers(const flow_tree_t *tree)
 {
     return tree != NULL ? tree->nscrollers : 0;

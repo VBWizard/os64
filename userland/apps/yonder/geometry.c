@@ -1,5 +1,6 @@
 #include "geometry.h"
 #include <limits.h>
+#include <os64/mem.h>
 #include <os64/str.h>
 
 typedef struct {
@@ -164,6 +165,173 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
         out->client_width = css_integer(w > 0 ? w : 0, zoom);
         out->client_height = css_integer(h > 0 ? h : 0, zoom);
     }
+    return true;
+}
+
+/* ── Intersection observations (INTERSECTION_OBSERVER.md) ─────────────── */
+
+// The elements a batch asks about, each once, with the bounds the walk
+// gathers for it: open addressing over a power of two at least twice their
+// number, so a probe ends at an empty slot.
+typedef struct {
+    const os64_html_node_t *node;
+    const flow_box_t *principal, *first;
+    Bounds visual;
+    os64_gui_rect_t first_visual;
+} Asked;
+
+typedef struct {
+    Asked *slots;
+    size_t mask;
+} AskedSet;
+
+static size_t asked_hash(const os64_html_node_t *node, size_t mask)
+{
+    uintptr_t v = (uintptr_t)node >> 4;
+    v ^= v >> 17;
+    return (size_t)(v * 0x9E3779B97F4A7C15ull) & mask;
+}
+
+static Asked *asked_find(const AskedSet *set, const os64_html_node_t *node)
+{
+    for (size_t i = asked_hash(node, set->mask);; i = (i + 1) & set->mask) {
+        if (set->slots[i].node == node) return &set->slots[i];
+        if (set->slots[i].node == NULL) return NULL;
+    }
+}
+
+static void asked_add(AskedSet *set, const flow_tree_t *tree, const os64_html_node_t *node)
+{
+    if (node == NULL) return;
+    for (size_t i = asked_hash(node, set->mask);; i = (i + 1) & set->mask) {
+        if (set->slots[i].node == node) return;
+        if (set->slots[i].node == NULL) {
+            set->slots[i].node = node;
+            set->slots[i].principal = flow_box_for(tree, node);
+            return;
+        }
+    }
+}
+
+// Whether `box` is one of its element's own border-box fragments, as
+// yonder_geometry_snapshot counts them: a table's caption is the table's;
+// a text, a marker, a line and a pseudo-element's box are no element's.
+static const os64_html_node_t *fragment_of(const flow_box_t *box)
+{
+    if (box->pseudo != 0 || box->kind == FLOW_BOX_TEXT || box->kind == FLOW_BOX_MARKER ||
+        box->kind == FLOW_BOX_LINE)
+        return NULL;
+    return box->node;
+}
+
+static void css_rect(const Bounds *b, flow_point_t scroll, double scale, double out[4])
+{
+    out[0] = (double)(b->left - scroll.x) * scale;
+    out[1] = (double)(b->top - scroll.y) * scale;
+    out[2] = (double)(b->right - scroll.x) * scale;
+    out[3] = (double)(b->bottom - scroll.y) * scale;
+}
+
+// A box's padding box, where it is painted, in document pixels.
+static Bounds padding_bounds(const flow_box_t *box, flow_point_t scroll)
+{
+    os64_gui_rect_t r = flow_box_doc_rect(box, scroll);
+    Bounds b = {true, (int64_t)r.x + border(box, FLOW_LEFT), (int64_t)r.y + border(box, FLOW_TOP),
+                (int64_t)r.x + r.w - border(box, FLOW_RIGHT), (int64_t)r.y + r.h - border(box, FLOW_BOTTOM)};
+    if (b.right < b.left) b.right = b.left;
+    if (b.bottom < b.top) b.bottom = b.top;
+    return b;
+}
+
+static bool connected(const os64_html_document_t *document, const os64_html_node_t *node)
+{
+    if (!os64_html_owns_node(document, node)) return false;
+    while (node->parent != NULL) node = node->parent;
+    return node == document->document;
+}
+
+bool yonder_intersections(const os64_html_document_t *document, const flow_tree_t *tree,
+    os64_dom_intersection_t *items, size_t count, uint32_t zoom, flow_point_t scroll)
+{
+    if (document == NULL || tree == NULL || flow_incomplete(tree)) return false;
+    zoom = zoom != 0 ? zoom : 1000;
+    double scale = 1000.0 / zoom;
+    size_t cap = 16;
+    while (cap < count * 4 && cap < ((size_t)1 << 40)) cap <<= 1;
+    AskedSet set = {os64_calloc(cap, sizeof(Asked)), cap - 1};
+    if (set.slots == NULL) return false;
+    for (size_t i = 0; i < count; i++) {
+        if (items[i].target != NULL && connected(document, items[i].target)) asked_add(&set, tree, items[i].target);
+        if (items[i].root != NULL && connected(document, items[i].root)) asked_add(&set, tree, items[i].root);
+    }
+    // One walk of the boxes: each asked element's fragments joined, a
+    // table's caption joined to the table's as well as its own.
+    for (const flow_box_t *box = flow_root(tree); box != NULL; box = next_box(box)) {
+        const os64_html_node_t *node = fragment_of(box);
+        if (node == NULL) continue;
+        Asked *own = asked_find(&set, node);
+        Asked *table = box->kind == FLOW_BOX_CAPTION && box->parent != NULL && box->parent->kind == FLOW_BOX_TABLE &&
+                       box->parent->node != NULL ? asked_find(&set, box->parent->node) : NULL;
+        if (table != NULL && table->principal != box->parent) table = NULL;
+        if (own == NULL && table == NULL) continue;
+        os64_gui_rect_t rect = flow_box_doc_rect(box, scroll);
+        Asked *joined[2] = {own, table};
+        for (int j = 0; j < 2; j++) {
+            Asked *a = joined[j];
+            if (a == NULL) continue;
+            if (a->first == NULL) {
+                a->first = box;
+                a->first_visual = rect;
+            }
+            if (rect.w > 0 && rect.h > 0) include(&a->visual, rect);
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
+        os64_dom_intersection_t *it = &items[i];
+        it->boxed = it->contained = it->root_boxed = false;
+        Asked *t = it->target != NULL ? asked_find(&set, it->target) : NULL;
+        if (t == NULL || t->first == NULL) continue;
+        if (!t->visual.present) include(&t->visual, t->first_visual);
+        it->boxed = true;
+        css_rect(&t->visual, scroll, scale, it->rect);
+        // The clips of the chain up to the root, the root's own left out.
+        Bounds clip = {true, -INT64_MAX / 4, -INT64_MAX / 4, INT64_MAX / 4, INT64_MAX / 4};
+        bool cut_x = false, cut_y = false;
+        const os64_html_node_t *at = flow_clip_parent(tree, it->target);
+        for (; at != NULL && at != it->root; at = flow_clip_parent(tree, at)) {
+            const flow_box_t *box = flow_box_for(tree, at);
+            bool x = flow_box_clips(box, true), y = flow_box_clips(box, false);
+            if (!x && !y) continue;
+            Bounds pad = padding_bounds(box, scroll);
+            if (x) {
+                if (pad.left > clip.left) clip.left = pad.left;
+                if (pad.right < clip.right) clip.right = pad.right;
+                cut_x = true;
+            }
+            if (y) {
+                if (pad.top > clip.top) clip.top = pad.top;
+                if (pad.bottom < clip.bottom) clip.bottom = pad.bottom;
+                cut_y = true;
+            }
+        }
+        it->contained = it->root == NULL || at == it->root;
+        css_rect(&clip, scroll, scale, it->clip);
+        if (!cut_x) it->clip[0] = -OS64_DOM_UNCLIPPED, it->clip[2] = OS64_DOM_UNCLIPPED;
+        if (!cut_y) it->clip[1] = -OS64_DOM_UNCLIPPED, it->clip[3] = OS64_DOM_UNCLIPPED;
+        if (it->root == NULL) continue;
+        Asked *r = asked_find(&set, it->root);
+        if (r == NULL || r->first == NULL) continue;
+        it->root_boxed = true;
+        const flow_box_t *own = r->principal != NULL ? r->principal : r->first;
+        if (flow_box_clips(own, true) || flow_box_clips(own, false)) {
+            Bounds pad = padding_bounds(own, scroll);
+            css_rect(&pad, scroll, scale, it->root_rect);
+        } else {
+            if (!r->visual.present) include(&r->visual, r->first_visual);
+            css_rect(&r->visual, scroll, scale, it->root_rect);
+        }
+    }
+    os64_free(set.slots);
     return true;
 }
 

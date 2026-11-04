@@ -1119,6 +1119,8 @@ static bool page_model_refresh(Page *p);
 static void sheets_restage(Page *p);
 static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out);
+static bool script_intersections(void *opaque, os64_dom_intersection_t *items, size_t count,
+                                 os64_dom_geometry_stats_t *cost);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static void page_timeline(Page *p);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
@@ -1134,6 +1136,12 @@ static bool page_rebuild_owed(const Page *p)
     return p->rendered_version != 0 && p->rendered_version != os64_html_version(page_doc(p));
 }
 
+// Counts the trees any Page has been given, so a reader can tell a new
+// layout from the old one even where the new tree has the old one's
+// address; and the animation ticks that moved boxes in the shown one
+// (tick_page). What intersections_turn reads for "something moved".
+static uint64_t s_trees_given, s_ticks_moved;
+
 // The tree a Page holds from now on, and with it the animations its layout
 // built (flow_timeline_commit): the old tree goes first, since it points
 // into the timeline they replace.
@@ -1141,6 +1149,7 @@ static void page_show(Page *p, flow_tree_t *tree)
 {
     flow_free(p->tree);
     p->tree = tree;
+    s_trees_given++;
     flow_timeline_commit(&p->timeline, tree);
     webfonts_families_shown(p);
 }
@@ -1435,6 +1444,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     if (reclaim != NULL && reclaim != p) {
         flow_free(p->tree);
         p->tree = fresh;
+        s_trees_given++;
     } else {
         page_show(p, fresh);
     }
@@ -7638,8 +7648,10 @@ static void tick_page_run(uint64_t now, bool frame)
         (void)lay_out_shown(true, LAID_FOR_TICK);
         return;
     }
-    if (moved)
+    if (moved) {
         forms_place();
+        s_ticks_moved++;
+    }
     if (frame) {
         g.ticked = true;
         g.tick_painting = true;
@@ -9121,7 +9133,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
-        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .opaque = doc,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
+        .intersections = script_intersections, .opaque = doc,
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
@@ -10228,7 +10241,8 @@ static bool scripts_owed(const yonder_scripts_t *host)
     const Page *p = page_of_host(host);
     uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
-           yonder_scripts_images_pending(host) || yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now;
+           yonder_scripts_images_pending(host) || yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now ||
+           yonder_scripts_intersections_due(host);
 }
 
 // The measured layout of the page whose document is `doc`, when that page
@@ -10282,6 +10296,78 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
     return ready && ended >= began;
+}
+
+// ── Intersection observations (INTERSECTION_OBSERVER.md) ────────────────
+
+// The batch's provider, whose opaque is its page's document: answered only
+// for the page on screen and only from the layout that is about to be
+// painted, never one made for it — the step is part of the rendering, not
+// a script's reach for geometry. False otherwise, and the step is tried
+// again at the next turn (intersections_turn). `answered` says whether
+// the last step's batch was.
+static bool s_intersections_answered;
+
+static bool script_intersections(void *opaque, os64_dom_intersection_t *items, size_t count,
+                                 os64_dom_geometry_stats_t *cost)
+{
+    (void)cost;
+    const os64_html_document_t *doc = opaque;
+    if (doc == NULL || doc != page_doc(&g.page) || g.page.tree == NULL || page_rebuild_owed(&g.page))
+        return false;
+    uint32_t zoom = g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom;
+    s_intersections_answered = yonder_intersections(doc, g.page.tree, items, count, zoom,
+                                                    (flow_point_t){g.sx, g.sy});
+    return s_intersections_answered;
+}
+
+// What an observation reads, as it stood when the last batch was answered.
+typedef struct {
+    uint64_t trees, ticks, scrolls;
+    int32_t sx, sy, w, h;
+    uint32_t zoom;
+} Observed;
+static Observed s_observed;
+
+static Observed observed_now(void)
+{
+    Observed o = {.trees = s_trees_given, .ticks = s_ticks_moved, .sx = g.sx, .sy = g.sy,
+                  .w = g.view.bounds.w, .h = g.view.bounds.h, .zoom = g.zoom};
+    // The boxes' scrolls folded into one number: any that moved moves it,
+    // but for a collision as unlikely as two scrolls cancelling exactly.
+    for (int32_t i = 0; i < flow_nscrollers(g.page.tree); i++) {
+        flow_point_t at = flow_scroll_at(g.page.tree, i);
+        o.scrolls = o.scrolls * 1000003u + (uint64_t)(uint32_t)at.x * 65599u + (uint32_t)at.y;
+    }
+    return o;
+}
+
+// THE INTERSECTION STEP (INTERSECTION_OBSERVER.md § 5, rule 2): the
+// rendering step's, after the animation frame callbacks and the layout
+// they asked for (script_turn) and a CSS animation's (motion_tick), and
+// before the paint, when something an observation reads has moved since
+// the last batch was answered — a new layout, a tick that moved boxes,
+// the page's or a box's scroll, the zoom, the view's size — or a target
+// waits for its first. Not while the window is covered, as the animation
+// frames are not. It only queues: the callbacks run in the delivery task
+// (script_turn). True when this step ran and that task waits, which the
+// loop rings itself back for; a task waiting from an earlier step is
+// scripts_owed's.
+static bool intersections_turn(void)
+{
+    yonder_scripts_t *s = g.page.scripts;
+    if (!g.scripts_on || s == NULL || g.covered || yonder_scripts_intersections_observed(s) == 0)
+        return false;
+    Observed now = observed_now(), was = s_observed;
+    bool moved = now.trees != was.trees || now.ticks != was.ticks || now.scrolls != was.scrolls ||
+                 now.sx != was.sx || now.sy != was.sy || now.w != was.w || now.h != was.h || now.zoom != was.zoom;
+    if (!moved && !yonder_scripts_intersections_owed(s))
+        return false;
+    s_intersections_answered = false;
+    bool due = yonder_scripts_intersections_update(s);
+    if (s_intersections_answered)
+        s_observed = now;
+    return due;
 }
 
 // ── The session's entries (MODERN_WEB.md § Slice 1b) ───────────────────
@@ -11102,6 +11188,12 @@ static bool script_turn(void)
     if (!ran) {
         what = "image";
         ran = yonder_scripts_image_fire(g.page.scripts, &out);
+    }
+    // The intersection observers' delivery task, which the last rendering
+    // step queued (intersections_turn).
+    if (!ran) {
+        what = "intersection-observer";
+        ran = yonder_scripts_intersections_fire(g.page.scripts, &out);
     }
     if (!ran)
         ran = queued_task(g.page.scripts, &what, &out);
@@ -16259,6 +16351,7 @@ int main(int argc, char **argv)
         downloads_turn();
         pictures_settle();
         title_follow();
+        bool observed = intersections_turn();
         before_paint();
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
@@ -16269,7 +16362,7 @@ int main(int argc, char **argv)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (s_bodies_asked)
             (void)os64_gui_event_ring(g.win, BELL_BODY);
-        if (coming_more || script_followup(scripts_ready, painted_frame))
+        if (coming_more || observed || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         exit_follow();
         // A task may have set or cleared a timer, and a frame for an

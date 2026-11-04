@@ -5021,7 +5021,9 @@ static void loop_view_off(void) {
         "modern off: nothing is dispatched");
     loop_drop();
 }
+#include "test_yonder_intersections.inc"
 static void loop_view_cases(void) {
+    io_cases();
     loop_view_computed();
     loop_view_scroll();
     loop_view_media();
@@ -11272,6 +11274,14 @@ int main(void)
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"canvas: text released");
         check(live==0,"canvas: heap empty");
         printf("yonder canvas: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_IO_ONLY")) {
+        io_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"io: text released");
+        check(live==0,"io: heap empty");
+        printf("yonder intersections: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_ANIMATION_ONLY")) {

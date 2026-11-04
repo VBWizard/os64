@@ -56,6 +56,10 @@ typedef struct {
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
     os64_dom_svg_hit_provider_t svg_hit;
+    // The intersection observations' batch (INTERSECTION_OBSERVER.md),
+    // given `opaque`: answered only from a layout already current, false
+    // when there is none. NULL: the page's observers never observe.
+    os64_dom_intersections_provider_t intersections;
     void *opaque;
     // The window's view, the computed style's provider (given `opaque`)
     // and the session's history, for the Modern Web arc's surface
@@ -378,6 +382,16 @@ bool yonder_scripts_view_step(yonder_scripts_t *scripts, os64_js_outcome_t *outc
 // between tasks.
 #define YONDER_SCRIPTS_VIEW_CADENCE_MS 16
 bool yonder_scripts_view_due(const yonder_scripts_t *scripts);
+// INTERSECTION OBSERVATIONS (INTERSECTION_OBSERVER.md; dom.h): how many
+// targets the page observes and whether one waits for its first
+// observation; the step, which runs no script, true when entries wait;
+// and the delivery task, one a call, false when none ran (its outcome
+// judged as a task's).
+size_t yonder_scripts_intersections_observed(const yonder_scripts_t *scripts);
+bool yonder_scripts_intersections_owed(const yonder_scripts_t *scripts);
+bool yonder_scripts_intersections_update(yonder_scripts_t *scripts);
+bool yonder_scripts_intersections_due(const yonder_scripts_t *scripts);
+bool yonder_scripts_intersections_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 // Whether the page asked to keep its own scroll across its entries
 // (history.scrollRestoration = "manual").
 bool yonder_scripts_scroll_manual(const yonder_scripts_t *scripts);

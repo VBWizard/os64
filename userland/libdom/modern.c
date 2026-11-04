@@ -84,6 +84,7 @@ static const DModernRow kModern[] = {
     /* After the encoding row, whose DataView it tells a view by. */
     {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
     {(const char *const[]){"DOMPointReadOnly", "DOMPoint", NULL}, d_point_install},
+    {(const char *const[]){"DOMRectReadOnly", "DOMRect", NULL}, d_rect_install},
     {(const char *const[]){"SVGGraphicsElement", "SVGGeometryElement", NULL}, d_svg_geometry_install},
     {(const char *const[]){"ImageData", NULL}, d_image_data_install},
     {(const char *const[]){"CanvasRenderingContext2D", "CanvasGradient", "TextMetrics", "Path2D", NULL}, d_canvas_install},
@@ -112,6 +113,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
+    /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its
+     * entries carry. */
+    {(const char *const[]){"IntersectionObserver", "IntersectionObserverEntry", NULL}, d_intersections_install},
     /* 0f's node row: members of Node's, Attr's, Text's and a template's
      * prototypes, none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},
