@@ -190,6 +190,16 @@ Chris put it in this slice, 2026-11-04). These share no state with each
 other, but they share the reviewer and they are each too small to be a
 round of their own.
 
+**Slice B's last task — TreeWalker, NodeIterator and NodeFilter** (moved
+here from Slice D by Chris, 2026-11-04, after a corpus count). In the P5's
+11/04 records `createTreeWalker` kills a social news site's feed (14
+records) and one other site (1 record), and `NodeFilter` GitHub's focus walker
+(12); across both corpus pulls 28 of 194 hosts call `createTreeWalker`, and
+Lit's template clone is `importNode` followed by a walker, with no shadow
+root involved. DOM § 6's walkers traverse one node tree: a shadow root is
+no child of its host, so a walker never enters one, and shadow DOM does
+not reshape them. Its own PR, after the others.
+
 **Slice C — the merges (#460, #461, #462, #463, #464).** Already done,
 Codex clean, waiting on Chris's P5 test. No developer needed; just the
 order (each stacks on the last).
@@ -197,9 +207,9 @@ order (each stacks on the last).
 **Slice D — Shadow DOM + ElementInternals (one developer, design doc
 first, Fable review).** The doc answers § 4's cut question with corpus
 numbers before anyone writes `attachShadow`. ElementInternals can be its
-own PR inside the slice, landing first. TreeWalker/NodeIterator belongs
-here too, not in B: a walker that must one day cross shadow boundaries
-is designed with them in mind or rewritten.
+own PR inside the slice, landing first. (TreeWalker and NodeIterator were
+here, for a walker designed with shadow boundaries in mind; they moved to
+the end of Slice B, which says why.)
 
 **Slice E — PerformanceObserver as an honest stub (optional, XS).**
 Accepts observers, `supportedEntryTypes` says what exists (`mark`,
