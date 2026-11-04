@@ -861,4 +861,14 @@ xmlhttprequest-eventtarget.htm	XMLHttpRequest: implements EventTarget
 xmlhttprequest-network-error-sync.htm	XMLHttpRequest: members during network errors (sync)
 xmlhttprequest-network-error.htm	XMLHttpRequest: members during network errors
 xmlhttprequest-sync-block-scripts.html	Check that while a sync XHR is in flight async script loads don't complete and run script
+xmlhttprequest-timeout-aborted.html?aborted immediately after send()	Timeout test: No events should fire for an unsent, unaborted request
+xmlhttprequest-timeout-aborted.html?aborted immediately after send()	Timeout test: time to abort is -1, timeout set at 2000
+xmlhttprequest-timeout-aborted.html?call abort() after TIME_NORMAL_LOAD	Timeout test: No events should fire for an unsent, unaborted request
+xmlhttprequest-timeout-aborted.html?call abort() after TIME_NORMAL_LOAD	Timeout test: time to abort is -1, timeout set at 2000
+xmlhttprequest-timeout-aborted.html?only open()ed, not aborted	Timeout test: No events should fire for an unsent, unaborted request
+xmlhttprequest-timeout-aborted.html?only open()ed, not aborted	Timeout test: time to abort is -1, timeout set at 2000
+xmlhttprequest-timeout-synconmain.html?timeout after open	Timeout test: Synchronous XHR must not allow a timeout to be set - calling open() after timeout is set must throw
+xmlhttprequest-timeout-synconmain.html?timeout after open	Timeout test: Synchronous XHR must not allow a timeout to be set - setting timeout must throw
+xmlhttprequest-timeout-synconmain.html?timeout before open	Timeout test: Synchronous XHR must not allow a timeout to be set - calling open() after timeout is set must throw
+xmlhttprequest-timeout-synconmain.html?timeout before open	Timeout test: Synchronous XHR must not allow a timeout to be set - setting timeout must throw
 xmlhttprequest-unsent.htm	XMLHttpRequest: members during UNSENT
