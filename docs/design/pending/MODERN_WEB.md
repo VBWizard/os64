@@ -429,9 +429,10 @@ Chris promotes it by name.
   116 of the corpus's 415 records met it. INTERSECTION_OBSERVER.md is the
   design. IO1 is built: libdom's arithmetic over one batch of geometry from
   yonder's layout a rendering step, run after the animation frames, with
-  `DOMRect` beside it. ResizeObserver is the next small slice on the same
-  step; what IO1 booked is DEBTS.md's. Oracle: WPT
-  `intersection-observer/`. Opus.
+  `DOMRect` beside it. ResizeObserver (RO1, § 11 of the same design) is
+  built on the same batch shape with a step of its own, one a frame, that
+  runs its callbacks inside it. What both booked is DEBTS.md's. Oracles:
+  WPT `intersection-observer/` and `resize-observer/`. Opus.
 
 ## How the slices run side by side (2026-10-21)
 

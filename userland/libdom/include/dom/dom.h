@@ -875,6 +875,41 @@ uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
  * refused the batch (the step observed nothing, and is owed again as it
  * was). */
 bool os64_dom_intersections_update(os64_dom_t *dom);
+/* RESIZE OBSERVATIONS (Resize Observer 1; INTERSECTION_OBSERVER.md § 11):
+ * the binding keeps the observers, the host answers every observed target's
+ * sizes in one call from a layout it makes current, in CSS pixels but for
+ * `device`. Unlike the intersection batch, this provider MAY lay the page
+ * out: its second round must see what the first round's callbacks changed. */
+typedef struct {
+    /* In: an element of the binding's document. */
+    const os64_html_node_t *target;
+    /* Out. `boxed`: it is in the document and has a box; false, and the
+     * rest is unread (every size 0). Width then height: the border box,
+     * the content box, the content box in whole device pixels, and the
+     * padding's left and top (the content rect's place). */
+    bool boxed;
+    double border[2], content[2], device[2], padding[2];
+} os64_dom_resize_t;
+typedef bool (*os64_dom_resizes_provider_t)(void *opaque, os64_dom_resize_t *items, size_t count,
+                                           os64_dom_geometry_stats_t *cost);
+void os64_dom_set_resizes(os64_dom_t *dom, os64_dom_resizes_provider_t provider, void *opaque);
+/* How many targets the page's resize observers observe, and whether a step
+ * is owed whether or not anything was laid out: a target waits for its
+ * first report, the last step's loop passed one over (its loop error),
+ * which the next step reports, or the last step left work undone (the
+ * provider refused, or a callback's entries could not be made), so what
+ * it did not measure or deliver waits for the next. */
+size_t os64_dom_resizes_observed(const os64_dom_t *dom);
+bool os64_dom_resizes_owed(const os64_dom_t *dom);
+/* THE RESIZE STEP, the standard's loop as ONE task: gather what moved,
+ * broadcast it to the callbacks, ask the provider again, gather deeper,
+ * until nothing is active; then the loop error, an ErrorEvent at window,
+ * when an observation was passed over. The host calls it in its rendering
+ * step after the animation frame callbacks and before the intersection
+ * step, when it laid the page out since the last or one is owed. True
+ * when a task ran, its outcome filled; false when nothing had moved, or the
+ * provider refused. */
+bool os64_dom_resizes_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* "NOTIFY INTERSECTION OBSERVERS": whether its task is queued, and the
  * task: each observer with entries, in the order the page made them,
  * handed them; true when it ran, its outcome filled. Owner thread, between

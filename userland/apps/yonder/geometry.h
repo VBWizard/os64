@@ -18,6 +18,13 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
 bool yonder_intersections(const os64_html_document_t *document, const flow_tree_t *tree,
     os64_dom_intersection_t *items, size_t count, uint32_t zoom, flow_point_t scroll);
 
+/* The resize observations' batch (os64_dom_resizes_provider_t) answered
+ * from a current layout laid out at `zoom`: each target's border box,
+ * content box and padding offset in CSS pixels, its content box in device
+ * pixels, read off its own box. False when the layout is incomplete. */
+bool yonder_resizes(const os64_html_document_t *document, const flow_tree_t *tree, os64_dom_resize_t *items,
+                    size_t count, uint32_t zoom);
+
 /* Resolve an image-map region in unscaled CSS image-content coordinates. */
 const os64_html_node_t *yonder_image_map_hit(const os64_html_document_t *document,
     const os64_html_node_t *image, double x, double y);

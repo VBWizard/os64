@@ -212,9 +212,9 @@ geometry and view providers, and not a new mechanism.
   until frames share a rendering step).
 - `<img loading="lazy">` built on the same step. yonder loads every
   picture now, which is correct, only eager.
-- **ResizeObserver.** It is the same step and the same batch, asking for a
-  box's size instead of its intersection: the small slice right after this
-  one.
+- **ResizeObserver.** The same batch, asking for a box's size instead of
+  its intersection, and a step of its own that runs script and lays out
+  between rounds: built as RO1, § 11.
 
 ## 7. Lifecycle
 
@@ -348,3 +348,78 @@ the judge, and each of these follows it:
   5d's `requestAnimationFrame`, merges into `userland` first, and IO1 is
   built on `userland` after it. The step runs right after the animation
   frame callbacks (rule 2).
+
+## 11. ResizeObserver (RO1)
+
+*Opus, 2026-11-04, the small slice § 6 booked after IO1.*
+
+**The standard** (Resize Observer 1, run from HTML's "update the
+rendering" after the layout and before the intersection steps):
+- `new ResizeObserver(callback)`; `observe(target, {box})` with `box` one
+  of `content-box` (the default), `border-box`, `device-pixel-content-box`;
+  `unobserve`; `disconnect`.
+- An observation starts with a last reported size of (-1, -1), so every
+  target reports once, a 0 by 0 one included.
+- Each rendering step: gather the observations whose observed box size
+  differs from the last reported one, deeper than a depth (0 at first);
+  broadcast them, each observer's callback handed its entries, in the
+  order the page made the observers; lay out again; gather again, only
+  deeper than the shallowest target just broadcast; until none is active.
+  An observation left over is reported as an ErrorEvent, "ResizeObserver
+  loop completed with undelivered notifications."
+- An entry carries `target`, `contentRect` (the content box at the padding
+  edge's offset), and `borderBoxSize`, `contentBoxSize` and
+  `devicePixelContentBoxSize`, each a frozen array of one
+  `ResizeObserverSize {inlineSize, blockSize}`.
+
+**How it departs from IO1's step: it runs script inside the rendering
+step, and lays out between rounds.** Intersection callbacks are a task
+queued after the step; resize callbacks are invoked in the step, so a
+callback's change to the page is laid out and measured again before the
+paint (that is what the depth rule bounds). So:
+- **The provider may lay the page out** (as `getBoundingClientRect`'s
+  geometry provider may), where IO1's rule 1 forbids it: the second
+  round's sizes must be the layout after the first round's callbacks. The
+  work is charged to the step's task.
+- **The step is one task** in libdom (`os64_dom_resizes_step`): gather,
+  broadcast, gather deeper, as many rounds as the depth rule allows, then
+  the loop error if any observation was skipped. yonder runs it in the
+  window loop after `script_turn` and `motion_tick` and before the
+  intersection step and the paint, when the page's trees, the view's size
+  or the zoom moved since the last step, or a report is owed: a target's
+  first, one the last step's loop passed over, or what a step left undone
+  (a refused gather, a callback whose entries could not be made: the host
+  records the layout as measured either way, so the binding keeps it).
+- **One step a frame.** A step's own callbacks change the page, and the
+  rebuild that follows reads as "the trees moved", so a step allowed on
+  every turn would run again on the next one: a callback that resizes its
+  own target (the loop error other browsers print once a frame) would
+  spin the window loop. After a step, the frame it ran in ends, then the
+  gap script frames keep (10 ms), and while the page waits for an
+  animation frame the step waits for that frame's callbacks too, since
+  the standard runs both in one rendering update, the callbacks first.
+  The ticker is offered the moment (`resizes_next`), so an owed report
+  arrives without anything else waking the loop.
+- **The batch** is the intersection batch's shape: one call, every
+  observed target, answered in one walk of the boxes: whether it has a
+  box, its border box and content box sizes in CSS pixels, its content
+  box in device pixels, and its padding's left and top.
+
+**Lifetime** is IntersectionObserver's: held while it observes something,
+marked dead by its finalizer and swept between walks.
+
+**Cut, booked** (DEBTS.md's row, with the WPT pages each costs):
+- vertical writing modes (inline and block sizes are width and height);
+- SVG elements without a CSS box (their bounding box);
+- fragments (multi-column): one size per array;
+- sizes in whole device pixels, CSS `zoom`, and scrollbars that take no
+  room from the content box: layout's, not the observer's.
+
+**Proof.** WPT `resize-observer/` (added to the fetch list): 74 of 104,
+every failure one of the cuts above, shadow DOM, or window named access.
+The DOM host against a fake batch (first reports, a 0 by 0 target, each
+box option, the depth loop and its error, lifetime, every allocation
+failed in turn), and the scripted-page host on real layout (a box resized
+by a script and by the window, a callback that resizes a deeper element,
+and a callback that resizes its own target into the loop error, one step
+a frame).

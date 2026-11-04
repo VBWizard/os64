@@ -870,6 +870,13 @@ int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, 
     return dispatch(&d, NULL);
 }
 
+int d_dispatch_window_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, os64_js_outcome_t *outcome)
+{
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, NULL};
+    if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
+    return dispatch(&d, NULL);
+}
+
 static bool define_number(JSContext *ctx, JSValueConst object, const char *name, double value)
 {
     return JS_DefinePropertyValueStr(ctx, object, name, JS_NewFloat64(ctx, value),

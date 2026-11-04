@@ -500,6 +500,7 @@ EventListener-handleEvent.html	throws if `handleEvent` is thruthy and not callab
 EventListenerOptions-capture.html	Capture boolean should be honored correctly
 EventListenerOptions-capture.html	Capture option should be honored correctly
 EventListenerOptions-capture.html	Equivalence of option values
+EventTarget-add-listener-platform-object.html	addEventListener with a platform object
 EventTarget-add-remove-listener.any.html	Removing an event listener without explicit capture arg should succeed
 EventTarget-addEventListener.any.html	Adding a null event listener should succeed
 EventTarget-constructible.any.html	A constructed EventTarget can be used as expected
@@ -610,4 +611,6 @@ passive-by-default.html	wheel listener is non-passive with {passive:undefined} f
 preventDefault-during-activation-behavior.html	behavior of preventDefault during activation behavior
 remove-all-listeners.html	Nested usage of once listeners should work.
 remove-all-listeners.html	Removing all listeners and then adding a new one should work.
+scrolling/scroll-event-fired-to-element.html	scrollTop and scrollLeft being set with invalid scroll offset.
+scrolling/scroll-event-fired-to-element.html	scrollTop and scrollLeft being set with the same value.
 window-event-restored-after-throwing-onerror.html	window.event is restored after a throwing window.onerror handler

@@ -60,6 +60,10 @@ typedef struct {
     // given `opaque`: answered only from a layout already current, false
     // when there is none. NULL: the page's observers never observe.
     os64_dom_intersections_provider_t intersections;
+    // The resize observations' batch (§ 11), given `opaque`: it may lay
+    // the page out, as a script's geometry read does. NULL: the page's
+    // resize observers never report.
+    os64_dom_resizes_provider_t resizes;
     void *opaque;
     // The window's view, the computed style's provider (given `opaque`)
     // and the session's history, for the Modern Web arc's surface
@@ -396,6 +400,13 @@ uint64_t yonder_scripts_intersections_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_intersections_update(yonder_scripts_t *scripts);
 bool yonder_scripts_intersections_due(const yonder_scripts_t *scripts);
 bool yonder_scripts_intersections_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// RESIZE OBSERVATIONS (§ 11; dom.h): how many targets, whether a report is
+// owed (a target's first, one the last step's loop passed over, or what
+// the last step left undone), and
+// the step, one task, false when none ran (its outcome judged as a task's).
+size_t yonder_scripts_resizes_observed(const yonder_scripts_t *scripts);
+bool yonder_scripts_resizes_owed(const yonder_scripts_t *scripts);
+bool yonder_scripts_resizes_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 // Whether the page asked to keep its own scroll across its entries
 // (history.scrollRestoration = "manual").
 bool yonder_scripts_scroll_manual(const yonder_scripts_t *scripts);

@@ -120,6 +120,7 @@ static const DModernRow kModern[] = {
     /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its
      * entries carry. */
     {(const char *const[]){"IntersectionObserver", "IntersectionObserverEntry", NULL}, d_intersections_install},
+    {(const char *const[]){"ResizeObserver", "ResizeObserverEntry", "ResizeObserverSize", NULL}, d_resizes_install},
     /* 0f's node row: members of Node's, Attr's, Text's and a template's
      * prototypes, none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},

@@ -1,4 +1,5 @@
 #include "geometry.h"
+#include "paint.h"
 #include <limits.h>
 #include <os64/mem.h>
 #include <os64/str.h>
@@ -61,6 +62,18 @@ static bool named(const os64_html_node_t *node, const char *name)
 {
     return node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
            os64_streq(node->name, name);
+}
+
+// The box an element's own sizes are read off: its principal box, or, for
+// an inline-block, inline-flex or inline-grid, the container its atom
+// holds. The atom is the line's piece; the container carries the element's
+// border, padding and content.
+static const flow_box_t *own_box(const flow_box_t *box, const os64_html_node_t *node)
+{
+    if (box != NULL && box->kind == FLOW_BOX_ATOMIC && box->first != NULL && box->first->node == node &&
+        box->first->pseudo == 0)
+        return box->first;
+    return box;
 }
 
 bool yonder_geometry_snapshot(const os64_html_document_t *document,
@@ -133,13 +146,9 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     // libflow, whose frames are its own (DEBTS). Its own border is no part
     // of it. The
     // root in quirks mode scrolls nothing but still has an area: its box's.
-    // An inline-block's or inline-flex's atom holds the element's own
-    // container, borders and all, so the area is that container's: counted
-    // as the atom's child, its border would read as overflow.
-    const flow_box_t *area = principal;
-    if (area != NULL && area->kind == FLOW_BOX_ATOMIC && area->first != NULL && area->first->node == node &&
-        area->first->pseudo == 0)
-        area = area->first;
+    // An inline-block's area is its container's (own_box): counted as its
+    // atom's child, the container's border would read as overflow.
+    const flow_box_t *area = own_box(principal, node);
     if (views) {
         int32_t w = flow_width(tree), h = flow_height(tree);
         out->scroll_width = css_integer(w > width ? w : width, zoom);
@@ -391,6 +400,39 @@ bool yonder_intersections(const os64_html_document_t *document, const flow_tree_
         }
     }
     os64_free(set.slots);
+    return true;
+}
+
+bool yonder_resizes(const os64_html_document_t *document, const flow_tree_t *tree, os64_dom_resize_t *items,
+                    size_t count, uint32_t zoom)
+{
+    if (document == NULL || tree == NULL || flow_incomplete(tree)) return false;
+    zoom = zoom != 0 ? zoom : 1000;
+    double scale = 1000.0 / zoom;
+    for (size_t i = 0; i < count; i++) {
+        os64_dom_resize_t *it = &items[i];
+        it->boxed = false;
+        const flow_box_t *box = it->target != NULL && connected(document, it->target)
+                                    ? own_box(flow_box_for(tree, it->target), it->target)
+                                    : NULL;
+        // A plain inline's content rect is empty (Resize Observer 1 § 3.3):
+        // its pieces of lines are no box of its own.
+        if (box == NULL || box->kind == FLOW_BOX_SPAN || box->pseudo != 0) continue;
+        it->boxed = true;
+        // A replaced box (an image, a control) has no content rect of its
+        // own in the public tree: its content box is where the painter
+        // draws it (yonder_content_rect).
+        os64_gui_rect_t content = box->kind == FLOW_BOX_ATOMIC || box->kind == FLOW_BOX_REPLACED
+                                      ? yonder_content_rect(box) : box->content;
+        it->border[0] = box->rect.w * scale;
+        it->border[1] = box->rect.h * scale;
+        it->content[0] = content.w * scale;
+        it->content[1] = content.h * scale;
+        it->device[0] = content.w;
+        it->device[1] = content.h;
+        it->padding[0] = ((int64_t)content.x - box->rect.x - border(box, FLOW_LEFT)) * scale;
+        it->padding[1] = ((int64_t)content.y - box->rect.y - border(box, FLOW_TOP)) * scale;
+    }
     return true;
 }
 

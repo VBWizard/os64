@@ -870,6 +870,7 @@ static bool wpt_turns(void) {
         motion_tick();
         /* The rendering step's intersection observations, where the window
          * loop takes them: before the frame's (here unpainted) paint. */
+        more=resizes_turn() || more;
         more=intersections_turn() || more;
         /* This headless runner presents no pixels, but completes the same
          * frame boundary so subsequent animation requests can become due. */

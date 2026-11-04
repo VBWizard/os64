@@ -743,6 +743,22 @@ the page made them, with a checkpoint after each. An observer is held
 while it has targets or entries waiting, as a MutationObserver is while it
 observes.
 
+## Resize observations
+
+`ResizeObserver` (`resize.c`; INTERSECTION_OBSERVER.md § 11) asks the same
+way, through its own batch provider (`os64_dom_set_resizes`): each observed
+target's box sizes in one call. Its step is different in kind. The
+standard calls resize callbacks INSIDE the rendering step and measures
+again after them, so `os64_dom_resizes_step` is one task that gathers,
+calls each observer with entries in the order the page made them, asks the
+provider again (which may lay the page out: a callback's change must be
+measured), and repeats only for targets deeper than the shallowest it just
+reported. One left over is the loop error, an `ErrorEvent` at `window`.
+The host runs the step when its layout moved or a report is owed
+(`os64_dom_resizes_owed`: a target's first, one the last step's loop
+passed over, or what a step left undone: a refused gather, a callback
+whose entries could not be made). An observer is held while it observes.
+
 ## The global-miss census
 
 `os64_dom_set_global_miss` tells an owner-thread hook each name a lookup on

@@ -514,6 +514,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
     os64_dom_set_svg_hit(s->dom, s->options.svg_hit, s->options.opaque);
     os64_dom_set_intersections(s->dom, s->options.intersections, s->options.opaque);
+    os64_dom_set_resizes(s->dom, s->options.resizes, s->options.opaque);
     if (s->options.view.read != NULL)
         os64_dom_set_view(s->dom, &s->options.view);
     os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
@@ -2073,6 +2074,29 @@ bool yonder_scripts_intersections_update(yonder_scripts_t *s)
 bool yonder_scripts_intersections_due(const yonder_scripts_t *s)
 {
     return s != NULL && !s->dead && os64_dom_intersections_due(s->dom);
+}
+
+size_t yonder_scripts_resizes_observed(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_resizes_observed(s->dom) : 0;
+}
+
+bool yonder_scripts_resizes_owed(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && os64_dom_resizes_owed(s->dom);
+}
+
+bool yonder_scripts_resizes_step(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    if (!os64_dom_resizes_step(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
 }
 
 bool yonder_scripts_intersections_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
