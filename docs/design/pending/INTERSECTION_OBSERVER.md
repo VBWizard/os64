@@ -415,7 +415,7 @@ marked dead by its finalizer and swept between walks.
 - sizes in whole device pixels, CSS `zoom`, and scrollbars that take no
   room from the content box: layout's, not the observer's.
 
-**Proof.** WPT `resize-observer/` (added to the fetch list): 73 of 104,
+**Proof.** WPT `resize-observer/` (added to the fetch list): 74 of 104,
 every failure one of the cuts above, shadow DOM, or window named access.
 The DOM host against a fake batch (first reports, a 0 by 0 target, each
 box option, the depth loop and its error, lifetime, every allocation

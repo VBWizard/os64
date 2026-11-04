@@ -1,4 +1,5 @@
 #include "geometry.h"
+#include "paint.h"
 #include <limits.h>
 #include <os64/mem.h>
 #include <os64/str.h>
@@ -418,14 +419,19 @@ bool yonder_resizes(const os64_html_document_t *document, const flow_tree_t *tre
         // its pieces of lines are no box of its own.
         if (box == NULL || box->kind == FLOW_BOX_SPAN || box->pseudo != 0) continue;
         it->boxed = true;
+        // A replaced box (an image, a control) has no content rect of its
+        // own in the public tree: its content box is where the painter
+        // draws it (yonder_content_rect).
+        os64_gui_rect_t content = box->kind == FLOW_BOX_ATOMIC || box->kind == FLOW_BOX_REPLACED
+                                      ? yonder_content_rect(box) : box->content;
         it->border[0] = box->rect.w * scale;
         it->border[1] = box->rect.h * scale;
-        it->content[0] = box->content.w * scale;
-        it->content[1] = box->content.h * scale;
-        it->device[0] = box->content.w;
-        it->device[1] = box->content.h;
-        it->padding[0] = ((int64_t)box->content.x - box->rect.x - border(box, FLOW_LEFT)) * scale;
-        it->padding[1] = ((int64_t)box->content.y - box->rect.y - border(box, FLOW_TOP)) * scale;
+        it->content[0] = content.w * scale;
+        it->content[1] = content.h * scale;
+        it->device[0] = content.w;
+        it->device[1] = content.h;
+        it->padding[0] = ((int64_t)content.x - box->rect.x - border(box, FLOW_LEFT)) * scale;
+        it->padding[1] = ((int64_t)content.y - box->rect.y - border(box, FLOW_TOP)) * scale;
     }
     return true;
 }

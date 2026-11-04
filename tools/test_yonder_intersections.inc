@@ -246,6 +246,17 @@ static void ro_real_layout(void) {
     if(!atom) fprintf(stderr,"inline-block said: %s\n",probe_text_of("out"));
     check(atom,"ro: an inline-block reports its container's sizes");
     loop_drop();
+    /* An image's content box is where it is drawn: a replaced box has no
+     * content rect of its own in the public tree. */
+    loop_page("<style>body{margin:0}#im{width:100px;height:50px;padding:5px;border:2px solid}</style>" IO_OUT IO_LOG
+        "<img id=im><script>"
+        "new ResizeObserver(function(es){var e=es[0];said(e.contentRect.width+'x'+e.contentRect.height+'@'+"
+        "e.contentRect.x+'/'+e.borderBoxSize[0].inlineSize+'x'+e.borderBoxSize[0].blockSize)})"
+        ".observe(document.getElementById('im'));</script>");
+    bool image=loop_settle() && io_turns() && probe_text_is("out","100x50@5/114x64");
+    if(!image) fprintf(stderr,"image said: %s\n",probe_text_of("out"));
+    check(image,"ro: an image reports the content box it is drawn in");
+    loop_drop();
     /* A step waits for an animation frame the page asked for: they are one
      * rendering update, the frame's callbacks first. The frame is due 20 ms
      * after the ask, the step's own gap 10 ms after its frame. */
@@ -303,6 +314,24 @@ static void ro_real_layout(void) {
     bool asked=loop_settle() && io_turns() && probe_text_is("out","ro");
     const FormWidget *field=probe_field("i");
     check(asked && field!=NULL && g.ui.focus==field->w,"ro: a focus a callback asks for is given after its step");
+    loop_drop();
+    /* What the step's tail runs is laid out after the step measured, so
+     * the next frame's step sees it. Here the observers are made by a
+     * timer (a step owed with nothing moved, so the pointer has no reason
+     * to look before it), the first callback moves #c under the parked
+     * pointer, and #c's pointerenter, which the tail's boundary check
+     * fires, resizes the observed #b. */
+    loop_page("<style>body{margin:0}#x,#b{width:10px;height:10px}#c{width:50px;height:20px;margin-top:100px}"
+        "</style>" IO_OUT IO_LOG "<div id=x></div><div id=b></div><div id=c></div><script>"
+        "var x=document.getElementById('x'),b=document.getElementById('b'),c=document.getElementById('c'),n=0;"
+        "c.addEventListener('pointerenter',function(){b.style.width='30px'});"
+        "setTimeout(function(){new ResizeObserver(function(){if(++n==1)c.style.marginTop='0px'}).observe(x);"
+        "new ResizeObserver(function(es){said('b:'+es[0].contentRect.width)}).observe(b)},50);</script>");
+    bool tail=loop_settle() && io_turns();
+    pointer_move(g.view.bounds.x+2,g.view.bounds.y+30,0);
+    for(int k=0;k<12;k++){now_ms+=10;tail=io_turns() && tail;}
+    if(!probe_text_is("out","b:10,b:30")) fprintf(stderr,"tail said: %s\n",probe_text_of("out"));
+    check(tail && probe_text_is("out","b:10,b:30"),"ro: a change the step's tail makes is the next frame's to report");
     loop_drop();
 }
 

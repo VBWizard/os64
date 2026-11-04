@@ -78,3 +78,4 @@ ordering.html	ResizeObserver and IntersectionObserver ordering
 scrollbars-2.html	ResizeObserver content-box size and scrollbars
 svg-with-css-box-001.html	ResizeObserver implemented
 svg-with-css-box-001.html	guard
+svg-with-css-box-001.html	test1: observe inline SVG in HTML

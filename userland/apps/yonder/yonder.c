@@ -10477,6 +10477,16 @@ static bool resizes_turn(void)
     const os64_html_document_t *doc = page_doc(&g.page);
     int64_t began = task_begin(s);
     bool ran = yonder_scripts_resizes_step(s, &out);
+    // The step laid the page out as its callbacks changed it: what it
+    // measured last is what stands now, recorded BEFORE the task's tail
+    // below, whose asks and pointer events run page code that may change
+    // the layout again, which the next frame's step must see as moved.
+    // Whatever the step still owes (one it passed over, one a callback
+    // began observing, or what it left undone: a refused gather, entries
+    // that could not be made) the binding owes the next frame
+    // (os64_dom_resizes_owed).
+    s_resized = observed_now();
+    g.resize_paced = true;
     if (ran) {
         task_said(s, true, "resize-observer", &out, began);
         // A task's tail, as script_turn's: the callbacks' changes built,
@@ -10488,13 +10498,6 @@ static bool resizes_turn(void)
                 (void)pointer_turn();
         }
     }
-    // The step laid the page out as its callbacks changed it: what it
-    // measured last is what stands now. Whatever it still owes (one it
-    // passed over, one a callback began observing, or what it left undone:
-    // a refused gather, entries that could not be made) the binding owes
-    // the next frame (os64_dom_resizes_owed).
-    s_resized = observed_now();
-    g.resize_paced = true;
     return ran;
 }
 
