@@ -86,8 +86,13 @@ struct DIntersections {
     /* The notify task is queued; an observer has died since the last
      * sweep. */
     bool queued, has_dead;
-    /* Entries not kept for want of memory, reported at the next notify. */
+    /* Observations not made, or entries not kept, for want of memory:
+     * reported at the next notify, which a loss queues. */
     uint64_t lost;
+    /* When, on the host's clock (options.now_ms), the first target the
+     * last step passed over for its observer's `delay` may be observed:
+     * the step is owed then whatever moves. UINT64_MAX for none. */
+    uint64_t delayed_due;
     DValue *entry_prototype;
     os64_dom_intersection_t *batch;
     size_t batch_cap;
@@ -209,9 +214,21 @@ size_t os64_dom_intersections_observed(const os64_dom_t *dom)
     return dom != NULL && !dom->closed && dom->intersections != NULL ? dom->intersections->observed : 0;
 }
 
+static uint64_t host_now(const os64_dom_t *dom)
+{
+    return dom->options.now_ms != NULL ? dom->options.now_ms(dom->options.host_opaque) : 0;
+}
+
+uint64_t os64_dom_intersections_next(const os64_dom_t *dom)
+{
+    return dom != NULL && !dom->closed && dom->intersections != NULL ? dom->intersections->delayed_due : UINT64_MAX;
+}
+
 bool os64_dom_intersections_owed(const os64_dom_t *dom)
 {
-    return dom != NULL && !dom->closed && dom->intersections != NULL && dom->intersections->owed != 0;
+    if (dom == NULL || dom->closed || dom->intersections == NULL) return false;
+    const struct DIntersections *s = dom->intersections;
+    return s->owed != 0 || (s->delayed_due != UINT64_MAX && host_now(dom) >= s->delayed_due);
 }
 
 bool os64_dom_intersections_due(const os64_dom_t *dom)
@@ -297,7 +314,13 @@ static bool observe_one(os64_dom_t *dom, DIObserver *o, DTarget *t, const os64_d
                         const double viewport[4], double time)
 {
     struct DIntersections *s = dom->intersections;
-    if (o->delay > 0 && t->updated && time - t->last_update < o->delay) return false;
+    if (o->delay > 0 && t->updated && time - t->last_update < o->delay) {
+        /* Passed over: owed again once its delay has run, moved or not. */
+        double wait = o->delay - (time - t->last_update);
+        uint64_t due = host_now(dom) + (uint64_t)ceil(wait);
+        if (due < s->delayed_due) s->delayed_due = due;
+        return false;
+    }
     t->last_update = time;
     t->updated = true;
     double plain[4] = {0, 0, 0, 0}, root[4];
@@ -357,10 +380,12 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
     if (s->batch_cap < s->observed) {
         os64_dom_intersection_t *grown = d_alloc(dom, s->observed * sizeof(*grown));
         if (grown == NULL) {
-            /* No room to ask: the step waits for the next one, and a page
-             * that keeps growing hears of it as its quota. */
-            s->lost++;
-            return false;
+            /* No room to ask: every observation this step would have made
+             * is lost, and the notify that says so as the page's quota is
+             * queued. */
+            s->lost += s->observed;
+            s->queued = true;
+            return true;
         }
         d_free(dom, s->batch);
         s->batch = grown;
@@ -377,11 +402,12 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
     bool answered = n == 0 || dom->intersections_provider(dom->intersections_opaque, s->batch, n, &cost);
     dom->geometry_stats.layouts += cost.layouts;
     dom->geometry_stats.elapsed_us += cost.elapsed_us;
-    if (!answered) return s->queued;
+    if (!answered) return false;
     os64_dom_view_t view = {0};
     if (dom->view.read != NULL) dom->view.read(dom->view.opaque, &view);
     const double viewport[4] = {0, 0, view.width, view.height};
     double time = d_performance_now(dom);
+    s->delayed_due = UINT64_MAX;
     bool queued = false;
     size_t at = 0;
     for (DIObserver *o = s->observers; o != NULL; o = o->next) {
@@ -750,9 +776,11 @@ static int read_thresholds(os64_dom_t *dom, JSContext *ctx, JSValueConst value, 
         JSValue method = JS_GetProperty(ctx, value, symbol);
         JS_FreeAtom(ctx, symbol);
         if (JS_IsException(method)) return -1;
-        bool iterable = !JS_IsUndefined(method) && !JS_IsNull(method);
-        JS_FreeValue(ctx, method);
-        if (iterable) return d_sequence_each(dom, ctx, value, number_each, n);
+        if (!JS_IsUndefined(method) && !JS_IsNull(method)) {
+            int status = d_sequence_each(dom, ctx, value, method, number_each, n);
+            JS_FreeValue(ctx, method);
+            return status;
+        }
     }
     return number_each(n, ctx, value);
 }
@@ -812,13 +840,17 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     struct DIntersections *s = dom->intersections;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
         return JS_ThrowTypeError(ctx, "IntersectionObserver needs a callback");
-    /* IntersectionObserverInit, its members read in WebIDL's order
-     * (lexicographic): delay, root, rootMargin, scrollMargin, threshold,
-     * trackVisibility. scrollMargin is kept and reported, and clips
-     * nothing: its clipping is booked (INTERSECTION_OBSERVER.md § 6). */
+    /* IntersectionObserverInit converted whole first, its members read in
+     * WebIDL's order (lexicographic): delay, root, rootMargin,
+     * scrollMargin, threshold, trackVisibility. Then the standard's
+     * constructor steps: the margins parsed, then the thresholds checked.
+     * scrollMargin is kept and reported, and clips nothing: its clipping is
+     * booked (INTERSECTION_OBSERVER.md § 6). */
     const os64_html_node_t *root = NULL;
     double margins[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
     bool percents[2][4] = {{false, false, false, false}, {false, false, false, false}};
+    DString margin_text[2] = {{0}, {0}};
+    bool margin_given[2] = {false, false};
     DNumbers thresholds = {0};
     int32_t delay = 0;
     bool track = false;
@@ -837,16 +869,8 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         v = present ? JS_GetPropertyStr(ctx, init, kMargins[m]) : JS_UNDEFINED;
         if (JS_IsException(v)) goto failed_value;
         if (!JS_IsUndefined(v)) {
-            DString text = {0};
-            if (!d_string(dom, ctx, v, &text)) goto failed_value;
-            bool parsed = parse_margin(text.data, text.length, margins[m], percents[m]);
-            d_string_free(dom, &text);
-            if (!parsed) {
-                JS_FreeValue(ctx, v);
-                d_error(ctx, "SyntaxError", m == 0 ? "rootMargin must be 1 to 4 lengths or percentages"
-                                                   : "scrollMargin must be 1 to 4 lengths or percentages");
-                goto failed;
-            }
+            if (!d_string(dom, ctx, v, &margin_text[m])) goto failed_value;
+            margin_given[m] = true;
         }
         JS_FreeValue(ctx, v);
     }
@@ -861,6 +885,14 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         track = b != 0;
     }
     JS_FreeValue(ctx, v);
+    for (int m = 0; m < 2; m++) {
+        if (margin_given[m] && !parse_margin(margin_text[m].data, margin_text[m].length, margins[m], percents[m])) {
+            d_error(ctx, "SyntaxError", m == 0 ? "rootMargin must be 1 to 4 lengths or percentages"
+                                               : "scrollMargin must be 1 to 4 lengths or percentages");
+            goto failed;
+        }
+        d_string_free(dom, &margin_text[m]);
+    }
     for (size_t i = 0; i < thresholds.count; i++)
         if (thresholds.values[i] < 0 || thresholds.values[i] > 1) {
             JS_ThrowRangeError(ctx, "A threshold must be between 0 and 1");
@@ -916,6 +948,8 @@ failed_value:
     JS_FreeValue(ctx, v);
 failed:
     d_free(dom, thresholds.values);
+    d_string_free(dom, &margin_text[0]);
+    d_string_free(dom, &margin_text[1]);
     return JS_EXCEPTION;
 }
 
@@ -1094,6 +1128,7 @@ int d_intersections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
         return -1;
     }
     os64_memset(s, 0, sizeof(*s));
+    s->delayed_due = UINT64_MAX;
     dom->intersections = s;
     s->observer_class = os64_js_class_id(&observer_slot);
     s->entry_class = os64_js_class_id(&entry_slot);

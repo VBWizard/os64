@@ -147,6 +147,9 @@ static void dom_rect_cases(void)
         "assert(!(DOMRectReadOnly.fromRect() instanceof DOMRect));"
         "throws('TypeError',()=>DOMRect.fromRect(1));throws('TypeError',()=>DOMRect(1,2,3,4));"
         "throws('TypeError',()=>DOMRectReadOnly.prototype.x);"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(DOMRect.prototype,'x').get.call(new DOMRectReadOnly(5)));"
+        "assert(Object.getOwnPropertyDescriptor(DOMRectReadOnly.prototype,'x').get.call(new DOMRect(5))===5,"
+        "'a DOMRect is a DOMRectReadOnly');"
         "class Mine extends DOMRect{};assert(new Mine(1,1,1,1) instanceof Mine);",
         "rect: DOMRectReadOnly and DOMRect");
     fixture_free(&f);
@@ -209,6 +212,10 @@ static void dom_intersection_interface_cases(void)
         "get threshold(){order.push('threshold')},get trackVisibility(){order.push('trackVisibility')}});"
         "assert(order.join()==='delay,root,rootMargin,scrollMargin,threshold,trackVisibility',"
         "'IntersectionObserverInit in its order: '+order);"
+        "throws('Error',()=>new IntersectionObserver(()=>{},{rootMargin:'x',get threshold(){throw Error('t')}}));"
+        "throws('SyntaxError',()=>new IntersectionObserver(()=>{},{rootMargin:'x',threshold:[2]}));"
+        "let gets=0;new IntersectionObserver(()=>{},{threshold:{get [Symbol.iterator](){gets++;return [].values.bind([0.5])}}});"
+        "assert(gets===1,'@@iterator read once: '+gets);"
         "throws('TypeError',()=>o.observe('foo'));throws('TypeError',()=>o.observe(document.createTextNode('t')));"
         "throws('TypeError',()=>o.observe());throws('TypeError',()=>o.unobserve(1));"
         "throws('TypeError',()=>IntersectionObserver.prototype.observe.call({},box));"
@@ -442,7 +449,10 @@ static void dom_intersection_step_cases(void)
     io_place("one", 0, 900, 10, 910);
     p2b_advance(50);
     check(!os64_dom_intersections_update(f.binding), "intersection: inside the delay, nothing");
+    check(os64_dom_intersections_next(f.binding) == p2b_ms + 50 && !os64_dom_intersections_owed(f.binding),
+          "intersection: the target passed over is owed when its delay runs out, and not before");
     p2b_advance(60);
+    check(os64_dom_intersections_owed(f.binding), "intersection: its delay run, the step is owed though nothing moved");
     check(io_frame(&f, "intersection: past the delay"), "intersection: past the delay");
     io_script(&f, "assert(L.length===2&&!L[1].isIntersecting);dl.disconnect();", "intersection: delayed entry");
     fixture_free(&f);

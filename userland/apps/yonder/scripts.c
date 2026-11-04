@@ -2060,6 +2060,11 @@ bool yonder_scripts_intersections_owed(const yonder_scripts_t *s)
     return s != NULL && !s->dead && os64_dom_intersections_owed(s->dom);
 }
 
+uint64_t yonder_scripts_intersections_next(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_intersections_next(s->dom) : UINT64_MAX;
+}
+
 bool yonder_scripts_intersections_update(yonder_scripts_t *s)
 {
     return s != NULL && !s->dead && s->dom != NULL && os64_dom_intersections_update(s->dom);

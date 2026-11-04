@@ -1643,10 +1643,12 @@ JSValue d_rect_new(os64_dom_t *dom, JSContext *ctx, bool readonly, double x, dou
                    double height);
 /* WebIDL's iteration of an iterable (§ 3.2.20, "create a sequence from an
  * iterable"): `each` handed every value in turn, borrowed for the call, 0
- * to go on and -1, with an exception pending, to stop. A value that is no
- * object, or has no iterator, is a TypeError. -1 with the exception
+ * to go on and -1, with an exception pending, to stop. `method` is the
+ * iterator method a union's conversion already took from the value, or
+ * JS_UNDEFINED to take it here: WebIDL reads @@iterator once. A value that
+ * is no object, or has no iterator, is a TypeError. -1 with the exception
  * pending. */
-int d_sequence_each(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+int d_sequence_each(os64_dom_t *dom, JSContext *ctx, JSValueConst value, JSValueConst method,
                     int (*each)(void *opaque, JSContext *ctx, JSValueConst item), void *opaque);
 size_t d_reactions_rows(void);
 bool d_reactions_row_name(size_t i, char *out, size_t cap);

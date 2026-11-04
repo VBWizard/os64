@@ -11,6 +11,9 @@
 static JSClassID rect_slot, readonly_slot;
 typedef struct { double v[4]; } DRect;
 enum { R_X, R_Y, R_WIDTH, R_HEIGHT, R_TOP, R_RIGHT, R_BOTTOM, R_LEFT, R_JSON };
+/* On a member DOMRect's prototype declares itself: its receiver must be a
+ * DOMRect, as WebIDL's brand check asks, not any read-only rect. */
+#define R_WRITABLE_ONLY 0x100
 static const char *const kNames[] = {"x", "y", "width", "height", "top", "right", "bottom", "left"};
 
 static DRect *rect_of(JSValueConst value)
@@ -124,10 +127,11 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     DRect *r = rect_of(self);
     if (r == NULL) return JS_ThrowTypeError(ctx, "Expected a DOMRectReadOnly");
     bool set = (magic & D_SET) != 0;
-    magic &= ~D_SET;
+    bool writable_only = (magic & R_WRITABLE_ONLY) != 0;
+    magic &= ~(D_SET | R_WRITABLE_ONLY);
+    if ((set || writable_only) && JS_GetOpaque(self, os64_js_class_id(&rect_slot)) == NULL)
+        return JS_ThrowTypeError(ctx, "Expected a DOMRect");
     if (set) {
-        if (JS_GetOpaque(self, os64_js_class_id(&rect_slot)) == NULL)
-            return JS_ThrowTypeError(ctx, "The rect is read only");
         double v;
         if (JS_ToFloat64(ctx, &v, argc > 0 ? argv[0] : JS_UNDEFINED) < 0) return JS_EXCEPTION;
         r->v[magic] = v;
@@ -167,7 +171,9 @@ int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
          * toJSON are inherited. */
         int members = readonly ? R_JSON : R_TOP;
         for (int j = 0; j < members; j++)
-            if (d_accessor(dom, ctx, proto, kNames[j], member, j, !readonly && j < R_TOP) < 0) return -1;
+            if (d_accessor(dom, ctx, proto, kNames[j], member, readonly ? j : j | R_WRITABLE_ONLY,
+                           !readonly && j < R_TOP) < 0)
+                return -1;
         if (d_method_named(dom, ctx, constructor, "fromRect", from_rect, 0, readonly) < 0) return -1;
         if (readonly && d_method_named(dom, ctx, proto, "toJSON", member, 0, R_JSON) < 0) return -1;
         parent = constructor;

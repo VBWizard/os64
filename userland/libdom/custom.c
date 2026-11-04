@@ -813,17 +813,22 @@ int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *cop
 enum { M_DEFINE, M_GET, M_GET_NAME, M_WHEN_DEFINED, M_UPGRADE };
 
 /* WebIDL's iteration of an iterable (internal.h). */
-int d_sequence_each(os64_dom_t *dom, JSContext *ctx, JSValueConst value,
+int d_sequence_each(os64_dom_t *dom, JSContext *ctx, JSValueConst value, JSValueConst given,
                     int (*each)(void *opaque, JSContext *ctx, JSValueConst item), void *opaque)
 {
     if (!JS_IsObject(value)) {
         JS_ThrowTypeError(ctx, "Expected a sequence");
         return -1;
     }
-    JSAtom symbol = JS_ValueToAtom(ctx, dom->iterator_symbol->value);
-    if (symbol == JS_ATOM_NULL) return -1;
-    JSValue method = JS_GetProperty(ctx, value, symbol);
-    JS_FreeAtom(ctx, symbol);
+    JSValue method;
+    if (JS_IsUndefined(given)) {
+        JSAtom symbol = JS_ValueToAtom(ctx, dom->iterator_symbol->value);
+        if (symbol == JS_ATOM_NULL) return -1;
+        method = JS_GetProperty(ctx, value, symbol);
+        JS_FreeAtom(ctx, symbol);
+    } else {
+        method = JS_DupValue(ctx, given);
+    }
     if (JS_IsException(method)) return -1;
     if (!JS_IsFunction(ctx, method)) {
         JS_FreeValue(ctx, method);
@@ -897,7 +902,7 @@ int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char 
     *out = NULL;
     *count = 0;
     DStrings s = {dom, out, count, 0};
-    int status = d_sequence_each(dom, ctx, value, string_each, &s);
+    int status = d_sequence_each(dom, ctx, value, JS_UNDEFINED, string_each, &s);
     if (status < 0) {
         for (size_t i = 0; i < *count; i++) d_free(dom, (*out)[i]);
         d_free(dom, *out);

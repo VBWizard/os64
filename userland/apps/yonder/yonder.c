@@ -7485,6 +7485,10 @@ static void pictures_schedule(void)
     deadline_offer(&d, tick_next(), PAST_TICKS);
     deadline_offer(&d, animation_next(), PAST_FRAMES);
     deadline_offer(&d, pointer_next(), PAST_FRAMES);
+    // A target an observer's delay passed over is owed a step when the
+    // delay runs out, whether or not anything moves (intersections_turn).
+    if (!g.covered)
+        deadline_offer(&d, yonder_scripts_intersections_next(g.page.scripts), PAST_FRAMES);
     if (g.coming.active)
         deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
     if (g.stream.active && g.stream.sheets_due != 0)
@@ -10305,7 +10309,7 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
 // painted, never one made for it — the step is part of the rendering, not
 // a script's reach for geometry. False otherwise, and the step is tried
 // again at the next turn (intersections_turn). `answered` says whether
-// the last step's batch was.
+// the last step's batch was, true when the step asked nothing.
 static bool s_intersections_answered;
 
 static bool script_intersections(void *opaque, os64_dom_intersection_t *items, size_t count,
@@ -10347,12 +10351,13 @@ static Observed observed_now(void)
 // they asked for (script_turn) and a CSS animation's (motion_tick), and
 // before the paint, when something an observation reads has moved since
 // the last batch was answered — a new layout, a tick that moved boxes,
-// the page's or a box's scroll, the zoom, the view's size — or a target
-// waits for its first. Not while the window is covered, as the animation
-// frames are not. It only queues: the callbacks run in the delivery task
-// (script_turn). True when this step ran and that task waits, which the
-// loop rings itself back for; a task waiting from an earlier step is
-// scripts_owed's.
+// the page's or a box's scroll, the zoom, the view's size — or one is owed
+// (a target waits for its first, or a delay passed one over and has run:
+// pictures_schedule wakes the loop for it). Not while the window is
+// covered, as the animation frames are not. It only queues: the callbacks
+// run in the delivery task (script_turn). True when the step ran and that
+// task waits, which the loop rings itself back for; false when it did not
+// run, or its batch was refused.
 static bool intersections_turn(void)
 {
     yonder_scripts_t *s = g.page.scripts;
@@ -10363,7 +10368,9 @@ static bool intersections_turn(void)
                  now.sx != was.sx || now.sy != was.sy || now.w != was.w || now.h != was.h || now.zoom != was.zoom;
     if (!moved && !yonder_scripts_intersections_owed(s))
         return false;
-    s_intersections_answered = false;
+    // A step that asks nothing (every root in another document) never
+    // calls the provider, and has still answered what it was asked.
+    s_intersections_answered = true;
     bool due = yonder_scripts_intersections_update(s);
     if (s_intersections_answered)
         s_observed = now;

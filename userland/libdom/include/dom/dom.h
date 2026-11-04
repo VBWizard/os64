@@ -840,16 +840,21 @@ void os64_dom_set_intersections(os64_dom_t *dom, os64_dom_intersections_provider
 /* How many targets the page's observers observe: 0, and the host need not
  * watch for movement at all. */
 size_t os64_dom_intersections_observed(const os64_dom_t *dom);
-/* Whether a target waits for its first observation, which a step owes it
- * whether or not anything moved. */
+/* Whether a step is owed whether or not anything moved: a target waits for
+ * its first observation, or the last step passed one over for its
+ * observer's `delay` and that delay has run (options.now_ms's clock). And
+ * when that delay runs out, for the host to wake at; UINT64_MAX for none. */
 bool os64_dom_intersections_owed(const os64_dom_t *dom);
+uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
 /* THE UPDATE INTERSECTION OBSERVATIONS STEPS: the host calls it in its
  * rendering step, after the animation frame callbacks and the layout they
  * asked for, when something an observation reads may have moved (a
  * layout, a scroll, a resize) or one is owed. It asks the provider once
  * and queues an entry for each target whose threshold index or
- * intersecting state changed; it runs no script. True when entries are
- * queued and the delivery task is due. */
+ * intersecting state changed; it runs no script. True when the delivery
+ * task is due after it; false when nothing is, and when the provider
+ * refused the batch (the step observed nothing, and is owed again as it
+ * was). */
 bool os64_dom_intersections_update(os64_dom_t *dom);
 /* "NOTIFY INTERSECTION OBSERVERS": whether its task is queued, and the
  * task: each observer with entries, in the order the page made them,

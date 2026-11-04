@@ -389,6 +389,10 @@ bool yonder_scripts_view_due(const yonder_scripts_t *scripts);
 // judged as a task's).
 size_t yonder_scripts_intersections_observed(const yonder_scripts_t *scripts);
 bool yonder_scripts_intersections_owed(const yonder_scripts_t *scripts);
+// When a target passed over for its observer's delay may be observed, on
+// yonder_now_ms' clock: the schedule's wake for it. YONDER_NEVER's value,
+// UINT64_MAX, for none.
+uint64_t yonder_scripts_intersections_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_intersections_update(yonder_scripts_t *scripts);
 bool yonder_scripts_intersections_due(const yonder_scripts_t *scripts);
 bool yonder_scripts_intersections_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
