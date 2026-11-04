@@ -1,10 +1,11 @@
 # INTL.md — ECMA-402 for yonder's pages
 
 *Opus, 2026-11-04. Slice A of GITHUB_WALLS.md (Fable's, same day): Intl is
-the wall that empties all three of the GitHub pages before they draw, by a
-module-scope `new Intl.DateTimeFormat(...)` that aborts a megabyte-long
-module half made. A design for Fable's review and Chris's rulings (§ 9);
-no code until both.*
+the wall that empties all three of the GitHub pages before they draw, by
+module-scope constructions (`new Intl.DateTimeFormat(...)` first, then
+NumberFormat, Collator and ListFormat) that abort megabyte-long modules
+half made. Reviewed by Fable the same day (build it; ten findings, folded
+in); three rulings are Chris's (§ 9).*
 
 ## 1. What pages ask of it, counted
 
@@ -103,11 +104,22 @@ data and the Gregorian calendar, complete to ECMA-402 for that data.**
   before either was written: Slice B adds the define, and this slice uses
   it from userland once B has merged, or from B's branch if A1 is ready
   first. A1 does not define it.
-- **The C underneath is small.** Three things JS cannot do well or at all:
-  the time-zone table (§ 5), the host's time-zone name, and nothing else.
-  Everything else is JavaScript over intrinsics captured at install, as
-  streams.js captures its own, so a page that replaces `Array.prototype.push`
-  or `Date.prototype.getUTCFullYear` cannot change what Intl does.
+- **The C underneath is small: one zone door.** `(zone name, ms since
+  epoch) → {offset minutes, isDST, abbreviation}`, over the zone table
+  (§ 5) and libos64's own POSIX-rule evaluator (`os64/date.h`, what
+  `Date`'s local time already runs on), so `Date` and `Intl` cannot
+  disagree about an offset and no second evaluator is written in
+  JavaScript. The host's zone name comes through the same door (`name`
+  omitted). Everything else is JavaScript over intrinsics captured at
+  install, as streams.js captures its own, so a page that replaces
+  `Array.prototype.push` or `Date.prototype.getUTCFullYear` cannot change
+  what Intl does. (Fable's finding 3.)
+- **`format` and `compare` are getters, not methods.**
+  `DateTimeFormat.prototype.format`, `NumberFormat.prototype.format` and
+  `Collator.prototype.compare` are accessors answering a function bound
+  to the instance, made once and kept, so `dates.map(dtf.format)` and
+  `names.sort(collator.compare)` work; the census shows both idioms, and
+  test262 holds the shape. (Finding 7.)
 
 ## 4. What ships, by constructor
 
@@ -123,8 +135,8 @@ it); a present one that misbehaves is rule 1's worse case.
 | `Intl.PluralRules` — cardinal and ordinal, the digit options, `select`, `selectRange`, `resolvedOptions` | 18 hosts; NumberFormat's compact and RelativeTimeFormat need its rules anyway |
 | `Intl.RelativeTimeFormat` — `format`, `formatToParts`, `numeric`, `style` | 18 hosts, GitHub's relative dates |
 | `Intl.ListFormat` — the three types and three styles | 21 hosts |
-| `Intl.Collator` and `String.prototype.localeCompare` through it — `usage`, `sensitivity`, `ignorePunctuation`, `numeric`, `caseFirst` | 72 hosts call `localeCompare` with arguments |
-| `Intl.Locale` — parsing and canonicalizing a BCP 47 tag, its parts, `maximize`/`minimize` for the English tags | 15 hosts; every constructor's locale argument is parsed the same way |
+| `Intl.Collator` and `String.prototype.localeCompare` through it — `usage`, `sensitivity`, `ignorePunctuation`, `numeric`, `caseFirst`, over the collation § 4.1 names | 72 hosts call `localeCompare` with arguments; GitHub's checks module constructs one at module scope |
+| `Intl.Locale` — parsing and canonicalizing a BCP 47 tag, its parts; `maximize`/`minimize` by CLDR's likely subtags for the English tags, and the identity for any tag the data lacks (the algorithm's own answer when no row matches: `new Intl.Locale("de-DE").maximize()` is `de-DE`) | 15 hosts; every constructor's locale argument is parsed the same way; primer-react's RelativeTime constructs one in render |
 | `Intl.getCanonicalLocales`, `Intl.supportedValuesOf` | small, and the second answers truly what the data holds |
 | The redefined built-ins: `Date.prototype.toLocaleString`/`DateString`/`TimeString`, `Number.prototype.toLocaleString`, `BigInt.prototype.toLocaleString`, `Array.prototype.toLocaleString` (unchanged in shape, its elements' now honoured) | 32 hosts; as § 1 says, wrong silently today |
 
@@ -133,6 +145,48 @@ it); a present one that misbehaves is rule 1's worse case.
 | `Intl.Segmenter` (6 hosts) | grapheme and word breaking is Unicode's segmentation data, a different and larger table; a page that tests for it falls back |
 | `Intl.DisplayNames` (9 hosts) | names of languages, regions, currencies and scripts: data, not formatting; booked with a second locale |
 | `Intl.DurationFormat` (1 host) | the newest constructor, one host; built on NumberFormat, so cheap when a page asks |
+
+### 4.1 Collation, named
+
+Real en-US collation is CLDR root, the Unicode Collation Algorithm over
+DUCET: tens of thousands of weights. It is why other browsers answer
+`"a".localeCompare("B")` with -1 and sort `_` before `1` before `a`, where
+code-point order puts `_` after the capitals. A collation that folds case
+and then compares code points would be "present but wrong" on every
+symbol. So the collation is written down (Fable's finding 2):
+
+- **Latin-1 in a UCA-shaped order:** whitespace and punctuation, then
+  symbols, then digits, then letters, the classes in DUCET's order and
+  each character's place within its class taken from DUCET (a table of
+  the 191 printable Latin-1 characters, generated from the named DUCET
+  version, not typed).
+- **Three levels:** the base letter (accents and case ignored), then the
+  accent, then case, lower before upper; `sensitivity` stops at the level
+  it names (`base` the first, `accent` the second, `case` the first and
+  third, `variant` all three), `caseFirst` reorders the third.
+- **`numeric: true`** compares a run of digits as the number it spells;
+  **`ignorePunctuation`** skips the first class.
+- **Beyond Latin-1, code-point order** after the Latin-1 letters, the gap
+  booked by name (DEBTS: full DUCET, its size stated).
+
+The fixtures hold what the 72 hosts ask (`{numeric: true, sensitivity:
+"base"}` over names and version strings) against Chrome's order.
+
+### 4.2 The data, from CLDR, versioned
+
+DateTimeFormat's hard half is turning a field bag (`{weekday: "long",
+hour: "numeric"}`) into Chrome's pattern, which ICU does with CLDR's `en`
+`availableFormats` table, its append items and the hour-cycle rewrite.
+That table is taken verbatim (about sixty entries) into a data file in the
+tree, its CLDR version named as the zone table names its tzdata, and the
+spec's BasicFormatMatcher runs over it; hand-made patterns would match
+Chrome on the bags the census saw and differ on the next. The same rule
+for every table the formatters read: the `dateStyle`/`timeStyle` patterns
+and their `{date}, {time}` / `{date} 'at' {time}` glue, month and day
+names, the compact suffixes, the currency symbols, the unit patterns,
+plural rules, the relative-time and list patterns. Data files with a
+version, generated or copied from CLDR, never literals typed from memory.
+(Finding 6.)
 
 ## 5. Time zones
 
@@ -146,12 +200,17 @@ The hard part, because pages pass zone names and read them back:
   browsers throw for one they do not know, so a page's typo behaves as it
   does elsewhere.
 - **The host's zone.** `resolvedOptions().timeZone` with no `timeZone`
-  must be an IANA name. os64's `TZ` is a POSIX string; the table maps it
-  back by rule (`EST5EDT,M3.2.0,M11.1.0` → `America/New_York`, the
-  canonical zone first with that rule; tzdata's own `EST5EDT` zone where
-  the string is that bare legacy form). A `TZ` no zone carries resolves to
-  `Etc/GMT±N` for its standard offset, as Chrome does for an unnamed
-  offset; no `TZ` is `UTC`.
+  must be an IANA name, and os64's `TZ` is a POSIX string, which many
+  zones share (`EST5EDT,M3.2.0,M11.1.0` is New York's rule and Toronto's
+  and thirty others'). So, without guessing silently (Fable's finding 4):
+  where `TZ` is one of tzdata's own legacy names (`EST5EDT`, `CST6CDT`,
+  `MST7MDT`, `PST8PDT`, which is what the P5 runs), that name, because it
+  IS an IANA zone; for any other rule, a fixed preference, one row per
+  rule in a small table in the tree, the most populous zone that carries
+  it; a rule no zone carries, `Etc/GMT±N` for its standard offset; no
+  `TZ`, `UTC`. The real cure is letting the system's `TZ` be an IANA
+  name too (`bootenv.conf`'s `TZ = America/Toronto`, resolved through the
+  same table); that is libos64's parser and is booked, not this slice.
 - **History is the honest gap.** A footer is the zone's CURRENT rule. A
   date from before the rule took effect (US 2007, the EU's 1996 change, a
   country that has since moved zones) formats with today's rule, off by an
@@ -160,6 +219,9 @@ The hard part, because pages pass zone names and read them back:
   about 400 KiB for every zone; booked, with the cost named, for the day a
   page shows a wrong historical hour. QuickJS's own `Date` already has the
   same gap, so Intl and `Date` agree.
+- **The offset of a named zone at an instant** is the zone door's (§ 3),
+  evaluating the rule from the table with libos64's code, so the
+  `M.m.w.d`, `Jn` and `/time` forms are read by one evaluator.
 - **Zone names in output** (`timeZoneName`): `short` gives `EST`/`EDT` for
   the zones whose en-US names CLDR gives (the US ones) and `GMT-5` for the
   rest, which is CLDR's own rule for en-US; `long` gives CLDR's long names
@@ -173,15 +235,18 @@ The hard part, because pages pass zone names and read them back:
   written as JS literals: month and day names, the date patterns per
   skeleton, plural rules, currency symbols, compact suffixes, units) plus
   the C zone table. To be measured, not promised.
-- **Each realm.** Compiled once a process and kept as bytecode, as
-  streams.c keeps its own (STREAMS.md § 8: a realm then reads bytecode in
-  about a thirtieth of the compile). And LAZY: the realm installs `Intl` as
-  an object whose constructors are small stubs, and the first `new
-  Intl.X` (or the first redefined built-in called with arguments) reads
-  the full bytecode. A page that never formats pays only the stubs.
-  Whether the stubs are honest (each a real constructor with the right
-  `length`, `name` and prototype, so nothing observable changes when the
-  rest arrives) is a § 9 question for Fable.
+- **Each realm, measured before chosen.** Compiled once a process and
+  kept as bytecode, as streams.c keeps its own (STREAMS.md § 8: a realm
+  then reads bytecode in about a thirtieth of the compile), and installed
+  EAGERLY if the measurement allows: the budget is about a millisecond and
+  a few hundred KiB a realm on the P5. Lazy only if a realm pays more, and
+  then real constructors and prototypes installed eagerly with only the
+  data loaded on first use, never stub constructors: a page reading
+  `Intl.DateTimeFormat.prototype.format` before constructing, the order of
+  `Intl`'s properties and `Function.prototype.toString` would all tell a
+  stub from the real thing, and a load that fails inside `new
+  Intl.DateTimeFormat` mid-page is a failure path no page expects.
+  (Fable's finding 9, the § 9.3 ruling.)
 - **The page's bytecode cache.** A kept blob is keyed by the engine's
   build identity, a hash over upstream and the libjs patch series
   (BYTECODE_CACHE.md). Intl's script is not among those sources, and a
@@ -200,6 +265,10 @@ The hard part, because pages pass zone names and read them back:
   digits; `supportedValuesOf` says exactly which.
 - Segmenter, DisplayNames, DurationFormat (§ 4).
 - Historical time-zone rules (§ 5).
+- An IANA name in the system's `TZ` (§ 5; libos64's, booked).
+- Collation beyond Latin-1 (§ 4.1; full DUCET, booked).
+- Likely subtags beyond English: `maximize` and `minimize` answer the tag
+  itself for one the data lacks (§ 4).
 - Changing what `Date.prototype.toString` prints (ECMA-262's, not 402's).
 
 ## 8. Proof
@@ -214,49 +283,65 @@ The hard part, because pages pass zone names and read them back:
   passes, except those that need a locale, calendar, numbering system or
   historical zone the data does not hold, each listed with its reason.
 - **The census's own calls, as fixtures:** every literal option bag § 1
-  found, formatted against a fixed date and number, compared with the
-  string Chrome produces for it (captured once into a file in the tree,
-  as W1's captures were). This is the "formats like Chrome" line, held by
-  test.
-- **The three GitHub pages, on QEMU and the P5:** each draws; the record
-  carries no `Intl` miss.
-- **The corpus census rerun after** (with the module keep below): no
-  script dies on Intl.
+  found, formatted against a fixed date and number, compared BYTE FOR BYTE
+  with the string Chrome produces for it (captured once into a file in the
+  tree, as W1's captures were). This is the "formats like Chrome" line,
+  held by test. Byte for byte matters: Chrome's en-US times have put
+  U+202F NARROW NO-BREAK SPACE before `AM`/`PM` since ICU 72, and
+  `formatRange` joins with U+2009 THIN SPACE around an en dash; "like
+  Chrome" means emitting both, and a comparison that folds whitespace
+  would hide a wrong one. (Fable's finding 5.)
+- **The glass draws them:** yonder's text painter must draw U+202F and
+  U+2009 as spaces, not as missing glyphs, in every face it ships; a test
+  page formatting `timeStyle: "short"` and a range is the proof, on QEMU
+  and the P5.
+- **The three GitHub pages, on QEMU and the P5:** each draws (after A2,
+  § 9); the record carries no `Intl` miss.
+- **The corpus census rerun** before A2 is cut, with module sources kept
+  (below), and after A3: no script dies on Intl.
 
-**A census tool fix rides with the slice:** yonder keeps a classic
-script's source in the record's folder (`script_arrived` → `diag_keep`),
-but a module and everything it imports arrive through the module loader
-and are never kept. GitHub's pages are all modules, so their records hold
-33 stylesheets and no script. Keeping module sources too (the same index,
-a `module` kind) is a few lines in yonder and makes the next census see
-the sites that matter most.
+**The module keep is not this slice's** (finding 8): yonder keeps a
+classic script's source in the record's folder (`script_arrived` →
+`diag_keep`), but a module and everything it imports arrive through the
+module loader and are never kept, so GitHub's records hold 33 stylesheets
+and no script. Keeping module sources too (the same index, a `module`
+kind) is a few lines of yonder that touch nothing Intl builds: its own
+small PR, merged first, so the census before A2 sees GitHub's modules
+(the compact NumberFormat and the Collator of finding 1 were found by
+hand because the census could not).
 
-## 9. Rulings and questions
+## 9. The cut, and the rulings
 
-1. **Fidelity (Chris's).** My lean: like Chrome for en-US, held by the
-   captured fixtures; where Chrome and the spec disagree (CLDR versions
-   drift), Chrome's string, because that is what page authors tested
-   against.
-2. **Time-zone history (Chris's).** My lean: current rules now, the
-   transitions booked (§ 5).
-3. **Lazy stubs (Fable's).** Are constructor stubs that load the rest on
-   first use an honest cut, or does something observable break (a page
-   reading `Intl.DateTimeFormat.prototype` before constructing; property
-   order on `Intl`)? My lean: install the real prototypes and constructors
-   eagerly (they are small) and load only the formatting machinery and
-   data lazily, so nothing observable depends on when it arrived.
-4. **The switch (Chris's).** Intl is language, but it is new surface this
-   arc adds, and MODERN_WEB.md rule 4 says one switch covers the arc's
-   surface. My lean: behind `modern = on`, like every other slice; with it
-   off, a page sees today's QuickJS (no Intl, today's `toLocale*`).
-5. **Where the slice ends.** My lean: three PRs in order, each merged
-   before the next starts (Chris, 2026-11-04: no long chains):
-   (A1) the realm door, the option machinery, Locale, DateTimeFormat with
-   the zone table, the date `toLocale*` built-ins, the test262 runner and
-   the module keep — GitHub's pages draw after this one;
-   (A2) NumberFormat, PluralRules, `Number`/`BigInt.toLocaleString`;
-   (A3) RelativeTimeFormat, ListFormat, Collator with `localeCompare`,
-   `getCanonicalLocales`, `supportedValuesOf`.
-   A1 alone leaves `Intl` without NumberFormat, which a page tests with
-   `Intl.NumberFormat` and finds absent; rule 1 is per interface, and each
-   constructor is one.
+Fable reviewed this design on 2026-11-04 (INTL_REVIEW.md, untracked):
+build it, with ten findings, all folded in above. Where each ruling
+stands:
+
+1. **Fidelity (Chris's; Fable concurs).** Chrome's strings for en-US,
+   held byte for byte by captured fixtures (§ 8), over CLDR data with a
+   named version (§ 4.2); where Chrome and Firefox disagree, Chrome.
+2. **Time-zone history (Chris's; Fable concurs).** Current rules; the
+   transitions booked with their 400 KiB named (§ 5).
+3. **Lazy loading (Fable's, ruled).** Measure first; eager if a realm
+   pays under the budget; otherwise real constructors and prototypes with
+   only the data loaded on first use; never stub constructors (§ 6).
+4. **The switch (Chris's; Fable concurs).** In yonder, behind
+   `modern = on` like every slice; with it off, a page sees today's
+   QuickJS (no `Intl`, today's `toLocale*`). The `js` command installs it
+   unconditionally: a shell has no Modern Web switch and no classic page
+   to protect.
+5. **The cut (Fable's finding 1, ruled).** DateTimeFormat alone does not
+   draw GitHub's pages: their modules construct NumberFormat (compact),
+   Collator and ListFormat at module scope, and primer-react's
+   RelativeTime constructs RelativeTimeFormat and Locale in render. So,
+   each PR merged before the next starts (Chris, 2026-11-04: no long
+   chains), after the module keep's own small PR (§ 8):
+   - **A1:** the realm door and the zone door, the option machinery,
+     Locale, DateTimeFormat with the zone table, and the test262 runner
+     (the gate exists before the first formatter merges).
+   - **A2:** NumberFormat, PluralRules, RelativeTimeFormat, ListFormat,
+     Collator. They share A1's machinery, and together they are what a
+     page constructs. **GitHub's pages draw after A2.**
+   - **A3:** the redefined built-ins (`toLocale*`, `localeCompare`),
+     `getCanonicalLocales`, `supportedValuesOf`.
+
+   Each constructor ships whole or not at all, at every step.
