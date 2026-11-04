@@ -396,6 +396,22 @@ static void data_page_cases(void)
 
 static void data_picture_cases(void)
 {
+    probe_page("<!doctype html><p>catalog</p>",false);
+    char *url=data_svg_url(9000);
+    int32_t indices[4];
+    for(unsigned mode=0;mode<4;++mode)indices[mode]=picture_for_mode(&g.page,url,mode);
+    for(unsigned mode=0;mode<4;++mode)
+        check(indices[mode]==(int32_t)mode,"long data: catalog keeps request modes distinct");
+    for(unsigned i=0;i<96;++i) {
+        char address[80];snprintf(address,sizeof(address),"https://a.test/%u.png",i);
+        check(picture_for_mode(&g.page,address,i%4)>=0,"catalog grows across request modes");
+    }
+    for(unsigned mode=0;mode<4;++mode)
+        check(picture_for_mode(&g.page,url,mode)==indices[mode],
+              "long data: catalog rehash preserves URL length and request mode");
+    check(picture_find_span(&g.page,url,strlen(url))==indices[0],
+          "CSS span lookup finds the display entry beside Canvas entries");
+    os64_free(url);probe_drop();
     data_worker_cases();
     data_page_cases();
 }

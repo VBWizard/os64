@@ -155,14 +155,23 @@ boundaries live.
   which is the carve-from-frontier case as today. A request never meets a
   block smaller than itself. The walk the P5 measured becomes a bitmap
   word and at most one short bin.
-- *Largest free*: the highest set bit names the bin; scan that bin alone.
-  `free_list_rescan_largest` keeps its name and loses its cost.
+- *Largest free*: retain the maximum pointer and conservative other-block
+  bound from the [2026-11-01 bookkeeping change](HEAP_MAXIMUM_REVIEW.md).
+  They certify replacement maxima without a walk when possible. When a
+  replacement remains unresolved, the highest set bit names the bin; scan
+  that bin alone. `free_list_rescan_largest` keeps its name and its work
+  becomes proportional to that bin's population. This addresses the remaining
+  scan pattern where a maximum at the list head is split below a nearby
+  runner-up, then restored by the next free.
 
 **The report** (`abi/include/os64/heap.h`, version 1 → 2, appended fields,
 the kernel validates the version before reading them): `walk_steps`, free
 blocks examined by allocations since start, which is the number this whole
 hunt lacked and would have answered it from one `cat`; and `bins_used`,
-non-empty bins now. `largest_free` and `blocks_free` keep their meaning.
+non-empty bins now. `largest_free` and `blocks_free` keep their meaning. If
+maximum-maintenance visits are instrumented too, distinguish entries visited
+from rescan invocations: an empty free list leaves the maximum pointer NULL,
+so `report_end` may invoke a rescan that visits zero entries.
 
 **The verifier** (`heap_verify_locked`): walks every bin, requires each
 block's `bin_of(size)` to be the bin it sits in, its canary FREE, and the

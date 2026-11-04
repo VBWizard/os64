@@ -131,6 +131,18 @@ static void sizes_worker_cases(void)
     (void)yonder_picture_run(job, NULL, NULL, &out); p = out;
     check(p && p->image.width == 400 && p->image.height == 200, "sizes: a rectangle past it keeps it whole");
     yonder_picture_release(job, out);
+    /* A Canvas source ignores display reduction, including a resample hint. */
+    for (unsigned mode = 1; mode <= 3; mode++) {
+        job = sizes_job(10, 5); out = NULL;
+        job->canvas_request = mode;
+        job->resample = true;
+        job->data_url = copy_text("data:image/png,SIZED%20400x200");
+        check(yonder_picture_run(job, NULL, NULL, &out) == 1, "sizes: Canvas source decoded");
+        p = out;
+        check(p && p->image.width == 400 && p->image.height == 200 && p->origin_clean,
+              "sizes: Canvas retains natural-resolution pixels and data-image origin");
+        yonder_picture_release(job, out);
+    }
     /* An SVG asked to cover a rectangle is a document all the same. */
     picture_http_bytes = picture_svg_source; picture_http_type = "image/svg+xml";
     job = sizes_job(10, 5); job->svg_enabled = true; out = NULL;
@@ -221,6 +233,17 @@ static void sizes_page_cases(void)
           g.page.kept_bytes == 100u * 50u * 4u, "sizes: and arrives at that size, its own size kept apart");
     sizes_layout(1000);
     check(g.page.resample_owed == 0 && sizes_held() == NULL, "sizes: a picture kept at its need is left alone");
+    sizes_close();
+
+    sizes_open("<!doctype html><p>Canvas source</p>", "SIZED 400x200");
+    int32_t canvas_index = picture_for_mode(&g.page, "data:image/png,SIZED%20400x200", 1);
+    pictures_feed(&g.page);
+    job = sizes_held();
+    check(canvas_index >= 0 && job && job->canvas_request == 1,
+          "sizes: shared submission preserves Canvas request mode");
+    check(sizes_run() && g.page.pics[canvas_index].origin_clean &&
+          g.page.pics[canvas_index].image.width == 400,
+          "sizes: Canvas catalog receives full-size origin-clean pixels");
     sizes_close();
 
     /* A box that waits on the picture: asked for whole, then judged. */

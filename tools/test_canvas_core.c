@@ -57,6 +57,11 @@ static void basics(void)
     OK(canvas_create(&opts, 4, 3, &c));
     CHECK(state(c).fill_argb == 0xff000000 && state(c).global_alpha == 1);
     for (unsigned i = 0; i < 12; ++i) CHECK(bitmap(c).pixels[i] == 0);
+    OK(canvas_set_fill_rgb_alpha(c, 0xffffff, .5));
+    CHECK(state(c).fill_alpha == .5 && state(c).fill_argb == 0x80ffffff);
+    OK(canvas_save(c)); OK(canvas_set_fill(c, 0xff000000)); OK(canvas_restore(c));
+    CHECK(state(c).fill_alpha == .5);
+    CHECK(canvas_set_fill_rgb_alpha(c, 0, NAN) == CANVAS_BAD_ARGUMENT && state(c).fill_alpha == .5);
     OK(canvas_ack_damage(c));
     OK(canvas_set_fill(c, 0xffff0000));
     OK(canvas_fill_rect(c, 3, 2, -2, -1));
@@ -230,9 +235,107 @@ static void shared_owner(void)
     canvas_stats_t stats; OK(canvas_stats(a, &stats)); CHECK(!stats.saved_states);
     OK(canvas_destroy(a)); CHECK(!o.live);
 }
+static void pixels(void)
+{
+    Owner o = {0}; canvas_options_t opts = options(&o); canvas_context_t *c;
+    OK(canvas_create(&opts, 3, 2, &c));
+    uint8_t source[] = {255, 0, 0, 255, 0, 255, 0, 128, 255, 255, 255, 0,
+                         1, 2, 3, 4, 0, 0, 255, 255, 0, 255, 255, 255};
+    canvas_rgba8_t src = {source, 3, 2, 12, sizeof(source)};
+    OK(canvas_set_alpha(c, 0)); OK(canvas_set_fill(c, 0));
+    OK(canvas_put_pixels(c, &src, 0, 0, NULL));
+    pixel(c, 0, 0, 0xffff0000); pixel(c, 1, 0, 0x80008000); pixel(c, 2, 0, 0);
+    pixel(c, 1, 1, 0xff0000ff);
+    uint8_t read[40]; memset(read, 0xa5, sizeof(read));
+    canvas_rgba8_t dst = {read, 4, 2, 20, 36};
+    OK(canvas_ack_damage(c)); OK(canvas_read_pixels(c, -1, 0, &dst));
+    const uint8_t first[] = {0, 0, 0, 0, 255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 0, 0};
+    CHECK(!memcmp(read, first, sizeof(first)));
+    for (unsigned i = 16; i < 20; ++i) CHECK(read[i] == 0xa5 && read[i+20] == 0xa5);
+    draw2d_damage_t d; OK(canvas_damage(c, &d)); CHECK(!d.x1);
+    OK(canvas_read_pixels(c, INT64_MIN, INT64_MAX, &dst));
+    for (unsigned y = 0; y < 2; ++y)
+        for (unsigned x = 0; x < 16; ++x) CHECK(!read[y * 20 + x]);
+    dst.capacity = 35; memset(read, 0xa5, sizeof(read));
+    CHECK(canvas_read_pixels(c, 0, 0, &dst) == CANVAS_LIMIT);
+    for (unsigned i = 0; i < sizeof(read); ++i) CHECK(read[i] == 0xa5);
+    canvas_bitmap_t v = bitmap(c);
+    canvas_rgba8_t alias = {(uint8_t *)v.pixels, v.width, v.height, v.stride, v.capacity};
+    CHECK(canvas_read_pixels(c, 0, 0, &alias) == CANVAS_BAD_ARGUMENT);
+    CHECK(canvas_put_pixels(c, &alias, 0, 0, NULL) == CANVAS_BAD_ARGUMENT);
+    OK(canvas_reset(c, 3, 2)); OK(canvas_ack_damage(c));
+    draw2d_damage_t dirty = {1, 0, 3, 1};
+    OK(canvas_put_pixels(c, &src, -1, 1, &dirty));
+    pixel(c, 0, 1, 0x80008000); pixel(c, 1, 1, 0); pixel(c, 2, 1, 0);
+    OK(canvas_damage(c, &d)); CHECK(d.x0 == 0 && d.y0 == 1 && d.x1 == 2 && d.y1 == 2);
+    OK(canvas_ack_damage(c));
+    OK(canvas_put_pixels(c, &src, INT64_MIN, INT64_MAX, NULL));
+    dirty = (draw2d_damage_t){UINT32_MAX, 0, UINT32_MAX, UINT32_MAX};
+    OK(canvas_put_pixels(c, &src, 0, 0, &dirty));
+    OK(canvas_damage(c, &d)); CHECK(!d.x1);
+    OK(canvas_destroy(c)); CHECK(!o.live);
+    opts.max_draw_pixels = 1;
+    OK(canvas_create(&opts, 3, 2, &c));
+    CHECK(canvas_put_pixels(c, &src, 0, 0, NULL) == CANVAS_LIMIT); pixel(c, 0, 0, 0);
+    dirty = (draw2d_damage_t){0, 0, 1, 1};
+    OK(canvas_put_pixels(c, &src, 0, 0, &dirty)); pixel(c, 0, 0, 0xffff0000);
+    dst.capacity = sizeof(read);
+    CHECK(canvas_read_pixels(c, 0, 0, &dst) == CANVAS_LIMIT);
+    OK(canvas_destroy(c)); CHECK(!o.live);
+}
+/* Sparse paths must not shade or dirty uncovered pixels when transparent
+ * source leaves the destination alone. COPY and the other clearing operators
+ * still process the clip outside the path. */
+static uint32_t counted_paint(void *opaque, double x, double y)
+{
+    size_t *calls = opaque;
+    CHECK(x >= 0 && x < 4 && y >= 0 && y < 3);
+    ++*calls;
+    return 0xff804020;
+}
+static void sparse_paint(void)
+{
+    for (unsigned op = DRAW2D_SOURCE_OVER; op <= DRAW2D_LIGHTER; ++op)
+        for (unsigned wide = 0; wide < 2; ++wide) {
+            bool clears = op == DRAW2D_SOURCE_IN || op == DRAW2D_SOURCE_OUT ||
+                op == DRAW2D_DESTINATION_IN || op == DRAW2D_DESTINATION_ATOP || op == DRAW2D_COPY;
+            uint32_t narrow[12]; draw2d_pixel_t pixels[12];
+            uint8_t coverage[12] = {0}, clip[12];
+            coverage[6] = 255;
+            for (size_t i = 0; i < 12; ++i) {
+                narrow[i] = 0x80402010; pixels[i] = draw2d_unpack(narrow[i]); clip[i] = 255;
+            }
+            clip[0] = 0;
+            draw2d_surface_t surface = {wide ? (void *)pixels : (void *)narrow, 4, 3,
+                wide ? 4 * sizeof(*pixels) : 4 * sizeof(*narrow),
+                wide ? sizeof(pixels) : sizeof(narrow),
+                wide ? DRAW2D_ARGB16_PREMULTIPLIED : DRAW2D_ARGB8_PREMULTIPLIED};
+            size_t calls = 0;
+            draw2d_shader_t shader = {&calls, counted_paint};
+            draw2d_damage_t damage;
+            CHECK(draw2d_paint_shader(&surface, coverage, clip, 12, &shader,
+                (draw2d_composite_t){op, 65535}, 12, &damage) == DRAW2D_OK);
+            CHECK(calls == (op == DRAW2D_CLEAR ? 0 : clears ? 11 : 1));
+            for (size_t i = 0; i < 12; ++i) if (i != 6) {
+                uint32_t expected = clears && i != 0 ? 0 : 0x80402010;
+                if (wide) {
+                    draw2d_pixel_t want = draw2d_unpack(expected);
+                    CHECK(!memcmp(&pixels[i], &want, sizeof(want)));
+                } else CHECK(narrow[i] == expected);
+            }
+            CHECK(damage.x0 == (clears ? 0u : 2u) && damage.y0 == (clears ? 0u : 1u));
+            CHECK(damage.x1 == (clears ? 4u : 3u) && damage.y1 == (clears ? 3u : 2u));
+            memset(clip, 0, sizeof(clip)); calls = 0;
+            CHECK(draw2d_paint_shader(&surface, coverage, clip, 12, &shader,
+                (draw2d_composite_t){op, 65535}, 12, &damage) == DRAW2D_OK);
+            CHECK(!calls && !damage.x1 && !damage.y1);
+        }
+}
+#include "test_draw2d_blur.inc"
+#include "test_draw2d_rect.inc"
 int main(void)
 {
-    basics(); surfaces(); repeated_blends(); failures(); shared_owner();
+    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels(); sparse_paint(); shared_blur(); rectangle_spans(); rectangle_blend_table();
     printf("Canvas core: %zu assertions passed (pixels, rounding, bounds, state, reset, refusal, ownership)\n", checks);
     return 0;
 }

@@ -1,0 +1,38 @@
+# WPT's html/webappapis/animation-frames in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/webappapis/animation-frames --update
+# rewrites [passing].
+[required]
+callback-exception.html	requestAnimationFrame callback exceptions are reported to error handler
+callback-handle.html	Check window.requestAnimationFrame can return a valid callback handle
+callback-invoked.html	requestAnimationFrame callback is invoked at least once before the timeout
+callback-multicalls.html	Check that multiple calls to requestAnimationFrame with the same callback will result in multiple entries being in the list with that same callback.
+callback-timestamp.html	Check FrameRequestCallback has a DOMHighResTimeStamp argument
+cancel-invoked.html	cancelAnimationFrame does nothing if there is no callback with the given handle
+cancel-pending.html	cancelAnimationFrame cancels a pending animation frame callback
+nested-raf-not-sync.html	A nested animation callback runs in a later rendering update
+no-interference-timers.html	Animation frame IDs must be unaffected by timer IDs
+no-interference-timers.html	Animation frame callbacks must still be invoked even if passed to clearInterval
+no-interference-timers.html	Animation frame callbacks must still be invoked even if passed to clearTimeout
+no-interference-timers.html	setInterval callbacks must still be invoked even if passed to cancelAnimationFrame
+no-interference-timers.html	setTimeout callbacks must still be invoked even if passed to cancelAnimationFrame
+same-dispatch-time.html	requestAnimationFrame will timestamp events in the same queue with the same time
+spurious-frame-callbacks-optimization.html	Optimization of requestAnimationFrame callbacks that don't modify the DOM shouldn't break animations
+[excluded]
+callback-cross-realm-report-exception.html	Requires an iframe script realm (IFRAME.md Tier 1).
+[passing]
+callback-exception.html	requestAnimationFrame callback exceptions are reported to error handler
+callback-handle.html	Check window.requestAnimationFrame can return a valid callback handle
+callback-invoked.html	requestAnimationFrame callback is invoked at least once before the timeout
+callback-multicalls.html	Check that multiple calls to requestAnimationFrame with the same callback will result in multiple entries being in the list with that same callback.
+callback-timestamp.html	Check FrameRequestCallback has a DOMHighResTimeStamp argument
+cancel-invoked.html	cancelAnimationFrame does nothing if there is no callback with the given handle
+cancel-pending.html	cancelAnimationFrame cancels a pending animation frame callback
+nested-raf-not-sync.html	A nested animation callback runs in a later rendering update
+no-interference-timers.html	Animation frame IDs must be unaffected by timer IDs
+no-interference-timers.html	Animation frame callbacks must still be invoked even if passed to clearInterval
+no-interference-timers.html	Animation frame callbacks must still be invoked even if passed to clearTimeout
+no-interference-timers.html	setInterval callbacks must still be invoked even if passed to cancelAnimationFrame
+no-interference-timers.html	setTimeout callbacks must still be invoked even if passed to cancelAnimationFrame
+same-dispatch-time.html	requestAnimationFrame will timestamp events in the same queue with the same time
+spurious-frame-callbacks-optimization.html	Optimization of requestAnimationFrame callbacks that don't modify the DOM shouldn't break animations

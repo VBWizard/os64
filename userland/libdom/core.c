@@ -402,6 +402,7 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     }
     JS_SetClassProto(ctx, dom->collection_class, collection_prototype);
     if (d_static_list_install(dom, ctx) < 0 || d_mixin_install(dom, ctx) < 0) goto fail;
+    if (selected.modern) d_mutation_start(dom);
     if (selected.url != NULL) {
         size_t size = os64_strlen(selected.url) + 1;
         dom->url = d_alloc(dom, size);
@@ -463,6 +464,7 @@ void os64_dom_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
+    d_mutation_stop(dom);
     /* What the page changed in its storage and has not committed goes to
      * the store before the binding is gone: the last of its commits. */
     d_storage_drain(dom);
@@ -471,8 +473,8 @@ void os64_dom_drain(os64_dom_t *dom)
     d_timer_drain(dom);
     d_message_drain(dom);
     d_idle_drain(dom);
-    /* The document may outlive the binding: its listener goes now. */
-    d_custom_drain(dom);
+    d_animation_drain(dom);
+    d_pointer_drain(dom);
     d_observers_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
@@ -508,6 +510,7 @@ void os64_dom_free(os64_dom_t *dom)
         DValue *next = entry->next;
         d_event_free(dom, entry);
         d_attr_free(dom, entry);
+        d_canvas_free(entry);
         d_free(dom, entry->output_default);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);
@@ -520,13 +523,13 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-/* The eight registries: wrappers and other held values, listener callbacks,
+/* The retained registries: wrappers and other held values, listener callbacks,
  * timer callbacks with their arguments, what the requests out hold, the
  * failures waiting for their events (report.c), the windows that posted
- * the messages waiting (message.c), the idle callbacks (idle.c), and the
- * mutation observers their registrations hold (observer.c). */
+ * the messages waiting (message.c), idle callbacks (idle.c) and frame callbacks (animation.c),
+ * and registered mutation observers (observer.c). */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
     return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
-        dom->pending_held + dom->messages_held + dom->idle_live + dom->observers_held : 0;
+        dom->pending_held + dom->messages_held + dom->idle_live + dom->animation_count + dom->observers_held : 0;
 }

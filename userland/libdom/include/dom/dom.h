@@ -4,6 +4,7 @@
 #include <html/html.h>
 #include <page/page.h>
 #include <os64/js.h>
+#include <os64/geometry_backend.h>
 #include <os64/url.h>
 #include <way/origin.h>
 
@@ -201,7 +202,7 @@ static inline os64_dom_options_t os64_dom_default_options(void)
 
 /* Which interface a host event is, with the Modern Web switch on: an
  * Event, a MouseEvent, a KeyboardEvent, a FocusEvent, an InputEvent (a
- * person's edit of a text control), a SubmitEvent. With it off every one is
+ * person's edit of a text control), a SubmitEvent or a PointerEvent. With it off every one is
  * an Event, MOUSE and KEY carrying their fields as data properties. */
 typedef enum {
     OS64_DOM_EVENT_PLAIN = 0,
@@ -209,11 +210,12 @@ typedef enum {
     OS64_DOM_EVENT_KEY,
     OS64_DOM_EVENT_FOCUS,
     OS64_DOM_EVENT_INPUT,
-    OS64_DOM_EVENT_SUBMIT
+    OS64_DOM_EVENT_SUBMIT,
+    OS64_DOM_EVENT_POINTER
 } os64_dom_event_kind_t;
 
 /* An event the host dispatches. Strings are borrowed for the call. Mouse
- * fields are read for MOUSE, key fields for KEY. related is the other node:
+ * fields are read for MOUSE and POINTER, key fields for KEY. related is the other node:
  * mouseover's and mouseout's, a focus change's (the node losing focus for
  * focus, the one gaining it for blur), a submission's submitter; or NULL.
  * detail is UIEvent's: a mouse button's click count, 0 for any other
@@ -223,7 +225,7 @@ typedef struct {
     const char *type;
     bool bubbles, cancelable;
     os64_dom_event_kind_t kind;
-    int32_t client_x, client_y, screen_x, screen_y;
+    double client_x, client_y, screen_x, screen_y;
     int32_t button;
     int32_t detail;
     uint16_t buttons;
@@ -233,7 +235,12 @@ typedef struct {
     bool shift, ctrl, alt, meta;
     // Optional CSS-page coordinates captured with the event, before callbacks.
     bool page_coordinates;
-    int32_t page_x, page_y;
+    double page_x, page_y;
+    /* POINTER adds identity and pressure to the mouse coordinate record. */
+    int32_t pointer_id;
+    const char *pointer_type;
+    bool is_primary;
+    double pressure;
 } os64_dom_event_t;
 
 typedef enum {
@@ -242,18 +249,19 @@ typedef enum {
     OS64_DOM_NAVIGATE_REPLACE,   /* location.replace() */
     OS64_DOM_NAVIGATE_RELOAD,
     OS64_DOM_NAVIGATE_HISTORY,   /* history.back/forward/go: delta */
-    OS64_DOM_NAVIGATE_FOLLOW,    /* a link's click() not cancelled: node */
+    OS64_DOM_NAVIGATE_FOLLOW,    /* an uncanceled link activation: node */
     OS64_DOM_NAVIGATE_SUBMIT     /* form.submit(), or a submit button's click()
                                   * and submit event not cancelled: node is the
                                   * form, submitter the button or NULL */
 } os64_dom_navigation_kind_t;
 
-/* The last navigation a script asked for. Nodes arrive HELD: the taker
+/* The last script navigation request or native activation. Nodes arrive HELD: the taker
  * releases them with os64_html_release when it is done with them. */
 typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
     int32_t delta;
+    bool user_activated; /* the default of a trusted native click, not a script request */
     char url[OS64_DOM_URL_MAX];
 } os64_dom_navigation_t;
 
@@ -535,6 +543,16 @@ typedef bool (*os64_dom_computed_provider_t)(void *opaque, const os64_html_node_
  * copied. A property not put reads "". False when the binding could not
  * keep it (its budget), which the provider answers as its own false. */
 bool os64_dom_computed_put(os64_dom_computed_t *out, int32_t prop, const char *value, size_t length);
+/* Synchronous SVG fill query in element-local user units. The provider resolves
+ * fresh geometry/fill-rule after argument coercion, ignoring visual effects.
+ * No script or I/O runs in the callback. Temporary storage uses memory; poll
+ * cancelled during bounded work. Clear inside on refusal and report layout
+ * costs even on failure. Borrowed nodes and callbacks expire on return. */
+typedef os64_geometry_status_t (*os64_dom_svg_hit_provider_t)(void *,
+    const os64_html_node_t *, double x, double y, const os64_geometry_memory_t *,
+    bool (*cancelled)(void *), void *, bool *inside, os64_dom_geometry_stats_t *cost);
+void os64_dom_set_svg_hit(os64_dom_t *, os64_dom_svg_hit_provider_t, void *);
+
 /* What making the style current cost, added to os64_dom_geometry_stats. */
 void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t elapsed_us);
 /* NULL removes it; a declaration's read then throws InvalidStateError for
@@ -764,6 +782,17 @@ uint64_t os64_dom_custom_visits(const os64_dom_t *dom);
 uint64_t os64_dom_message_next(const os64_dom_t *dom);
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 
+/* Animation callbacks: next is a monotonic millisecond deadline (UINT64_MAX
+ * when empty). fire runs one due snapshot in request order, with one shared
+ * performance-clock timestamp and runtime budget, checkpointing after each
+ * callback. Requests made during it wait for another frame; cancellations
+ * apply immediately. The successor's deadline counts from this batch's now,
+ * clamped to completion on overrun; missed intervals do not accumulate. The
+ * host calls between tasks on its rendering step, suppresses frames while
+ * covered, and presents once after the batch, yielding to input before another. */
+uint64_t os64_dom_animation_next(const os64_dom_t *dom);
+bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+
 /* IDLE CALLBACKS (W3C requestIdleCallback; MODERN_WEB.md § P2b): the host
  * says when its loop is idle, and the binding runs the page's idle
  * callbacks then. next answers when one may run on the host's clock: 0
@@ -778,8 +807,12 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * os64_dom_timer_fire. Owner thread, between tasks. */
 uint64_t os64_dom_idle_next(const os64_dom_t *dom);
 bool os64_dom_idle_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
+/* As idle_run, with a host rendering deadline in monotonic milliseconds.
+ * The grant and IdleDeadline.timeRemaining stop at that deadline. UINT64_MAX
+ * leaves the grant bounded by timers, pending frames and its 50 ms period. */
+bool os64_dom_idle_before(os64_dom_t *dom, uint64_t render_due, os64_js_outcome_t *outcome);
 
-/* The navigation a script asked for since the last take, if any: the last
+/* A script navigation request or native activation since the last take: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add
  * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the
  * one before it. False when there is none. */

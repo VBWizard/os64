@@ -281,7 +281,7 @@ static void fg_release(os64_font_glyph_t *g)
 static const os64_font_backend_t kFake = {
     OS64_FONT_BACKEND_REVISION, sizeof(os64_font_backend_t),
     fe_create, fe_destroy, fe_stats, ff_open, ff_close, ff_info,
-    ff_lookup, ff_pair, ff_render, fg_view, fg_release,
+    ff_lookup, ff_pair, ff_render, fg_view, fg_release, NULL,
 };
 
 // ── What the loader should find ─────────────────────────────────────────────

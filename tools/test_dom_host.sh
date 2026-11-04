@@ -9,9 +9,9 @@ cleanup() {
 trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto report document frames clone message idle options selection importmap controls elements tables \
+    browsing crypto report document frames clone message idle animation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
-    sheets; do
+    sheets point svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 # THE ONE DOOR (attr.c): libdom sets and removes attributes through d_set_attr
@@ -30,7 +30,7 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
     '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"'
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
-    -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
+    -Iuserland/libsvg/include -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
     -Iuserland/libgarb/include -Iuserland/libway/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
     -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
     '-DGARB_MODERN_PROBE="animation-name"')
@@ -39,12 +39,14 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
 # hold to (tools/test_dom_modern.inc); libgarb's own suite proves the rest.
 objects=()
 for source in userland/libjs/runtime/runtime.c userland/libos64/str.c userland/libos64/fmt.c \
+    userland/libos64/text.c userland/libos64/text_cache.c userland/libos64/text_decode.c userland/libos64/text_bitmap.c \
     userland/libos64/bidi.c userland/libos64/url.c userland/libos64/arena.c tools/test_js_port_calendar.c tools/test_dom_host.c \
     userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \
     userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
-    userland/libway/origin.c; do
+    userland/libsvg/{core,path,geometry,bounds,hit,stroke,scene,paint,gradient,cache}.c \
+    userland/libway/origin.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libos64/crc32.c; do
     object="$work/${source//\//_}.o"
     cc "${flags[@]}" -c "$source" -o "$object"
     if [ "$source" = userland/libos64/str.c ]; then
@@ -59,13 +61,28 @@ done
 # allocator name is distinct because these DSOs share one host executable.
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto report document frames clone message idle options selection importmap controls elements tables \
+    browsing crypto report document frames clone message idle animation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
-    sheets; do
+    sheets point svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \
         -Dos64_malloc_size=dom_host_malloc_size -c "userland/libdom/$name.c" -o "$object"
+    objects+=("$object")
+done
+mapfile -t ft_sources < <(python3 -c '
+import sys
+sys.path.insert(0,"tools")
+import test_freetype_host as ft
+for p in sum(ft.sources(),[]):
+    print(p.relative_to(ft.REPO))
+')
+for source in "${ft_sources[@]}"; do
+    object="$work/${source//\//_}.o"
+    cc "${flags[@]}" -DOS64_FREETYPE_HOSTED -DFT2_BUILD_LIBRARY \
+        -Iuserland/libfreetype/port -Iuserland/libfreetype/upstream/include \
+        -Wno-unused-variable -Wno-unused-but-set-variable -fcf-protection=none \
+        -fno-fast-math -ffp-contract=off -c "$source" -o "$object"
     objects+=("$object")
 done
 mapfile -t maths < <(make -s -C userland math-host-flags | python3 -c '

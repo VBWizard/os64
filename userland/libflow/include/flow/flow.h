@@ -917,6 +917,16 @@ typedef struct {
 
 // ── What the face hands in ──────────────────────────────────────────────
 
+/* Optional measurements of one flow_layout call. Times are microseconds
+ * from the caller's monotonic clock, with invalid/backward reads counted.
+ * Counts come from stages that returned a result; a stage returning NULL
+ * has no count. Times include attempted stages, including refused builds.
+ * `reused` is zero for a full rebuild. No clock is read without a sink. */
+typedef struct {
+    uint64_t style_us, boxes_us, layout_us, public_us;
+    uint64_t elements, boxes, measures, reused, clock_errors;
+} flow_profile_t;
+
 typedef struct {
     void *ctx;
     // Fonts: the face's resolver; on the host, the fake backend. `families`
@@ -1180,6 +1190,83 @@ typedef struct flow_tree flow_tree_t;
 // model until free. Its cascade, fonts and text context outlive it.
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
                          int32_t width, const flow_env_t *env);
+/* The same layout with an optional output sink and injectable monotonic
+ * microsecond clock. Both are borrowed for this call, and the sink is cleared
+ * even on refusal. A missing/invalid clock is counted, not treated as timing
+ * evidence. The ordinary flow_layout entry reads no profiling clock. */
+flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_page_t *model,
+                                  int32_t width, const flow_env_t *env, flow_profile_t *profile,
+                                  int64_t (*clock)(void *), void *clock_ctx);
+/* Build a fresh tree, copying unaffected computed styles from `previous`
+ * when its cascade generation and styling inputs agree. The previous tree
+ * is borrowed for this call; no arena ownership is shared. Boxes and layout
+ * are rebuilt. The cascade must have been updated for the current document.
+ * A NULL previous is a whole rebuild. Profiling has the contract above. */
+flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_page_t *model,
+                                  int32_t width, const flow_env_t *env, const flow_tree_t *previous,
+                                  flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
+/* Resource answers can change without a DOM mutation. The caller serializes
+ * layouts and advances revisions before such answers change. Owner identities
+ * must be stable across temporary resolver contexts; renew an owner on revision
+ * wrap. A NULL resource owner disables snapshot preparation. State owner/version
+ * identify the shared form state (both zero when there is none). */
+typedef struct {
+    const void *resource_owner;
+    uint64_t fonts_revision, replaced_revision;
+    const void *state_owner;
+    uint64_t state_version;
+} flow_reuse_inputs_t;
+
+typedef enum {
+    FLOW_REUSE_NO_SOURCE = 0,
+    FLOW_REUSE_INCOMPLETE,
+    FLOW_REUSE_INPUTS_CHANGED,
+    FLOW_REUSE_HISTORY_LOST,
+    FLOW_REUSE_BUDGET,
+    FLOW_REUSE_NO_MEMORY,
+    FLOW_REUSE_STRUCTURE,
+    FLOW_REUSE_DIRTY,
+    FLOW_REUSE_STYLE,
+    FLOW_REUSE_MOTION,
+    FLOW_REUSE_BOX_ROLE,
+    FLOW_REUSE_CALL_INPUTS,
+    FLOW_REUSE_FLOATS,
+    FLOW_REUSE_MARKER,
+    FLOW_REUSE_TRANSLATION,
+    FLOW_REUSE_RETAIN,
+    FLOW_REUSE_NREASONS
+} flow_reuse_reason_t;
+
+/* Snapshot diagnostics, separate from geometry's profile.reused. Refusals
+ * count failed preparation checks; source and destination preparation may
+ * each refuse in one call. Box checks count one refusal per rejected subtree.
+ * Equal subtrees/candidates certify structure, not a layout call signature. Dirty counts describe the previous snapshot's
+ * cumulative changes, including ancestors in dirty_subtrees. */
+typedef struct {
+    uint64_t nodes_indexed, dirty_nodes, dirty_subtrees;
+    uint64_t boxes_compared, subtrees_equal, geometry_candidates;
+    uint64_t intrinsic_hits, marker_measures;
+    size_t metadata_bytes, metadata_peak;
+    uint64_t refused[FLOW_REUSE_NREASONS];
+    bool source_ready;
+} flow_reuse_stats_t;
+
+/* The restyled layout with bounded, independent mutation-history snapshots.
+ * Box construction is fresh. Eligible ordinary subtrees copy completed layout
+ * results into fresh storage and retain their immutable text runs. Intrinsic
+ * width reuse is counted separately. Preparation failure builds normally;
+ * failure during copying follows the incomplete-layout contract.
+ * A previous snapshot's private dirty set advances cumulatively; the caller
+ * must serialize uses of that source and must not mutate/reenter via callbacks.
+ * No reference to the previous tree survives the call. Profiling charges
+ * preparation to layout_us. Ordinary layout entries register no reader. */
+flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64_page_t *model,
+                                    int32_t width, const flow_env_t *env,
+                                    const flow_tree_t *previous, const flow_reuse_inputs_t *inputs,
+                                    flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
+/* NULL supplies zero statistics. The answer is copied, not borrowed. */
+flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
+uint64_t flow_styles_reused(const flow_tree_t *tree);
 void flow_free(flow_tree_t *tree);
 // Borrowed snapshot whose indices the boxes carry; NULL if built without one.
 const os64_page_t *flow_model(const flow_tree_t *tree);

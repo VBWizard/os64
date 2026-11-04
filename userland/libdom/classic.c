@@ -421,12 +421,7 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         if (os64_dom_resolve(dom->document,dom->url,text,absolute,sizeof(absolute))) return JS_NewString(ctx,absolute);
     }
     if (magic == C_WIDTH || magic == C_HEIGHT) {
-        uint64_t number = 0;
-        while (*text >= '0' && *text <= '9') {
-            number = number * 10 + (unsigned)(*text++ - '0');
-            if (number > UINT32_MAX) return JS_NewInt32(ctx,0);
-        }
-        return JS_NewUint32(ctx,(uint32_t)number);
+        return d_image_dimension(dom,ctx,node,magic == C_HEIGHT);
     }
     return JS_NewString(ctx,text);
 }
@@ -582,8 +577,7 @@ static int string_tag(JSContext *ctx, JSValueConst prototype, JSAtom key, const 
  * `Element.prototype` is what every element inherits, so `el instanceof
  * Element` holds and a page may patch the prototype, as the Wayback
  * Machine's player does. One interface per prototype: an interface with no
- * prototype of its own here (most HTML elements have only HTMLElement's,
- * and SVG's subclasses only SVGElement's) is not installed, since aliasing
+ * prototype of its own here is not installed, since aliasing
  * it to a broader one would make `instanceof` lie, and the census says what
  * is missing (INTERFACES_FORMS.md). Each prototype's `constructor` is its
  * interface, and each interface object inherits its parent's

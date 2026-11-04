@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — A Personal Touch</title>
+<style>
+body{margin:0;background:#e4eee8;color:#233e3b;font:18px sans-serif}
+main{max-width:960px;margin:28px auto;padding:0 24px}h1{font-size:44px;margin:8px 0 12px}h2{font-size:23px;margin:0 0 12px}
+p{line-height:1.5}.eyebrow{font-size:14px;letter-spacing:3px;color:#48786b}.cards{display:flex;flex-wrap:wrap;gap:20px}
+.card{width:400px;flex-shrink:0;padding:20px;background:#fffdf3;border:1px solid #adc7ba;border-radius:12px}
+canvas{width:100%;height:170px;display:block;background:#193e45;border:1px solid #608b86}
+button{padding:10px 16px;background:#326e65;color:white;border:0;border-radius:6px;font-size:16px;margin:8px 10px 8px 0}
+.caption{font-size:15px;min-height:65px}.readout{font-size:14px;color:#48786b;min-height:24px}
+#lane{position:relative;height:170px;background:#d5e6dc;border:1px solid #608b86;overflow:hidden}
+#gate{position:absolute;left:0;top:32px;width:90px;height:100px;background:#d99765;border-radius:12px}
+</style>
+<main><p class="eyebrow">YONDER / CANVAS / POINTER INPUT</p><h1>A Personal Touch</h1>
+<p>The drawings have learned to listen. Hold, drag, scribble, and let go.</p>
+<p id="ready">Enable Scripts and Modern Web, then reload.</p>
+<div class="cards">
+<section class="card"><h2>1. Leave your mark</h2><canvas id="ink" width="400" height="170"></canvas>
+<button id="clear">Fresh paper</button><p id="inkState" class="readout">Ready for your signature.</p>
+<p class="caption">Hold the left button and draw. Take the pointer outside the canvas, then return before releasing: the stroke stays yours.</p></section>
+<section class="card"><h2>2. A travelling light</h2><canvas id="light" width="400" height="170"></canvas>
+<p id="lightState" class="readout">Drag anywhere in the night sky.</p>
+<p class="caption">The light follows your drag and settles when you release. Try leaving the drawing while holding the button.</p></section>
+<section class="card"><h2>3. A chord of your own</h2><canvas id="chord" width="400" height="170"></canvas>
+<p id="chordState" class="readout">Left · middle · right</p>
+<p class="caption">Hold different mouse buttons together. Each held button lights its own circle. Cover the window during a drag to try cancellation.</p></section>
+<section class="card"><h2>4. Meet me halfway</h2><div id="lane"><div id="gate"></div></div>
+<button id="motion">Start the gate</button><p id="gateState" class="readout">Rest your pointer in the lane.</p>
+<p class="caption">Start the gate, then hold the pointer still in its path. The gate turns green when it passes underneath—even without a mouse move.</p></section>
+</div><p>Try 25%–400% zoom. <label><input id="tick" type="checkbox"> Ordinary controls still work.</label></p>
+<p id="tickState" class="readout"></p></main>
+<script>
+(function(){
+ if(!window.PointerEvent){document.getElementById('ready').textContent='Pointer input is unavailable. Enable Modern Web and reload.';return}
+ var ink=document.getElementById('ink'),pen=ink.getContext('2d'),light=document.getElementById('light'),sky=light.getContext('2d');
+ var chord=document.getElementById('chord'),keys=chord.getContext('2d'),gate=document.getElementById('gate');
+ function point(c,e){var r=c.getBoundingClientRect();return {x:(e.clientX-r.left)*c.width/r.width,y:(e.clientY-r.top)*c.height/r.height}}
+ function say(id,text){document.getElementById(id).textContent=text}
+ var drawing=false,last=null;
+ function stroke(e){if(!drawing)return;var p=point(ink,e);pen.strokeStyle='#f2c477';pen.lineWidth=4;pen.lineCap='round';
+  pen.beginPath();pen.moveTo(last.x,last.y);pen.lineTo(p.x,p.y);pen.stroke();last=p}
+ ink.onpointerdown=function(e){if(e.button!==0)return;e.preventDefault();ink.setPointerCapture(e.pointerId);drawing=true;last=point(ink,e);
+  pen.fillStyle='#f2c477';pen.beginPath();pen.arc(last.x,last.y,2,0,Math.PI*2);pen.fill();say('inkState','Drawing — captured.')};
+ ink.onpointermove=stroke;ink.onpointerup=function(e){stroke(e);drawing=false;say('inkState','Signed. Ready for another stroke.')};
+ ink.onpointercancel=function(){drawing=false;say('inkState','Interrupted safely. Start another stroke.')};
+ document.getElementById('clear').onclick=function(){pen.clearRect(0,0,400,170);say('inkState','Fresh paper.')};
+ function drawLight(x,y){sky.clearRect(0,0,400,170);sky.fillStyle='#b4d4c2';for(var i=0;i<19;i++)sky.fillRect((i*83+17)%390,(i*37+13)%160,2,2);
+  var glow=sky.createRadialGradient(x,y,1,x,y,44);glow.addColorStop(0,'#fff0bd');glow.addColorStop(1,'#3e777a');sky.fillStyle=glow;
+  sky.beginPath();sky.arc(x,y,44,0,Math.PI*2);sky.fill()}
+ var dragging=false;drawLight(200,85);
+ function moveLight(e){if(!dragging)return;var p=point(light,e);drawLight(Math.max(25,Math.min(375,p.x)),Math.max(25,Math.min(145,p.y)))}
+ light.onpointerdown=function(e){if(e.button!==0)return;e.preventDefault();light.setPointerCapture(e.pointerId);dragging=true;moveLight(e);say('lightState','Following your lead.')};
+ light.onpointermove=moveLight;light.onpointerup=function(e){moveLight(e);dragging=false;say('lightState','Home for now.')};
+ light.onpointercancel=function(){dragging=false;say('lightState','Interrupted safely. The light stays here.')};
+ function drawChord(mask){keys.clearRect(0,0,400,170);var bits=[1,4,2],names=['LEFT','MIDDLE','RIGHT'];
+  for(var i=0;i<3;i++){keys.fillStyle=(mask&bits[i])?'#f2c477':'#3d666b';keys.beginPath();keys.arc(76+i*124,68,31,0,Math.PI*2);keys.fill();
+   keys.fillStyle='#d5e6dc';keys.font='14px sans-serif';keys.textAlign='center';keys.fillText(names[i],76+i*124,128)}}
+ drawChord(0);
+ function chordInput(e){drawChord(e.buttons);say('chordState',e.type+' · buttons '+e.buttons)}
+ chord.onpointerdown=function(e){e.preventDefault();chord.setPointerCapture(e.pointerId);chordInput(e)};
+ chord.onpointermove=chordInput;chord.onpointerup=chordInput;chord.onpointercancel=function(){drawChord(0);say('chordState','Canceled — all clear.')};
+ gate.onpointerenter=function(){gate.style.background='#338363';say('gateState','Hello, stationary traveller.')};
+ gate.onpointerleave=function(){gate.style.background='#d99765';say('gateState','Until we meet again.')};
+ var running=false,frame=0,start=0;function travel(now){if(!running)return;if(!start)start=now;
+  gate.style.left=(155+Math.sin((now-start)/1600)*150)+'px';frame=requestAnimationFrame(travel)}
+ document.getElementById('motion').onclick=function(){running=!running;this.textContent=running?'Pause the gate':'Start the gate';
+  if(running){start=0;frame=requestAnimationFrame(travel)}else cancelAnimationFrame(frame)};
+ document.getElementById('tick').onchange=function(){say('tickState',this.checked?'Checked once. No double activation.':'Unchecked.')};
+ say('ready','Pointer events and capture are ready. This page responds to real input.');
+})();
+</script>

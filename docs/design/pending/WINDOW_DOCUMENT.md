@@ -872,7 +872,7 @@ Event handler IDL attributes (`on<type>`), grouped where they share a status and
 | `oncontextlost`, `oncontextrestored` | absent | d | canvas: no slice plans it |
 | `oncopy`, `oncut`, `onpaste` | absent | d | clipboard events |
 | `ondrag`, `ondragend`, `ondragenter`, `ondragleave`, `ondragover`, `ondragstart`, `ondrop` | absent | d | drag and drop: the handlers are what pages detect DnD by |
-| `ongotpointercapture` 7, `onlostpointercapture` 7, `onpointercancel` 7, `onpointerdown` 1, `onpointerenter` 7, `onpointerleave` 1, `onpointermove` 7, `onpointerout` 7, `onpointerover` 7, `onpointerrawupdate`, `onpointerup` 8 | absent | d | Pointer Events: exposing the handlers without firing pointer events makes pages that detect them stop listening for mouse events |
+| `ongotpointercapture` 7, `onlostpointercapture` 7, `onpointercancel` 7, `onpointerdown` 1, `onpointerenter` 7, `onpointerleave` 1, `onpointermove` 7, `onpointerout` 7, `onpointerover` 7, `onpointerrawupdate`, `onpointerup` 8 | PE1 except rawupdate | PE1 | Mouse-backed pointer dispatch and capture are connected with the handlers; `onpointerrawupdate` remains absent (POINTER_EVENTS.md) |
 | `onpagereveal`, `onpageswap` | absent | d | view transitions |
 | `onselectionchange`, `onselectstart` | absent | d | Selection and Range: no slice plans them |
 | `onappinstalled` 1, `onbeforeinstallprompt` 1 C14.08 W, `onbeforexrselect` 6 | absent | e | Chromium-only or near-zero usage, meaningless for one user on one machine |
@@ -1035,7 +1035,7 @@ Event handler IDL attributes (`on<type>`), grouped where they share a status and
 | `oncopy`, `oncut`, `onpaste` | absent | d | clipboard events |
 | `ondrag`, `ondragend`, `ondragenter`, `ondragleave`, `ondragover`, `ondragstart`, `ondrop` | absent | d | drag and drop: the handlers are what pages detect DnD by |
 | `onfullscreenchange`, `onfullscreenerror` | absent | d | Fullscreen (an honest refusal, fullscreenEnabled false, is possible earlier) |
-| `ongotpointercapture`, `onlostpointercapture`, `onpointercancel`, `onpointerdown`, `onpointerenter`, `onpointerleave`, `onpointermove`, `onpointerout`, `onpointerover`, `onpointerrawupdate`, `onpointerup` | absent | d | Pointer Events: exposing the handlers without firing pointer events makes pages that detect them stop listening for mouse events |
+| `ongotpointercapture`, `onlostpointercapture`, `onpointercancel`, `onpointerdown`, `onpointerenter`, `onpointerleave`, `onpointermove`, `onpointerout`, `onpointerover`, `onpointerrawupdate`, `onpointerup` | PE1 except rawupdate | PE1 | Mouse-backed pointer dispatch and capture are connected with the handlers; `onpointerrawupdate` remains absent (POINTER_EVENTS.md) |
 | `onpointerlockchange`, `onpointerlockerror` | absent | d | pointer lock (kernel mouse capture) |
 | `onselectionchange`, `onselectstart` | absent | d | Selection and Range |
 | `onbeforexrselect` | absent | e | WebXR |

@@ -14,6 +14,7 @@ typedef struct {
     size_t len, cap;
 } HBuf;
 typedef struct HBlock HBlock;
+typedef struct HChange HChange;
 /* Node bodies carry uniform lifetime metadata, including embedded nodes and
  * isolated fragment staging. The first word retains the kind-specific data. */
 typedef struct {
@@ -82,6 +83,11 @@ typedef struct {
     /* os64_html_observe's listener, or NULL. */
     void (*changed)(void *opaque, const os64_html_change_t *change);
     void *changed_opaque;
+    os64_html_reader_t *readers;
+    HChange *log_head, *log_tail;
+    size_t log_bytes, log_limit;
+    uint64_t log_floor;
+    bool log_limited;
 } HDoc;
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
@@ -373,9 +379,9 @@ typedef struct {
 } HSeen;
 void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *seen);
 void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *replaced,
-                   const HSeen *seen);
-void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *next);
-void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len);
+                   const HSeen *seen, bool log);
+void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *next, bool log);
+void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len, bool log);
 /* How many documents the program has begun (core.c). Here so that a test can
  * set it near its end. */
 extern uint32_t h_document_serial;

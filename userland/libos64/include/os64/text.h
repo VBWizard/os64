@@ -108,11 +108,26 @@ typedef struct {
 /* One logical line; literal LF is BAD_ARGUMENT. NUL is input data, not an end
  * marker. Successful layout owns a byte copy and retains fonts/glyph images.
  * Failed layout returns no partial run and preserves existing runs/fonts.
- * View pointers remain valid until run_release. Runs are immutable. */
+ * Successful layout returns one owned reference. Runs are immutable; view
+ * pointers remain valid while an owned reference keeps the run alive. */
 os64_font_status_t os64_text_layout(os64_text_context_t *, const uint8_t *,
     size_t length, const os64_text_layout_t *, os64_text_run_t **out);
 os64_font_status_t os64_text_run_view(const os64_text_run_t *, os64_text_run_view_t *out);
+/* Retain an additional owner without allocating. NULL is BAD_ARGUMENT;
+ * reference-count overflow is LIMIT. Failure leaves ownership unchanged.
+ * Release drops one owner (NULL is harmless); the last release frees the
+ * run and its font/glyph-image holds. Like other context operations, these
+ * calls require caller serialization and a live owned reference. */
+os64_font_status_t os64_text_run_retain(os64_text_run_t *);
 void os64_text_run_release(os64_text_run_t *);
+/* Positioned run contours for vector consumers. Uses unhinted font curves;
+ * builtin/missing glyphs become contours of their binary bitmap cells. The
+ * caller's visitor owns copied output. No script/engine reentry is permitted.
+ * The command budget spans the entire run. emit may be NULL for tight bounds.
+ * A failure clears bounds; discard any commands already emitted. */
+os64_font_status_t os64_text_run_outline(const os64_text_run_t *,size_t max_commands,
+    os64_font_outline_emit_t emit,void *,os64_geometry_bounds_t *);
+
 
 typedef enum {
     OS64_TEXT_BEFORE = 0,

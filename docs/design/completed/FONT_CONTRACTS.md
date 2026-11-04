@@ -30,9 +30,28 @@ the production dependency is integrated. No loader or kernel change is implied.
 R3 names the review document revision. The backend table remains revision 1 and
 the getter remains `_v1`: R3 clarifies semantics without changing declarations,
 field layout or enum values. It is not a promise to support mixed-version
-installed libraries. The getter's table revision and struct size must match
-before use. The recorded freeze follows Fable's R3 approval. Changes update this record, header,
-fixtures and affected work packets together.
+installed libraries. Consumers check revision 1 and the required prefix through `glyph_release`;
+optional tail members require a separate `struct_size` check. The recorded
+freeze follows Fable's R3 approval. Changes update this record, header, fixtures
+and affected work packets together.
+
+### Positioned outlines
+
+Canvas C5 adds the optional `outline` tail without changing the prefix or enum
+values. It exports closed unhinted, scaled glyph contours in pixel doubles,
+X right and Y down, through a synchronous visitor. The caller supplies a
+command budget, including CLOSE commands. The visitor cannot reenter the
+engine; a refusal stops export and requires discarding partial output. Tight
+geometric bounds are cleared on failure. No FreeType storage escapes. Rendering
+into an owned glyph mask retains its original hinting and lifetime contract.
+
+`os64_text_run_outline` applies the run's existing fallback and glyph positions,
+retains its fonts through run lifetime, and applies one command budget across
+the run. Builtin and synthetic missing glyphs expose contours of their binary
+bitmap cells. A font backend without the optional tail remains valid for layout
+and raster text; asking it for a face outline returns UNSUPPORTED. A NULL visitor
+measures bounds under the same budget. The operation neither shapes new text
+nor draws a surface; Canvas and later markup consumers share this boundary.
 
 ## Backend semantics and bounds
 

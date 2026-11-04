@@ -195,7 +195,7 @@ LIBGZIP_SO   := $(BIN)/libgzip.so
 # zlib door and libos64's heap/CRC primitives, but neither of
 # those lower libraries knows an image format exists. That direction keeps a
 # decoder out of every program's foundational runtime.
-LIBPNG_SRCS := libpng/png.c
+LIBPNG_SRCS := libpng/png.c libpng/encode.c
 LIBPNG_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBPNG_SRCS))
 LIBPNG_SO   := $(BIN)/libpng.so
 
@@ -530,7 +530,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
-APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO)) \
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) \
                        $(if $(filter $(1),htmltest wend pagetest flowdump yonder garbdump),$(LIBHTML_SO)) \
                        $(if $(filter $(1),domtest yonder),$(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO)) \
                        $(if $(filter $(1),$(LIBFLOW_PROGRAMS)),$(LIBFLOW_SO)) \

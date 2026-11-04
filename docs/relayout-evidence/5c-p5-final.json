@@ -1,0 +1,2659 @@
+{
+  "profile": "5c final acceptance, 2026-10-31",
+  "candidate_runtime_commit": "904e106c34f18406e164f5b03e98072c5114c4ea",
+  "candidate_integration_merge": "94a8ad38",
+  "summary": {
+    "aggregation": "Median of three per-run medians, setup times, stream totals or process peaks; never pooled samples. Paired differences also retained.",
+    "order": [
+      "control1",
+      "candidate1",
+      "candidate2",
+      "control2",
+      "control3",
+      "candidate3"
+    ],
+    "rows": [
+      {
+        "workload": "graft",
+        "metric": "setup_ms",
+        "control_runs": [
+          165.79999999999927,
+          170.39999999999964,
+          167.89999999999964
+        ],
+        "candidate_runs": [
+          103.20000000000073,
+          105.19999999999891,
+          103
+        ],
+        "control_median": 167.89999999999964,
+        "candidate_median": 103.20000000000073,
+        "aggregate_change_percent": -38.534842167956555,
+        "pair_changes_percent": [
+          -37.75633293124175,
+          -38.262910798122576,
+          -38.6539606908873
+        ]
+      },
+      {
+        "workload": "graft",
+        "metric": "Change paragraph around a float",
+        "control_runs": [
+          56.60000000000127,
+          58.24999999999909,
+          58.600000000000364
+        ],
+        "candidate_runs": [
+          10.75,
+          10.75,
+          10.599999999999909
+        ],
+        "control_median": 58.24999999999909,
+        "candidate_median": 10.75,
+        "aggregate_change_percent": -81.54506437768212,
+        "pair_changes_percent": [
+          -81.00706713780961,
+          -81.54506437768212,
+          -81.91126279863508
+        ]
+      },
+      {
+        "workload": "graft",
+        "metric": "Append one list row",
+        "control_runs": [
+          55,
+          57.55000000000018,
+          54.349999999999454
+        ],
+        "candidate_runs": [
+          10.400000000001455,
+          10.199999999999818,
+          10.550000000000182
+        ],
+        "control_median": 55,
+        "candidate_median": 10.400000000001455,
+        "aggregate_change_percent": -81.09090909090645,
+        "pair_changes_percent": [
+          -81.09090909090645,
+          -82.27628149435311,
+          -80.58877644894152
+        ]
+      },
+      {
+        "workload": "graft",
+        "metric": "process_peak_live_bytes",
+        "control_runs": [
+          56406400,
+          56405520,
+          56406208
+        ],
+        "candidate_runs": [
+          56238208,
+          56238848,
+          56238464
+        ],
+        "control_median": 56406208,
+        "candidate_median": 56238464,
+        "aggregate_change_percent": -0.29738570619745053,
+        "pair_changes_percent": [
+          -0.29817893005048557,
+          -0.2954888103150144,
+          -0.29738570619745053
+        ]
+      },
+      {
+        "workload": "mutation",
+        "metric": "Read unchanged geometry",
+        "control_runs": [
+          0.1000000000003638,
+          0.1000000000003638,
+          0.1000000000003638
+        ],
+        "candidate_runs": [
+          0.09999999999990905,
+          0.1000000000003638,
+          0.1000000000003638
+        ],
+        "control_median": 0.1000000000003638,
+        "candidate_median": 0.1000000000003638,
+        "aggregate_change_percent": 0.0,
+        "pair_changes_percent": [
+          -4.547473508864641e-10,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "workload": "mutation",
+        "metric": "Change one paragraph",
+        "control_runs": [
+          42.94999999999982,
+          42.849999999999454,
+          40.54999999999927
+        ],
+        "candidate_runs": [
+          10.5,
+          11.649999999999636,
+          10.699999999999818
+        ],
+        "control_median": 42.849999999999454,
+        "candidate_median": 10.699999999999818,
+        "aggregate_change_percent": -75.02917152858821,
+        "pair_changes_percent": [
+          -75.55296856810234,
+          -72.81213535589315,
+          -73.61282367447592
+        ]
+      },
+      {
+        "workload": "mutation",
+        "metric": "Replace one list item",
+        "control_runs": [
+          56.849999999999454,
+          56.69999999999891,
+          57.849999999999454
+        ],
+        "candidate_runs": [
+          50.19999999999982,
+          50.899999999999636,
+          49.69999999999982
+        ],
+        "control_median": 56.849999999999454,
+        "candidate_median": 50.19999999999982,
+        "aggregate_change_percent": -11.697449428319617,
+        "pair_changes_percent": [
+          -11.697449428319617,
+          -10.229276895942474,
+          -14.088159031978764
+        ]
+      },
+      {
+        "workload": "mutation",
+        "metric": "process_peak_live_bytes",
+        "control_runs": [
+          54089792,
+          54089824,
+          54089872
+        ],
+        "candidate_runs": [
+          54484784,
+          54484784,
+          54484816
+        ],
+        "control_median": 54089824,
+        "candidate_median": 54484784,
+        "aggregate_change_percent": 0.7301927992962254,
+        "pair_changes_percent": [
+          0.7302523921704163,
+          0.7301927992962254,
+          0.7301625709153159
+        ]
+      },
+      {
+        "workload": "article",
+        "metric": "article_total_ms",
+        "control_runs": [
+          424.6000000000001,
+          417.20000000000005,
+          436.7
+        ],
+        "candidate_runs": [
+          404.90000000000003,
+          397.5999999999999,
+          409.09999999999997
+        ],
+        "control_median": 424.6000000000001,
+        "candidate_median": 404.90000000000003,
+        "aggregate_change_percent": -4.63966085727745,
+        "pair_changes_percent": [
+          -4.63966085727745,
+          -4.697986577181245,
+          -6.320128234485923
+        ]
+      },
+      {
+        "workload": "article",
+        "metric": "checkpoint_median_ms",
+        "control_runs": [
+          21.049999999999997,
+          21.14999999999999,
+          22.30000000000002
+        ],
+        "candidate_runs": [
+          20.349999999999994,
+          19.89999999999999,
+          20.099999999999994
+        ],
+        "control_median": 21.14999999999999,
+        "candidate_median": 20.099999999999994,
+        "aggregate_change_percent": -4.964539007092183,
+        "pair_changes_percent": [
+          -3.325415676959631,
+          -5.910165484633567,
+          -9.865470852018031
+        ]
+      },
+      {
+        "workload": "article",
+        "metric": "process_peak_live_bytes",
+        "control_runs": [
+          60528784,
+          60528944,
+          60528992
+        ],
+        "candidate_runs": [
+          60529600,
+          60530256,
+          60529760
+        ],
+        "control_median": 60528944,
+        "candidate_median": 60529760,
+        "aggregate_change_percent": 0.0013481153743555296,
+        "pair_changes_percent": [
+          0.0013481189379271896,
+          0.0021675580528901506,
+          0.00126881346380614
+        ]
+      }
+    ],
+    "excluded": "First candidate1 mutation attempt retained separately; user repeated for d, latest complete attempt chosen before comparison.",
+    "scope": "Same final-campaign viewport and font/browser settings; historical differently sized article results are not pooled."
+  },
+  "settings": {
+    "viewport": [
+      2526,
+      1259
+    ],
+    "device_pixel_ratio": 1,
+    "zoom_percent": 100,
+    "appearance": "dark",
+    "scripts": true,
+    "modern_web": true,
+    "web_default_font_px": 30,
+    "web_control_face": "DejaVuSansMono-Bold.ttf"
+  },
+  "batches": [
+    {
+      "cohort": "control",
+      "round": 1,
+      "files": {
+        "bin/libcanvas.so": {
+          "sha256": "697f3fb6f97738e9343a0b8c8e669bcf7bf8b6057cfae16a2c6d6546e769545d",
+          "matches": true
+        },
+        "bin/libdom.so": {
+          "sha256": "db8bdeb26b48452254fac28ee9df48ef745181244136b60e857c6c15d03cdcb1",
+          "matches": true
+        },
+        "bin/libdraw2d.so": {
+          "sha256": "8bcb3bab530d0794855bfba7676f2707cbf768aaec8ffcf8e20f013f249d5579",
+          "matches": true
+        },
+        "bin/libfetch.so": {
+          "sha256": "8965219d50db5a2faaa1ad433677dfc9a8893773b0ba01b25ff168bf114cc787",
+          "matches": true
+        },
+        "bin/libflow.so": {
+          "sha256": "85e4447b7d752fcbfab7b5223e46928166ee7ba99bae8782274453be4533de26",
+          "matches": true
+        },
+        "bin/libfreetype.so": {
+          "sha256": "83417c058f28d2d3fd77c0c0031fad9151adbc6b5c439ece6bbfc177f22e5063",
+          "matches": true
+        },
+        "bin/libgarb.so": {
+          "sha256": "adf269f3d2a78e7ad6d7735ae3c96b164e3d5bcb0d73af6fa0bbaf86a16c2773",
+          "matches": true
+        },
+        "bin/libgzip.so": {
+          "sha256": "9310c58c21593b73e6f9908c033f750f9885b412961ddb274a6fa56501583e24",
+          "matches": true
+        },
+        "bin/libhtml.so": {
+          "sha256": "d5cc4b78af99586e0a0db3643733fe9efcde94cfc00a2ad061ec285ed1f339c9",
+          "matches": true
+        },
+        "bin/libimage.so": {
+          "sha256": "94f0de0341a8e2c93e632a94d8c7091eb2bbdedd5efefaab1aa8e214c7aaab67",
+          "matches": true
+        },
+        "bin/libjpeg.so": {
+          "sha256": "267774a40132a63b97629881689a0fe6a121f5b856f9037a7a8292366e8ebda2",
+          "matches": true
+        },
+        "bin/libjs.so": {
+          "sha256": "cff069b114592900fec4c713e20fddc1fc29c604113d8cd013ec0f358a806dd6",
+          "matches": true
+        },
+        "bin/libmath.so": {
+          "sha256": "b934cdb1207fc250533b32c38b4f6a3b7d2672e1586600ffee5ef03326d9a0a0",
+          "matches": true
+        },
+        "bin/libos64.so": {
+          "sha256": "f8ede83e7ebb73c6796af5ae66b7d0868098af343d453e1edc8a0d716003e40b",
+          "matches": true
+        },
+        "bin/libpage.so": {
+          "sha256": "e87794d3dd955984df0854de475744b7a8330d0988b04d77ace7edb1dcb052d7",
+          "matches": true
+        },
+        "bin/libpng.so": {
+          "sha256": "6c59ff84dc060fbeaf19048175dc01ab2124e8f77b134a399265b3021c970073",
+          "matches": true
+        },
+        "bin/libsvg.so": {
+          "sha256": "37cb1eb1076a35cc4a1d9094a5bd61d9718039b7569eb650c88b0f2198933a85",
+          "matches": true
+        },
+        "bin/libtls.so": {
+          "sha256": "fbe81238a124078183b0b6ce4f4564ec4225a86d962a0d317a431ceabe348c62",
+          "matches": true
+        },
+        "bin/libway.so": {
+          "sha256": "53b76fa714244de96c6b278bc7e4460eed84fdb3e599bc6f6d082fcf24fa8c28",
+          "matches": true
+        },
+        "bin/libwebp.so": {
+          "sha256": "451f6bdb58c6814e068310a729bd35003f95d1a6ee2d2a5b791a3b348e677f6c",
+          "matches": true
+        },
+        "bin/libxml.so": {
+          "sha256": "97331a0557581101de6b86d97b49fac0bcc1b278ccc7fc8749d52e06f30d40e1",
+          "matches": true
+        },
+        "bin/yonder": {
+          "sha256": "8aef58c6393b95888af8a70759e41e7dd6b82108fe8b9fa8ab386c7611508eb0",
+          "matches": true
+        },
+        "pages/layout-graft.html": {
+          "sha256": "0dbe0d27941cd3081e22406fc647e3479b57478236de5fec8c3d574d4b2295a5",
+          "matches": true
+        },
+        "pages/layout-measure.html": {
+          "sha256": "0b7f5104e77ea63989cc50adf1e90428118dcb19129a75baa2dc1c8573cd817e",
+          "matches": true
+        },
+        "pages/layout-stream.html": {
+          "sha256": "8dcad83867d48cb112f479241a9290a5a9cbc0d7531190d9e1ba647ebb20b8c8",
+          "matches": true
+        },
+        "pages/layout-stream-article.html": {
+          "sha256": "8769d87448145a1a101584a2094723279b699af43d2cd46cb610a9213e0276d2",
+          "matches": true
+        }
+      },
+      "workloads": {
+        "graft": {
+          "corpus": 952,
+          "report": {
+            "format": "yonder-layout-graft-v1",
+            "page": "file:///tests/pages/layout-graft.html",
+            "state": "complete",
+            "started": "2026-10-31T19:02:25.820Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "initial_layout_ms": 165.79999999999927,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "results": [
+              {
+                "experiment": "Change paragraph around a float",
+                "median_ms": 56.60000000000127,
+                "samples_ms": [
+                  61.600000000000364,
+                  147.29999999999927,
+                  57.30000000000109,
+                  70.89999999999964,
+                  49.19999999999891,
+                  61,
+                  49.600000000000364,
+                  77.29999999999927,
+                  55.900000000001455,
+                  64.89999999999964,
+                  41.19999999999891,
+                  62.30000000000109,
+                  44.600000000000364,
+                  53.20000000000073,
+                  67.89999999999964,
+                  50.70000000000073,
+                  49.100000000000364,
+                  51.600000000000364,
+                  54.399999999999636,
+                  64.89999999999964
+                ]
+              },
+              {
+                "experiment": "Append one list row",
+                "median_ms": 55,
+                "samples_ms": [
+                  44.69999999999891,
+                  55.20000000000073,
+                  55.80000000000109,
+                  61.099999999998545,
+                  53.100000000000364,
+                  50.20000000000073,
+                  55.899999999999636,
+                  50,
+                  55.30000000000109,
+                  64.19999999999891,
+                  60.20000000000073,
+                  49.80000000000109,
+                  52.100000000000364,
+                  50.79999999999927,
+                  48.20000000000073,
+                  56.80000000000109,
+                  48.899999999999636,
+                  55.899999999999636,
+                  55.599999999998545,
+                  54.79999999999927
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 57184256,
+            "live": 35792016,
+            "free": 19971520,
+            "overhead": 609824,
+            "virgin": 810896,
+            "high_water": 56406400
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 13222 us, cascade 9605 us, style 72405 us, boxes 25276 us, layout 3504136 us, public 82472 us; elements 111860, boxes 111050, measures 111860, reused 0; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 105528, cascade updates 51"
+          ],
+          "manual_d_present": false
+        },
+        "mutation": {
+          "corpus": 953,
+          "report": {
+            "format": "yonder-layout-5a-v1",
+            "page": "file:///tests/pages/layout-measure.html",
+            "state": "complete",
+            "started": "2026-10-31T19:03:07.500Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "results": [
+              {
+                "experiment": "Read unchanged geometry",
+                "median_ms": 0.1000000000003638,
+                "worst_ms": 0.2000000000007276,
+                "samples_ms": [
+                  0.2000000000007276,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1999999999989086,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638
+                ]
+              },
+              {
+                "experiment": "Change one paragraph",
+                "median_ms": 42.94999999999982,
+                "worst_ms": 154,
+                "samples_ms": [
+                  128.20000000000073,
+                  154,
+                  83.70000000000073,
+                  116.5,
+                  45,
+                  83.29999999999927,
+                  40.29999999999927,
+                  47.099999999998545,
+                  36.5,
+                  50.399999999999636,
+                  43,
+                  37.600000000000364,
+                  40.600000000000364,
+                  33.80000000000109,
+                  36,
+                  43,
+                  42.899999999999636,
+                  33.5,
+                  37.599999999998545,
+                  36.69999999999891
+                ]
+              },
+              {
+                "experiment": "Replace one list item",
+                "median_ms": 56.849999999999454,
+                "worst_ms": 69.29999999999927,
+                "samples_ms": [
+                  56.5,
+                  60.69999999999891,
+                  53,
+                  57.899999999999636,
+                  53.5,
+                  54,
+                  56.899999999999636,
+                  62.69999999999891,
+                  53.79999999999927,
+                  59.70000000000073,
+                  67.90000000000146,
+                  69.29999999999927,
+                  56,
+                  57.79999999999927,
+                  55.899999999999636,
+                  56.399999999999636,
+                  65.80000000000109,
+                  56.79999999999927,
+                  58.600000000000364,
+                  54.399999999999636
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 52490240,
+            "live": 34111040,
+            "free": 16933872,
+            "overhead": 356944,
+            "virgin": 1088384,
+            "high_water": 54089792
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 12214 us, cascade 191358 us, style 104987 us, boxes 24694 us, layout 2937166 us, public 64175 us; elements 106499, boxes 105851, measures 105374, reused 0; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 53134, cascade updates 26"
+          ],
+          "manual_d_present": true
+        },
+        "article": {
+          "corpus": 955,
+          "report": {
+            "format": "yonder-stream-layout-v1",
+            "page": "file:///tests/pages/layout-stream-article.html",
+            "state": "complete",
+            "checkpoints": 18,
+            "total_ms": 424.6000000000001,
+            "median_ms": 21.049999999999997,
+            "worst_ms": 43,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "samples_ms": [
+              13.699999999999996,
+              11.5,
+              13.600000000000009,
+              15.5,
+              14.900000000000006,
+              15.799999999999997,
+              17.19999999999999,
+              19.400000000000006,
+              20.5,
+              21.900000000000006,
+              21.599999999999994,
+              26.200000000000017,
+              26.19999999999999,
+              27.19999999999999,
+              35.5,
+              43,
+              40.900000000000034,
+              40
+            ],
+            "heights": [
+              394,
+              396,
+              666,
+              930,
+              930,
+              930,
+              978,
+              2226,
+              3106,
+              3106,
+              3383,
+              3383,
+              3906,
+              4623,
+              4856,
+              5952,
+              6360,
+              6436
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 29822976,
+            "live": 27058208,
+            "free": 1494864,
+            "overhead": 159184,
+            "virgin": 1110720,
+            "high_water": 60528784
+          },
+          "native_stages": [
+            "layout stream: totals: model rebuild 2849 us, cascade 359041 us, style 6251 us, boxes 1412 us, layout 49533 us, public 3372 us; elements 7927, boxes 5294, measures 3795, reused 0; 17 model rebuilds, 18 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0",
+            "layout: totals: model rebuild 0 us, cascade 29549 us, style 758 us, boxes 167 us, layout 5842 us, public 414 us; elements 941, boxes 512, measures 413, reused 0; 0 model rebuilds, 1 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0"
+          ],
+          "manual_d_present": true
+        }
+      }
+    },
+    {
+      "cohort": "candidate",
+      "round": 1,
+      "files": {
+        "bin/libcanvas.so": {
+          "sha256": "697f3fb6f97738e9343a0b8c8e669bcf7bf8b6057cfae16a2c6d6546e769545d",
+          "matches": true
+        },
+        "bin/libdom.so": {
+          "sha256": "db8bdeb26b48452254fac28ee9df48ef745181244136b60e857c6c15d03cdcb1",
+          "matches": true
+        },
+        "bin/libdraw2d.so": {
+          "sha256": "8bcb3bab530d0794855bfba7676f2707cbf768aaec8ffcf8e20f013f249d5579",
+          "matches": true
+        },
+        "bin/libfetch.so": {
+          "sha256": "8965219d50db5a2faaa1ad433677dfc9a8893773b0ba01b25ff168bf114cc787",
+          "matches": true
+        },
+        "bin/libflow.so": {
+          "sha256": "8f522a663c1b25b6ad825ae3e888cfddb7bc3378eed40c4168db68c8f1d97498",
+          "matches": true
+        },
+        "bin/libfreetype.so": {
+          "sha256": "83417c058f28d2d3fd77c0c0031fad9151adbc6b5c439ece6bbfc177f22e5063",
+          "matches": true
+        },
+        "bin/libgarb.so": {
+          "sha256": "7a0e692778bcdfd52604e124f3c0f2bc84888f69208abf9a817f86e902213f98",
+          "matches": true
+        },
+        "bin/libgzip.so": {
+          "sha256": "9310c58c21593b73e6f9908c033f750f9885b412961ddb274a6fa56501583e24",
+          "matches": true
+        },
+        "bin/libhtml.so": {
+          "sha256": "d5cc4b78af99586e0a0db3643733fe9efcde94cfc00a2ad061ec285ed1f339c9",
+          "matches": true
+        },
+        "bin/libimage.so": {
+          "sha256": "94f0de0341a8e2c93e632a94d8c7091eb2bbdedd5efefaab1aa8e214c7aaab67",
+          "matches": true
+        },
+        "bin/libjpeg.so": {
+          "sha256": "267774a40132a63b97629881689a0fe6a121f5b856f9037a7a8292366e8ebda2",
+          "matches": true
+        },
+        "bin/libjs.so": {
+          "sha256": "cff069b114592900fec4c713e20fddc1fc29c604113d8cd013ec0f358a806dd6",
+          "matches": true
+        },
+        "bin/libmath.so": {
+          "sha256": "b934cdb1207fc250533b32c38b4f6a3b7d2672e1586600ffee5ef03326d9a0a0",
+          "matches": true
+        },
+        "bin/libos64.so": {
+          "sha256": "9e4a01a4faaaf67cec01672c1723dc776fdf15a07dbc8f62386b5980aaec3127",
+          "matches": true
+        },
+        "bin/libpage.so": {
+          "sha256": "e87794d3dd955984df0854de475744b7a8330d0988b04d77ace7edb1dcb052d7",
+          "matches": true
+        },
+        "bin/libpng.so": {
+          "sha256": "6c59ff84dc060fbeaf19048175dc01ab2124e8f77b134a399265b3021c970073",
+          "matches": true
+        },
+        "bin/libsvg.so": {
+          "sha256": "37cb1eb1076a35cc4a1d9094a5bd61d9718039b7569eb650c88b0f2198933a85",
+          "matches": true
+        },
+        "bin/libtls.so": {
+          "sha256": "fbe81238a124078183b0b6ce4f4564ec4225a86d962a0d317a431ceabe348c62",
+          "matches": true
+        },
+        "bin/libway.so": {
+          "sha256": "53b76fa714244de96c6b278bc7e4460eed84fdb3e599bc6f6d082fcf24fa8c28",
+          "matches": true
+        },
+        "bin/libwebp.so": {
+          "sha256": "451f6bdb58c6814e068310a729bd35003f95d1a6ee2d2a5b791a3b348e677f6c",
+          "matches": true
+        },
+        "bin/libxml.so": {
+          "sha256": "97331a0557581101de6b86d97b49fac0bcc1b278ccc7fc8749d52e06f30d40e1",
+          "matches": true
+        },
+        "bin/yonder": {
+          "sha256": "7aaf482b10a2e095c6a12fabfba823df3265ceb4ac12e057520748c200e27d42",
+          "matches": true
+        },
+        "pages/layout-graft.html": {
+          "sha256": "0dbe0d27941cd3081e22406fc647e3479b57478236de5fec8c3d574d4b2295a5",
+          "matches": true
+        },
+        "pages/layout-measure.html": {
+          "sha256": "0b7f5104e77ea63989cc50adf1e90428118dcb19129a75baa2dc1c8573cd817e",
+          "matches": true
+        },
+        "pages/layout-stream.html": {
+          "sha256": "8dcad83867d48cb112f479241a9290a5a9cbc0d7531190d9e1ba647ebb20b8c8",
+          "matches": true
+        },
+        "pages/layout-stream-article.html": {
+          "sha256": "8769d87448145a1a101584a2094723279b699af43d2cd46cb610a9213e0276d2",
+          "matches": true
+        }
+      },
+      "workloads": {
+        "graft": {
+          "corpus": 956,
+          "report": {
+            "format": "yonder-layout-graft-v1",
+            "page": "file:///tests/pages/layout-graft.html",
+            "state": "complete",
+            "started": "2026-10-31T19:10:20.010Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "initial_layout_ms": 103.20000000000073,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "results": [
+              {
+                "experiment": "Change paragraph around a float",
+                "median_ms": 10.75,
+                "samples_ms": [
+                  12.099999999998545,
+                  10.5,
+                  11.5,
+                  10.599999999998545,
+                  12.5,
+                  11.599999999998545,
+                  10.200000000000728,
+                  11.5,
+                  10.700000000000728,
+                  11.200000000000728,
+                  10.600000000002183,
+                  10.400000000001455,
+                  10.799999999999272,
+                  10.700000000000728,
+                  10,
+                  10,
+                  11,
+                  10.899999999997817,
+                  11.400000000001455,
+                  10.599999999998545
+                ]
+              },
+              {
+                "experiment": "Append one list row",
+                "median_ms": 10.400000000001455,
+                "samples_ms": [
+                  10.700000000000728,
+                  10.599999999998545,
+                  9.400000000001455,
+                  12.799999999999272,
+                  10.600000000002183,
+                  10.299999999999272,
+                  10.900000000001455,
+                  13.200000000000728,
+                  9.900000000001455,
+                  10.299999999999272,
+                  10.100000000002183,
+                  11.900000000001455,
+                  10.5,
+                  9.899999999997817,
+                  9.700000000000728,
+                  9.100000000002183,
+                  9.900000000001455,
+                  15.299999999999272,
+                  10.30000000000291,
+                  10.600000000002183
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 48164864,
+            "live": 35687616,
+            "free": 11003040,
+            "overhead": 336944,
+            "virgin": 1137264,
+            "high_water": 56238208
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 19156 us, cascade 9705 us, style 77175 us, boxes 25304 us, layout 443027 us, public 80125 us; elements 111860, boxes 111050, measures 6452, reused 104312; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 105528, cascade updates 51"
+          ],
+          "manual_d_present": true
+        },
+        "mutation": {
+          "corpus": 958,
+          "report": {
+            "format": "yonder-layout-5a-v1",
+            "page": "file:///tests/pages/layout-measure.html",
+            "state": "complete",
+            "started": "2026-10-31T19:11:21.150Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "results": [
+              {
+                "experiment": "Read unchanged geometry",
+                "median_ms": 0.09999999999990905,
+                "worst_ms": 0.2000000000007276,
+                "samples_ms": [
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.2000000000007276,
+                  0.0999999999994543,
+                  0,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.1000000000003638,
+                  0.2000000000007276,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0,
+                  0.1999999999998181,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0,
+                  0.0999999999994543,
+                  0.0999999999994543,
+                  0.2000000000007276
+                ]
+              },
+              {
+                "experiment": "Change one paragraph",
+                "median_ms": 10.5,
+                "worst_ms": 16,
+                "samples_ms": [
+                  12.5,
+                  10.699999999999818,
+                  11.099999999999454,
+                  11.800000000000182,
+                  11.899999999999636,
+                  11.100000000000364,
+                  16,
+                  11.100000000000364,
+                  10.800000000000182,
+                  10,
+                  10.300000000000182,
+                  9.600000000000364,
+                  9,
+                  9.400000000000546,
+                  9.399999999999636,
+                  12.800000000000182,
+                  9.699999999999818,
+                  9.5,
+                  10.100000000000364,
+                  9.699999999999818
+                ]
+              },
+              {
+                "experiment": "Replace one list item",
+                "median_ms": 50.19999999999982,
+                "worst_ms": 59.899999999999636,
+                "samples_ms": [
+                  51.70000000000073,
+                  56.19999999999982,
+                  50,
+                  49.600000000000364,
+                  48.600000000000364,
+                  54.099999999999454,
+                  50.099999999999454,
+                  50.69999999999982,
+                  54.400000000000546,
+                  59.899999999999636,
+                  50.30000000000018,
+                  47.69999999999982,
+                  48.5,
+                  53.399999999999636,
+                  49.599999999999454,
+                  56.69999999999982,
+                  47.899999999999636,
+                  55.70000000000073,
+                  50,
+                  50.099999999999454
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 50806784,
+            "live": 34294048,
+            "free": 15446656,
+            "overhead": 220048,
+            "virgin": 846032,
+            "high_water": 54484784
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 14442 us, cascade 191903 us, style 109280 us, boxes 25143 us, layout 1035032 us, public 62838 us; elements 106499, boxes 105851, measures 53065, reused 52262; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 53134, cascade updates 26"
+          ],
+          "manual_d_present": true
+        },
+        "article": {
+          "corpus": 960,
+          "report": {
+            "format": "yonder-stream-layout-v1",
+            "page": "file:///tests/pages/layout-stream-article.html",
+            "state": "complete",
+            "checkpoints": 18,
+            "total_ms": 404.90000000000003,
+            "median_ms": 20.349999999999994,
+            "worst_ms": 39.10000000000002,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "samples_ms": [
+              13.700000000000003,
+              11.5,
+              13.700000000000003,
+              15.400000000000006,
+              14.300000000000011,
+              15.5,
+              17.299999999999983,
+              19,
+              19.799999999999983,
+              20.900000000000006,
+              20.900000000000006,
+              27.50000000000003,
+              25.30000000000001,
+              27.30000000000001,
+              28.69999999999999,
+              36.69999999999999,
+              38.30000000000001,
+              39.10000000000002
+            ],
+            "heights": [
+              394,
+              396,
+              666,
+              930,
+              930,
+              930,
+              978,
+              2226,
+              3106,
+              3106,
+              3383,
+              3383,
+              3906,
+              4623,
+              4856,
+              5952,
+              6360,
+              6436
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 28774400,
+            "live": 26988560,
+            "free": 1490208,
+            "overhead": 125248,
+            "virgin": 170384,
+            "high_water": 60529600
+          },
+          "native_stages": [
+            "layout stream: totals: model rebuild 2932 us, cascade 348924 us, style 6321 us, boxes 1351 us, layout 39853 us, public 3507 us; elements 7927, boxes 5294, measures 3795, reused 0; 17 model rebuilds, 18 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0",
+            "layout: totals: model rebuild 0 us, cascade 29538 us, style 712 us, boxes 181 us, layout 4619 us, public 324 us; elements 941, boxes 512, measures 413, reused 0; 0 model rebuilds, 1 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0"
+          ],
+          "manual_d_present": true
+        }
+      }
+    },
+    {
+      "cohort": "candidate",
+      "round": 2,
+      "files": {
+        "bin/libcanvas.so": {
+          "sha256": "697f3fb6f97738e9343a0b8c8e669bcf7bf8b6057cfae16a2c6d6546e769545d",
+          "matches": true
+        },
+        "bin/libdom.so": {
+          "sha256": "db8bdeb26b48452254fac28ee9df48ef745181244136b60e857c6c15d03cdcb1",
+          "matches": true
+        },
+        "bin/libdraw2d.so": {
+          "sha256": "8bcb3bab530d0794855bfba7676f2707cbf768aaec8ffcf8e20f013f249d5579",
+          "matches": true
+        },
+        "bin/libfetch.so": {
+          "sha256": "8965219d50db5a2faaa1ad433677dfc9a8893773b0ba01b25ff168bf114cc787",
+          "matches": true
+        },
+        "bin/libflow.so": {
+          "sha256": "8f522a663c1b25b6ad825ae3e888cfddb7bc3378eed40c4168db68c8f1d97498",
+          "matches": true
+        },
+        "bin/libfreetype.so": {
+          "sha256": "83417c058f28d2d3fd77c0c0031fad9151adbc6b5c439ece6bbfc177f22e5063",
+          "matches": true
+        },
+        "bin/libgarb.so": {
+          "sha256": "7a0e692778bcdfd52604e124f3c0f2bc84888f69208abf9a817f86e902213f98",
+          "matches": true
+        },
+        "bin/libgzip.so": {
+          "sha256": "9310c58c21593b73e6f9908c033f750f9885b412961ddb274a6fa56501583e24",
+          "matches": true
+        },
+        "bin/libhtml.so": {
+          "sha256": "d5cc4b78af99586e0a0db3643733fe9efcde94cfc00a2ad061ec285ed1f339c9",
+          "matches": true
+        },
+        "bin/libimage.so": {
+          "sha256": "94f0de0341a8e2c93e632a94d8c7091eb2bbdedd5efefaab1aa8e214c7aaab67",
+          "matches": true
+        },
+        "bin/libjpeg.so": {
+          "sha256": "267774a40132a63b97629881689a0fe6a121f5b856f9037a7a8292366e8ebda2",
+          "matches": true
+        },
+        "bin/libjs.so": {
+          "sha256": "cff069b114592900fec4c713e20fddc1fc29c604113d8cd013ec0f358a806dd6",
+          "matches": true
+        },
+        "bin/libmath.so": {
+          "sha256": "b934cdb1207fc250533b32c38b4f6a3b7d2672e1586600ffee5ef03326d9a0a0",
+          "matches": true
+        },
+        "bin/libos64.so": {
+          "sha256": "9e4a01a4faaaf67cec01672c1723dc776fdf15a07dbc8f62386b5980aaec3127",
+          "matches": true
+        },
+        "bin/libpage.so": {
+          "sha256": "e87794d3dd955984df0854de475744b7a8330d0988b04d77ace7edb1dcb052d7",
+          "matches": true
+        },
+        "bin/libpng.so": {
+          "sha256": "6c59ff84dc060fbeaf19048175dc01ab2124e8f77b134a399265b3021c970073",
+          "matches": true
+        },
+        "bin/libsvg.so": {
+          "sha256": "37cb1eb1076a35cc4a1d9094a5bd61d9718039b7569eb650c88b0f2198933a85",
+          "matches": true
+        },
+        "bin/libtls.so": {
+          "sha256": "fbe81238a124078183b0b6ce4f4564ec4225a86d962a0d317a431ceabe348c62",
+          "matches": true
+        },
+        "bin/libway.so": {
+          "sha256": "53b76fa714244de96c6b278bc7e4460eed84fdb3e599bc6f6d082fcf24fa8c28",
+          "matches": true
+        },
+        "bin/libwebp.so": {
+          "sha256": "451f6bdb58c6814e068310a729bd35003f95d1a6ee2d2a5b791a3b348e677f6c",
+          "matches": true
+        },
+        "bin/libxml.so": {
+          "sha256": "97331a0557581101de6b86d97b49fac0bcc1b278ccc7fc8749d52e06f30d40e1",
+          "matches": true
+        },
+        "bin/yonder": {
+          "sha256": "7aaf482b10a2e095c6a12fabfba823df3265ceb4ac12e057520748c200e27d42",
+          "matches": true
+        },
+        "pages/layout-graft.html": {
+          "sha256": "0dbe0d27941cd3081e22406fc647e3479b57478236de5fec8c3d574d4b2295a5",
+          "matches": true
+        },
+        "pages/layout-measure.html": {
+          "sha256": "0b7f5104e77ea63989cc50adf1e90428118dcb19129a75baa2dc1c8573cd817e",
+          "matches": true
+        },
+        "pages/layout-stream.html": {
+          "sha256": "8dcad83867d48cb112f479241a9290a5a9cbc0d7531190d9e1ba647ebb20b8c8",
+          "matches": true
+        },
+        "pages/layout-stream-article.html": {
+          "sha256": "8769d87448145a1a101584a2094723279b699af43d2cd46cb610a9213e0276d2",
+          "matches": true
+        }
+      },
+      "workloads": {
+        "graft": {
+          "corpus": 961,
+          "report": {
+            "format": "yonder-layout-graft-v1",
+            "page": "file:///tests/pages/layout-graft.html",
+            "state": "complete",
+            "started": "2026-10-31T19:15:44.100Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "initial_layout_ms": 105.19999999999891,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "results": [
+              {
+                "experiment": "Change paragraph around a float",
+                "median_ms": 10.75,
+                "samples_ms": [
+                  16,
+                  11.299999999999272,
+                  12.099999999998545,
+                  10.399999999999636,
+                  12.900000000001455,
+                  10.700000000000728,
+                  11,
+                  10.899999999999636,
+                  10.799999999999272,
+                  10.900000000001455,
+                  10.399999999999636,
+                  10.599999999998545,
+                  13.600000000000364,
+                  11.600000000000364,
+                  10,
+                  9.899999999999636,
+                  10.100000000000364,
+                  10,
+                  10.200000000000728,
+                  10
+                ]
+              },
+              {
+                "experiment": "Append one list row",
+                "median_ms": 10.199999999999818,
+                "samples_ms": [
+                  10.100000000000364,
+                  9.5,
+                  9.899999999999636,
+                  11.600000000000364,
+                  9.799999999999272,
+                  14.299999999999272,
+                  10.299999999999272,
+                  10.700000000000728,
+                  14.100000000000364,
+                  11.5,
+                  10.600000000000364,
+                  10.300000000001091,
+                  9.100000000000364,
+                  10,
+                  9.899999999999636,
+                  9.600000000000364,
+                  10.199999999998909,
+                  9.800000000001091,
+                  10.200000000000728,
+                  13.899999999999636
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 48164864,
+            "live": 35687072,
+            "free": 10937888,
+            "overhead": 337120,
+            "virgin": 1202784,
+            "high_water": 56238848
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 17313 us, cascade 13870 us, style 80571 us, boxes 27394 us, layout 468929 us, public 82694 us; elements 111860, boxes 111050, measures 6452, reused 104312; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 105528, cascade updates 51"
+          ],
+          "manual_d_present": true
+        },
+        "mutation": {
+          "corpus": 962,
+          "report": {
+            "format": "yonder-layout-5a-v1",
+            "page": "file:///tests/pages/layout-measure.html",
+            "state": "complete",
+            "started": "2026-10-31T19:16:17.060Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "results": [
+              {
+                "experiment": "Read unchanged geometry",
+                "median_ms": 0.1000000000003638,
+                "worst_ms": 0.2000000000007276,
+                "samples_ms": [
+                  0.0999999999994543,
+                  0.1999999999998181,
+                  0.0999999999994543,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.2000000000007276,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638
+                ]
+              },
+              {
+                "experiment": "Change one paragraph",
+                "median_ms": 11.649999999999636,
+                "worst_ms": 13.899999999999636,
+                "samples_ms": [
+                  11.5,
+                  11.899999999999636,
+                  12.300000000001091,
+                  12.299999999999272,
+                  12.599999999998545,
+                  11.5,
+                  10.799999999999272,
+                  10.899999999999636,
+                  10.5,
+                  10.600000000000364,
+                  12.599999999998545,
+                  11.100000000000364,
+                  11.799999999999272,
+                  10.799999999999272,
+                  12.300000000001091,
+                  11.799999999999272,
+                  13.899999999999636,
+                  9.5,
+                  12.300000000001091,
+                  9.700000000000728
+                ]
+              },
+              {
+                "experiment": "Replace one list item",
+                "median_ms": 50.899999999999636,
+                "worst_ms": 59.600000000000364,
+                "samples_ms": [
+                  49.100000000000364,
+                  51.099999999998545,
+                  50.099999999998545,
+                  54.30000000000109,
+                  50.899999999999636,
+                  50.20000000000073,
+                  57.20000000000073,
+                  51.70000000000073,
+                  59.600000000000364,
+                  50,
+                  49.80000000000109,
+                  50.20000000000073,
+                  58.5,
+                  48,
+                  50.20000000000073,
+                  48.80000000000109,
+                  56.5,
+                  50.899999999999636,
+                  51.69999999999891,
+                  58.899999999999636
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 49758208,
+            "live": 34302208,
+            "free": 14211600,
+            "overhead": 220000,
+            "virgin": 1024400,
+            "high_water": 54484784
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 14637 us, cascade 184173 us, style 109244 us, boxes 26338 us, layout 1068486 us, public 63395 us; elements 106499, boxes 105851, measures 53065, reused 52262; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 53134, cascade updates 26"
+          ],
+          "manual_d_present": true
+        },
+        "article": {
+          "corpus": 964,
+          "report": {
+            "format": "yonder-stream-layout-v1",
+            "page": "file:///tests/pages/layout-stream-article.html",
+            "state": "complete",
+            "checkpoints": 18,
+            "total_ms": 397.5999999999999,
+            "median_ms": 19.89999999999999,
+            "worst_ms": 38.89999999999998,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "samples_ms": [
+              13.700000000000003,
+              11.500000000000007,
+              13.700000000000003,
+              15.5,
+              14.399999999999991,
+              15.5,
+              17,
+              19.099999999999994,
+              19.599999999999994,
+              20.19999999999999,
+              20.899999999999977,
+              21.600000000000023,
+              25.399999999999977,
+              26.600000000000023,
+              29,
+              36.599999999999966,
+              38.39999999999998,
+              38.89999999999998
+            ],
+            "heights": [
+              394,
+              396,
+              666,
+              930,
+              930,
+              930,
+              978,
+              2226,
+              3106,
+              3106,
+              3383,
+              3383,
+              3906,
+              4623,
+              4856,
+              5952,
+              6360,
+              6436
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 28774400,
+            "live": 26987952,
+            "free": 1573120,
+            "overhead": 125072,
+            "virgin": 88256,
+            "high_water": 60530256
+          },
+          "native_stages": [
+            "layout stream: totals: model rebuild 2914 us, cascade 342904 us, style 6223 us, boxes 1349 us, layout 39183 us, public 3258 us; elements 7927, boxes 5294, measures 3795, reused 0; 17 model rebuilds, 18 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0",
+            "layout: totals: model rebuild 0 us, cascade 29524 us, style 727 us, boxes 145 us, layout 4526 us, public 368 us; elements 941, boxes 512, measures 413, reused 0; 0 model rebuilds, 1 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0"
+          ],
+          "manual_d_present": true
+        }
+      }
+    },
+    {
+      "cohort": "control",
+      "round": 2,
+      "files": {
+        "bin/libcanvas.so": {
+          "sha256": "697f3fb6f97738e9343a0b8c8e669bcf7bf8b6057cfae16a2c6d6546e769545d",
+          "matches": true
+        },
+        "bin/libdom.so": {
+          "sha256": "db8bdeb26b48452254fac28ee9df48ef745181244136b60e857c6c15d03cdcb1",
+          "matches": true
+        },
+        "bin/libdraw2d.so": {
+          "sha256": "8bcb3bab530d0794855bfba7676f2707cbf768aaec8ffcf8e20f013f249d5579",
+          "matches": true
+        },
+        "bin/libfetch.so": {
+          "sha256": "8965219d50db5a2faaa1ad433677dfc9a8893773b0ba01b25ff168bf114cc787",
+          "matches": true
+        },
+        "bin/libflow.so": {
+          "sha256": "85e4447b7d752fcbfab7b5223e46928166ee7ba99bae8782274453be4533de26",
+          "matches": true
+        },
+        "bin/libfreetype.so": {
+          "sha256": "83417c058f28d2d3fd77c0c0031fad9151adbc6b5c439ece6bbfc177f22e5063",
+          "matches": true
+        },
+        "bin/libgarb.so": {
+          "sha256": "adf269f3d2a78e7ad6d7735ae3c96b164e3d5bcb0d73af6fa0bbaf86a16c2773",
+          "matches": true
+        },
+        "bin/libgzip.so": {
+          "sha256": "9310c58c21593b73e6f9908c033f750f9885b412961ddb274a6fa56501583e24",
+          "matches": true
+        },
+        "bin/libhtml.so": {
+          "sha256": "d5cc4b78af99586e0a0db3643733fe9efcde94cfc00a2ad061ec285ed1f339c9",
+          "matches": true
+        },
+        "bin/libimage.so": {
+          "sha256": "94f0de0341a8e2c93e632a94d8c7091eb2bbdedd5efefaab1aa8e214c7aaab67",
+          "matches": true
+        },
+        "bin/libjpeg.so": {
+          "sha256": "267774a40132a63b97629881689a0fe6a121f5b856f9037a7a8292366e8ebda2",
+          "matches": true
+        },
+        "bin/libjs.so": {
+          "sha256": "cff069b114592900fec4c713e20fddc1fc29c604113d8cd013ec0f358a806dd6",
+          "matches": true
+        },
+        "bin/libmath.so": {
+          "sha256": "b934cdb1207fc250533b32c38b4f6a3b7d2672e1586600ffee5ef03326d9a0a0",
+          "matches": true
+        },
+        "bin/libos64.so": {
+          "sha256": "f8ede83e7ebb73c6796af5ae66b7d0868098af343d453e1edc8a0d716003e40b",
+          "matches": true
+        },
+        "bin/libpage.so": {
+          "sha256": "e87794d3dd955984df0854de475744b7a8330d0988b04d77ace7edb1dcb052d7",
+          "matches": true
+        },
+        "bin/libpng.so": {
+          "sha256": "6c59ff84dc060fbeaf19048175dc01ab2124e8f77b134a399265b3021c970073",
+          "matches": true
+        },
+        "bin/libsvg.so": {
+          "sha256": "37cb1eb1076a35cc4a1d9094a5bd61d9718039b7569eb650c88b0f2198933a85",
+          "matches": true
+        },
+        "bin/libtls.so": {
+          "sha256": "fbe81238a124078183b0b6ce4f4564ec4225a86d962a0d317a431ceabe348c62",
+          "matches": true
+        },
+        "bin/libway.so": {
+          "sha256": "53b76fa714244de96c6b278bc7e4460eed84fdb3e599bc6f6d082fcf24fa8c28",
+          "matches": true
+        },
+        "bin/libwebp.so": {
+          "sha256": "451f6bdb58c6814e068310a729bd35003f95d1a6ee2d2a5b791a3b348e677f6c",
+          "matches": true
+        },
+        "bin/libxml.so": {
+          "sha256": "97331a0557581101de6b86d97b49fac0bcc1b278ccc7fc8749d52e06f30d40e1",
+          "matches": true
+        },
+        "bin/yonder": {
+          "sha256": "8aef58c6393b95888af8a70759e41e7dd6b82108fe8b9fa8ab386c7611508eb0",
+          "matches": true
+        },
+        "pages/layout-graft.html": {
+          "sha256": "0dbe0d27941cd3081e22406fc647e3479b57478236de5fec8c3d574d4b2295a5",
+          "matches": true
+        },
+        "pages/layout-measure.html": {
+          "sha256": "0b7f5104e77ea63989cc50adf1e90428118dcb19129a75baa2dc1c8573cd817e",
+          "matches": true
+        },
+        "pages/layout-stream.html": {
+          "sha256": "8dcad83867d48cb112f479241a9290a5a9cbc0d7531190d9e1ba647ebb20b8c8",
+          "matches": true
+        },
+        "pages/layout-stream-article.html": {
+          "sha256": "8769d87448145a1a101584a2094723279b699af43d2cd46cb610a9213e0276d2",
+          "matches": true
+        }
+      },
+      "workloads": {
+        "graft": {
+          "corpus": 965,
+          "report": {
+            "format": "yonder-layout-graft-v1",
+            "page": "file:///tests/pages/layout-graft.html",
+            "state": "complete",
+            "started": "2026-10-31T19:18:57.050Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "initial_layout_ms": 170.39999999999964,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "results": [
+              {
+                "experiment": "Change paragraph around a float",
+                "median_ms": 58.24999999999909,
+                "samples_ms": [
+                  65.20000000000073,
+                  234.29999999999927,
+                  58.599999999998545,
+                  150.40000000000146,
+                  60.19999999999891,
+                  77.39999999999964,
+                  53.70000000000073,
+                  56.399999999999636,
+                  67.30000000000109,
+                  52.80000000000109,
+                  59.30000000000109,
+                  62.69999999999891,
+                  59,
+                  52.29999999999927,
+                  52.80000000000109,
+                  48.599999999998545,
+                  56,
+                  49.70000000000073,
+                  57.899999999999636,
+                  45.600000000000364
+                ]
+              },
+              {
+                "experiment": "Append one list row",
+                "median_ms": 57.55000000000018,
+                "samples_ms": [
+                  48.600000000000364,
+                  53.29999999999927,
+                  52.399999999999636,
+                  62.599999999998545,
+                  54.100000000000364,
+                  58.29999999999927,
+                  58,
+                  57.600000000000364,
+                  51.29999999999927,
+                  56.600000000000364,
+                  58,
+                  60.5,
+                  54.30000000000109,
+                  58.600000000000364,
+                  61.79999999999927,
+                  53.19999999999891,
+                  57.5,
+                  64.5,
+                  57.19999999999891,
+                  62.80000000000109
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 57184256,
+            "live": 35787968,
+            "free": 20076512,
+            "overhead": 609920,
+            "virgin": 709856,
+            "high_water": 56405520
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 12745 us, cascade 8880 us, style 76479 us, boxes 25950 us, layout 3914128 us, public 88311 us; elements 111860, boxes 111050, measures 111860, reused 0; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 105528, cascade updates 51"
+          ],
+          "manual_d_present": true
+        },
+        "mutation": {
+          "corpus": 966,
+          "report": {
+            "format": "yonder-layout-5a-v1",
+            "page": "file:///tests/pages/layout-measure.html",
+            "state": "complete",
+            "started": "2026-10-31T19:19:45.830Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "results": [
+              {
+                "experiment": "Read unchanged geometry",
+                "median_ms": 0.1000000000003638,
+                "worst_ms": 0.1999999999998181,
+                "samples_ms": [
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.1999999999998181,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.1999999999998181,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638
+                ]
+              },
+              {
+                "experiment": "Change one paragraph",
+                "median_ms": 42.849999999999454,
+                "worst_ms": 157.29999999999927,
+                "samples_ms": [
+                  122.79999999999927,
+                  157.29999999999927,
+                  88,
+                  122.09999999999854,
+                  46.79999999999927,
+                  75.89999999999964,
+                  44.79999999999927,
+                  48,
+                  35.19999999999891,
+                  45,
+                  38.20000000000073,
+                  40.899999999999636,
+                  39.600000000000364,
+                  36.80000000000109,
+                  37.30000000000109,
+                  34.900000000001455,
+                  48.20000000000073,
+                  35.100000000000364,
+                  40.80000000000109,
+                  33.599999999998545
+                ]
+              },
+              {
+                "experiment": "Replace one list item",
+                "median_ms": 56.69999999999891,
+                "worst_ms": 66.89999999999964,
+                "samples_ms": [
+                  57.100000000000364,
+                  56.69999999999891,
+                  55.5,
+                  54.79999999999927,
+                  54.600000000000364,
+                  66.89999999999964,
+                  59,
+                  56,
+                  59.899999999999636,
+                  60,
+                  61.69999999999891,
+                  64.60000000000036,
+                  55.5,
+                  53.70000000000073,
+                  55,
+                  54.399999999999636,
+                  56.69999999999891,
+                  62.19999999999891,
+                  57.900000000001455,
+                  55.5
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 52490240,
+            "live": 34116192,
+            "free": 16816976,
+            "overhead": 356912,
+            "virgin": 1200160,
+            "high_water": 54089824
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 12242 us, cascade 189132 us, style 104727 us, boxes 22716 us, layout 2912013 us, public 65761 us; elements 106499, boxes 105851, measures 105374, reused 0; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 53134, cascade updates 26"
+          ],
+          "manual_d_present": true
+        },
+        "article": {
+          "corpus": 968,
+          "report": {
+            "format": "yonder-stream-layout-v1",
+            "page": "file:///tests/pages/layout-stream-article.html",
+            "state": "complete",
+            "checkpoints": 18,
+            "total_ms": 417.20000000000005,
+            "median_ms": 21.14999999999999,
+            "worst_ms": 41.400000000000034,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "samples_ms": [
+              13.700000000000003,
+              11.500000000000007,
+              13.5,
+              15.5,
+              14.700000000000003,
+              15.700000000000003,
+              17.19999999999999,
+              19.599999999999994,
+              20.5,
+              22.19999999999999,
+              21.799999999999983,
+              27.100000000000023,
+              26,
+              27.200000000000045,
+              29.099999999999966,
+              39.5,
+              41,
+              41.400000000000034
+            ],
+            "heights": [
+              394,
+              396,
+              666,
+              930,
+              930,
+              930,
+              978,
+              2226,
+              3106,
+              3106,
+              3383,
+              3383,
+              3906,
+              4623,
+              4856,
+              5952,
+              6360,
+              6436
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 29822976,
+            "live": 27059680,
+            "free": 1421456,
+            "overhead": 159264,
+            "virgin": 1182576,
+            "high_water": 60528944
+          },
+          "native_stages": [
+            "layout stream: totals: model rebuild 2922 us, cascade 348973 us, style 6220 us, boxes 1389 us, layout 52032 us, public 3382 us; elements 7927, boxes 5294, measures 3795, reused 0; 17 model rebuilds, 18 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0",
+            "layout: totals: model rebuild 0 us, cascade 29656 us, style 723 us, boxes 149 us, layout 6942 us, public 456 us; elements 941, boxes 512, measures 413, reused 0; 0 model rebuilds, 1 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0"
+          ],
+          "manual_d_present": true
+        }
+      }
+    },
+    {
+      "cohort": "control",
+      "round": 3,
+      "files": {
+        "bin/libcanvas.so": {
+          "sha256": "697f3fb6f97738e9343a0b8c8e669bcf7bf8b6057cfae16a2c6d6546e769545d",
+          "matches": true
+        },
+        "bin/libdom.so": {
+          "sha256": "db8bdeb26b48452254fac28ee9df48ef745181244136b60e857c6c15d03cdcb1",
+          "matches": true
+        },
+        "bin/libdraw2d.so": {
+          "sha256": "8bcb3bab530d0794855bfba7676f2707cbf768aaec8ffcf8e20f013f249d5579",
+          "matches": true
+        },
+        "bin/libfetch.so": {
+          "sha256": "8965219d50db5a2faaa1ad433677dfc9a8893773b0ba01b25ff168bf114cc787",
+          "matches": true
+        },
+        "bin/libflow.so": {
+          "sha256": "85e4447b7d752fcbfab7b5223e46928166ee7ba99bae8782274453be4533de26",
+          "matches": true
+        },
+        "bin/libfreetype.so": {
+          "sha256": "83417c058f28d2d3fd77c0c0031fad9151adbc6b5c439ece6bbfc177f22e5063",
+          "matches": true
+        },
+        "bin/libgarb.so": {
+          "sha256": "adf269f3d2a78e7ad6d7735ae3c96b164e3d5bcb0d73af6fa0bbaf86a16c2773",
+          "matches": true
+        },
+        "bin/libgzip.so": {
+          "sha256": "9310c58c21593b73e6f9908c033f750f9885b412961ddb274a6fa56501583e24",
+          "matches": true
+        },
+        "bin/libhtml.so": {
+          "sha256": "d5cc4b78af99586e0a0db3643733fe9efcde94cfc00a2ad061ec285ed1f339c9",
+          "matches": true
+        },
+        "bin/libimage.so": {
+          "sha256": "94f0de0341a8e2c93e632a94d8c7091eb2bbdedd5efefaab1aa8e214c7aaab67",
+          "matches": true
+        },
+        "bin/libjpeg.so": {
+          "sha256": "267774a40132a63b97629881689a0fe6a121f5b856f9037a7a8292366e8ebda2",
+          "matches": true
+        },
+        "bin/libjs.so": {
+          "sha256": "cff069b114592900fec4c713e20fddc1fc29c604113d8cd013ec0f358a806dd6",
+          "matches": true
+        },
+        "bin/libmath.so": {
+          "sha256": "b934cdb1207fc250533b32c38b4f6a3b7d2672e1586600ffee5ef03326d9a0a0",
+          "matches": true
+        },
+        "bin/libos64.so": {
+          "sha256": "f8ede83e7ebb73c6796af5ae66b7d0868098af343d453e1edc8a0d716003e40b",
+          "matches": true
+        },
+        "bin/libpage.so": {
+          "sha256": "e87794d3dd955984df0854de475744b7a8330d0988b04d77ace7edb1dcb052d7",
+          "matches": true
+        },
+        "bin/libpng.so": {
+          "sha256": "6c59ff84dc060fbeaf19048175dc01ab2124e8f77b134a399265b3021c970073",
+          "matches": true
+        },
+        "bin/libsvg.so": {
+          "sha256": "37cb1eb1076a35cc4a1d9094a5bd61d9718039b7569eb650c88b0f2198933a85",
+          "matches": true
+        },
+        "bin/libtls.so": {
+          "sha256": "fbe81238a124078183b0b6ce4f4564ec4225a86d962a0d317a431ceabe348c62",
+          "matches": true
+        },
+        "bin/libway.so": {
+          "sha256": "53b76fa714244de96c6b278bc7e4460eed84fdb3e599bc6f6d082fcf24fa8c28",
+          "matches": true
+        },
+        "bin/libwebp.so": {
+          "sha256": "451f6bdb58c6814e068310a729bd35003f95d1a6ee2d2a5b791a3b348e677f6c",
+          "matches": true
+        },
+        "bin/libxml.so": {
+          "sha256": "97331a0557581101de6b86d97b49fac0bcc1b278ccc7fc8749d52e06f30d40e1",
+          "matches": true
+        },
+        "bin/yonder": {
+          "sha256": "8aef58c6393b95888af8a70759e41e7dd6b82108fe8b9fa8ab386c7611508eb0",
+          "matches": true
+        },
+        "pages/layout-graft.html": {
+          "sha256": "0dbe0d27941cd3081e22406fc647e3479b57478236de5fec8c3d574d4b2295a5",
+          "matches": true
+        },
+        "pages/layout-measure.html": {
+          "sha256": "0b7f5104e77ea63989cc50adf1e90428118dcb19129a75baa2dc1c8573cd817e",
+          "matches": true
+        },
+        "pages/layout-stream.html": {
+          "sha256": "8dcad83867d48cb112f479241a9290a5a9cbc0d7531190d9e1ba647ebb20b8c8",
+          "matches": true
+        },
+        "pages/layout-stream-article.html": {
+          "sha256": "8769d87448145a1a101584a2094723279b699af43d2cd46cb610a9213e0276d2",
+          "matches": true
+        }
+      },
+      "workloads": {
+        "graft": {
+          "corpus": 969,
+          "report": {
+            "format": "yonder-layout-graft-v1",
+            "page": "file:///tests/pages/layout-graft.html",
+            "state": "complete",
+            "started": "2026-10-31T19:22:24.760Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "initial_layout_ms": 167.89999999999964,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "results": [
+              {
+                "experiment": "Change paragraph around a float",
+                "median_ms": 58.600000000000364,
+                "samples_ms": [
+                  64.90000000000146,
+                  222.39999999999964,
+                  58.5,
+                  146.89999999999964,
+                  56.30000000000109,
+                  67.69999999999891,
+                  66,
+                  55.600000000000364,
+                  68.5,
+                  58.80000000000109,
+                  59,
+                  53,
+                  58.5,
+                  58.70000000000073,
+                  62.399999999999636,
+                  47.20000000000073,
+                  53.100000000000364,
+                  48.29999999999927,
+                  53.30000000000109,
+                  47.80000000000109
+                ]
+              },
+              {
+                "experiment": "Append one list row",
+                "median_ms": 54.349999999999454,
+                "samples_ms": [
+                  51.69999999999891,
+                  53.899999999999636,
+                  59.70000000000073,
+                  44.400000000001455,
+                  49.20000000000073,
+                  48.5,
+                  68.70000000000073,
+                  59.5,
+                  59,
+                  54.100000000000364,
+                  49.600000000000364,
+                  60,
+                  54.599999999998545,
+                  57.100000000000364,
+                  50.80000000000109,
+                  56.600000000000364,
+                  48.20000000000073,
+                  59.600000000000364,
+                  57.79999999999927,
+                  49.70000000000073
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 58232832,
+            "live": 35784208,
+            "free": 20240480,
+            "overhead": 610096,
+            "virgin": 1598048,
+            "high_water": 56406208
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 16070 us, cascade 9567 us, style 74014 us, boxes 26440 us, layout 3869180 us, public 87734 us; elements 111860, boxes 111050, measures 111860, reused 0; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 105528, cascade updates 51"
+          ],
+          "manual_d_present": true
+        },
+        "mutation": {
+          "corpus": 970,
+          "report": {
+            "format": "yonder-layout-5a-v1",
+            "page": "file:///tests/pages/layout-measure.html",
+            "state": "complete",
+            "started": "2026-10-31T19:23:10.170Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "results": [
+              {
+                "experiment": "Read unchanged geometry",
+                "median_ms": 0.1000000000003638,
+                "worst_ms": 0.2000000000007276,
+                "samples_ms": [
+                  0.1000000000003638,
+                  0.1999999999998181,
+                  0.1000000000003638,
+                  0.2000000000007276,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.09999999999854481,
+                  0.1000000000003638,
+                  0.2000000000007276,
+                  0.1000000000003638,
+                  0.09999999999854481,
+                  0.2000000000007276,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1999999999989086,
+                  0.1000000000003638,
+                  0.1000000000003638
+                ]
+              },
+              {
+                "experiment": "Change one paragraph",
+                "median_ms": 40.54999999999927,
+                "worst_ms": 164.3000000000011,
+                "samples_ms": [
+                  141.6999999999989,
+                  164.3000000000011,
+                  80.70000000000073,
+                  124.90000000000146,
+                  44.400000000001455,
+                  81.19999999999891,
+                  40.29999999999927,
+                  61,
+                  35.399999999999636,
+                  39.099999999998545,
+                  36.600000000000364,
+                  39.79999999999927,
+                  35.5,
+                  41.100000000000364,
+                  39.5,
+                  40.79999999999927,
+                  35.599999999998545,
+                  46.100000000000364,
+                  34.70000000000073,
+                  32.79999999999927
+                ]
+              },
+              {
+                "experiment": "Replace one list item",
+                "median_ms": 57.849999999999454,
+                "worst_ms": 62.899999999999636,
+                "samples_ms": [
+                  59.399999999999636,
+                  57.79999999999927,
+                  54.69999999999891,
+                  57.29999999999927,
+                  55.100000000000364,
+                  55.20000000000073,
+                  58.5,
+                  62,
+                  62.899999999999636,
+                  56.899999999999636,
+                  57,
+                  61.5,
+                  55.30000000000109,
+                  57,
+                  59.20000000000073,
+                  60.19999999999891,
+                  57.19999999999891,
+                  62.5,
+                  57.899999999999636,
+                  61.899999999999636
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 52490240,
+            "live": 34117824,
+            "free": 16866304,
+            "overhead": 356992,
+            "virgin": 1149120,
+            "high_water": 54089872
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 12058 us, cascade 185343 us, style 102006 us, boxes 28236 us, layout 2948629 us, public 63953 us; elements 106499, boxes 105851, measures 105374, reused 0; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 53134, cascade updates 26"
+          ],
+          "manual_d_present": true
+        },
+        "article": {
+          "corpus": 972,
+          "report": {
+            "format": "yonder-stream-layout-v1",
+            "page": "file:///tests/pages/layout-stream-article.html",
+            "state": "complete",
+            "checkpoints": 18,
+            "total_ms": 436.7,
+            "median_ms": 22.30000000000002,
+            "worst_ms": 43,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "samples_ms": [
+              14.100000000000001,
+              11.299999999999997,
+              14.600000000000009,
+              15.900000000000006,
+              22.500000000000014,
+              16,
+              17.5,
+              19.700000000000017,
+              21.400000000000006,
+              22.899999999999977,
+              22.100000000000023,
+              26.80000000000001,
+              27.399999999999977,
+              30.099999999999966,
+              31.19999999999999,
+              43,
+              40.30000000000001,
+              39.89999999999998
+            ],
+            "heights": [
+              394,
+              396,
+              666,
+              930,
+              930,
+              930,
+              978,
+              2226,
+              3106,
+              3106,
+              3383,
+              3383,
+              3906,
+              4623,
+              4856,
+              5952,
+              6360,
+              6436
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 29822976,
+            "live": 27060624,
+            "free": 1624032,
+            "overhead": 159248,
+            "virgin": 979072,
+            "high_water": 60528992
+          },
+          "native_stages": [
+            "layout stream: totals: model rebuild 2935 us, cascade 362233 us, style 6482 us, boxes 1564 us, layout 57827 us, public 3479 us; elements 7927, boxes 5294, measures 3795, reused 0; 17 model rebuilds, 18 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0",
+            "layout: totals: model rebuild 0 us, cascade 29558 us, style 733 us, boxes 148 us, layout 6327 us, public 410 us; elements 941, boxes 512, measures 413, reused 0; 0 model rebuilds, 1 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0"
+          ],
+          "manual_d_present": true
+        }
+      }
+    },
+    {
+      "cohort": "candidate",
+      "round": 3,
+      "files": {
+        "bin/libcanvas.so": {
+          "sha256": "697f3fb6f97738e9343a0b8c8e669bcf7bf8b6057cfae16a2c6d6546e769545d",
+          "matches": true
+        },
+        "bin/libdom.so": {
+          "sha256": "db8bdeb26b48452254fac28ee9df48ef745181244136b60e857c6c15d03cdcb1",
+          "matches": true
+        },
+        "bin/libdraw2d.so": {
+          "sha256": "8bcb3bab530d0794855bfba7676f2707cbf768aaec8ffcf8e20f013f249d5579",
+          "matches": true
+        },
+        "bin/libfetch.so": {
+          "sha256": "8965219d50db5a2faaa1ad433677dfc9a8893773b0ba01b25ff168bf114cc787",
+          "matches": true
+        },
+        "bin/libflow.so": {
+          "sha256": "8f522a663c1b25b6ad825ae3e888cfddb7bc3378eed40c4168db68c8f1d97498",
+          "matches": true
+        },
+        "bin/libfreetype.so": {
+          "sha256": "83417c058f28d2d3fd77c0c0031fad9151adbc6b5c439ece6bbfc177f22e5063",
+          "matches": true
+        },
+        "bin/libgarb.so": {
+          "sha256": "7a0e692778bcdfd52604e124f3c0f2bc84888f69208abf9a817f86e902213f98",
+          "matches": true
+        },
+        "bin/libgzip.so": {
+          "sha256": "9310c58c21593b73e6f9908c033f750f9885b412961ddb274a6fa56501583e24",
+          "matches": true
+        },
+        "bin/libhtml.so": {
+          "sha256": "d5cc4b78af99586e0a0db3643733fe9efcde94cfc00a2ad061ec285ed1f339c9",
+          "matches": true
+        },
+        "bin/libimage.so": {
+          "sha256": "94f0de0341a8e2c93e632a94d8c7091eb2bbdedd5efefaab1aa8e214c7aaab67",
+          "matches": true
+        },
+        "bin/libjpeg.so": {
+          "sha256": "267774a40132a63b97629881689a0fe6a121f5b856f9037a7a8292366e8ebda2",
+          "matches": true
+        },
+        "bin/libjs.so": {
+          "sha256": "cff069b114592900fec4c713e20fddc1fc29c604113d8cd013ec0f358a806dd6",
+          "matches": true
+        },
+        "bin/libmath.so": {
+          "sha256": "b934cdb1207fc250533b32c38b4f6a3b7d2672e1586600ffee5ef03326d9a0a0",
+          "matches": true
+        },
+        "bin/libos64.so": {
+          "sha256": "9e4a01a4faaaf67cec01672c1723dc776fdf15a07dbc8f62386b5980aaec3127",
+          "matches": true
+        },
+        "bin/libpage.so": {
+          "sha256": "e87794d3dd955984df0854de475744b7a8330d0988b04d77ace7edb1dcb052d7",
+          "matches": true
+        },
+        "bin/libpng.so": {
+          "sha256": "6c59ff84dc060fbeaf19048175dc01ab2124e8f77b134a399265b3021c970073",
+          "matches": true
+        },
+        "bin/libsvg.so": {
+          "sha256": "37cb1eb1076a35cc4a1d9094a5bd61d9718039b7569eb650c88b0f2198933a85",
+          "matches": true
+        },
+        "bin/libtls.so": {
+          "sha256": "fbe81238a124078183b0b6ce4f4564ec4225a86d962a0d317a431ceabe348c62",
+          "matches": true
+        },
+        "bin/libway.so": {
+          "sha256": "53b76fa714244de96c6b278bc7e4460eed84fdb3e599bc6f6d082fcf24fa8c28",
+          "matches": true
+        },
+        "bin/libwebp.so": {
+          "sha256": "451f6bdb58c6814e068310a729bd35003f95d1a6ee2d2a5b791a3b348e677f6c",
+          "matches": true
+        },
+        "bin/libxml.so": {
+          "sha256": "97331a0557581101de6b86d97b49fac0bcc1b278ccc7fc8749d52e06f30d40e1",
+          "matches": true
+        },
+        "bin/yonder": {
+          "sha256": "7aaf482b10a2e095c6a12fabfba823df3265ceb4ac12e057520748c200e27d42",
+          "matches": true
+        },
+        "pages/layout-graft.html": {
+          "sha256": "0dbe0d27941cd3081e22406fc647e3479b57478236de5fec8c3d574d4b2295a5",
+          "matches": true
+        },
+        "pages/layout-measure.html": {
+          "sha256": "0b7f5104e77ea63989cc50adf1e90428118dcb19129a75baa2dc1c8573cd817e",
+          "matches": true
+        },
+        "pages/layout-stream.html": {
+          "sha256": "8dcad83867d48cb112f479241a9290a5a9cbc0d7531190d9e1ba647ebb20b8c8",
+          "matches": true
+        },
+        "pages/layout-stream-article.html": {
+          "sha256": "8769d87448145a1a101584a2094723279b699af43d2cd46cb610a9213e0276d2",
+          "matches": true
+        }
+      },
+      "workloads": {
+        "graft": {
+          "corpus": 973,
+          "report": {
+            "format": "yonder-layout-graft-v1",
+            "page": "file:///tests/pages/layout-graft.html",
+            "state": "complete",
+            "started": "2026-10-31T19:25:33.290Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "initial_layout_ms": 103,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "results": [
+              {
+                "experiment": "Change paragraph around a float",
+                "median_ms": 10.599999999999909,
+                "samples_ms": [
+                  11.600000000000364,
+                  11.099999999999454,
+                  11.899999999999636,
+                  11.199999999999818,
+                  10.899999999999636,
+                  11.600000000000364,
+                  10.5,
+                  10.899999999999636,
+                  10.5,
+                  10.699999999999818,
+                  9.399999999999636,
+                  10.199999999999818,
+                  10.199999999999818,
+                  15.399999999999636,
+                  10.5,
+                  10.300000000000182,
+                  10,
+                  10.099999999999454,
+                  10.5,
+                  11
+                ]
+              },
+              {
+                "experiment": "Append one list row",
+                "median_ms": 10.550000000000182,
+                "samples_ms": [
+                  9.799999999999272,
+                  10.699999999998909,
+                  10.600000000000364,
+                  10.699999999998909,
+                  9.5,
+                  10.099999999998545,
+                  13.200000000000728,
+                  9.599999999998545,
+                  11.299999999999272,
+                  16.80000000000109,
+                  9.200000000000728,
+                  10.700000000000728,
+                  9.299999999999272,
+                  11.200000000000728,
+                  9.200000000000728,
+                  9.699999999998909,
+                  9.899999999999636,
+                  11,
+                  14.299999999999272,
+                  10.5
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 48164864,
+            "live": 35686000,
+            "free": 10938928,
+            "overhead": 337184,
+            "virgin": 1202752,
+            "high_water": 56238464
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 17549 us, cascade 9533 us, style 76042 us, boxes 26980 us, layout 455800 us, public 78359 us; elements 111860, boxes 111050, measures 6452, reused 104312; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 105528, cascade updates 51"
+          ],
+          "manual_d_present": true
+        },
+        "mutation": {
+          "corpus": 974,
+          "report": {
+            "format": "yonder-layout-5a-v1",
+            "page": "file:///tests/pages/layout-measure.html",
+            "state": "complete",
+            "started": "2026-10-31T19:26:05.490Z",
+            "rows": 2000,
+            "samples": 20,
+            "warmup": 5,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "results": [
+              {
+                "experiment": "Read unchanged geometry",
+                "median_ms": 0.1000000000003638,
+                "worst_ms": 0.1999999999998181,
+                "samples_ms": [
+                  0.0999999999994543,
+                  0.1999999999998181,
+                  0.0999999999994543,
+                  0.0999999999994543,
+                  0.1999999999998181,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.0999999999994543,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.0999999999994543,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.1000000000003638,
+                  0.0999999999994543
+                ]
+              },
+              {
+                "experiment": "Change one paragraph",
+                "median_ms": 10.699999999999818,
+                "worst_ms": 17,
+                "samples_ms": [
+                  12.600000000000364,
+                  11.199999999998909,
+                  11.899999999999636,
+                  12.299999999999272,
+                  11.300000000001091,
+                  11.200000000000728,
+                  17,
+                  12.600000000000364,
+                  13.199999999998909,
+                  9.799999999999272,
+                  11.399999999999636,
+                  9.100000000000364,
+                  10.200000000000728,
+                  9.200000000000728,
+                  10.199999999998909,
+                  9.099999999998545,
+                  9.100000000000364,
+                  9.5,
+                  9.600000000000364,
+                  9
+                ]
+              },
+              {
+                "experiment": "Replace one list item",
+                "median_ms": 49.69999999999982,
+                "worst_ms": 57.30000000000109,
+                "samples_ms": [
+                  48.899999999999636,
+                  51.600000000000364,
+                  46.69999999999891,
+                  50.19999999999891,
+                  49.5,
+                  50.399999999999636,
+                  46.600000000000364,
+                  57.30000000000109,
+                  48.29999999999927,
+                  49.899999999999636,
+                  46.900000000001455,
+                  47.600000000000364,
+                  48.900000000001455,
+                  52.30000000000109,
+                  49.30000000000109,
+                  49.20000000000073,
+                  52.69999999999891,
+                  50.79999999999927,
+                  50.20000000000073,
+                  52.30000000000109
+                ]
+              }
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 50806784,
+            "live": 34304688,
+            "free": 15294928,
+            "overhead": 220160,
+            "virgin": 987008,
+            "high_water": 54484816
+          },
+          "native_stages": [
+            "layout: totals: model rebuild 15955 us, cascade 193706 us, style 109473 us, boxes 25764 us, layout 1003505 us, public 59581 us; elements 106499, boxes 105851, measures 53065, reused 52262; 52 model rebuilds, 54 layout attempts, 0 refused/partial, 0 clock errors; styles reused 53134, cascade updates 26"
+          ],
+          "manual_d_present": true
+        },
+        "article": {
+          "corpus": 976,
+          "report": {
+            "format": "yonder-stream-layout-v1",
+            "page": "file:///tests/pages/layout-stream-article.html",
+            "state": "complete",
+            "checkpoints": 18,
+            "total_ms": 409.09999999999997,
+            "median_ms": 20.099999999999994,
+            "worst_ms": 41.60000000000002,
+            "viewport": {
+              "width": 2526,
+              "height": 1259,
+              "devicePixelRatio": 1
+            },
+            "samples_ms": [
+              14,
+              11.599999999999994,
+              13.799999999999997,
+              15.700000000000003,
+              14.299999999999997,
+              15.599999999999994,
+              17.19999999999999,
+              19.400000000000006,
+              20,
+              20.19999999999999,
+              20.80000000000001,
+              26.19999999999999,
+              25.099999999999966,
+              26.19999999999999,
+              29.30000000000001,
+              39.200000000000045,
+              41.60000000000002,
+              38.89999999999998
+            ],
+            "heights": [
+              394,
+              396,
+              666,
+              930,
+              930,
+              930,
+              978,
+              2226,
+              3106,
+              3106,
+              3383,
+              3383,
+              3906,
+              4623,
+              4856,
+              5952,
+              6360,
+              6436
+            ]
+          },
+          "heap_bytes": {
+            "mapped": 29822976,
+            "live": 26989536,
+            "free": 1595760,
+            "overhead": 125056,
+            "virgin": 1112624,
+            "high_water": 60529760
+          },
+          "native_stages": [
+            "layout stream: totals: model rebuild 3023 us, cascade 352287 us, style 6310 us, boxes 1451 us, layout 40530 us, public 3424 us; elements 7927, boxes 5294, measures 3795, reused 0; 17 model rebuilds, 18 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0",
+            "layout: totals: model rebuild 0 us, cascade 29975 us, style 731 us, boxes 142 us, layout 4406 us, public 396 us; elements 941, boxes 512, measures 413, reused 0; 0 model rebuilds, 1 layout attempts, 0 refused/partial, 0 clock errors; styles reused 0, cascade updates 0"
+          ],
+          "manual_d_present": true
+        }
+      }
+    }
+  ],
+  "excluded_attempt": {
+    "reason": "Candidate1 mutation repeated for manual diagnostic; later attempt selected independently of speed. This earlier attempt is preserved but excluded from aggregates.",
+    "corpus": 957,
+    "report": {
+      "format": "yonder-layout-5a-v1",
+      "page": "file:///tests/pages/layout-measure.html",
+      "state": "complete",
+      "started": "2026-10-31T19:10:55.020Z",
+      "rows": 2000,
+      "samples": 20,
+      "warmup": 5,
+      "viewport": {
+        "width": 2526,
+        "height": 1259,
+        "devicePixelRatio": 1
+      },
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+      "results": [
+        {
+          "experiment": "Read unchanged geometry",
+          "median_ms": 0.1000000000003638,
+          "worst_ms": 0.2000000000007276,
+          "samples_ms": [
+            0.1000000000003638,
+            0.1000000000003638,
+            0.1000000000003638,
+            0.1000000000003638,
+            0.1000000000003638,
+            0.09999999999854481,
+            0.1000000000003638,
+            0.1000000000003638,
+            0.1000000000003638,
+            0.2000000000007276,
+            0.1000000000003638,
+            0.1000000000003638,
+            0.1999999999989086,
+            0.1000000000003638,
+            0.1000000000003638,
+            0.1999999999989086,
+            0.09999999999854481,
+            0.2000000000007276,
+            0.2000000000007276,
+            0.1000000000003638
+          ]
+        },
+        {
+          "experiment": "Change one paragraph",
+          "median_ms": 10.5,
+          "worst_ms": 13.799999999999272,
+          "samples_ms": [
+            12,
+            11.100000000000364,
+            12.600000000000364,
+            12,
+            12.099999999998545,
+            11.399999999999636,
+            13.799999999999272,
+            11.100000000000364,
+            9.699999999998909,
+            9.899999999999636,
+            10.399999999999636,
+            10,
+            10.100000000000364,
+            10.5,
+            9.699999999998909,
+            9.5,
+            10.5,
+            11.099999999998545,
+            10.200000000000728,
+            10
+          ]
+        },
+        {
+          "experiment": "Replace one list item",
+          "median_ms": 49.94999999999982,
+          "worst_ms": 58.20000000000073,
+          "samples_ms": [
+            50,
+            50.20000000000073,
+            51.29999999999927,
+            51.100000000000364,
+            48.79999999999927,
+            58.20000000000073,
+            49,
+            56.399999999999636,
+            49.899999999999636,
+            49,
+            49.399999999999636,
+            50.70000000000073,
+            47.899999999999636,
+            49.79999999999927,
+            57,
+            52.100000000000364,
+            47.600000000000364,
+            49,
+            50.600000000000364,
+            49.5
+          ]
+        }
+      ]
+    }
+  },
+  "limitations": [
+    "Control1 graft has complete automatic native totals and a matched heap capture, but no separate manual d paint reading.",
+    "Historical article checkpoint heights differ; the former font setting was not verified. This campaign holds font/browser settings fixed and requires matching heights across its own six article runs. Historical timings are not pooled.",
+    "Process memory is lifetime peak live allocator payload at post-report capture, not RSS, isolated layout metadata, or a long-running leak test.",
+    "The setup metric times a forced geometry read after replacing gallery rows; it is not application launch time."
+  ]
+}

@@ -1,5 +1,7 @@
 #ifndef YONDER_SCRIPTS_H
 #define YONDER_SCRIPTS_H
+#include <dom/canvas.h>
+#include <dom/pointer.h>
 
 // A page's SCRIPT HOST (DOM_D7.md § The script host of a page): its runtime
 // and binding, made at the first script that runs, and the lists HTML's
@@ -15,12 +17,18 @@
 // retires the runtime, and the page goes on without script.
 
 #include <dom/dom.h>
+#include <dom/pointer.h>
 
 #include "diag.h"
 #include "script_job.h"
 #include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
+bool yonder_scripts_images_pending(const yonder_scripts_t *);
+bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
+bool yonder_scripts_canvas_bitmap(yonder_scripts_t *, const os64_html_node_t *, canvas_bitmap_t *);
+void yonder_scripts_canvas_visit_damage(yonder_scripts_t *,os64_dom_canvas_damage_fn,void *);
+void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
 
 typedef struct {
     const char *url;                // the page's address: names, location, a src's base
@@ -47,6 +55,7 @@ typedef struct {
     // `opaque`: it answers from a layout of the page as far as it has been
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
+    os64_dom_svg_hit_provider_t svg_hit;
     void *opaque;
     // The window's view, the computed style's provider (given `opaque`)
     // and the session's history, for the Modern Web arc's surface
@@ -55,6 +64,8 @@ typedef struct {
     // a page's view reads as zeros and its history is its own.
     os64_dom_view_provider_t view;
     os64_dom_computed_provider_t computed;
+    os64_dom_image_provider_t images;
+    os64_dom_text_provider_t canvas_text;
     os64_dom_history_t history;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, a module that failed (or, with
@@ -204,6 +215,12 @@ void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const cha
 // whose script never ran makes its runtime here if an element carries an
 // on<type> attribute for this event (a page may be all handlers); otherwise
 // nothing hears.
+// One native pointer sample is one script task, including compatibility events.
+os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *, const os64_dom_pointer_sample_t *,
+                                        os64_dom_pointer_default_t, void *, bool *ran, os64_js_outcome_t *);
+void yonder_scripts_pointer_cancel(yonder_scripts_t *);
+bool yonder_scripts_pointer_active(const yonder_scripts_t *);
+
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *scripts, const os64_html_node_t *node,
                                          const os64_dom_event_t *event, bool *prevented,
                                          os64_js_outcome_t *outcome);
@@ -230,6 +247,10 @@ void yonder_scripts_set_note(yonder_scripts_t *scripts, const char *line);
 const char *yonder_scripts_note(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// One rendering opportunity's ordered callback batch; the host owns visibility,
+// pacing and the rendering step after it (os64_dom_animation_fire).
+uint64_t yonder_scripts_animation_next(const yonder_scripts_t *scripts);
+bool yonder_scripts_animation_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
 // Custom element reactions the parser's insertions left owed
 // (os64_dom_reactions_run): whether any are, and running them as one task,
 // true when it ran. The first failure of the constructor `name` defines,
@@ -248,6 +269,7 @@ bool yonder_scripts_message_fire(yonder_scripts_t *scripts, os64_js_outcome_t *o
 // due. False when nothing ran.
 uint64_t yonder_scripts_idle_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_idle_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, os64_js_outcome_t *outcome);
 // The answer to the page's request `token` (os64_dom_fetched), as one
 // task. False when nothing ran: the runtime is gone, or never was, or the
 // answer was a module's (YONDER_MODULE_TOKEN), which the page's module map

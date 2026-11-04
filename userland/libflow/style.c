@@ -72,11 +72,15 @@ typedef struct {
     FProps taken;               // FStyled.taken
 } Spec;
 
+#include "style_copy.inc"
+
 typedef struct {
     const os64_html_document_t *doc;
     const os64_page_t *model;
     const flow_env_t *env;
     FStyles *out;
+    const FStyles *previous;
+    FStyleCopy copies;
     bool quirks;                // full quirks mode
     // `body link=` recolours every link, and the body is styled before any
     // link it contains is.
@@ -1390,6 +1394,7 @@ static void *list_alloc(Ctx *c, size_t bytes, bool *spent)
     *spent = bytes > c->out->lists_left;
     if (*spent) {
         c->spent = true;
+        c->out->lists_refused = true;
         return NULL;
     }
     void *p = f_arena_alloc(&c->out->arena, bytes);
@@ -4495,13 +4500,30 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
     if (out == NULL)
         return NULL;
+    size_t before_lists = c->out->lists_left;
+    // The previous tree pins the document: a removed node cannot be
+    // reclaimed and have its address mistaken for this node in its map.
+    const FStyled *old = c->previous ? f_style_of(c->previous, n) : NULL;
+    bool untouched = old && !garb_style_updated_since(c->env->cascade, n, c->previous->cascade_updates);
+    bool ancestry = !up || up->reuse_safe;
+    bool copied = untouched && ancestry && !old->motion && !old->style.animations.nname &&
+                  !c->out->lists_refused &&
+                  old->list_cost <= c->out->lists_left && n != c->doc->html && !is(n, OS64_HTML_TAG_BODY);
     Spec sp;
     os64_memset(&sp, 0, sizeof(sp));
-    sp.s = inherit(c, parent);
+    if (copied) {
+        sp.s = old->style;
+        if (!style_copy_value(&c->copies, &sp.s)) return NULL;
+        sp.taken = old->taken;
+        c->out->lists_left -= old->list_cost;
+        ++c->out->reused;
+    } else sp.s = inherit(c, parent);
     bool item = up != NULL && up->lays_out_items, root = n == c->doc->html;
     FMotion *motion = NULL;
     bool svg_root = c->env->svg && flow_svg_root(n);
-    if (n->ns != OS64_HTML_NS_HTML && !svg_root) {
+    if (copied) {
+        // The scalar style and its lists are already computed.
+    } else if (n->ns != OS64_HTML_NS_HTML && !svg_root) {
         // SVG descendants still need computed fonts and colors for CSSOM's
         // relative lengths/currentColor. Their outer viewport owns the
         // graphics; they do not become HTML boxes through author display.
@@ -4559,10 +4581,15 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
             !animate(c, n, &sp, &ua, parent, item, root, &motion))
             return NULL;
     }
-    if (motion == NULL)
+    if (motion == NULL && !copied)
         finish(c, &sp, parent, item, root);
     out->style = sp.s;
     out->motion = motion;
+    out->list_cost = before_lists - c->out->lists_left;
+    out->steady = copied || (old && !old->motion && !motion &&
+                             f_style_equal(&old->style, &out->style));
+    out->subtree_steady = out->steady;
+    out->reuse_safe = untouched && ancestry && out->steady;
     if (motion != NULL) {
         FStyles *st = c->out;
         if (st->nanimated == st->cap_animated) {
@@ -5061,13 +5088,32 @@ static const os64_html_node_t *next_element(const os64_html_node_t *n)
 FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
                        const flow_env_t *env)
 {
+    return f_style_build_reusing(doc, model, env, NULL);
+}
+
+FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
+                              const flow_env_t *env, const FStyles *previous)
+{
     if (doc == NULL || env == NULL)
         return NULL;
+    if (previous) {
+        const flow_env_t *had = &previous->inputs;
+        if (previous->doc != doc || previous->lists_refused || doc->quirks == OS64_HTML_QUIRKS ||
+            !env->cascade || previous->cascade_generation != garb_cascade_generation(env->cascade) ||
+            garb_cascade_version(env->cascade) != os64_html_version(doc) ||
+            had->viewport_font_px != env->viewport_font_px || had->default_generic != env->default_generic ||
+            had->ink != env->ink || had->link_ink != env->link_ink || had->paper != env->paper ||
+            had->zoom != env->zoom || had->static_only != env->static_only || had->svg != env->svg ||
+            had->scripting != env->scripting) previous = NULL;
+    }
     FStyles *out = os64_calloc(1, sizeof(*out));
     if (out == NULL)
         return NULL;
     out->doc = doc;
     out->env = env;
+    out->inputs = *env;
+    out->cascade_generation = garb_cascade_generation(env->cascade);
+    out->cascade_updates = garb_cascade_updates(env->cascade);
     // One record per element and the family names a `face` wrote are
     // bounded by the document libhtml admitted, so the arena has no cap —
     // pass 1 is all or nothing, and a cap here would blank a large page
@@ -5083,7 +5129,8 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         f_style_free(out);
         return NULL;
     }
-    Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
+    Ctx c = {.doc = doc, .model = model, .env = env, .out = out, .previous = previous,
+             .copies = {.arena = &out->arena},
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
              .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
     c.root_font = css(&c, env->viewport_font_px);
@@ -5098,9 +5145,11 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         if (styled != NULL && !open_element(&c, cur, styled))
             styled = NULL;
         if (styled == NULL) {
+            bool retry = c.copies.budget && previous;
+            f_map_free(&c.copies.slices);
             os64_free(c.counters);
             f_style_free(out);
-            return NULL;
+            return retry ? f_style_build(doc, model, env) : NULL;
         }
         const os64_html_node_t *child = styled->style.display == FLOW_DISPLAY_NONE
                                             ? NULL : next_element(cur->first_child);
@@ -5111,13 +5160,23 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         while (cur != NULL) {
             FStyled *done = f_map_get(&out->map, cur);
             if (!close_element(&c, cur, done)) {
+                f_map_free(&c.copies.slices);
                 os64_free(c.counters);
                 f_style_free(out);
                 return NULL;
             }
+            const FStyled *old = previous ? f_style_of(previous, cur) : NULL;
+            // Generated text depends on tree-order counters and quote depth,
+            // and its synthetic nodes belong to this style pass. Rebuild the
+            // containing layout subtree when either pass has generated nodes.
+            if (done && (done->pseudo[0] || done->pseudo[1] ||
+                         (old && (old->pseudo[0] || old->pseudo[1]))))
+                done->subtree_steady = false;
             FStyled *parent = f_map_get(&out->map, cur->parent);
-            if (parent != NULL && done != NULL && contributes_block(done))
-                parent->holds_block = true;
+            if (parent != NULL && done != NULL) {
+                if (contributes_block(done)) parent->holds_block = true;
+                parent->subtree_steady &= done->subtree_steady;
+            }
             // A document with no document node was walked from its html
             // element, and that element's siblings are not the page's.
             if (top == NULL && cur == doc->html) {
@@ -5134,6 +5193,7 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
                 cur = NULL;
         }
     }
+    f_map_free(&c.copies.slices);
     os64_free(c.counters);
     return out;
 }

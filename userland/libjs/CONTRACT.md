@@ -728,3 +728,12 @@ allocation refused) left a half-read module listed under its name, found
 by the next import of it, and walked by the GC through entry counts read
 before their arrays were allocated. The read now unlists and frees it,
 zeroing first any count whose array it never got.
+
+### Refused UTF-8 exports
+
+Patch 0017 releases the reference `JS_ToCStringLen2` holds on its source
+when allocation of the encoded copy fails. It still returns NULL and a
+zero length with the engine exception pending. This includes a rope
+linearized by `JS_ToString`; the temporary string belongs to the conversion
+until it is returned or released. `tools/test_js_port_host.sh` refuses the
+conversion of both a Latin-1 and a wide string and checks teardown ownership.

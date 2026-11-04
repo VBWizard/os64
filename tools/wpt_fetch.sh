@@ -57,6 +57,9 @@ WPT_DIRS=(
     css/support
     html/browsers/the-window-object
     html/dom
+    html/canvas/element
+    html/canvas/resources
+    html/webappapis/animation-frames
     html/webappapis/microtask-queuing
     html/webappapis/scripting
     secure-contexts
@@ -64,6 +67,7 @@ WPT_DIRS=(
     page-visibility
     html/interaction/focus
     dom/events
+    pointerevents
     html/webappapis/structured-clone
     requestidlecallback
     webmessaging/without-ports

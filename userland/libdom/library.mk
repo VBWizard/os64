@@ -21,7 +21,7 @@ LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.
 LIBDOM_SRCS += libdom/document.c
 # P2b: the structured clone, same-window postMessage, idle callbacks.
-LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c
+LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c libdom/pointer.c
 # 0f P1a: the select's options and the Option factory.
 LIBDOM_SRCS += libdom/options.c
 # 0f P2's core: the text controls' selection and the window's Selection.
@@ -38,7 +38,7 @@ LIBDOM_SRCS += libdom/forms.c
 LIBDOM_SRCS += libdom/validity.c
 # Node's comparisons: isSameNode, isEqualNode, compareDocumentPosition.
 LIBDOM_SRCS += libdom/compare.c
-LIBDOM_SRCS += libdom/sheets.c
+LIBDOM_SRCS += libdom/sheets.c libdom/point.c libdom/svg_geometry.c libdom/image_data.c libdom/canvas.c libdom/canvas_path.c libdom/canvas_path2d.c libdom/canvas_text.c libdom/canvas_image.c libdom/mutation.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
 # Custom elements: the registry, upgrades and their reactions.
@@ -52,15 +52,15 @@ LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 $(OBJ)/pic/libdom/streams.c.o: libdom/streams.js
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
-LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libway/include
+LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libcanvas/include -I$(CURDIR)/libdraw2d/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libway/include
 
 # libway for one copy of the origin and CORS rules (way/origin.h), which a
 # script's Headers and Request ask as the fetch job does.
-$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBOS64_SO) \
+$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO) \
     link/lib.ld GNUmakefile libdom/library.mk tools/app_bases.py
 	$(LD) --defsym LIB_BASE=$(LIBDOM_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libdom.so --no-undefined --no-as-needed \
-	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBOS64_SO)
+	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO)
 
 $(OBJ)/pic/libdom/%.c.o: libdom/%.c $(LIBJS_GENERATED)/.prepared libdom/library.mk GNUmakefile
 	@mkdir -p "$(@D)"

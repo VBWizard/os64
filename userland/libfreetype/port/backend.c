@@ -36,6 +36,8 @@
 #include <ft2build.h>
 #include <freetype/freetype.h>
 #include <freetype/ftsystem.h>
+#include <freetype/ftoutln.h>
+#include <freetype/ftbbox.h>
 #include <freetype/ftmodapi.h>
 #include <freetype/ftsnames.h>
 #include <freetype/tttables.h>
@@ -1097,6 +1099,62 @@ static void glyph_release( os64_font_glyph_t *glyph )
 }
 
 
+/* Export curves before rasterization so transformed/stroked text shares the
+ * geometry backend instead of stretching a hinted glyph bitmap. */
+typedef struct {
+    os64_font_outline_emit_t emit;
+    void *context;
+    size_t count,limit;
+    bool open;
+    os64_font_status_t status;
+} OutlineVisit;
+static int outline_emit(OutlineVisit *v,os64_geometry_command_t command)
+{
+    if(v->status!=OS64_FONT_OK)return 1;
+    if(v->count==v->limit){v->status=OS64_FONT_LIMIT;return 1;}
+    ++v->count;
+    if(v->emit)v->status=v->emit(v->context,&command);
+    return v->status!=OS64_FONT_OK;
+}
+static os64_geometry_point_t outline_point(const FT_Vector *p)
+{ return (os64_geometry_point_t){p->x/64.0,-p->y/64.0}; }
+static int outline_move(const FT_Vector *p,void *opaque)
+{
+    OutlineVisit *v=opaque;
+    if(v->open&&outline_emit(v,(os64_geometry_command_t){.verb=OS64_GEOMETRY_CLOSE}))return 1;
+    v->open=true;
+    return outline_emit(v,(os64_geometry_command_t){.verb=OS64_GEOMETRY_MOVE,.p={outline_point(p)}});
+}
+static int outline_line(const FT_Vector *p,void *opaque)
+{ return outline_emit(opaque,(os64_geometry_command_t){.verb=OS64_GEOMETRY_LINE,.p={outline_point(p)}}); }
+static int outline_quad(const FT_Vector *a,const FT_Vector *b,void *opaque)
+{ return outline_emit(opaque,(os64_geometry_command_t){.verb=OS64_GEOMETRY_QUADRATIC,.p={outline_point(a),outline_point(b)}}); }
+static int outline_cubic(const FT_Vector *a,const FT_Vector *b,const FT_Vector *c,void *opaque)
+{ return outline_emit(opaque,(os64_geometry_command_t){.verb=OS64_GEOMETRY_CUBIC,.p={outline_point(a),outline_point(b),outline_point(c)}}); }
+static os64_font_status_t outline(os64_font_face_t *face,uint32_t index,size_t limit,
+    os64_font_outline_emit_t emit,void *opaque,os64_geometry_bounds_t *bounds)
+{
+    if(bounds)*bounds=(os64_geometry_bounds_t){.empty=true};
+    if(!face||!bounds||!glyph_index_ok(face,index))return OS64_FONT_BAD_ARGUMENT;
+    face->engine->allocation_failure=OS64_FONT_OK;
+    FT_Error error=FT_Load_Glyph(face->ft,index,FT_LOAD_NO_HINTING|FT_LOAD_NO_BITMAP|FT_LOAD_NO_AUTOHINT);
+    if(error)return status_for(face->engine,error);
+    if(face->ft->glyph->format!=FT_GLYPH_FORMAT_OUTLINE)return OS64_FONT_UNSUPPORTED;
+    FT_Outline *shape=&face->ft->glyph->outline;
+    if(!shape->n_points)return OS64_FONT_OK;
+    FT_BBox box;
+    error=FT_Outline_Get_BBox(shape,&box);
+    if(error)return status_for(face->engine,error);
+    OutlineVisit visit={.emit=emit,.context=opaque,.limit=limit};
+    const FT_Outline_Funcs functions={outline_move,outline_line,outline_quad,outline_cubic,0,0};
+    error=FT_Outline_Decompose(shape,&functions,&visit);
+    if(!error&&visit.open)outline_emit(&visit,(os64_geometry_command_t){.verb=OS64_GEOMETRY_CLOSE});
+    if(visit.status!=OS64_FONT_OK)return visit.status;
+    if(error)return status_for(face->engine,error);
+    *bounds=(os64_geometry_bounds_t){false,box.xMin/64.0,-box.yMax/64.0,box.xMax/64.0,-box.yMin/64.0};
+    return OS64_FONT_OK;
+}
+
 /* ── the font table and its exported getter ────────────────────────── */
 
 static const os64_font_backend_t backend = {
@@ -1113,6 +1171,7 @@ static const os64_font_backend_t backend = {
     .render        = render,
     .glyph_view    = glyph_view,
     .glyph_release = glyph_release,
+    .outline       = outline,
 };
 
 

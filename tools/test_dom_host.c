@@ -228,6 +228,9 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_modern.inc"
 #include "test_dom_storage.inc"
 #include "test_dom_text.inc"
+#include "test_dom_canvas.inc"
+#include "test_dom_canvas_images.inc"
+#include "test_dom_canvas_paints.inc"
 #include "test_dom_custom.inc"
 #include "test_dom_observer.inc"
 #include "test_dom_platform.inc"
@@ -239,6 +242,8 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_report.inc"
 #include "test_dom_document.inc"
 #include "test_dom_message.inc"
+#include "test_dom_animation.inc"
+#include "test_dom_pointer.inc"
 #include "test_dom_importmap.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
@@ -368,8 +373,8 @@ static void dom_global_miss_cases(void)
               "global miss: a bare name in a closure, which still throws");
     miss_form(&f,&m,"var r;try{noSuchGlobal}catch(e){r=e.name}assert(r==='ReferenceError');","noSuchGlobal|",
               "global miss: a bare name at top level, which still throws");
-    miss_form(&f,&m,"(function(){assert(typeof requestAnimationFrame==='undefined')})();",
-              "requestAnimationFrame|","global miss: typeof inside a function");
+    miss_form(&f,&m,"(function(){assert(typeof noSuchGlobal==='undefined')})();",
+              "noSuchGlobal|","global miss: typeof inside a function");
     miss_form(&f,&m,"assert(window[Symbol.iterator]===undefined&&window[7]===undefined);","",
               "global miss: a symbol or an index is no name");
     miss_form(&f,&m,"assert(typeof document==='object'&&window.document===document);"
@@ -417,6 +422,7 @@ static void dom_global_miss_cases(void)
 
 int main(int argc, char **argv)
 {
+    if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--implementation")){dom_implementation_cases();implementation_allocation_cases();printf("DOM implementation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -426,20 +432,24 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--window")){dom_window_cases();printf("DOM window probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--storage-quota")){dom_storage_quota_cases();printf("DOM storage quota: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--pointer")){dom_pointer_cases();printf("DOM pointer: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_classic_cases();
     dom_modern_cases();
+    dom_pointer_cases();
     dom_custom_cases();
     dom_observer_cases();
     dom_view_cases();
     dom_storage_cases();
     dom_base64_cases();
-    dom_encoding_cases();
+    dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();
     dom_screen_cases();
     dom_performance_cases();
     dom_url_cases();
@@ -449,6 +459,7 @@ int main(int argc, char **argv)
     dom_report_cases();
     dom_document_cases();
     dom_p2b_cases();
+    dom_animation_cases();
     dom_import_map_cases();
     dom_geometry_cases();
     dom_global_miss_cases();

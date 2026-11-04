@@ -80,6 +80,92 @@ static void lifetimes(void)
     os64_text_run_release(a);os64_text_font_release(g);
     CHECK(c->files==NULL && os64_text_destroy(c)==OS64_FONT_OK && live==0);
 }
+static void shared_runs(void)
+{
+    current="shared run survives original owner and cache pressure";
+    CHECK(os64_text_run_retain(NULL)==OS64_FONT_BAD_ARGUMENT);
+    os64_text_run_release(NULL);
+    c=create(0,1);os64_text_font_t *f=open_font(c,'P');
+    os64_text_run_t *source=layout(c,f,(const uint8_t *)"iW",2,0,0);
+    os64_text_run_t *copy=source;
+    os64_text_run_view_t before,after;
+    CHECK(os64_text_run_view(source,&before)==OS64_FONT_OK);
+    size_t allocated=allocations,bytes=c->live;
+    c->cap=c->live;deny=allocations+1;
+    CHECK(os64_text_run_retain(copy)==OS64_FONT_OK);
+    CHECK(allocations==allocated && c->live==bytes && c->runs==1);
+    deny=0;c->cap=OS64_TEXT_MEMORY_DEFAULT;
+    text_image *image=source->images[0];uint8_t coverage=image->view.coverage[0];
+    os64_text_run_release(source);
+    for (unsigned i=0;i<8;i++) {
+        os64_text_run_t *pressure=layout(c,f,(const uint8_t *)"AVej",4,0,0);
+        os64_text_run_release(pressure);
+        CHECK(image->view.coverage[0]==coverage);
+    }
+    os64_text_font_release(f);
+    CHECK(os64_text_destroy(c)==OS64_FONT_BUSY && c->runs==1);
+    CHECK(text_evict(c)==0 && image->view.coverage[0]==coverage);
+    CHECK(os64_text_run_view(copy,&after)==OS64_FONT_OK);
+    CHECK(after.bytes==before.bytes && after.glyphs==before.glyphs && after.carets==before.carets);
+    CHECK(after.byte_count==2 && !memcmp(after.bytes,"iW",2) && after.advance_x==before.advance_x);
+    os64_text_caret_t caret;
+    CHECK(os64_text_caret(copy,2,OS64_TEXT_AFTER,&caret)==OS64_FONT_OK && caret.x==before.advance_x);
+    CHECK(os64_text_hit(copy,0,&caret)==OS64_FONT_OK && caret.byte_offset==0);
+    os64_text_run_release(copy);
+    CHECK(c->runs==0 && c->fonts==NULL && c->cache_bytes==0);
+    CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+
+    current="shared empty run, overflow and reverse release order";
+    c=create(0,1);f=open_font(c,'P');source=layout(c,f,NULL,0,0,0);copy=source;
+    CHECK(os64_text_run_retain(copy)==OS64_FONT_OK && c->runs==1);
+    copy->refs=SIZE_MAX;allocated=allocations;bytes=c->live;
+    CHECK(os64_text_run_retain(copy)==OS64_FONT_LIMIT && copy->refs==SIZE_MAX);
+    CHECK(allocations==allocated && c->live==bytes && c->runs==1);
+    copy->refs=2; // Restore the two real owners after the overflow probe.
+    os64_text_run_release(copy);
+    os64_text_font_release(f);
+    CHECK(os64_text_destroy(c)==OS64_FONT_BUSY);
+    CHECK(os64_text_run_view(source,&after)==OS64_FONT_OK && after.byte_count==0 && after.caret_count==1);
+    os64_text_run_release(source);
+    CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+}
+
+static void warm_run_allocations(void)
+{
+    /* Cached glyphs leave only the run's own storage to allocate. The copied
+     * bytes and caret data must survive both the input and the warming run. */
+    char long_line[4097];memset(long_line,'i',sizeof(long_line)-1);long_line[sizeof(long_line)-1]=0;
+    const char *cases[]={"AVeWi", "\t\t", "", long_line};
+    for (size_t n=0;n<sizeof(cases)/sizeof(cases[0]);n++) {
+        current="one allocation for a warm run, including empty and tabs";
+        c=create(0,1);os64_text_font_t *f=open_font(c,'P');
+        uint8_t input[sizeof(long_line)];size_t length=strlen(cases[n]);memcpy(input,cases[n],length);
+        os64_text_run_t *warm=layout(c,f,input,length,0,0);
+        os64_text_run_view_t expected,actual;
+        CHECK(os64_text_run_view(warm,&expected)==OS64_FONT_OK);
+        size_t before=allocations;deny=before+2;
+        os64_text_run_t *r=layout(c,f,input,length,0,0);
+        CHECK(allocations==before+1);deny=0;
+        CHECK(os64_text_run_view(r,&actual)==OS64_FONT_OK);
+        CHECK(actual.advance_x==expected.advance_x && actual.glyph_count==expected.glyph_count &&
+              actual.caret_count==expected.caret_count && rect_eq(actual.ink,expected.ink));
+        for (size_t i=0;i<actual.glyph_count;i++) {
+            CHECK(actual.glyphs[i].glyph_index==expected.glyphs[i].glyph_index &&
+                  actual.glyphs[i].x==expected.glyphs[i].x);
+        }
+        for (size_t i=0;i<actual.caret_count;i++) {
+            CHECK(actual.carets[i].byte_offset==expected.carets[i].byte_offset &&
+                  actual.carets[i].x==expected.carets[i].x);
+        }
+        memset(input,0,sizeof(input));os64_text_run_release(warm);os64_text_font_release(f);
+        CHECK(actual.byte_count==length && (!length || !memcmp(actual.bytes,cases[n],length)));
+        os64_text_caret_t end;
+        CHECK(os64_text_caret(r,length,OS64_TEXT_AFTER,&end)==OS64_FONT_OK && end.x==actual.advance_x);
+        os64_text_run_release(r);
+        CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+    }
+}
+
 static void failures(void)
 {
     current="allocation-denial cleanup";
@@ -296,6 +382,16 @@ static void bitmap(void)
 }
 
 #ifdef TEXT_REAL
+typedef struct {size_t count,stop;bool open;double last_x;} OutlineProbe;
+static os64_font_status_t outline_probe(void *opaque,const os64_geometry_command_t *cmd)
+{
+    OutlineProbe *p=opaque;
+    if(p->stop&&p->count==p->stop)return OS64_FONT_NO_MEMORY;
+    ++p->count;
+    if(cmd->verb==OS64_GEOMETRY_MOVE){CHECK(!p->open);p->open=true;p->last_x=cmd->p[0].x;}
+    else {CHECK(p->open);if(cmd->verb==OS64_GEOMETRY_CLOSE)p->open=false;}
+    return OS64_FONT_OK;
+}
 static void real_fonts(const char *dir)
 {
     current="real FreeType integration";
@@ -324,7 +420,22 @@ static void real_fonts(const char *dir)
         a=layout(c,f,(uint8_t *)"AV",2,0,0);
         CHECK(a->view.caret_count==3 && a->view.carets[1].x==a->view.glyphs[1].x);
         printf("real %s: AV advance %d/64, V origin %d/64, ink pixels %zu\n",names[n],a->view.advance_x,a->view.glyphs[1].x,ink);
+        CHECK(os64_text_run_retain(a)==OS64_FONT_OK);
+        os64_text_run_release(a); // The second owner keeps the real face and glyphs alive.
         os64_text_font_release(f);CHECK(os64_text_destroy(c)==OS64_FONT_BUSY);
+        os64_geometry_bounds_t bounds,measured;OutlineProbe probe={0};
+        CHECK(os64_text_run_outline(a,4096,outline_probe,&probe,&bounds)==OS64_FONT_OK);
+        CHECK(!probe.open&&probe.count>10&&!bounds.empty&&bounds.x_max>20&&bounds.y_min<0);
+        CHECK(os64_text_run_outline(a,4096,NULL,NULL,&measured)==OS64_FONT_OK);
+        CHECK(bounds.x_min==measured.x_min&&bounds.y_min==measured.y_min&&bounds.x_max==measured.x_max&&bounds.y_max==measured.y_max);
+        CHECK(os64_text_run_outline(a,probe.count-1,NULL,NULL,&measured)==OS64_FONT_LIMIT&&measured.empty);
+        size_t commands=probe.count;
+        for(size_t cut=1;cut<commands;++cut) {
+            probe=(OutlineProbe){.stop=cut};
+            CHECK(os64_text_run_outline(a,4096,outline_probe,&probe,&measured)==OS64_FONT_NO_MEMORY&&measured.empty);
+        }
+        CHECK(os64_text_run_outline(a,commands,NULL,NULL,&measured)==OS64_FONT_OK);
+
         CHECK(os64_text_draw(a,&ps,(os64_gui_rect_t){0,0,128,64},4,40,0xffffff)==OS64_FONT_OK);
         os64_text_run_release(a);CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
     }
@@ -436,11 +547,31 @@ static void ranges(void)
         CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
     }
 }
+static void outline_compatibility(void)
+{
+    current="old backend table and bitmap outline fallback";
+    size_t prefix=offsetof(os64_font_backend_t,glyph_release)+sizeof(((os64_font_backend_t *)0)->glyph_release);
+    os64_font_backend_t *old=malloc(prefix);CHECK(old!=NULL);memcpy(old,os64_fake_font_backend(),prefix);
+    memcpy((char *)old+offsetof(os64_font_backend_t,struct_size),&prefix,sizeof(prefix));
+    os64_text_options_t options={.memory={NULL,alloc,release},.backend=old};
+    CHECK(os64_text_create(&options,&c)==OS64_FONT_OK);
+    os64_text_font_t *font=NULL;CHECK(os64_text_font_bitmap(c,&font)==OS64_FONT_OK);
+    os64_text_run_t *run=layout(c,font,(const uint8_t *)"Ag",2,0,0);
+    os64_geometry_bounds_t bounds;
+    CHECK(os64_text_run_outline(run,4096,NULL,NULL,&bounds)==OS64_FONT_OK&&!bounds.empty&&bounds.x_max>8);
+    CHECK(os64_text_run_outline(run,1,NULL,NULL,&bounds)==OS64_FONT_LIMIT&&bounds.empty);
+    os64_text_run_release(run);os64_text_font_release(font);
+    font=open_font(c,'P');run=layout(c,font,(const uint8_t *)"A",1,0,0);
+    CHECK(os64_text_run_outline(run,4096,NULL,NULL,&bounds)==OS64_FONT_UNSUPPORTED&&bounds.empty);
+    os64_text_run_release(run);os64_text_font_release(font);
+    CHECK(os64_text_destroy(c)==OS64_FONT_OK&&live==0);
+    size_t short_size=prefix-1;memcpy((char *)old+offsetof(os64_font_backend_t,struct_size),&short_size,sizeof(short_size));CHECK(os64_text_create(&options,&c)==OS64_FONT_BAD_ARGUMENT);free(old);
+}
 int main(int argc,char **argv)
 {
     (void)argc;(void)argv;
     c=create(0,0);frozen_vectors();CHECK(os64_text_destroy(c)==OS64_FONT_OK);CHECK(live==0);
-    lifetimes();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();
+    lifetimes();shared_runs();warm_run_allocations();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();outline_compatibility();
 #ifdef TEXT_REAL
     CHECK(argc==2);real_fonts(argv[1]);
 #endif

@@ -12,7 +12,7 @@
  * and no record can outlive its node and be found again by another node
  * reclaimed at the same address (the design's finding 6).
  *
- * THE DOCUMENT'S LISTENER (os64_html_observe) is where the tree's changes
+ * The binding's shared mutation dispatcher is where the tree's changes
  * become reactions: an insertion connects or tries to upgrade, a removal
  * disconnects, an observed attribute changes, a node changes documents.
  * It runs inside a libhtml verb, so it never enters the engine: it
@@ -90,6 +90,7 @@ typedef struct DWaiting {
 } DWaiting;
 
 struct DCustomState {
+    DMutationConsumer mutations;
     DValue *registry;
     JSClassID class_id;
     DDefinition *definitions, *last_definition, *by_name[D_CUSTOM_BUCKETS];
@@ -420,15 +421,8 @@ static void children_changed(os64_dom_t *dom, const os64_html_change_t *c)
     s->moving_count = 0;
 }
 
-/* The document's one listener, for both of its readers: mutation observers'
- * records first (observer.c), then custom element reactions. Which comes
- * first cannot be observed: records are delivered at the checkpoint and
- * reactions run as their member returns, and both are queued before either. */
-static void changed(void *opaque, const os64_html_change_t *c)
+static void changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
-    os64_dom_t *dom = opaque;
-    if (dom->closed) return;
-    d_observers_changed(dom, c);
     /* No definitions, no work: a page that defines nothing walks nothing. */
     if (dom->custom == NULL || dom->custom->definitions == NULL) return;
     if (c->kind == OS64_HTML_CHANGE_ATTR) attribute_changed(dom, c);
@@ -1464,7 +1458,7 @@ size_t d_reactions_wrapped(const os64_dom_t *dom)
 
 /* The custom elements row (modern.c): CustomElementRegistry, an Illegal
  * constructor; window.customElements, [SameObject]; the [CEReactions]
- * wrappers over the members the rows before it made; and the listener, so
+ * wrappers over the members the rows before it made; and a mutation consumer, so
  * everything here exists only with the Modern Web switch on. The
  * HTMLElement constructor is the interfaces row's, which answers Illegal
  * constructor until a definition names its new.target. */
@@ -1499,7 +1493,7 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_held_getter(dom, ctx, global, "customElements", registry, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE) < 0)
         return -1;
     if (reactions_wrap(dom, ctx, global) < 0) return -1;
-    os64_html_observe(dom->document, changed, dom);
+    d_mutation_register(dom, &s->mutations, changed);
     return 0;
 }
 
@@ -1543,13 +1537,8 @@ uint64_t os64_dom_custom_visits(const os64_dom_t *dom)
     return dom != NULL && dom->custom != NULL ? dom->custom->visits : 0;
 }
 
-/* Teardown: the listener goes with the engine's values (os64_dom_drain),
- * and the records and definitions' own memory after the engine. */
-void d_custom_drain(os64_dom_t *dom)
-{
-    if (dom->custom != NULL) os64_html_observe(dom->document, NULL, NULL);
-}
-
+/* The shared dispatcher stops before engine teardown; definitions and
+ * reaction records release their native memory after the engine. */
 void d_custom_free(os64_dom_t *dom)
 {
     struct DCustomState *s = dom->custom;

@@ -144,3 +144,13 @@ Publishing quickjs.h exposes its inline value layout. R0's reviewed ABI check
 is enforced before publishing a wrapper-owned engine context. Native bindings remain
 trusted code and retain reference-count, GC marking, finalizer, class-ID, and
 re-entry obligations. The host probe is not a test of these wrapper contracts.
+
+### UTF-8 export refusal (patch 0017)
+
+`JS_ToCStringLen2` duplicates or produces a source string before allocating
+its encoded copy. Its refusal label returned without releasing that reference.
+The combined DOM quota fixture exposed a retained 5 MiB wide string; a smaller
+C API regression reproduces the same ownership error for Latin-1 and wide
+strings. Patch 0017 releases the reference on that label, preserving the
+pending exception and NULL/zero-length result. The adapter suite checks both
+target and sanitized engines with leak detection enabled.

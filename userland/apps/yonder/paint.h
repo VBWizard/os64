@@ -92,6 +92,8 @@ typedef struct {
     bool (*clip_open)(void *ctx, os64_gui_rect_t bounds);
     void (*clip_fill)(void *ctx);
     void (*clip_close)(void *ctx);
+    // Optional retained Canvas pixels; absent, the stand-in route applies.
+    void (*canvas)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
     // A LAYER: a filtered or blended group (flow_style_t.filter,
     // .mix_blend; FILTER.md, MIX_BLEND.md). Everything painted until its
     // close goes into a layer, `bounds` of the coordinates being painted,
@@ -233,6 +235,9 @@ typedef struct {
 } yonder_tile_t;
 bool yonder_background_tile(const flow_layer_t *l, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
                             yonder_tile_t *out);
+
+// The replaced-content painting rectangle, before document/frame offsets.
+os64_gui_rect_t yonder_content_rect(const flow_box_t *);
 
 // Where a picture `iw` x `ih` is drawn in its CONTENT box `box`, as its
 // style's object-fit and object-position say (CSS Images 3 § 4.5, § 4.6):

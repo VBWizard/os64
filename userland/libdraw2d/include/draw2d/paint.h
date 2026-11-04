@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <os64/geometry_backend.h>
 
 /* Numeric sRGB paint, independent of markup, paths and fonts. Channels in
  * this intermediate are premultiplied; RGB must not exceed alpha. */
@@ -59,13 +60,41 @@ typedef struct {
 } draw2d_surface_t;
 typedef struct { uint32_t x0, y0, x1, y1; } draw2d_damage_t;
 typedef struct { uint32_t argb; } draw2d_solid_t; /* Straight-alpha sRGB source. */
-typedef enum { DRAW2D_SOURCE_OVER, DRAW2D_CLEAR } draw2d_operator_t;
+typedef enum {
+    DRAW2D_SOURCE_OVER, DRAW2D_CLEAR, DRAW2D_DESTINATION_OUT,
+    DRAW2D_SOURCE_IN, DRAW2D_SOURCE_OUT, DRAW2D_SOURCE_ATOP,
+    DRAW2D_DESTINATION_OVER, DRAW2D_DESTINATION_IN, DRAW2D_DESTINATION_ATOP,
+    DRAW2D_COPY, DRAW2D_XOR, DRAW2D_LIGHTER
+} draw2d_operator_t;
+/* Whether zero shape coverage leaves destination pixels unchanged. CLEAR
+ * uses coverage directly; the others in this set composite transparent source. */
+static inline bool draw2d_zero_coverage_preserves_destination(draw2d_operator_t op)
+{
+    return op == DRAW2D_SOURCE_OVER || op == DRAW2D_CLEAR || op == DRAW2D_DESTINATION_OUT ||
+        op == DRAW2D_SOURCE_ATOP || op == DRAW2D_DESTINATION_OVER || op == DRAW2D_XOR || op == DRAW2D_LIGHTER;
+}
 typedef struct {
     draw2d_operator_t operation;
     uint16_t opacity;
 } draw2d_composite_t;
 
+/* A read-only sRGB image view. The caller holds storage stable and keeps it
+ * disjoint from the destination for the complete paint. Map transforms device
+ * pixel centers into source pixel coordinates; filtering clamps to image edges. */
+typedef struct {
+    draw2d_surface_t surface;
+    os64_geometry_map_t device_to_source;
+    bool smoothing;
+} draw2d_image_t;
+/* A validated, infallible straight-sRGB source. sample must not allocate,
+ * reenter painting, mutate storage, or execute script. */
+typedef struct { void *context; uint32_t (*sample)(void *,double,double); } draw2d_shader_t;
 #pragma GCC visibility push(default)
+/* Premultiplied pixel composition followed by clip interpolation. Source
+ * already includes coverage and global alpha. CLEAR is a separate coverage
+ * operation; callers pass SOURCE_OVER through LIGHTER, excluding CLEAR. */
+draw2d_pixel_t draw2d_blend_pixel(draw2d_pixel_t source, draw2d_pixel_t destination,
+                                  draw2d_operator_t, uint16_t clip);
 /* Empty surfaces may have NULL storage. Nonempty surfaces require aligned
  * storage/stride, nonoverflowing row bounds and sufficient capacity. */
 draw2d_status_t draw2d_surface_validate(const draw2d_surface_t *);
@@ -81,5 +110,29 @@ draw2d_status_t draw2d_paint_rect(const draw2d_surface_t *, double x, double y,
                                  double width, double height, draw2d_solid_t,
                                  draw2d_composite_t, uint64_t max_pixels,
                                  draw2d_damage_t *damage);
+/* Full-bitmap byte coverage and optional clip coverage, tightly packed.
+ * Length must cover width*height. Both buffers are borrowed, must not alias
+ * writable destination storage, and remain immutable. A transparent source
+ * still participates in operators such as COPY and DESTINATION_IN.
+ * Clip coverage interpolates the completed composite with the old pixel.
+ * CLEAR ignores source/opacity and removes shape coverage inside the clip.
+ * Zero coverage is skipped when the operator preserves the destination for
+ * transparent source. Damage encloses processed pixels inside the clip;
+ * clearing operators may damage pixels outside the shape. Validates the
+ * full bitmap work cap before any write; output damage is conservative. */
+draw2d_status_t draw2d_paint_mask(const draw2d_surface_t *, const uint8_t *coverage,
+    const uint8_t *clip, size_t length, draw2d_solid_t, draw2d_composite_t,
+    uint64_t max_pixels, draw2d_damage_t *);
+draw2d_status_t draw2d_paint_image(const draw2d_surface_t *, const uint8_t *coverage,
+    const uint8_t *clip, size_t length, const draw2d_image_t *, draw2d_composite_t,
+    uint64_t max_pixels, draw2d_damage_t *);
+/* Paint a destination sub-surface whose top-left is (origin_x, origin_y)
+ * in the image map's device space. Coverage and returned damage stay local
+ * to the sub-surface. Sampling keeps the original map and evaluation order. */
+draw2d_status_t draw2d_paint_image_at(const draw2d_surface_t *,const uint8_t *coverage,
+    const uint8_t *clip,size_t length,const draw2d_image_t *,uint32_t origin_x,uint32_t origin_y,
+    draw2d_composite_t,uint64_t max_pixels,draw2d_damage_t *);
+draw2d_status_t draw2d_paint_shader(const draw2d_surface_t *,const uint8_t *,const uint8_t *,size_t,
+    const draw2d_shader_t *,draw2d_composite_t,uint64_t,draw2d_damage_t *);
 #pragma GCC visibility pop
 #endif

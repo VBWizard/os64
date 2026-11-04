@@ -1,0 +1,12 @@
+# JS_ToCStringLen2 owns a reference to the source string while allocating
+# its UTF-8 export. Return that reference when the allocation is refused,
+# including a source produced by linearizing a rope.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -4610,5 +4610,6 @@
+     return (const char *)str_new->u.str8;
+  fail:
++    JS_FreeValue(ctx, val);
+     if (plen)
+         *plen = 0;
+     return NULL;

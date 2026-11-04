@@ -202,6 +202,36 @@ static void clocks_and_engine(void)
         check(live == 0, "runtime constructor allocation failure cleanup");
     }
 }
+/* UTF-8 export takes a reference to its source before allocating the
+ * encoded copy. Refusing that copy must return the reference too. */
+static void cstring_refusal(void)
+{
+    const char *texts[] = {"\xc3\xa9", "\xc4\x80"};
+    for (size_t i = 0; i < sizeof(texts) / sizeof(*texts); ++i) {
+        size_t baseline = live;
+        JSRuntime *rt = JS_NewRuntime();
+        JSContext *ctx = JS_NewContext(rt);
+        // Exceed the target engine's small-object arena so refusal reaches
+        // its allocator on both the native and instrumented engines.
+        char source[2048];
+        for (size_t k = 0; k < sizeof(source); k += 2)
+            memcpy(source + k, texts[i], 2);
+        JSValue value = JS_NewStringLen(ctx, source, sizeof(source));
+        check(!JS_IsException(value), "UTF-8 refusal source constructed");
+        JS_SetMemoryLimit(rt, 0);
+        size_t length = 123;
+        const char *text = JS_ToCStringLen(ctx, &length, value);
+        check(text == NULL && length == 0, "UTF-8 export reports allocation refusal");
+        JS_FreeCString(ctx, text);
+        JSValue error = JS_GetException(ctx);
+        JS_FreeValue(ctx, error);
+        JS_SetMemoryLimit(rt, SIZE_MAX);
+        JS_FreeValue(ctx, value);
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+        check(live == baseline, "refused UTF-8 export releases its source reference");
+    }
+}
 int main(int argc, char **argv)
 {
     if (argc == 2 && !strcmp(argv[1], "--zero-allocation")) {
@@ -216,7 +246,7 @@ int main(int argc, char **argv)
         JSRuntime *rt = JS_NewRuntime(); JSContext *ctx = JS_NewContext(rt);
         (void)JS_NewObject(ctx); JS_FreeContext(ctx); JS_FreeRuntime(rt); return 1;
     }
-    allocators(); formatting(); clocks_and_engine();
+    allocators(); formatting(); clocks_and_engine(); cstring_refusal();
     printf("QuickJS os64 adaptation: %u checks, %u failures\n", checks, failures);
     return failures != 0;
 }

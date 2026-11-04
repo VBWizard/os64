@@ -24,7 +24,8 @@ void yonder_svg_cache_trim(yonder_svg_cache_t *);
 // call; a scene pins document lifetime while preparing and rendering. No I/O.
 // SVG, backend and destination allocations share the supplied owner ledger.
 // initial_color is the face's initial ink in straight ARGB.
-// A successful output belongs to that ledger and is released with yonder_svg_pixels_free.
+// Output pixels are straight ARGB8. A successful output belongs to that
+// ledger and is released with yonder_svg_pixels_free.
 typedef struct {
     uint32_t *pixels;
     size_t bytes;
@@ -60,4 +61,9 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *, const ga
 void yonder_svg_pixels_free(const os64_geometry_memory_t *, yonder_svg_pixels_t *);
 bool yonder_svg_natural_size(const os64_html_node_t *, const garb_cascade_t *, int32_t *, int32_t *);
 bool yonder_svg_size(const os64_html_node_t *, int32_t *, int32_t *);
+// Local geometry only; resolves the live cascade without rendering a scene.
+svg_status_t yonder_svg_contains(const os64_html_document_t *, const garb_cascade_t *,
+    const flow_tree_t *, const os64_html_node_t *, uint32_t zoom,
+    const os64_geometry_memory_t *, bool (*cancelled)(void *), void *,
+    double x, double y, bool *inside);
 #endif

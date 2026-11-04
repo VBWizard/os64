@@ -290,6 +290,11 @@ static void document_contracts(void)
     assert(pixel(&pixels, 64, 64) == 0xff0000ff);
     size_t render_allocations = l.calls - before, cascade_allocations = s_mallocs - calls,
            render_polls = cancel.polls;
+    size_t reference_bytes = pixels.bytes;
+    os64_gui_rect_t reference_rect = pixels.rect;
+    void *reference = malloc(reference_bytes);
+    assert(reference);
+    memcpy(reference, pixels.pixels, reference_bytes);
     pixels_free(&l, &pixels);
     image_view.cancelled = NULL;
     image_view.cancel_context = NULL;
@@ -297,9 +302,20 @@ static void document_contracts(void)
         s_alloc_left = (long)i;
         svg_status_t status = image_draw(d, &l, &pixels);
         s_alloc_left = -1;
-        assert((status == SVG_NO_MEMORY || status == SVG_LIMIT) && !pixels.pixels && !l.live &&
-               live == document_live);
+        // Refusing the cascade's optional mutation reader can still render
+        // fully. Success must preserve the entire image, not merely its centre.
+        if (status == SVG_OK) {
+            assert(pixels.pixels && pixels.bytes == reference_bytes &&
+                   pixels.rect.x == reference_rect.x && pixels.rect.y == reference_rect.y &&
+                   pixels.rect.w == reference_rect.w && pixels.rect.h == reference_rect.h &&
+                   !memcmp(pixels.pixels, reference, reference_bytes));
+            pixels_free(&l, &pixels);
+        } else {
+            assert((status == SVG_NO_MEMORY || status == SVG_LIMIT) && !pixels.pixels);
+        }
+        assert(!l.live && live == document_live);
     }
+    free(reference);
     for (size_t i = 1; i <= render_allocations; ++i)
         for (int admission = 0; admission < 2; ++admission) {
             l.admission = admission;

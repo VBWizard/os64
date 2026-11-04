@@ -1,0 +1,49 @@
+<!doctype html><meta charset="utf-8"><title>Canvas — Inside the Lines</title>
+<style>
+body{margin:0;background:#eaf1ee;color:#29413d;font:18px sans-serif}
+main{max-width:960px;margin:32px auto;padding:0 24px}h1{font-size:42px;margin:8px 0 12px}h2{font-size:23px;margin:0 0 12px}
+p{line-height:1.5}.eyebrow{color:#678b80;font-size:14px;letter-spacing:3px}.cards{display:flex;flex-wrap:wrap;gap:20px}
+.card{width:400px;flex-shrink:0;padding:20px;border:1px solid #bdd1c9;background:#fffdf5;border-radius:12px}
+canvas{width:100%;height:180px;display:block;background:#e4ece4;border:1px solid #a4bcae}
+button{margin-top:12px;padding:10px 16px;background:#386d61;color:white;border:0;border-radius:6px;font-size:16px}
+.caption{font-size:15px;min-height:66px}
+.ticket{position:relative;width:400px;height:180px;background:#ead5a4}.prize{position:absolute;top:65px;left:90px;font-size:26px;color:#386d61}#ticket{position:relative;background:transparent;touch-action:none}</style>
+<main><div class="eyebrow">YONDER / CANVAS 2D / C6D</div><h1>Inside the Lines</h1>
+<p>A drawing can now answer back. Move over the shapes, watch the light, then scratch the ticket.</p>
+<div class="cards">
+<section class="card"><h2>1. Find the star</h2><canvas id="medals" width="400" height="180"></canvas><p class="caption" id="star-status">Move the pointer across the star. Green means inside, including its edge.</p><button id="turn">Change the outline</button></section>
+<section class="card"><h2>2. A hole is a decision</h2><canvas id="rings" width="400" height="180"></canvas><p class="caption" id="rule-status">Even-odd: the center is outside. Move the pointer over it.</p><button id="rule">Change the fill rule</button></section>
+<section class="card"><h2>3. Follow the light</h2><canvas id="curve" width="400" height="180"></canvas><p class="caption">The orbiting light turns green inside the oval and amber outside. No rapid clicking required.</p><button id="stretch">Pause the light</button></section>
+<section class="card"><h2>4. Earn the reveal</h2><div class="ticket"><div class="prize">WELL PLAYED!</div><canvas id="ticket" width="400" height="180"></canvas></div><p class="caption" id="progress">Scratch the foil. The counter checks only points inside its outline.</p><button id="foil">Fresh foil</button></section>
+</div><p id="status">Preparing geometry…</p></main>
+<svg width="400" height="180" viewBox="0 0 400 180" style="display:none">
+<path id="star-guide" d="M200 20L220 65L272 70L233 104L244 155L200 130L156 155L167 104L128 70L180 65Z"/>
+<path id="ring-guide" fill-rule="evenodd" d="M110 20H290V160H110Z M155 55H245V125H155Z"/>
+<ellipse id="oval-guide" cx="200" cy="90" rx="130" ry="48"/>
+<path id="foil-guide" d="M28 28H372V152H28Z"/>
+</svg>
+<script>
+(function(){
+const by=id=>document.getElementById(id), contexts=['medals','rings','curve','ticket'].map(id=>by(id).getContext('2d'));
+const star=by('star-guide'),ring=by('ring-guide'),oval=by('oval-guide'),foil=by('foil-guide');
+let starPath=new Path2D(star.getAttribute('d')),ringPath=new Path2D(ring.getAttribute('d')),foilPath=new Path2D(foil.getAttribute('d'));
+let alternate=false,odd=true,running=true,frame=0,angle=0,lastTime=0,previous=null,finished=false;
+function background(x){x.clearRect(0,0,400,180);x.fillStyle='#e4ece4';x.fillRect(0,0,400,180);}
+function marker(x,p,inside){x.beginPath();x.arc(p.x,p.y,7,0,Math.PI*2);x.fillStyle=inside?'#277c61':'#db9a3a';x.fill();x.lineWidth=2;x.strokeStyle='white';x.stroke();}
+function point(event,canvas){const r=canvas.getBoundingClientRect();return new DOMPoint((event.clientX-r.left)*400/r.width,(event.clientY-r.top)*180/r.height);}
+function starDraw(p){const x=contexts[0];background(x);x.fillStyle='#6f9c8c';x.fill(starPath);x.strokeStyle='#305c50';x.lineWidth=2;x.stroke(starPath);if(p){const hit=star.isPointInFill(p);marker(x,p,hit);by('star-status').textContent=hit?'Inside the outline.':'Outside the outline.';}}
+function ringDraw(p){const x=contexts[1];background(x);x.fillStyle='#718fba';x.fill(ringPath,odd?'evenodd':'nonzero');if(p)marker(x,p,ring.isPointInFill(p));}
+by('medals').addEventListener('pointermove',e=>starDraw(point(e,by('medals'))));
+by('rings').addEventListener('pointermove',e=>ringDraw(point(e,by('rings'))));
+by('turn').addEventListener('click',()=>{alternate=!alternate;star.setAttribute('d',alternate?'M200 20Q320 20 300 100Q280 170 200 150Q100 180 100 90Q90 20 200 20Z':'M200 20L220 65L272 70L233 104L244 155L200 130L156 155L167 104L128 70L180 65Z');starPath=new Path2D(star.getAttribute('d'));starDraw();});
+by('rule').addEventListener('click',()=>{odd=!odd;ring.style.fillRule=odd?'evenodd':'nonzero';by('rule-status').textContent=odd?'Even-odd: the center is outside.':'Nonzero: the center is inside.';ringDraw();});
+function lightDraw(){const x=contexts[2];background(x);x.fillStyle='#c3d7c1';x.beginPath();x.ellipse(200,90,130,48,0,0,Math.PI*2);x.fill();const p=new DOMPoint(200+155*Math.cos(angle),90+60*Math.sin(angle*2));marker(x,p,oval.isPointInFill(p));}
+function tick(time){if(!running)return;angle+=lastTime?Math.min(50,time-lastTime)*.001:0;lastTime=time;lightDraw();frame=requestAnimationFrame(tick);}
+by('stretch').addEventListener('click',()=>{running=!running;by('stretch').textContent=running?'Pause the light':'Resume the light';if(running){lastTime=0;frame=requestAnimationFrame(tick)}else cancelAnimationFrame(frame);});
+function fresh(){const x=contexts[3];x.reset();x.fillStyle='#b9c8b1';x.fill(foilPath);x.strokeStyle='#71876e';x.lineWidth=2;x.stroke(foilPath);finished=false;previous=null;by('progress').textContent='Scratch the foil. The counter checks only points inside its outline.';}
+function scratch(p){if(finished)return;const x=contexts[3];x.save();x.clip(foilPath);x.globalCompositeOperation='destination-out';x.lineWidth=30;x.lineCap='round';x.beginPath();x.moveTo(previous?previous.x:p.x,previous?previous.y:p.y);x.lineTo(p.x,p.y);x.stroke();x.restore();previous=p;}
+function progress(){if(finished)return;const pixels=contexts[3].getImageData(0,0,400,180).data;let total=0,cleared=0;for(let y=0;y<180;y+=8)for(let x=0;x<400;x+=8){if(foil.isPointInFill(new DOMPoint(x,y))){total++;if(pixels[(y*400+x)*4+3]<32)cleared++;}}const percent=Math.round(100*cleared/total);by('progress').textContent=percent+'% cleared. Reveal at 55%.';if(percent>=55){finished=true;contexts[3].clearRect(0,0,400,180);by('progress').textContent='Revealed! The shape agrees you earned it.';}}
+const ticket=by('ticket');ticket.addEventListener('pointerdown',e=>{ticket.setPointerCapture(e.pointerId);scratch(point(e,ticket));});ticket.addEventListener('pointermove',e=>{if(previous&&e.buttons)scratch(point(e,ticket));});ticket.addEventListener('pointerup',e=>{previous=null;progress();if(ticket.hasPointerCapture(e.pointerId))ticket.releasePointerCapture(e.pointerId);});ticket.addEventListener('pointercancel',()=>{previous=null;});by('foil').addEventListener('click',fresh);
+starDraw();ringDraw();lightDraw();fresh();frame=requestAnimationFrame(tick);by('status').textContent='Ready — four live geometry checks. Scripts + Modern Web; try 25% to 400% zoom.';
+})();
+</script>

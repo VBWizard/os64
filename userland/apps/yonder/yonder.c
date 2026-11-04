@@ -10,6 +10,7 @@
 // how the page looks on the glass, how a person moves around it, and how
 // the window hears a fetch it never waits for.
 
+#include <math.h>
 #include <stdarg.h>
 #include <stddef.h>
 
@@ -82,6 +83,8 @@
 // that set none is white's dark counterpart, as the painter turns it.
 static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
+// --layout-profile enables phase clocks and the page record's layout totals.
+static bool s_layout_profile;
 
 // THE PERSON'S MOTION SETTINGS (yonder.conf): `motion = reduce` has pages
 // told `prefers-reduced-motion: reduce`, and `animations = off` hands no
@@ -572,12 +575,14 @@ typedef struct {
     size_t url_len;                 // a data: address may be kilobytes: kept, not measured per probe
     PictureState state;
     yonder_picture_kind_t kind;
+    unsigned canvas_request;
+    bool origin_clean;
     yonder_svg_document_t *svg;
     // Its own size in CSS pixels, any kind, once it has arrived (kept when
     // it is NOT_KEPT too): what layout reads (picture_natural).
     uint32_t width, height;
-    // A still raster's pixels, kept at the size it is drawn (PICTURE_SIZES.md),
-    // which may be smaller than `width` x `height`: what painters read.
+    // Display raster pixels may be smaller than the natural size
+    // (PICTURE_SIZES.md); Canvas sources retain full-resolution pixels.
     os64_image_t image;
     os64_image_sequence_t *moving;  // or a moving one's, its frame on show
     size_t cost;                    // what it is charged to kept_bytes while SHOWN
@@ -619,9 +624,15 @@ typedef struct {
 #define SHEET_IMPORTS_MAX 16    // the @imports one sheet may make
 #define SHEETS_WAIT_MS 3000     // how long a page waits for its sheets before it is shown
 
-typedef struct Sheet {
+typedef struct {
+    uint32_t refs;
     garb_parsed_t parsed;
-    struct Sheet *borrowed_from; // staged reuse; ownership moves after old layout is freed
+    char *inline_text;
+    size_t inline_len;
+} SheetParse;
+
+typedef struct Sheet {
+    SheetParse *source; // shared by displayed, measured and staged tables
     bool ready;                     // parsed: it is in the cascade
     bool waiting;                   // its job is out, as `id`
     // The first paint waits for it: its media holds on this glass now, or
@@ -665,7 +676,9 @@ typedef struct {
 // text/plain page has no tree of its own, so it is given one.
 typedef struct Page {
     way_page_t way;
-    struct Page *reuse_sheets;   // source of ready linked parses during a rebuild
+    struct Page *reuse_sheets;   // source of immutable parses during a rebuild
+    const flow_tree_t *restyle_from; // borrowed only for a staged layout
+    bool measuring;             // measurement does not enqueue stylesheet fetches
     bool scripting;
     // Whether the page has the Modern Web arc's surface: its script host's
     // globals and the properties its cascade reads (garb_env_t.modern_off),
@@ -791,6 +804,7 @@ typedef struct Page {
 
 static void webfonts_families_shown(const Page *p);
 static void webfonts_layout_begins(const Page *p);
+static int32_t picture_find(const Page *p, const char *url);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
 
@@ -849,8 +863,12 @@ static void sheet_table_free(const os64_html_document_t *doc, Sheet *sheets, int
     for (int32_t i = 0; i < n; i++) {
         if (sheets[i].node != NULL)
             os64_html_release(doc, sheets[i].node);
-        if (sheets[i].borrowed_from == NULL)
-            garb_free(&sheets[i].parsed);
+        SheetParse *source = sheets[i].source;
+        if (source && --source->refs == 0) {
+            garb_free(&source->parsed);
+            os64_free(source->inline_text);
+            os64_free(source);
+        }
         os64_free(sheets[i].url);
         os64_free(sheets[i].imports);
         os64_free(sheets[i].child);
@@ -892,8 +910,64 @@ static void page_session_free(Page *p)
     p->nback = p->nahead = p->nevents = 0;
 }
 
+// Resolver answers outlive temporary Page copies. Epochs are advanced by
+// resource producers, independently of the batching flags consumers clear.
+static struct {
+    uint64_t fonts, pictures;
+    bool exhausted;
+    const os64_html_document_t *font_doc;
+    uint64_t font_dom_version;
+} s_layout_resources;
+static void layout_revision(uint64_t *revision)
+{
+    if (*revision == UINT64_MAX) s_layout_resources.exhausted = true;
+    else ++*revision;
+}
+// Existing catalog entries can answer a relative URL differently after a
+// history move or a <base> mutation, without a file arriving. Compare model
+// bases on rebuilds for both displayed and hidden layouts.
+static void layout_model_rebased(const os64_page_t *old, const os64_page_t *model)
+{
+    if (model && !os64_streq(os64_page_base(old), os64_page_base(model))) {
+        layout_revision(&s_layout_resources.fonts);
+        layout_revision(&s_layout_resources.pictures);
+    }
+}
+static flow_reuse_inputs_t layout_inputs(const Page *p, const os64_page_state_t *state)
+{
+    if (!state) state = os64_page_shared_state(page_model(p));
+    return (flow_reuse_inputs_t){
+        .resource_owner = s_layout_resources.exhausted ? NULL : &s_layout_resources,
+        .fonts_revision = s_layout_resources.fonts,
+        .replaced_revision = s_layout_resources.pictures,
+        .state_owner = state, .state_version = os64_page_state_version(state)};
+}
+static bool layout_inputs_same(flow_reuse_inputs_t a, flow_reuse_inputs_t b)
+{
+    return a.resource_owner && a.resource_owner == b.resource_owner &&
+        a.fonts_revision == b.fonts_revision && a.replaced_revision == b.replaced_revision &&
+        a.state_owner == b.state_owner && a.state_version == b.state_version;
+}
+static void layout_font_dependencies(const Page *p)
+{
+    const garb_font_face_t *faces;
+    const os64_html_document_t *doc = page_doc(p);
+    // unicode-range selection examines the document's characters, including
+    // text outside a candidate subtree. A DOM change can therefore change
+    // a web-font answer even before any file arrives.
+    if (s_laying.cascade && garb_cascade_font_faces(s_laying.cascade, &faces, NULL) > 0 &&
+        (s_layout_resources.font_doc != doc ||
+         s_layout_resources.font_dom_version != os64_html_version(doc))) {
+        layout_revision(&s_layout_resources.fonts);
+        s_layout_resources.font_doc = doc;
+        s_layout_resources.font_dom_version = os64_html_version(doc);
+    }
+}
+static void webfonts_layout_copied(Page *p, const flow_tree_t *tree);
+
 static void page_clear(Page *p)
 {
+    if (p->npics) layout_revision(&s_layout_resources.pictures);
     measured_forget(page_doc(p));
     page_session_free(p);
     // The host borrows the record (its miss hook), so the record goes after
@@ -967,7 +1041,7 @@ static int32_t sheet_emit(const Page *p, int32_t e, garb_sheet_in_t *in, int32_t
     int32_t at = (*n)++;
     entry[at] = e;
     in[at] = (garb_sheet_in_t){
-        .sheet = &sh->parsed,
+        .sheet = &sh->source->parsed,
         .media = sh->media,
         .via = sh->importer >= 0 ? &p->sheets[sh->importer].imports[sh->import_index] : NULL,
     };
@@ -1156,6 +1230,76 @@ static void layout_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
         mark_part(meet);
 }
 
+static int64_t layout_clock(void *opaque)
+{
+    (void)opaque;
+    return os64_micros();
+}
+static uint64_t layout_elapsed(int64_t from, uint64_t *errors)
+{
+    int64_t to = os64_micros();
+    if (from < 0 || to < from) { ++*errors; return 0; }
+    return (uint64_t)(to - from);
+}
+// A measured stream page borrows its stream's record without becoming an
+// owner. Ordinary Page.diag ownership and teardown stay with the page.
+static yonder_diag_t *layout_profile_diag(const Page *p);
+static void layout_profile_add(const Page *p, const yonder_layout_stats_t *sample)
+{
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (p->diag) yonder_diag_layout_add(diag, sample);
+    else yonder_diag_layout_stream_add(diag, sample);
+}
+static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
+{
+    bool enabled = s_layout_profile && layout_profile_diag(p);
+    int64_t began = enabled ? os64_micros() : -1;
+    os64_page_t *model = os64_page_rebuild(old);
+    layout_model_rebased(old, model);
+    if (enabled) {
+        yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
+        sample.model_us = layout_elapsed(began, &sample.clock_errors);
+        layout_profile_add(p, &sample);
+    }
+    return model;
+}
+static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
+{
+    bool enabled = s_layout_profile && layout_profile_diag(p);
+    flow_profile_t profile = {0};
+    layout_font_dependencies(p);
+    flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
+    // A cascade without change tracking will replace its generation after a
+    // DOM mutation. Avoid recording speculative geometry for that path.
+    bool track_geometry = garb_cascade_tracks_changes(s_env.cascade);
+    flow_tree_t *tree = flow_layout_incremental(page_doc(p), page_model(p), width, &s_env,
+        p->restyle_from ? p->restyle_from : p->tree, track_geometry ? &inputs : NULL, &profile,
+        enabled ? layout_clock : NULL, NULL);
+    flow_reuse_stats_t reuse = flow_reuse_stats(tree);
+    if (profile.reused || reuse.intrinsic_hits) {
+        int64_t began = enabled ? os64_micros() : -1;
+        webfonts_layout_copied(p, tree);
+        if (enabled) profile.layout_us += layout_elapsed(began, &profile.clock_errors);
+    }
+    if (enabled) {
+        yonder_layout_stats_t sample = {
+            .style_us = profile.style_us, .boxes_us = profile.boxes_us,
+            .layout_us = profile.layout_us, .public_us = profile.public_us,
+            .elements = profile.elements, .boxes = profile.boxes,
+            .measures = profile.measures, .reused = profile.reused,
+            .styles_reused = flow_styles_reused(tree),
+            .intrinsic_hits = reuse.intrinsic_hits, .marker_measures = reuse.marker_measures,
+            .metadata_peak = reuse.metadata_peak,
+            .clock_errors = profile.clock_errors, .layouts = 1,
+            .refusals = tree == NULL || flow_incomplete(tree)};
+        _Static_assert(YONDER_LAYOUT_REUSE_REASONS == FLOW_REUSE_NREASONS, "layout refusal diagnostics");
+        os64_memcpy(sample.reuse_refused, reuse.refused, sizeof(sample.reuse_refused));
+        layout_profile_add(p, &sample);
+    }
+    return tree;
+}
+
+static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     if (page_rebuild_owed(p))
@@ -1165,28 +1309,31 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     garb_env_t view = css_view(width, height, zoom);
     view.modern_off = !p->modern;
     view.scripting = p->scripting;
-    if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
-                                                  garb_cascade_env(cascade).height != view.height ||
-                                                  garb_cascade_env(cascade).dark != view.dark ||
-                                                  garb_cascade_env(cascade).reduced_motion !=
-                                                      view.reduced_motion ||
-                                                  garb_cascade_env(cascade).modern_off != view.modern_off ||
-                                                  garb_cascade_env(cascade).scripting != view.scripting ||
-                                                  garb_cascade_env(cascade).device_width != view.device_width ||
-                                                  garb_cascade_env(cascade).device_height != view.device_height ||
-                                                  garb_cascade_env(cascade).resolution != view.resolution))) {
-        garb_sheet_in_t in[SHEETS_MAX];
-        int32_t n = 0;
-        const os64_page_t *model = page_model(p);
-        for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
-            int32_t e = sheet_of(p, os64_page_sheet(model, i)->node);
-            if (e >= 0)
-                (void)sheet_emit(p, e, in, entry, &n);
-        }
-        // Inline style attributes also need a cascade when no sheet is linked.
+    int64_t began = s_layout_profile && layout_profile_diag(p) ? os64_micros() : -1;
+    garb_sheet_in_t in[SHEETS_MAX];
+    int32_t n = 0;
+    const os64_page_t *model = page_model(p);
+    for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
+        int32_t e = sheet_of(p, os64_page_sheet(model, i)->node);
+        if (e >= 0) (void)sheet_emit(p, e, in, entry, &n);
+    }
+    uint64_t prior_updates = garb_cascade_updates(cascade);
+    // A live page can explicitly invalidate its sheets. A staged table
+    // instead proves that its immutable inputs still match the source.
+    bool updated = (!p->sheets_changed || p->reuse_sheets) &&
+                   garb_cascade_matches(cascade, in, n, view) && garb_cascade_update(cascade);
+    if (!updated) {
+        measured_fallback(p);
         cascade = garb_cascade(in, n, page_doc(p), view);
-        if (cascade == NULL)
-            return false;
+    }
+    if (s_layout_profile && layout_profile_diag(p)) {
+        yonder_layout_stats_t sample = {.refusals = cascade == NULL,
+            .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates};
+        sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
+        layout_profile_add(p, &sample);
+    }
+    if (cascade == NULL) return false;
+    {
         // A condition of the page, said once however many of its cascades
         // meet it; a copy of the page laid out beside it (a rebuild staged,
         // a measurement) borrows its record, so it is said there too. The
@@ -1203,7 +1350,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_env.svg = p->modern;
     s_env.cascade = cascade;
     s_laying.cascade = cascade;
-    s_laying.entry = cascade == p->cascade ? p->cascade_entry : entry;
+    s_laying.entry = entry;
     s_env.scripting = p->scripting;
     // One height for `vh` and the initial containing block (flow_env_t),
     // in CSS pixels at `zoom`.
@@ -1214,7 +1361,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     s_env.now_ms = yonder_now_ms();
     geometry_layout_total++;
     webfonts_layout_begins(p);
-    flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+    flow_tree_t *fresh = profile_flow_layout(p, width);
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
     // engine's budget and its face limit — so a layout at new sizes (a
@@ -1225,6 +1372,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // attempt did.
     if (fresh != NULL && flow_incomplete(fresh) && reclaim != NULL && reclaim->tree != NULL) {
         flow_free(fresh);
+        if (p->restyle_from == reclaim->tree) p->restyle_from = NULL;
         flow_free(reclaim->tree);
         reclaim->tree = NULL;
         if (reclaim != p) {
@@ -1233,7 +1381,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         }
         geometry_layout_total++;
         webfonts_layout_begins(p);
-        fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+        fresh = profile_flow_layout(p, width);
     }
     s_env.cascade = NULL;
     s_laying.cascade = NULL;
@@ -1293,8 +1441,8 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     if (cascade != p->cascade) {
         garb_cascade_free(p->cascade);
         p->cascade = cascade;
-        os64_memcpy(p->cascade_entry, entry, sizeof(entry));
     }
+    os64_memcpy(p->cascade_entry, entry, sizeof(entry));
     p->laid_width = width;
     p->laid_height = height;
     p->laid_zoom = zoom;
@@ -1693,6 +1841,11 @@ static struct {
     bool ticked, tick_painting;
     uint64_t tick_began, tick_ended, tick_us;
     int64_t tick_began_us;
+    // A script frame includes callbacks, their rebuild and the final paint.
+    // Its successor leaves a 10 ms input/idle opportunity after painting,
+    // in addition to the DOM frame deadline. Missed frames do not accumulate.
+    bool raf_painting, script_painting;
+    uint64_t raf_resume_at;
     // Widgets have stable addresses and node keys; rebuilding replaces the
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
@@ -1751,12 +1904,20 @@ static void mark_whole(WholeBy by, bool root)
     os64_ui_mark_dirty(&g.ui, root ? &g.root : &g.view);
 }
 
+static yonder_diag_t *layout_profile_diag(const Page *p)
+{
+    if (p->diag) return p->diag;
+    const os64_html_document_t *doc = page_doc(p);
+    return doc && g.stream.parser && doc == os64_html_parser_document(g.stream.parser)
+        ? g.stream.diag : NULL;
+}
+
 // THE MEASURED LAYOUT (DOM.md § Geometry): a page not on screen, laid out
 // for its scripts' measurements at the view's size — the stream's parse as
 // far as it has gone, the page stream_finish holds, the page waiting for
 // its sheets. It is made from a copy of the page and never published: the
-// page's own model, cascade and tree are left as they were (arrival lays
-// the page out for itself), and nothing is clamped, placed or painted. It
+// page's shown model and tree remain in place; its cascade may accept
+// changes shared with this measured layout. Nothing is placed or painted. It
 // is kept for the reads after it while nothing it was made from has moved,
 // and let go before its document, its control state or its sheets are.
 // Each page is measured against its own sheet table, the stream's included
@@ -1769,8 +1930,13 @@ static struct {
     os64_page_t *model;
     garb_cascade_t *cascade;
     flow_tree_t *tree;
+    Sheet *sheets;
+    int32_t nsheets, ready;
+    flow_reuse_inputs_t inputs;
+    bool dark, reduced_motion;
 } s_measured;
 static Page s_measuring;            // the copy a measured layout is made from
+static void sheets_start(Page *p);
 
 // Lets go of the measured layout if it is `doc`'s.
 static void measured_forget(const os64_html_document_t *doc)
@@ -1779,25 +1945,46 @@ static void measured_forget(const os64_html_document_t *doc)
         return;
     flow_free(s_measured.tree);
     garb_cascade_free(s_measured.cascade);
+    sheet_table_free(s_measured.doc, s_measured.sheets, s_measured.nsheets);
     os64_page_free(s_measured.model);
     os64_memset(&s_measured, 0, sizeof(s_measured));
+}
+
+// A full cascade changes generation, so the hidden measurement cannot
+// supply copied styles. Its sheets have already been retained by p's new
+// table. Release the cached measurement even when new sheets prevented it
+// from being selected as the source. A displayed source stays owned by its
+// page; clearing this measurement's references does not reclaim that page.
+static void measured_fallback(Page *p)
+{
+    if (!p->measuring)
+        return;
+    p->restyle_from = NULL;
+    p->reuse_sheets = NULL;
+    measured_forget(s_measured.doc);
+    garb_cascade_free(p->cascade);
+    p->cascade = NULL;
 }
 
 // `p`'s measured layout at `width` x `height` and the window's zoom, in
 // s_measured. The model is the tree's version: the last measured one or the
 // page's own while current, else one built beside it, sharing `state`
 // (`url` is where a page with no model came from). There is one measured
-// layout at a time: the one held, whichever page's, is let go first. False
-// when it cannot be had, or the layout ran short: no stale answer is kept.
+// cached measurement at a time. Its source stays alive for style reuse;
+// a full-cascade fallback releases an unusable measured source before the
+// replacement is built. False on refusal or a short layout: no stale answer
+// is kept.
 static bool measured_layout(const Page *p, os64_page_state_t *state, const char *url,
                             int32_t width, int32_t height)
 {
     const os64_html_document_t *doc = page_doc(p);
     uint64_t version = os64_html_version(doc);
+    flow_reuse_inputs_t inputs = layout_inputs(p, state);
     bool mine = s_measured.doc == doc && s_measured.model != NULL;
     if (mine && s_measured.version == version && s_measured.width == width &&
         s_measured.height == height && s_measured.zoom == g.zoom && s_measured.serial == p->serial &&
-        s_measured.sheets_ready == p->sheets_ready)
+        s_measured.sheets_ready == p->sheets_ready && s_measured.dark == s_dark &&
+        s_measured.reduced_motion == s_reduce_motion && layout_inputs_same(s_measured.inputs, inputs))
         return true;
     os64_page_t *model = NULL;
     if (mine && s_measured.version == version)
@@ -1805,20 +1992,39 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     else if (page_model(p) != NULL && p->model_version == version)
         model = os64_page_retain(page_model(p)) ? page_model(p) : NULL;
     else if (mine)
-        model = os64_page_rebuild(s_measured.model);
+        model = profile_model_rebuild(p, s_measured.model);
     else if (page_model(p) != NULL)
-        model = os64_page_rebuild(page_model(p));
+        model = profile_model_rebuild(p, page_model(p));
     else
         model = os64_page_build(doc, url, NULL, state);
-    measured_forget(s_measured.doc);
-    if (model == NULL)
+    if (model == NULL) {
+        measured_forget(s_measured.doc);
         return false;
+    }
+    Page source = *p;
+    if (mine && s_measured.serial == p->serial && s_measured.sheets_ready == p->sheets_ready) {
+        source.tree = s_measured.tree;
+        source.cascade = s_measured.cascade;
+        source.sheets = s_measured.sheets;
+        source.nsheets = s_measured.nsheets;
+        source.sheets_ready = s_measured.ready;
+    }
     s_measuring = *p;
     s_measuring.way.model = model;
     s_measuring.plain_model = NULL;
+    s_measuring.restyle_from = source.tree;
     s_measuring.tree = NULL;
-    s_measuring.cascade = NULL;
+    // Geometry reads may advance this shared cascade beyond the shown
+    // tree. Tasks and rendering are serialized: frame/parts work resumes
+    // after the rendering step has brought that tree to the DOM version.
+    s_measuring.cascade = garb_cascade_retain(source.cascade) ? source.cascade : NULL;
+    s_measuring.model_version = version;
+    s_measuring.reuse_sheets = &source;
+    s_measuring.measuring = true;
+    s_measuring.sheets = NULL;
+    s_measuring.nsheets = s_measuring.sheets_waiting = s_measuring.sheets_ready = 0;
     s_measuring.sheets_changed = true;
+    sheets_start(&s_measuring);
     s_measuring.box_scrolls = NULL;
     s_measuring.nbox_scrolls = s_measuring.cap_box_scrolls = 0;
     s_measuring.rendered_version = 0;
@@ -1826,12 +2032,12 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     // out to be shown (page_timeline).
     s_measuring.timeline = NULL;
     bool laid = page_lay_out(&s_measuring, width, height, g.zoom, NULL);
-    if (laid && flow_incomplete(s_measuring.tree)) {
+    if (laid && flow_incomplete(s_measuring.tree)) laid = false;
+    measured_forget(s_measured.doc);
+    if (!laid) {
         flow_free(s_measuring.tree);
         garb_cascade_free(s_measuring.cascade);
-        laid = false;
-    }
-    if (!laid) {
+        sheet_table_free(doc, s_measuring.sheets, s_measuring.nsheets);
         os64_page_free(model);
         os64_memset(&s_measuring, 0, sizeof(s_measuring));
         return false;
@@ -1844,8 +2050,13 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     s_measured.sheets_ready = p->sheets_ready;
     s_measured.zoom = g.zoom;
     s_measured.model = model;
+    s_measured.inputs = layout_inputs(&s_measuring, state);
+    s_measured.dark = s_dark; s_measured.reduced_motion = s_reduce_motion;
     s_measured.cascade = s_measuring.cascade;
     s_measured.tree = s_measuring.tree;
+    s_measured.sheets = s_measuring.sheets;
+    s_measured.nsheets = s_measuring.nsheets;
+    s_measured.ready = s_measuring.sheets_ready;
     os64_memset(&s_measuring, 0, sizeof(s_measuring));
     return true;
 }
@@ -1947,16 +2158,16 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
         select_size(c, node, w, h);
         return true;
     }
-    int32_t i = p->pic_of != NULL ? os64_page_image_for(model, node) : -1;
-    // A picture past the memory kept has its size all the same: its frame
-    // is laid out at it, which is the size a resample asks for it at.
-    if (i < 0 || i >= p->nimage_map || p->pic_of[i] < 0 ||
-        (p->pics[p->pic_of[i]].state != PIC_SHOWN && p->pics[p->pic_of[i]].state != PIC_NOT_KEPT))
-        return false;
+    // Resolve the hidden model's current URL rather than the shown image map.
+    // Even a picture past the kept-memory limit supplies its natural size.
+    int32_t i = model != NULL ? os64_page_image_for(model, node) : -1;
+    const os64_page_image_t *image = i >= 0 ? os64_page_image(model, i) : NULL;
+    int32_t picture = image ? picture_find(p, image->src.url) : -1;
+    if (picture < 0 || (p->pics[picture].state != PIC_SHOWN &&
+                        p->pics[picture].state != PIC_NOT_KEPT)) return false;
     uint32_t pw, ph;
-    picture_natural(&p->pics[p->pic_of[i]], &pw, &ph);
-    if (pw == 0 || ph == 0)
-        return false;
+    picture_natural(&p->pics[picture], &pw, &ph);
+    if (pw == 0 || ph == 0) return false;
     *w = (int32_t)pw;
     *h = (int32_t)ph;
     return true;
@@ -2292,15 +2503,15 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
 // element is; one whose constructor failed is the page's failure, by
 // name and with what its constructor threw first, so the next wall a page
 // meets (shadow DOM's attachShadow) reads as a reason and not as a count.
-// A canvas where scripting is on is also the page's failure, one
-// FAILED line however many it has (libflow lays out its fallback where
-// scripting is off). Enabled inline SVG reports individual render refusals
+// With Modern Web off, a scripted canvas is a stand-in and a FAILED line
+// (libflow lays out its fallback with scripting off). Enabled Canvas draws
+// its retained bitmap. Enabled inline SVG reports render refusals
 // at the paint boundary instead of declaring every SVG missing. A frame
 // is not a failure here: its stand-in takes a click to
 // its document.
 #define DIAG_CUSTOM_MAX 64
 static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, const yonder_scripts_t *scripts,
-                          bool scripting, bool svg)
+                          bool scripting, bool modern)
 {
     // A frame's document is not loaded into its box (it is offered as a
     // link instead), and an embed makes no box: both are asked for and not
@@ -2316,7 +2527,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
             for (int k = 0; k < NOTHING; k++)
                 nothing[k] +=
-                    os64_streq(n->name, kNothing[k]) && (!svg || !os64_streq(kNothing[k], "svg"));
+                    os64_streq(n->name, kNothing[k]) && (!modern || (!os64_streq(kNothing[k], "svg") && !os64_streq(kNothing[k], "canvas")));
             canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
             if (n->ns == OS64_HTML_NS_HTML && n->ce != OS64_HTML_CE_CUSTOM &&
                 os64_html_custom_name(n->name)) {
@@ -2345,7 +2556,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
     for (int k = 0; k < NOTHING; k++)
         if (nothing[k] != 0)
             yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);
-    if (scripting && canvases != 0)
+    if (!modern && scripting && canvases != 0)
         yonder_diag_failed_seen(d, "unsupported", "canvas");
     for (int32_t c = 0; c < ncustom; c++) {
         char why[256], line[sizeof(why) + 80];
@@ -2406,12 +2617,11 @@ static const char *const kPaintStage[PS_COUNT] = {
 // clock's next tick when the loop meets it itself (pictures_schedule), so a
 // source counted often here is rings that may do no work.
 typedef enum {
-    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_DOWNLOADS,
-    PAST_COUNT
+    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_FRAMES, PAST_DOWNLOADS, PAST_COUNT
 } PastDeadline;
 
 static const char *const kPastDeadline[PAST_COUNT] = {
-    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures", "downloads",
+    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures", "frames", "downloads",
 };
 
 static const char *const kWholeBy[WHOLE_COUNT] = {
@@ -2545,11 +2755,26 @@ static void cost_reset(void)
     yonder_paint_cache_counts_restart(g.paint_cache);
 }
 
+// Pointer hit testing follows published geometry, not every drawing operation.
+static bool s_pointer_replay, s_pointer_ignore_cancel, s_pointer_cancel_owed;
+static bool s_pointer_known, s_pointer_rehit, s_pointer_draining;
+static uint16_t s_pointer_buttons;
+static unsigned s_pointer_modifiers;
+static os64_ui_menu_model_t *s_pointer_menu;
+static os64_gui_rect_t s_pointer_menu_anchor;
+static uint64_t s_pointer_menu_serial;
+static uint64_t s_pointer_revision, s_pointer_rested;
+static void pointer_geometry_changed(void) { s_pointer_revision++; s_pointer_rehit = true; }
+static uint64_t pointer_next(void);
+static bool pointer_turn(void);
+static void pointer_cancel_run(void);
+
 // A layout, timed (s_cost): page_lay_out_run is the layout itself.
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     cost_begin(PS_LAYOUTS);
     bool laid = page_lay_out_run(p, width, height, zoom, reclaim);
+    if (laid && p == &g.page) pointer_geometry_changed();
     cost_end(PS_LAYOUTS);
     s_cost.layouts++;
     cost_fold(PS_LAYOUTS, PS_LAYOUTS);
@@ -3211,6 +3436,9 @@ static void refresh_if_declared(void)
 // draining it cancels each one.
 static void page_departs(void)
 {
+    // The compositor keeps a pressed window's grab across navigation.
+    // Consume that physical tail even after the old document is gone.
+    if (s_pointer_known && s_pointer_buttons) s_pointer_draining = true;
     yonder_scripts_depart(g.page.scripts);
 }
 
@@ -3368,6 +3596,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.laid_at = t1;
     g.motion_laid = false;             // a new page's own layout stands for its cost
     g.ticked = false;
+    g.raf_painting = false;
+    g.script_painting = false;
+    g.raf_resume_at = 0;
     g.motion_pause[0] = '\0';
     pictures_start(&g.page);
     css_pictures(&g.page);
@@ -4113,8 +4344,8 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
 
 // Who asks for a page's picture, sheet, script or font, and what for: the
 // agent's preset lines, read with the agent, and the request's metadata
-// from the page at `page_url`. Mode no-cors for every one: yonder runs no
-// CORS check on any of them, a font included, so none says it does.
+// from the page at `page_url`. This display-resource path uses no-cors;
+// Canvas image requests use fetch_job's hop and CORS checks separately.
 static void hooks_ask(way_hooks_t *hooks, const char *page_url, way_dest_t dest)
 {
     hooks->identity = g.way.identity;
@@ -4147,6 +4378,7 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
     job->svg_enabled = p->modern;
     job->dark = s_dark;
     job->reduced_motion = s_reduce_motion;
+    job->canvas_request = pic->canvas_request;
     job->cover_w = cover_w;
     job->cover_h = cover_h;
     job->resample = resample;
@@ -4232,29 +4464,29 @@ static size_t url_hash(const char *url, size_t n)
     return (size_t)h;
 }
 
-// The table's index slot for the `n` bytes at `url`, which need not end
+// The table's index slot for request mode and `n` bytes at `url`, which need not end
 // there: where it is, or the empty slot where it would go. The index is
 // never full (picture_for keeps it half empty).
-static size_t picture_slot(const Page *p, const char *url, size_t n)
+static size_t picture_slot(const Page *p, const char *url, size_t n, unsigned mode)
 {
-    size_t at = url_hash(url, n) & (p->pic_slot_cap - 1);
+    size_t at = (url_hash(url, n) ^ mode) & (p->pic_slot_cap - 1);
     while (p->pic_slot[at] >= 0) {
         const Picture *pic = &p->pics[p->pic_slot[at]];
-        if (pic->url_len == n && os64_memcmp(pic->url, url, n) == 0)
+        if (pic->canvas_request == mode && pic->url_len == n && os64_memcmp(pic->url, url, n) == 0)
             break;
         at = (at + 1) & (p->pic_slot_cap - 1);
     }
     return at;
 }
 
-// The picture at the `n` bytes at `url` in the page's table, or -1: found
+// The display picture at the `n` bytes at `url` in the page's table, or -1: found
 // through the index, never by a walk of the table — a page names every
 // picture it likes, and a walk per picture is quadratic in them.
 static int32_t picture_find_span(const Page *p, const char *url, size_t n)
 {
     if (p->pic_slot == NULL || url == NULL)
         return -1;
-    return p->pic_slot[picture_slot(p, url, n)];
+    return p->pic_slot[picture_slot(p, url, n, 0)];
 }
 
 static int32_t picture_find(const Page *p, const char *url)
@@ -4262,13 +4494,13 @@ static int32_t picture_find(const Page *p, const char *url)
     return url != NULL ? picture_find_span(p, url, os64_strlen(url)) : -1;
 }
 
-// The picture at `url`, gathered once however many times the page or its
-// sheets name it: its index in the page's table, QUEUED for pictures_feed
+// The picture for URL and request mode, gathered once per key: its index
+// in the page's table, QUEUED for pictures_feed
 // when it is new, or -1 for an address nothing here fetches (or no memory).
 // A data: address is taken as the others are, the picture inside it
 // decoded by the worker. The catalog owns each address. The index grows
 // with the table, so pictures found after a layout join the same one.
-static int32_t picture_for(Page *p, const char *url)
+static int32_t picture_for_mode(Page *p, const char *url, unsigned mode)
 {
     if (url == NULL)
         return -1;
@@ -4279,7 +4511,7 @@ static int32_t picture_for(Page *p, const char *url)
                      data_address(url, len);
     if (!fetchable)
         return -1;
-    int32_t found = picture_find_span(p, url, len);
+    int32_t found = p->pic_slot ? p->pic_slot[picture_slot(p, url, len, mode)] : -1;
     if (found >= 0)
         return found;
     // Script-driven source changes may revisit many URLs between rebuilds.
@@ -4300,7 +4532,7 @@ static int32_t picture_for(Page *p, const char *url)
         p->pic_slot = slot;
         p->pic_slot_cap = cap;
         for (int32_t k = 0; k < p->npics; k++)
-            p->pic_slot[picture_slot(p, p->pics[k].url, p->pics[k].url_len)] = k;
+            p->pic_slot[picture_slot(p, p->pics[k].url, p->pics[k].url_len, p->pics[k].canvas_request)] = k;
     }
     if (p->npics == p->cap_pics) {
         int32_t cap = p->cap_pics > 0 ? p->cap_pics * 2 : 8;
@@ -4314,15 +4546,18 @@ static int32_t picture_for(Page *p, const char *url)
     const char *kept = copy_text(url);
     if (kept == NULL)
         return -1;
-    p->pic_slot[picture_slot(p, kept, len)] = p->npics;
+    p->pic_slot[picture_slot(p, kept, len, mode)] = p->npics;
     Picture *pic = &p->pics[p->npics];
     pic->url = kept;
     pic->url_len = len;
+    pic->canvas_request = mode;
     p->picture_url_bytes += bytes;
     pic->state = PIC_QUEUED;
     p->waiting++;
     return p->npics++;
 }
+
+static int32_t picture_for(Page *p,const char *url) { return picture_for_mode(p,url,0); }
 
 // ── The page's sheets ───────────────────────────────────────────────────
 
@@ -4418,18 +4653,14 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
             Sheet *source = &old->sheets[i];
             if (!source->ready || source->url == NULL || !os64_streq(source->url, url))
                 continue;
-            bool lent = false;
-            for (int32_t k = 0; k < p->nsheets; k++)
-                lent |= p->sheets[k].borrowed_from == source;
-            if (lent)
-                continue;
-            sh->parsed = source->parsed;
-            sh->borrowed_from = source;
+            if (source->source->refs == UINT32_MAX) continue;
+            sh->source = source->source;
+            ++sh->source->refs;
             sheet_ready(p, (int32_t)(sh - p->sheets));
             return;
         }
     }
-    bool fetchable = sh->url != NULL &&
+    bool fetchable = !p->measuring && sh->url != NULL &&
                      ((os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
                       (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0));
@@ -4473,7 +4704,7 @@ static void sheet_ready(Page *p, int32_t e)
     sh->ready = true;
     p->sheets_ready++;
     p->sheets_changed = true;
-    int32_t n = garb_sheet_imports(&sh->parsed, NULL, 0);
+    int32_t n = garb_sheet_imports(&sh->source->parsed, NULL, 0);
     if (n > SHEET_IMPORTS_MAX)
         n = SHEET_IMPORTS_MAX;
     if (n == 0)
@@ -4492,7 +4723,7 @@ static void sheet_ready(Page *p, int32_t e)
     sh->child = os64_calloc((size_t)n, sizeof(*sh->child));
     if (sh->imports == NULL || sh->child == NULL)
         return;
-    sh->nimports = garb_sheet_imports(&sh->parsed, sh->imports, n);
+    sh->nimports = garb_sheet_imports(&sh->source->parsed, sh->imports, n);
     if (sh->nimports > n)
         sh->nimports = n;
     for (int32_t k = 0; k < sh->nimports; k++) {
@@ -4516,6 +4747,51 @@ static void sheet_ready(Page *p, int32_t e)
     }
 }
 
+static bool sheet_inline_matches(const SheetParse *source, const os64_html_node_t *node)
+{
+    if (!source || !source->inline_text) return false;
+    size_t at = 0;
+    for (const os64_html_node_t *x = node->first_child; x; x = x->next) {
+        if (x->kind != OS64_HTML_TEXT) continue;
+        if (x->text_len > source->inline_len - at ||
+            os64_memcmp(source->inline_text + at, x->text, x->text_len)) return false;
+        at += x->text_len;
+    }
+    return at == source->inline_len;
+}
+
+static void sheet_inline(Page *p, Sheet *sh)
+{
+    if (p->reuse_sheets) {
+        int32_t e = sheet_of(p->reuse_sheets, sh->node);
+        Sheet *old = e >= 0 ? &p->reuse_sheets->sheets[e] : NULL;
+        if (old && old->ready && old->url == NULL && old->source->refs < UINT32_MAX &&
+            sheet_inline_matches(old->source, sh->node)) {
+            sh->source = old->source;
+            ++sh->source->refs;
+            sheet_ready(p, (int32_t)(sh - p->sheets));
+            return;
+        }
+    }
+    SheetParse *source = os64_calloc(1, sizeof(*source));
+    if (!source) return;
+    source->refs = 1;
+    sh->source = source;
+    size_t len = 0;
+    for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
+        if (x->kind == OS64_HTML_TEXT) len += x->text_len;
+    source->inline_text = os64_malloc(len + 1);
+    if (!source->inline_text) return;
+    for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
+        if (x->kind == OS64_HTML_TEXT) {
+            os64_memcpy(source->inline_text + source->inline_len, x->text, x->text_len);
+            source->inline_len += x->text_len;
+        }
+    source->inline_text[len] = '\0';
+    if (garb_parse_sheet_text(source->inline_text, len, &source->parsed) == GARB_OK)
+        sheet_ready(p, (int32_t)(sh - p->sheets));
+}
+
 // A sheet the page names, if the table does not have it yet: a `style`
 // element's parsed here, a linked one sent for. A page whose table the
 // stream began has most of them already (stream_sheets); a sheet is
@@ -4532,10 +4808,8 @@ static bool sheet_add(void *page, const os64_page_sheet_t *one)
         return false;               // the table is full
     if (one->linked) {
         sheet_fetch(p, sh, one->href.url);
-    } else if (garb_parse_style_element(one->node, &sh->parsed) == GARB_OK) {
-        sheet_ready(p, (int32_t)(sh - p->sheets));
     } else {
-        garb_free(&sh->parsed);
+        sheet_inline(p, sh);
     }
     return true;
 }
@@ -4609,7 +4883,10 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     if (sh->holds)
         p->sheets_waiting--;
     if (got != NULL && got->ok) {
-        sh->parsed = got->parsed;               // moved: the release frees nothing
+        sh->source = os64_calloc(1, sizeof(*sh->source));
+        if (!sh->source) return;
+        sh->source->refs = 1;
+        sh->source->parsed = got->parsed;
         os64_memset(&got->parsed, 0, sizeof(got->parsed));
         char *url = copy_text(got->url);        // after its redirects
         if (url != NULL) {
@@ -5196,6 +5473,8 @@ static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *produ
         pic->refused_w = job->cover_w;
         pic->refused_h = job->cover_h;
     } else {
+        layout_revision(&s_layout_resources.pictures);
+        pic->origin_clean = product->origin_clean;
         os64_image_free(&pic->image);
         pic->image = product->image;
         os64_memset(&product->image, 0, sizeof(product->image));
@@ -5230,6 +5509,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         picture_failed(&g.page, pic->url, product, NULL);
         return;
     }
+    layout_revision(&s_layout_resources.pictures);
+    pic->origin_clean = product->origin_clean;
     pic->kind = product->kind;
     pic->width = product->width;
     pic->height = product->height;
@@ -5459,13 +5740,14 @@ static int32_t webfonts_add(const char *url, const char **why)
 // none.
 // local() names a system font by its full name, and yonder's have none a
 // page writes: it is passed over to the next source.
-static int32_t webfonts_file(const Page *p, const garb_font_face_t *f, int32_t face)
+static int32_t webfonts_file(const Page *p, const int32_t *entry, const garb_font_face_t *f,
+                             int32_t face, uint8_t *face_use)
 {
     for (int32_t i = 0; i < f->nsrc; i++) {
         const garb_face_src_t *s = &f->src[i];
         char url[OS64_FETCH_URL_MAX];
         if (s->kind != GARB_FACE_URL || !webfonts_readable(s) ||
-            !webfonts_url(p, s_laying.entry, f, s, url, sizeof(url)))
+            !webfonts_url(p, entry, f, s, url, sizeof(url)))
             continue;
         int32_t file = webfonts_find(url);
         const char *why = NULL;
@@ -5478,7 +5760,8 @@ static int32_t webfonts_file(const Page *p, const garb_font_face_t *f, int32_t f
             char line[OS64_FETCH_URL_MAX + 80];
             os64_snprintf(line, sizeof(line), "%s: %s", url, why);
             yonder_diag_failed_seen(g.page.diag, "font", line);
-            s_web.face_laying[face] |= WF_USE_UNKEPT;
+            if (face_use != NULL)
+                face_use[face] |= WF_USE_UNKEPT;
             s_web.unkept = true;
         }
         if (file < 0 || s_web.files[file].state == WF_FAILED)
@@ -5744,9 +6027,9 @@ static void webfonts_families_shown(const Page *p)
 // name no face serves that it knows (os64_font_family_open), else the
 // generic, which comes last. The resolver opens no file: a face is
 // another size of a file the text context already holds, as the system's
-// sizes are the provider's. What served each name is on the record
-// (webfonts_served), and a name with neither is MISSING font there: the
-// shown page's, or a page arriving (s_arriving). The metrics are the first font's, as
+// sizes are the provider's. During layout, what served each name is on
+// the record (webfonts_served), and a name with neither is MISSING there:
+// the shown page's, or a page arriving (s_arriving). The metrics are the first font's, as
 // an empty run would report them: a line at least as tall as its ascent
 // and descent.
 static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *families, bool bold,
@@ -5757,16 +6040,22 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     // The shown page, or a copy of it a script's rebuild or a measurement
     // lays out: its document is the one on screen. A page arriving has
     // its own until it is shown (arrive_now).
-    bool shown = p != NULL && page_doc(p) == page_doc(&g.page) && s_laying.cascade != NULL;
+    // Canvas also resolves fonts between layouts. Its owning page keeps
+    // both the cascade and the sheet mapping needed for relative font URLs.
+    bool laying = s_laying.cascade != NULL && s_env.ctx == p;
+    const garb_cascade_t *cascade = laying ? s_laying.cascade : p != NULL ? p->cascade : NULL;
+    const int32_t *entry = laying ? s_laying.entry : p != NULL ? p->cascade_entry : NULL;
+    uint8_t *face_use = laying ? s_web.face_laying : NULL;
+    bool shown = p != NULL && page_doc(p) == page_doc(&g.page) && cascade != NULL;
     const garb_font_face_t *faces = NULL;
-    int32_t own = s_laying.cascade != NULL ? garb_cascade_font_faces(s_laying.cascade, &faces, NULL) : 0;
+    int32_t own = cascade != NULL ? garb_cascade_font_faces(cascade, &faces, NULL) : 0;
     int32_t nfaces = shown ? own : 0;
-    // Where the answers are kept for the record: the shown page's
-    // layout's, or a page arriving's.
+    // Layout diagnostics describe the tree being built. A Canvas lookup
+    // leaves those records intact.
     WebFontFamilies *record = NULL;
-    if (shown)
+    if (laying && shown)
         record = &s_web.laying;
-    else if (p != NULL && p->diag != NULL && s_arriving.staged && s_arriving.seq == yonder_diag_seq(p->diag))
+    else if (laying && p != NULL && p->diag != NULL && s_arriving.staged && s_arriving.seq == yonder_diag_seq(p->diag))
         record = &s_arriving.families;
     if (nfaces > 0)
         webfonts_chars(p);
@@ -5845,13 +6134,13 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
             if (!webfonts_chosen(f, &families->names[k], bold, &pick) || f->nranges > (int32_t)OS64_TEXT_RANGES_MAX ||
                 !webfonts_meet(f))
                 continue;
-            int32_t file = webfonts_file(p, f, i);
+            int32_t file = webfonts_file(p, entry, f, i, face_use);
             if (file < 0)
                 continue;
             bool ready = s_web.files[file].state == WF_READY, room = false;
             os64_text_font_t *font = ready ? webfonts_handle(file, f, px, &room) : NULL;
-            if (ready)
-                s_web.face_laying[i] |= font != NULL ? WF_USE_LISTED : room ? WF_USE_ROOM : WF_USE_REFUSED;
+            if (ready && face_use != NULL)
+                face_use[i] |= font != NULL ? WF_USE_LISTED : room ? WF_USE_ROOM : WF_USE_REFUSED;
             if (ready && font == NULL && !room)
                 continue;
             bool dup = false;
@@ -5912,8 +6201,8 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
         webfonts_served(record, nm->name, nm->len,
                         faced ? WF_SERVED_PAGE_UNLISTED : system ? WF_SERVED_SYSTEM : WF_SERVED_NONE, primary->family);
     }
-    for (uint32_t k = 0; shown && k < nserved; k++)
-        webfonts_served(&s_web.laying, served[k].name, served[k].len,
+    for (uint32_t k = 0; record != NULL && shown && k < nserved; k++)
+        webfonts_served(record, served[k].name, served[k].len,
                         served[k].joined > 0 ? WF_SERVED_PAGE : WF_SERVED_PAGE_UNLISTED, primary->family);
     if (rest != small)
         os64_free(rest);
@@ -5922,11 +6211,65 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     return OS64_FONT_OK;
 }
 
+// Reuse skips shaping-time resolver calls. Reconstruct the font report from
+// text, line/span metrics and atomic content in the resulting public tree. Counts
+// in this report describe font requests, rather than repeated shaping calls.
+// A small deduplication table keeps long runs of identical typography cheap;
+// excess distinct requests remain correct without extra allocations.
+typedef struct { const flow_style_t *seen[64]; size_t count; } FontReport;
+static bool font_request_equal(const flow_style_t *a, const flow_style_t *b)
+{
+    if (a->font_size != b->font_size || (a->font_weight >= 600) != (b->font_weight >= 600) ||
+        a->font_style != b->font_style || a->family.generic != b->family.generic ||
+        a->family.count != b->family.count) return false;
+    for (uint32_t i = 0; i < a->family.count; ++i)
+        if (a->family.names[i].len != b->family.names[i].len ||
+            os64_memcmp(a->family.names[i].name, b->family.names[i].name, a->family.names[i].len))
+            return false;
+    return true;
+}
+static void webfonts_public(Page *p, const flow_box_t *box, FontReport *report)
+{
+    for (; box; box = box->next) {
+        const flow_style_t *style = box->style;
+        if (style && (box->run || box->ellipsis || box->kind == FLOW_BOX_LINE ||
+                      box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_ATOMIC ||
+                      box->kind == FLOW_BOX_REPLACED)) {
+            bool seen = false;
+            for (size_t i = 0; i < report->count && !seen; ++i)
+                seen = font_request_equal(style, report->seen[i]);
+            if (!seen) {
+                if (report->count < 64) report->seen[report->count++] = style;
+                int64_t px = (style->font_size + 32) / 64;
+                if (px < 1) px = 1;
+                if (px > OS64_FONT_PIXEL_MAX) px = OS64_FONT_PIXEL_MAX;
+                os64_text_font_t *const *list; size_t count; os64_font_face_info_t primary;
+                if (page_fonts(p, &style->family, style->font_weight >= 600,
+                        style->font_style == FLOW_FONT_ITALIC, (uint32_t)px,
+                        &list, &count, &primary) != OS64_FONT_OK) {
+                    if (page_doc(p) == page_doc(&g.page)) s_web.laying.short_of_memory = true;
+                    else s_arriving.families.short_of_memory = true;
+                    layout_revision(&s_layout_resources.fonts);
+                }
+            }
+        }
+        webfonts_public(p, box->first, report);
+    }
+}
+static void webfonts_layout_copied(Page *p, const flow_tree_t *tree)
+{
+    if (!s_faces.families) return;
+    webfonts_layout_begins(p);
+    FontReport report = {0};
+    webfonts_public(p, flow_root(tree), &report);
+}
+
 // The page is to be laid out again (pictures_settle) — and now, so a move
 // made after a settle has run (by the feed, after its layout) is not left
 // waiting for an event: the ticker is armed for this moment.
 static void webfonts_move(void)
 {
+    layout_revision(&s_layout_resources.fonts);
     s_web.moved = true;
     g.settle_due = yonder_now_ms();
     pictures_schedule();
@@ -6071,6 +6414,7 @@ static void webfonts_feed(bool laid)
 // and until then the record says it is not asked for yet.
 static void webfonts_unhold(void)
 {
+    layout_revision(&s_layout_resources.fonts);
     for (int32_t i = 0; i < s_web.nfiles; i++) {
         WebFontFile *w = &s_web.files[i];
         if (w->state != WF_HELD)
@@ -6158,6 +6502,8 @@ static void webfonts_orphaned(void)
 // until the tree goes.
 static void webfonts_leave(void)
 {
+    layout_revision(&s_layout_resources.fonts);
+    s_layout_resources.font_doc = NULL;
     for (int32_t i = 0; i < s_web.nfiles; i++) {
         if (s_web.files[i].state == WF_WAITING && g.pool != NULL)
             os64_work_cancel(g.pool, s_web.files[i].id);
@@ -6949,14 +7295,12 @@ static bool motion_paused_why(char *out, size_t cap, bool *some)
     return true;
 }
 
-// Whether a frame for an animation — a layout's or a tick's — waits for its
-// paint (motion_painted): it is then the only frame, of either half. A
-// next one is due only once it is painted, when its cost is whole, and so
-// no event batch makes frames nobody sees, each costing what only the last
-// is charged for.
+// A CSS animation frame or a script's fresh layout awaits presentation.
+// A script layout already sampled the CSS timeline; sampling it again before
+// that paint would spend a second layout on a frame nobody sees.
 static bool frame_unpainted(void)
 {
-    return g.motion_painting || g.tick_painting;
+    return g.motion_painting || g.tick_painting || g.script_painting;
 }
 
 // When the shown page is next laid out for an animation: when libflow says
@@ -7023,10 +7367,23 @@ static uint64_t tick_next(void)
     return due;
 }
 
+// Script frames use the rendering loop even when CSS animations are disabled:
+// pages also use them to deliver state. Covered windows retain requests but
+// spend no frames. Rebuild retries and unfinished paints precede another batch.
+static uint64_t animation_next(void)
+{
+    if (!g.scripts_on || g.covered || g.page.tree == NULL ||
+        page_rebuild_owed(&g.page) || g.raf_painting)
+        return YONDER_NEVER;
+    uint64_t due = yonder_scripts_animation_next(g.page.scripts);
+    return due < g.raf_resume_at ? g.raf_resume_at : due;
+}
+
 // Hands the ticker the earliest of its deadlines: the next frame among the
 // pictures on screen, the moment a slow page's layout goes stale
 // (pictures_settle), the next layout for an animation (motion_next) and
-// its next tick (tick_next) — none of them for a covered window — the
+// its next tick (tick_next), and script frames (animation_next) — none for
+// a covered window — the
 // moment a page waiting for its
 // sheets is shown whatever is still coming, the moment a script the stream
 // is stopped at stops waiting for its sheets, the next timer and the
@@ -7045,9 +7402,10 @@ typedef struct {
 // and the stream's and the arriving page's turns), a storage commit
 // (storage_turn), a cookie file's write (cookies_turn, offered as a timer
 // is), the settle (pictures_settle) and the stream's wait for its
-// sheets (stream_turn) itself, after the events; the bell meets the rest (pictures_tick,
-// motion_tick, coming_show, downloads_heard). Two at one moment are common — the clock
-// steps by the tick — and the moment is the bell's if either is.
+// sheets (stream_turn) itself, after the events; the bell meets pictures_tick,
+// coming_show and downloads_heard. Motion and script frames run after tasks.
+// Two deadlines at one moment are common — the clock steps by the tick —
+// and the moment is the bell's if either is.
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 
 // The shown page has nothing more coming of its own accord: it has
@@ -7096,7 +7454,8 @@ static void exit_follow(void)
 
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
 {
-    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM;
+    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM &&
+                from != PAST_FRAMES && from != PAST_LAYOUTS && from != PAST_TICKS;
     if (due < d->next) {
         d->next = due;
         d->from = from;
@@ -7114,6 +7473,8 @@ static void pictures_schedule(void)
         deadline_offer(&d, g.settle_due, PAST_SETTLE);
     deadline_offer(&d, motion_next(), PAST_LAYOUTS);
     deadline_offer(&d, tick_next(), PAST_TICKS);
+    deadline_offer(&d, animation_next(), PAST_FRAMES);
+    deadline_offer(&d, pointer_next(), PAST_FRAMES);
     if (g.coming.active)
         deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
     if (g.stream.active && g.stream.sheets_due != 0)
@@ -7306,10 +7667,9 @@ static void ticks_before_paint(void)
         tick_page(now, false);
 }
 
-// The ticker rang: when an animation's layout is due, the page is laid out
-// again at this moment, quietly (lay_out_shown); when only its tick is,
-// the ticking animations move (tick_page). A ring for another deadline
-// does neither.
+// After script callbacks, meet a due CSS layout (lay_out_shown) or tick
+// (tick_page). A fresh script layout waits for its paint before another
+// CSS frame can begin (frame_unpainted).
 static void motion_tick(void)
 {
     uint64_t now = yonder_now_ms();
@@ -7325,6 +7685,12 @@ static void motion_tick(void)
 // so).
 static void motion_painted(void)
 {
+    g.script_painting = false;
+    if (g.raf_painting) {
+        g.raf_painting = false;
+        uint64_t now = yonder_now_ms();
+        g.raf_resume_at = now < UINT64_MAX - 10 ? now + 10 : UINT64_MAX - 1;
+    }
     if (g.motion_painting) {
         g.motion_painting = false;
         g.motion_ended = yonder_now_ms();
@@ -7617,6 +7983,7 @@ static void forms_sync_from_model(bool text);
 // libpage's, so picking one may have cleared others.
 static void check_changed(os64_ui_checkbox_t *cb, void *user)
 {
+    if (s_pointer_replay) { forms_sync_from_model(false); return; }
     const FormWidget *fw = user;
     uint8_t was = 0;
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
@@ -7678,6 +8045,7 @@ static void form_reset(int32_t form)
 
 static void button_clicked(os64_ui_widget_t *w, void *user)
 {
+    if (s_pointer_replay) return;
     (void)w;
     const FormWidget *fw = user;
     if (scripts_live()) {
@@ -8284,6 +8652,7 @@ static const os64_ui_class_t *unpainted_class(const os64_ui_class_t *cls)
 
 static void forms_place(void)
 {
+    pointer_geometry_changed();
     const os64_gui_rect_t v = g.view.bounds;
     for (int32_t i = 0; i < g.nfw; i++) {
         FormWidget *fw = g.fw[i];
@@ -8361,7 +8730,7 @@ static bool page_model_refresh(Page *p)
     uint64_t version = os64_html_version(page_doc(p));
     if (version == p->model_version)
         return true;
-    os64_page_t *model = os64_page_rebuild(page_model(p));
+    os64_page_t *model = profile_model_rebuild(p, page_model(p));
     if (model == NULL)
         return false;
     os64_page_t *old = page_model(p);
@@ -8376,7 +8745,7 @@ static bool page_model_refresh(Page *p)
 
 // A page not yet laid out whose model was just refreshed takes its sheet
 // table from that model, as script_rebuild's staged page does: parses
-// already in are borrowed, waits on the old table are cancelled, and a new
+// already in are shared, waits on the old table are cancelled, and a new
 // serial keeps an old table's job out of the new one. Sheets the scripts
 // linked are fetched and join when they arrive; the first paint does not
 // wait for them.
@@ -8390,12 +8759,6 @@ static void sheets_restage(Page *p)
     next.serial = ++g.pages_made;
     sheets_start(&next);
     sheets_leave(p);
-    // A borrowed parse moves to its borrower before the old table goes.
-    for (int32_t i = 0; i < next.nsheets; i++)
-        if (next.sheets[i].borrowed_from != NULL) {
-            os64_memset(&next.sheets[i].borrowed_from->parsed, 0, sizeof(garb_parsed_t));
-            next.sheets[i].borrowed_from = NULL;
-        }
     sheets_free(p);
     p->sheets = next.sheets;
     p->nsheets = next.nsheets;
@@ -8404,6 +8767,42 @@ static void sheets_restage(Page *p)
     p->sheets_changed = next.sheets_changed;
     p->serial = next.serial;
     p->reuse_sheets = NULL;
+}
+
+static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_t width,uint32_t height,
+                               const draw2d_damage_t *damage)
+{
+    Page *p=opaque;
+    const flow_box_t *box=p->tree?flow_box_for(p->tree,node):NULL;
+    if(!box || !box->replaced || box->style->visibility!=FLOW_VISIBLE)return;
+    os64_gui_rect_t view={g.sx,g.sy,g.view.bounds.w,g.view.bounds.h};
+    if(!damage || !width || !height){mark_part(view);return;}
+    // Groups and transformed ancestors retain conservative invalidation.
+    // Plain canvases share the painter's content and object-fit geometry.
+    for(const flow_box_t *b=box;b;b=b->parent) {
+        const flow_style_t *s=b->style;
+        if(s->opacity!=1000 || s->transform || s->translate || s->rotate || s->scale ||
+           s->will_change || s->animating || s->nfilter || s->nbackdrop_filter ||
+           s->mix_blend!=FLOW_BLEND_NORMAL || s->isolate){mark_part(view);return;}
+    }
+    os64_gui_rect_t content=yonder_content_rect(box);
+    flow_point_t offset=flow_box_doc_offset(box,scroll_now());
+    int64_t cx=(int64_t)content.x+offset.x,cy=(int64_t)content.y+offset.y;
+    if(cx<INT32_MIN || cx>INT32_MAX || cy<INT32_MIN || cy>INT32_MAX){mark_part(view);return;}
+    content.x=cx;content.y=cy;
+    os64_gui_rect_t at=yonder_object_rect(box->style,content,zoomed_px(width,p->laid_zoom),
+                                         zoomed_px(height,p->laid_zoom));
+    if(at.w<=0 || at.h<=0)return;
+    // Include a source texel on each edge for image reconstruction filtering.
+    double x0=floor(at.x+((double)damage->x0-1)*at.w/width);
+    double y0=floor(at.y+((double)damage->y0-1)*at.h/height);
+    double x1=ceil(at.x+((double)damage->x1+1)*at.w/width);
+    double y1=ceil(at.y+((double)damage->y1+1)*at.h/height);
+    x0=fmax(x0,fmax(content.x,view.x));y0=fmax(y0,fmax(content.y,view.y));
+    x1=fmin(x1,fmin((double)content.x+content.w,(double)view.x+view.w));
+    y1=fmin(y1,fmin((double)content.y+content.h,(double)view.y+view.h));
+    if(x0>INT32_MAX || y0>INT32_MAX){mark_part(view);return;}
+    if(x1>x0 && y1>y0)mark_part((os64_gui_rect_t){x0,y0,x1-x0,y1-y0});
 }
 
 static bool script_rebuild(void)
@@ -8444,8 +8843,9 @@ static bool script_rebuild(void)
         Page next = *p;
         next.rendered_version = version; // the staged layout's target DOM version
         next.reuse_sheets = p;
+        next.restyle_from = p->tree;
         next.tree = NULL;
-        next.cascade = NULL;
+        next.cascade = garb_cascade_retain(p->cascade) ? p->cascade : NULL;
         next.sheets = NULL;
         next.nsheets = next.sheets_waiting = next.sheets_ready = 0;
         next.sheets_changed = true;
@@ -8469,14 +8869,8 @@ static bool script_rebuild(void)
         }
         sheets_leave(p);
         page_show(p, next.tree);
+        g.script_painting = true;
         garb_cascade_free(p->cascade);
-        // A borrowed parse has one staged borrower. Once its old cascade
-        // is gone, transfer its arena before freeing the old sheet table.
-        for (int32_t i = 0; i < next.nsheets; i++)
-            if (next.sheets[i].borrowed_from != NULL) {
-                os64_memset(&next.sheets[i].borrowed_from->parsed, 0, sizeof(garb_parsed_t));
-                next.sheets[i].borrowed_from = NULL;
-            }
         sheets_free(p);
         p->laid_width = next.laid_width;
         p->laid_height = next.laid_height;
@@ -8523,6 +8917,9 @@ static bool script_rebuild(void)
     // A selection a script set changes no revision: it is asked of every
     // text field, after its text.
     forms_pull_selections();
+    // Pixel-only changes reuse layout. Plain canvases invalidate mapped pixel
+    // damage; resets and effects retain the conservative viewport fallback.
+    yonder_scripts_canvas_visit_damage(p->scripts,canvas_damage_mark,p);
     return true;
 }
 
@@ -8660,6 +9057,8 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
 
 static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
+static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
+    const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
 static bool history_update(void *opaque, const char *url, const char *state, size_t length, bool push);
 static bool history_fragment(void *opaque, const char *url, bool replace);
@@ -8694,6 +9093,22 @@ static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
         *modified = 0;
 }
 
+static os64_dom_image_status_t canvas_source(void *,const os64_html_node_t *,bool,os64_dom_image_view_t *);
+static void canvas_source_release(void *,os64_dom_image_view_t *);
+static Page *page_of_doc(const os64_html_document_t *);
+static os64_font_status_t canvas_text_layout(void *opaque,const os64_font_family_list_t *families,
+    bool bold,bool italic,uint32_t px,const uint8_t *text,size_t length,os64_text_run_t **out)
+{
+    *out=NULL;
+    if(!s_env.text||!s_env.fonts)return OS64_FONT_UNSUPPORTED;
+    flow_family_list_t names={.names=(const flow_family_name_t *)families->names,
+        .count=families->count,.generic=(flow_generic_t)families->generic};
+    os64_text_font_t *const *fonts=NULL;size_t count=0;os64_font_face_info_t info;
+    os64_font_status_t status=s_env.fonts(page_of_doc(opaque),&names,bold,italic,px,&fonts,&count,&info);
+    if(status!=OS64_FONT_OK)return status;
+    os64_text_layout_t options={.fonts=fonts,.font_count=count,.tab_interval=64};
+    return os64_text_layout(s_env.text,text,length,&options,out);
+}
 static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
 
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
@@ -8706,8 +9121,10 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
-        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .opaque = doc,
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
+        .images={canvas_source,canvas_source_release,doc},
+        .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
@@ -9568,10 +9985,9 @@ static void unshown_go(Page *p, int32_t delta)
         session_go((int32_t)target, WAY_BY_PAGE, from);
 }
 
-// A navigation a page's script asked for. Every one is the page's own
-// (WAY_BY_PAGE): no person's activation, even for a click() or submit() a
-// listener ran inside the person's own click, which HTML would give it
-// (transient activation, which yonder does not track: DIVERGENCES).
+// Navigation requested by the binding. A native click's default retains
+// the person's activation; script requests remain WAY_BY_PAGE, including
+// a click() or submit() called by a listener (DIVERGENCES: transient activation).
 static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
                                bool shown)
 {
@@ -9660,7 +10076,8 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         if (shown) {
             int32_t link = os64_page_link_for(page_model(&g.page), ask->node);
             if (link >= 0)
-                follow_link_asked(link, WAY_ASK_GO, WAY_BY_PAGE);
+                follow_link_asked(link, ask->user_activated ? WAY_ASK_NEVER : WAY_ASK_GO,
+                                  ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE);
         }
         return;
     case OS64_DOM_NAVIGATE_SUBMIT:
@@ -9674,10 +10091,10 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             // submitter's submission before its submit event (libdom's
             // window.c), and the model must not judge it again.
             if (control >= 0)
-                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, WAY_BY_PAGE, g.page.modern);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE, g.page.modern);
             else
                 form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind,
-                             WAY_BY_PAGE, false);
+                             ask->user_activated ? WAY_BY_PERSON : WAY_BY_PAGE, false);
         }
         return;
     case OS64_DOM_NAVIGATE_NONE:
@@ -9685,10 +10102,12 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
     }
 }
 
-// After a task: what it asked of the widgets, then the navigation it asked
-// for. The ask's nodes are let go before it is performed, since going
-// somewhere may free the very page they belong to.
-static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
+// After a task: widget asks, then navigation, using the rebuilt model.
+// Consumes the optional held frame fallback; a script navigation takes priority.
+// Shown-page nodes remain held while navigation reads them. An unshown-page
+// request releases its nodes before navigation, which may free its document.
+static void asks_perform_with_fallback(yonder_scripts_t *host, const os64_html_document_t *doc,
+                                       bool shown, const os64_html_node_t *fallback)
 {
     for (int32_t i = 0; i < g.nasks; i++) {
         if (shown && g.asks[i].doc == page_doc(&g.page)) {
@@ -9716,8 +10135,19 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
     }
     g.nasks = 0;
     os64_dom_navigation_t ask;
-    if (!yonder_scripts_take_navigation(host, &ask))
-        return;
+    if (yonder_scripts_take_navigation(host, &ask)) {
+        if (fallback) os64_html_release(doc, fallback);
+    } else {
+        if (!fallback) return;
+        const os64_html_node_t *root = fallback;
+        while (root->parent) root = root->parent;
+        if (!shown || doc != page_doc(&g.page) || root != doc->document) {
+            os64_html_release(doc, fallback);
+            return;
+        }
+        ask = (os64_dom_navigation_t){.kind = OS64_DOM_NAVIGATE_FOLLOW,
+            .node = fallback, .user_activated = true};
+    }
     os64_dom_navigation_t held = ask;
     if (!shown) {
         if (ask.node != NULL)
@@ -9739,7 +10169,12 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
     }
 }
 
-// One task of a page's: a ready script, else a due timer. True when one
+static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
+{
+    asks_perform_with_fallback(host, doc, shown, NULL);
+}
+
+// One task of a page's: script, image event, message or timer. True when one
 // ran. `shown` decides whether its asks may reach the page on screen.
 static bool page_event_run(Page *p, bool shown);
 
@@ -9774,6 +10209,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     int64_t began = task_begin(host);
     const char *what = "script";
     bool ran = yonder_scripts_step(host, &out);
+    if (!ran) { what="image"; ran=yonder_scripts_image_fire(host,&out); }
     if (!ran)
         ran = queued_task(host, &what, &out);
     if (!ran)
@@ -9784,7 +10220,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 }
 
 // Whether a host has a task to run now: a history event owed its page, a
-// script ready, a message posted, or a timer due. An idle callback is no
+// script ready, image event ready, a message posted, or a timer due. An idle callback is no
 // task owed: the shown page's turn runs one only when nothing else is
 // (script_turn).
 static bool scripts_owed(const yonder_scripts_t *host)
@@ -9792,7 +10228,7 @@ static bool scripts_owed(const yonder_scripts_t *host)
     const Page *p = page_of_host(host);
     uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
-           yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now;
+           yonder_scripts_images_pending(host) || yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now;
 }
 
 // The measured layout of the page whose document is `doc`, when that page
@@ -9989,6 +10425,12 @@ static void page_rebase(Page *p)
         os64_page_free(model);
         return;
     }
+    layout_model_rebased(old, model);
+    // The DOM version does not change with history. A hidden model still
+    // carries the old document URL, even when an absolute <base> happens to
+    // keep today's resolved base equal; a later base removal must use the
+    // new document URL too.
+    measured_forget(page_doc(p));
     p->way.model = model;
     os64_page_free(old);
     if (p == &g.page)
@@ -10557,6 +10999,26 @@ static bool computed_url(void *ctx, const char *written, uint32_t len, int32_t s
     return css_url(ctx, &layer, out, cap);
 }
 
+static os64_geometry_status_t script_svg_hit(void *opaque,const os64_html_node_t *node,
+    double x,double y,const os64_geometry_memory_t *memory,bool (*cancelled)(void *),
+    void *cancel_context,bool *inside,os64_dom_geometry_stats_t *cost)
+{
+    const os64_html_document_t *doc=opaque;*inside=false;
+    if(!os64_html_owns_node(doc,node))return OS64_GEOMETRY_BAD_ARGUMENT;
+    flow_env_t env;
+    const flow_tree_t *tree=layout_current(doc,&env,&cost->layouts,&cost->elapsed_us);
+    if(!tree)return OS64_GEOMETRY_ENGINE_ERROR;
+    svg_status_t status=yonder_svg_contains(doc,env.cascade,tree,node,env.zoom,
+        memory,cancelled,cancel_context,x,y,inside);
+    switch(status) {
+    case SVG_OK:return OS64_GEOMETRY_OK;
+    case SVG_LIMIT:return OS64_GEOMETRY_LIMIT;
+    case SVG_NO_MEMORY:return OS64_GEOMETRY_NO_MEMORY;
+    case SVG_CANCELLED:return OS64_GEOMETRY_CANCELLED;
+    default:return OS64_GEOMETRY_ENGINE_ERROR;
+    }
+}
+
 // getComputedStyle's provider: the element's resolved style read from the
 // page's current layout (libflow's flow_computed), every property of
 // libgarb's table put. An element with no style puts nothing.
@@ -10598,7 +11060,8 @@ static bool script_computed(void *opaque, const os64_html_node_t *element, os64_
     return kept;
 }
 
-// THE SHOWN PAGE'S TURN: at most one task, then the rendering step.
+// THE SHOWN PAGE'S TURN: at most one ordinary task, then due animation callbacks
+// and one rendering step. Each callback has its own microtask checkpoint.
 // Whether the turn just ran one of the view's events: more may be owed.
 static bool s_view_ran;
 
@@ -10636,6 +11099,10 @@ static bool script_turn(void)
         what = "script";
         ran = yonder_scripts_step(g.page.scripts, &out);
     }
+    if (!ran) {
+        what = "image";
+        ran = yonder_scripts_image_fire(g.page.scripts, &out);
+    }
     if (!ran)
         ran = queued_task(g.page.scripts, &what, &out);
     if (!ran) {
@@ -10647,19 +11114,50 @@ static bool script_turn(void)
     // is due (main's bell), and the ticker wakes it for one that waits
     // (pictures_schedule). Tasks that keep coming leave none idle, which
     // HTML allows: an idle period starts only when the loop is idle.
-    if (!ran) {
+    if (!ran && animation_next() > yonder_now_ms()) {
         what = "idle";
-        ran = yonder_scripts_idle_run(g.page.scripts, &out);
+        uint64_t due = animation_next(), motion = motion_next(), tick = tick_next();
+        if (motion < due) due = motion;
+        if (tick < due) due = tick;
+        ran = yonder_scripts_idle_before(g.page.scripts, due, &out);
+    }
+    if (ran)
+        task_said(g.page.scripts, true, what, &out, began);
+    // The task may have changed the DOM; those changes and this batch share
+    // the rebuild below. Only a failed rebuild from an earlier turn blocks
+    // callbacks (the entry guard), not the task's fresh mutations.
+    uint64_t now = yonder_now_ms();
+    if (!g.covered && !g.raf_painting && now >= g.raf_resume_at &&
+        yonder_scripts_animation_next(g.page.scripts) <= now) {
+        int64_t frame_began = task_begin(g.page.scripts);
+        if (yonder_scripts_animation_fire(g.page.scripts, now, &out)) {
+            g.raf_painting = true;
+            ran = true;
+            task_said(g.page.scripts, true, "animation-frame", &out, frame_began);
+        }
     }
     if (!ran)
-        return false;
-    task_said(g.page.scripts, true, what, &out, began);
+        return pointer_turn();
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree.
     bool rendered = script_rebuild();
-    if (rendered)
+    if (rendered) {
         asks_perform(g.page.scripts, doc, true);
+        if (page_doc(&g.page) == doc) (void)pointer_turn();
+    }
     return rendered;
+}
+
+// A due CSS frame can refuse an idle grant without running a script task.
+// Once that frame paints, give runnable idle work another turn. Requiring
+// task or frame progress avoids polling when neither can make progress.
+static bool script_followup(bool scripts_ready, bool painted_frame)
+{
+    if (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran))
+        return true;
+    bool idle_ready = scripts_ready || (painted_frame && g.scripts_on &&
+                      g.page.tree != NULL && !page_rebuild_owed(&g.page));
+    return idle_ready && yonder_scripts_idle_next(g.page.scripts) <= yonder_now_ms();
 }
 
 // PAGE STORAGE'S TURN: each page's storage commits what is due when no task
@@ -10803,6 +11301,9 @@ static void input_release(const Input *in)
 // the focus were resting on in it, are let go.
 static void inputs_drop(void)
 {
+    if (s_pointer_known && s_pointer_buttons) s_pointer_draining = true;
+    s_pointer_cancel_owed = s_pointer_known = s_pointer_rehit = false;
+    s_pointer_buttons = 0; s_pointer_modifiers = 0; s_pointer_rested = 0; s_pointer_menu = NULL;
     for (int32_t i = 0; i < g.ninputs; i++)
         input_release(&g.inputs[i]);
     g.ninputs = 0;
@@ -10892,6 +11393,9 @@ static os64_dom_event_t mouse_event(const char *type, bool cancelable, const Inp
     ev.page_y = clamp32(((int64_t)in->y - g.view.bounds.y + g.sy)*1000/zoom);
     ev.screen_x = in->x;
     ev.screen_y = in->y;
+    if (g.modern && os64_streq(type, "click")) {
+        ev.kind = OS64_DOM_EVENT_POINTER; ev.pointer_id = -1; ev.pointer_type = "";
+    }
     return ev;
 }
 
@@ -11184,6 +11688,10 @@ static void inputs_run(void)
 
 static void input_lost(void)
 {
+    if (g.modern && scripts_live() && yonder_scripts_pointer_active(g.page.scripts))
+        yonder_diag_fact(g.page.diag, "pointer input", "native input queue lost events; active gesture canceled");
+    yonder_scripts_pointer_cancel(g.page.scripts);
+    s_pointer_cancel_owed = true;
     g.seq = g.key_seq = 0;
     g.pressed_link = -1;
     if (g.pressed_node != NULL)
@@ -12110,7 +12618,6 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
             coming_show();
         pictures_tick();
-        motion_tick();
     }
     if ((mask & BELL_WORK) && g.pool != NULL) {
         os64_work_id_t id;
@@ -12347,6 +12854,57 @@ static void svg_partial_diagnostic(const yonder_svg_pixels_t *pixels, bool image
         yonder_diag_missing_seen(g.page.diag, image ? "svg image" : "svg",
             "unsupported drawing subtrees omitted (maximum per render)", pixels->omitted_subtrees);
 }
+/* Canvas sources use the same decoded products and bounded picture catalog.
+ * Their request-mode key prevents a display-only or differently credentialed
+ * fetch from being reused as proof that script may read the image. */
+static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t *node,
+    bool pixels,os64_dom_image_view_t *out)
+{
+    *out=(os64_dom_image_view_t){0};
+    Page *p=page_of_doc(opaque);
+    if(!p||!p->modern||!os64_html_owns_node(opaque,node))return OS64_DOM_IMAGE_BROKEN;
+    /* The picture catalog and worker generation belong to the shown page.
+     * Streaming/coming pages acquire images once they become that owner. */
+    if(p!=&g.page)return OS64_DOM_IMAGE_PENDING;
+    const os64_html_attr_t *src=os64_html_attr(node,"src");
+    if(!src||!src->value[0])return OS64_DOM_IMAGE_PENDING;
+    char resolved[OS64_FETCH_URL_MAX];const char *url=src->value;
+    const char *base=yonder_scripts_url(page_scripts(p));
+    if((os64_strlen(url)<5||os64_memcmp(url,"data:",5))) {
+        if(!os64_dom_resolve(opaque,base,url,resolved,sizeof(resolved)))return OS64_DOM_IMAGE_BROKEN;
+        url=resolved;
+    }
+    bool local=(os64_strlen(url)>=7&&!os64_memcmp(url,"file://",7)),data=(os64_strlen(url)>=5&&!os64_memcmp(url,"data:",5));
+    if(local&&(!base||(os64_strlen(base)<7||os64_memcmp(base,"file://",7))))return OS64_DOM_IMAGE_BROKEN;
+    const os64_html_attr_t *cors=os64_html_attr(node,"crossorigin");
+    unsigned mode=local||data?1:!cors?1:os64_streq_nocase(cors->value,"use-credentials")?3:2;
+    int32_t index=picture_for_mode(p,url,mode);
+    if(index<0)return OS64_DOM_IMAGE_REFUSED;
+    if(p==&g.page)pictures_feed(p);
+    Picture *pic=&p->pics[index];
+    if(pic->state==PIC_QUEUED||pic->state==PIC_WAITING)return OS64_DOM_IMAGE_PENDING;
+    if(pic->state!=PIC_SHOWN)return OS64_DOM_IMAGE_BROKEN;
+    uint32_t w,h;const uint32_t *plane=picture_pixels(pic,&w,&h);
+    out->origin_clean=pic->origin_clean;
+    out->surface=(draw2d_surface_t){(void *)plane,w,h,(size_t)w*4,(size_t)w*h*4,DRAW2D_ARGB8_STRAIGHT};
+    if(!pixels||pic->kind!=YONDER_PICTURE_SVG)return OS64_DOM_IMAGE_READY;
+    yonder_svg_pixels_t *rendered=os64_calloc(1,sizeof(*rendered));
+    if(!rendered)return OS64_DOM_IMAGE_REFUSED;
+    yonder_svg_image_view_t view={.width=w,.height=h,.pixel_width=w,.pixel_height=h,
+        .dark=s_dark,.reduced_motion=s_reduce_motion};
+    os64_geometry_memory_t memory={p,svg_allocate,svg_free};
+    svg_status_t status=yonder_svg_document_render(pic->svg,&view,&memory,os64_freetype_geometry_v1(),rendered);
+    if(status!=SVG_OK){os64_free(rendered);return OS64_DOM_IMAGE_REFUSED;}
+    out->surface=(draw2d_surface_t){rendered->pixels,w,h,(size_t)w*4,rendered->bytes,DRAW2D_ARGB8_STRAIGHT};
+    out->token=rendered;return OS64_DOM_IMAGE_READY;
+}
+static void canvas_source_release(void *opaque,os64_dom_image_view_t *view)
+{
+    if(!view->token)return;
+    Page *p=page_of_doc(opaque);os64_geometry_memory_t memory={p,svg_allocate,svg_free};
+    yonder_svg_pixels_free(&memory,view->token);os64_free(view->token);view->token=NULL;
+}
+
 static bool svg_picture_pixels(const Picture *pic, os64_gui_rect_t at, yonder_svg_pixels_t *out)
 {
     *out = (yonder_svg_pixels_t){0};
@@ -12783,6 +13341,28 @@ static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
     }
     for (int32_t k = 0; k < gp->n; k++)
         glass_image(gp->now[k], b, c, clip);
+}
+
+static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    GlassPane *gp = ctx;
+    canvas_bitmap_t bitmap;
+    if (!yonder_scripts_canvas_bitmap(g.page.scripts, b->node, &bitmap)) return;
+    draw2d_surface_t source = {(void *)bitmap.pixels, bitmap.width, bitmap.height,
+        bitmap.stride, bitmap.capacity, DRAW2D_ARGB8_PREMULTIPLIED};
+    os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(bitmap.width, g.page.laid_zoom),
+                                            zoomed_px(bitmap.height, g.page.laid_zoom));
+    bool consumed = gp->n > 0;
+    for (int32_t k = 0; k < gp->n; ++k) {
+        Glass *gl = gp->now[k];
+        os64_gui_rect_t cut = on_glass(gl, clip);
+        os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
+        if (!os64_rect_intersect(cut, content, &cut)) continue;
+        os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
+        consumed &= yonder_draw_surface(gl->surf->pixels, gl->surf->pitch_px, cut, box,
+                                        !b->style->pixelated, &source);
+    }
+    if (consumed) yonder_scripts_canvas_painted(g.page.scripts, b->node);
 }
 
 static void pane_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -13282,7 +13862,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
-                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close,
+                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL,
                         timed_layer_open, timed_layer_close, timed_backdrop_filter};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
@@ -13741,6 +14321,11 @@ static bool wheel_box(int32_t x, int32_t y, int32_t dx, int32_t dy)
 static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_t *ev)
 {
     (void)ui;
+    if (s_pointer_replay && (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN ||
+                            ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP || ev->type == OS64_GUI_EVENT_MOUSE_MOVE)) {
+        if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) os64_ui_set_focus(&g.ui, w);
+        return true;
+    }
     int32_t page = w->bounds.h - line_step();
     switch (ev->type) {
     case OS64_GUI_EVENT_MOUSE_WHEEL: {
@@ -13913,8 +14498,11 @@ static bool download_taken(void *ctx, const char *name)
 static void download_ask(const char *url, const char *referrer, const char *disposition)
 {
     if (s_ask.url != NULL) {
-        if (s_save.window > 0)
+        if (s_save.window > 0) {
+            yonder_scripts_pointer_cancel(g.page.scripts);
+            s_pointer_cancel_owed = true;
             (void)os64_gui_window_focus(s_save.window);
+        }
         return;
     }
     if (!downloadable(url)) {
@@ -14692,6 +15280,12 @@ static bool view_context(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *
     os64_ui_menu_model_t *model = g.context_menus[has_link && has_picture ? CONTEXT_BOTH
                                                   : has_link              ? CONTEXT_LINK
                                                                           : CONTEXT_PICTURE];
+    if (g.modern && scripts_live()) {
+        s_pointer_menu = model; s_pointer_menu_anchor = (os64_gui_rect_t){x,y,0,0};
+        s_pointer_menu_serial = g.page_serial;
+        yonder_scripts_pointer_cancel(g.page.scripts); s_pointer_cancel_owed = true;
+        return true;
+    }
     (void)os64_ui_actions_refresh(g.action_view);
     os64_ui_status_code_t rc = os64_ui_menu_open(g.menus, model, g.action_view,
                                                  (os64_gui_rect_t){x, y, 0, 0}, OS64_UI_MENU_CONTEXT);
@@ -14714,7 +15308,7 @@ static void hover(int32_t x, int32_t y)
     g.pointer_y = y;
     // The element under the pointer, for mouseover and mouseout: hover
     // tracks the node now, not only the link (DOM_D7.md § Input events).
-    if (scripts_live()) {
+    if (scripts_live() && !g.modern) {
         const os64_html_node_t *over = element_at(x, y, NULL);
         if (over != g.hover_node) {
             if (g.hover_node != NULL) {
@@ -15335,6 +15929,8 @@ static void ui_dispatch(const os64_gui_event_t *ev)
         field_selection_chosen(g.ui.focus);
 }
 
+#include "pointer_input.inc"
+
 // One of yonder's window's events. The pointer is read before libui
 // because a widget is handed moves only while a button is held and the
 // status line follows its current position; the question bar answers by
@@ -15346,16 +15942,27 @@ static void window_event(void *user, const os64_gui_event_t *event)
         return;
     const os64_gui_event_t ev = *event;
     // The Save dialog is modal (§ Downloads): a press, a key, the wheel or
-    // Settings brings it forward instead. A release still goes through, so
-    // a press that began before the dialog finishes where it began.
+    // Settings brings it forward instead. Cancel a page gesture before the
+    // dialog takes over; its later release drains without activating it.
     if (s_save.window > 0 &&
         (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || ev.type == OS64_GUI_EVENT_KEY_DOWN ||
          ev.type == OS64_GUI_EVENT_MOUSE_WHEEL || ev.type == OS64_GUI_EVENT_SETTINGS)) {
+        yonder_scripts_pointer_cancel(g.page.scripts);
+        s_pointer_cancel_owed = true;
+        pointer_cancel_run();
         (void)os64_gui_window_focus(s_save.window);
         return;
     }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
         input_lost();
+    if (ev.type == OS64_GUI_EVENT_INPUT_LOST || ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
+        ev.type == OS64_GUI_EVENT_WINDOW_RESIZE || ev.type == OS64_GUI_EVENT_SETTINGS ||
+        (ev.type == OS64_GUI_EVENT_WINDOW_FOCUS && !ev.focus.gained)) {
+        yonder_scripts_pointer_cancel(g.page.scripts);
+        s_pointer_cancel_owed = true;
+        pointer_cancel_run();
+    }
+    if (ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED) pointer_geometry_changed();
     if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
         hover(ev.mouse.x, ev.mouse.y);
     else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
@@ -15370,9 +15977,18 @@ static void window_event(void *user, const os64_gui_event_t *event)
                              motion_use, g.modern, modern_use,
                              s_cookies != NULL ? yonder_cookies_mode(s_cookies) : s_cookies_asked,
                              cookies_use);
-    else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
-             !password_key(&ev))
+    else if (!((s_pointer_draining || yonder_scripts_pointer_active(g.page.scripts)) && pointer_route(&ev)) &&
+             !bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
+             !password_key(&ev) && !pointer_route(&ev))
         ui_dispatch(&ev);
+    pointer_cancel_run();
+    if (s_pointer_menu) {
+        os64_ui_menu_model_t *menu = s_pointer_menu; s_pointer_menu = NULL;
+        if (s_pointer_menu_serial == g.page_serial) {
+            (void)os64_ui_actions_refresh(g.action_view);
+            (void)os64_ui_menu_open(g.menus, menu, g.action_view, s_pointer_menu_anchor, OS64_UI_MENU_CONTEXT);
+        }
+    }
     interface_font_finish();
     // What the event became, as DOM events, now libui is done with it.
     inputs_run();
@@ -15399,6 +16015,8 @@ int main(int argc, char **argv)
     for (; address_arg < argc && argv[address_arg][0] == '-' && argv[address_arg][1] == '-'; address_arg++) {
         if (os64_streq(argv[address_arg], "--script-audit"))
             s_script_audit = true;
+        else if (os64_streq(argv[address_arg], "--layout-profile"))
+            s_layout_profile = true;
         else if (os64_streq(argv[address_arg], "--exit-when-loaded"))
             s_exit_when_loaded = true;
         else
@@ -15471,6 +16089,11 @@ int main(int argc, char **argv)
     g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network
 
     os64_ui_init(&g.ui, &g.ctx);
+    if (!os64_ui_on_gesture_cancel(&g.ui, pointer_widget_canceled)) {
+        os64_printf("yonder: could not install pointer cancellation observer\n");
+        os64_gui_window_destroy(g.win);
+        return 1;
+    }
     g.ui.on_resize = on_resize;
     g.ui.on_close = on_close;
     g.ui.on_doorbell = on_doorbell;
@@ -15629,6 +16252,7 @@ int main(int argc, char **argv)
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
         bodies_turn();
+        motion_tick();
         storage_turn();
         cookies_turn();
         children_turn();
@@ -15637,6 +16261,7 @@ int main(int argc, char **argv)
         title_follow();
         before_paint();
         glass_paint();
+        bool painted_frame = frame_unpainted() || g.raf_painting;
         motion_painted();
         if (motion_pause_said())
             glass_paint();
@@ -15644,8 +16269,7 @@ int main(int argc, char **argv)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (s_bodies_asked)
             (void)os64_gui_event_ring(g.win, BELL_BODY);
-        if (coming_more || (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran ||
-                                              yonder_scripts_idle_next(g.page.scripts) <= yonder_now_ms())))
+        if (coming_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         exit_follow();
         // A task may have set or cleared a timer, and a frame for an

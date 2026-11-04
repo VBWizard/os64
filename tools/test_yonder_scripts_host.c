@@ -5,9 +5,16 @@
 #include "test_js_port_host.c"
 #undef os64_write
 #undef main
+#include <os64/gui.h>
+static int64_t pointer_host_rect(int64_t handle, os64_gui_rect_t *rect)
+{
+    (void)handle; *rect = (os64_gui_rect_t){60,80,800,600}; return 0;
+}
+#define os64_gui_window_get_content_rect pointer_host_rect
 #define main yonder_fixture_main
 #include "../userland/apps/yonder/yonder.c"
 #include "paint_cache.h"
+#include <png/png.h>
 #undef main
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
@@ -602,6 +609,12 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *options) { (void)hooks; (void)options; }
 os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
     ++picture_raster_decodes; memset(out,0,sizeof(*out));
+    if(len>=8&&bytes[0]==137&&!memcmp(bytes+1,"PNG",3)) {
+        os64_png_image_t png;
+        os64_png_status_t status=os64_png_decode(bytes,len,0,&png);
+        if(status!=OS64_PNG_OK)return OS64_IMAGE_MALFORMED;
+        out->width=png.width;out->height=png.height;out->pixels=png.pixels;return OS64_IMAGE_OK;
+    }
     if(len==6 && !memcmp(bytes,"RASTER",6)) {
         out->pixels=os64_malloc(4); if(!out->pixels) return OS64_IMAGE_NO_MEMORY;
         out->width=out->height=1; out->pixels[0]=0xff123456; return OS64_IMAGE_OK;
@@ -779,6 +792,25 @@ flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_
     }
     if(geometry_refuse_layout) return NULL;
     flow_tree_t *tree=__real_flow_layout(doc,model,width,env);
+    clock_us+=geometry_layout_delay;
+    if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
+    return tree;
+}
+static flow_profile_t last_graft_profile;
+flow_tree_t *__real_flow_layout_incremental(const os64_html_document_t *,const os64_page_t *,int32_t,
+    const flow_env_t *,const flow_tree_t *,const flow_reuse_inputs_t *,flow_profile_t *,int64_t (*)(void *),void *);
+flow_tree_t *__wrap_flow_layout_incremental(const os64_html_document_t *doc,const os64_page_t *model,
+    int32_t width,const flow_env_t *env,const flow_tree_t *previous,const flow_reuse_inputs_t *inputs,flow_profile_t *profile,
+    int64_t (*clock)(void *),void *clock_ctx) {
+    // A refusal after reclaiming the old geometry exercises the retry's
+    // teardown and recovery, rather than the usual preserve-old-tree path.
+    if(budget_active && budget_refuse_retry && g.page.tree==NULL) {
+        budget_refuse_retry=false;budget_retry_refusals++;
+        return NULL;
+    }
+    if(geometry_refuse_layout) return NULL;
+    flow_tree_t *tree=__real_flow_layout_incremental(doc,model,width,env,previous,inputs,profile,clock,clock_ctx);
+    if(profile) last_graft_profile=*profile;
     clock_us+=geometry_layout_delay;
     if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
     return tree;
@@ -1411,7 +1443,7 @@ static void tick_cases(void) {
     now_ms=100;
     probe_page(kTickPage,false);
     relayout(true);
-    check(motion_next()==YONDER_NEVER && tick_next()==100 && ticker_due==100,
+    check(motion_next()==YONDER_NEVER && tick_next()==100 && ticker_due==101,
         "ticks: what only painting reads is due for a tick, not a layout");
     int32_t field_was=g.nfw==1 ? g.fw[0]->w->bounds.x : -1;
     uint64_t laid_began=g.motion_began;
@@ -1702,7 +1734,7 @@ static void motion_cases(void) {
         "motion: a layout not made to be shown starts nothing, and nothing is due");
     uint64_t for_motion=s_cost.layouts_motion;
     relayout(true);
-    check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && ticker_due==100,
+    check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && ticker_due==101,
         "motion: the shown page's layout starts its animations, and one moving is due at once");
     check(s_cost.layouts_motion==for_motion,
         "motion: the record does not count the page's own layout as one for animations");
@@ -1950,6 +1982,9 @@ static void motion_cases(void) {
         ".go{animation:slide 1s linear infinite}</style><div id=a></div>"
         "<script>document.getElementById('a').className='go'</script>",true);
     script_turn(); script_turn();
+    check(g.script_painting && motion_next()==YONDER_NEVER,
+        "motion: script layout reaches paint before another animation layout");
+    motion_painted();
     check(g.page.timeline!=NULL && motion_next()==2500,
         "motion: a script's change starts an animation on the page's timeline");
     now_ms=2750;
@@ -1972,8 +2007,10 @@ static void motion_cases(void) {
         "motion: while a script's change waits for its rebuild, nothing is due");
     now_ms=3100;
     motion_tick();
-    check(script_rebuild() && g.motion_us!=UINT64_MAX && motion_next()==3100,
-        "motion: once the rebuild is made, frames are due again");
+    check(script_rebuild() && g.motion_us!=UINT64_MAX && motion_next()==YONDER_NEVER,
+        "motion: the rebuilt frame waits for paint");
+    motion_painted();
+    check(motion_next()==3100,"motion: after the rebuild paints, frames are due again");
     probe_drop();
     s_animations=was_run; s_reduce_motion=was_reduce;
 }
@@ -2318,12 +2355,14 @@ static void stylesheet_reuse(void) {
             Sheet *sheet=&g.page.sheets[i];
             bool child=strstr(sheet->url,"child.css")!=NULL;
             const char *text=child?"h1{font-weight:bold}":css;
-            check(garb_parse_sheet_text(text,strlen(text),&sheet->parsed)==GARB_OK,"linked sheet fixture parses");
+            sheet->source=os64_calloc(1,sizeof(*sheet->source));
+            sheet->source->refs=1;
+            check(garb_parse_sheet_text(text,strlen(text),&sheet->source->parsed)==GARB_OK,"linked sheet fixture parses");
             sheet_ready(&g.page,i);
         }
         check(g.page.nsheets==4 && page_lay_out(&g.page,800,600,g.zoom,&g.page),"duplicate links and imports lay out");
         const void *arenas[4];
-        for(int i=0; i<4; i++) arenas[i]=g.page.sheets[i].parsed.arena;
+        for(int i=0; i<4; i++) arenas[i]=g.page.sheets[i].source->parsed.arena;
         check(os64_html_set_text(g.page.way.doc,probe_id("heading")->first_child,"new",3)==OS64_HTML_OK,
             "linked sheet fixture text changes");
         if(cut) fail_at=attempts+cut;
@@ -2331,16 +2370,17 @@ static void stylesheet_reuse(void) {
         fail_at=0;
         if(!complete) {
             refused++;
-            check(g.page.sheets[0].parsed.arena==arenas[0] && g.page.sheets[0].ready,
+            check(g.page.sheets[0].source->parsed.arena==arenas[0] && g.page.sheets[0].ready,
                 "failed recascade keeps original linked parse");
             check(script_rebuild(),"linked parse survives failure and retry");
         }
         bool transferred=g.page.nsheets==4;
         for(int i=0; i<g.page.nsheets; i++) {
+            if(!g.page.sheets[i].source) { transferred=false; continue; }
             bool found=false;
-            for(int j=0; j<4; j++) found |= g.page.sheets[i].parsed.arena==arenas[j];
-            transferred &= found && g.page.sheets[i].ready && g.page.sheets[i].borrowed_from==NULL;
-            for(int j=0; j<i; j++) transferred &= g.page.sheets[i].parsed.arena!=g.page.sheets[j].parsed.arena;
+            for(int j=0; j<4; j++) found |= g.page.sheets[i].source->parsed.arena==arenas[j];
+            transferred &= found && g.page.sheets[i].ready && g.page.sheets[i].source->refs>0;
+
         }
         // An optional sheet metadata allocation can fail while geometry still
         // succeeds; that sheet is omitted and its unused old parse is released.
@@ -2351,7 +2391,7 @@ static void stylesheet_reuse(void) {
             for(int i=0;i<g.page.nsheets;i++) omitted |= !g.page.sheets[i].ready;
             check(omitted,"refused import metadata may omit a sheet");
         } else {
-            check(transferred,"ready duplicate parses and imports transfer without aliasing ownership");
+            check(transferred,"ready duplicate parses and imports retain shared ownership");
         }
         probe_drop();
     }
@@ -2405,14 +2445,18 @@ static void bounded_resources(void) {
 /* ── INPUT EVENTS (docs/design/pending/DOM_D7.md § Input events) ────────
  * The window's real input sites — view_event, hover, the widgets' own
  * callbacks, key_event — with the queue run as the loop runs it. */
+static void pointer_window(uint8_t, int, int, int, unsigned);
+static void pointer_move(int, int, unsigned);
 static void input_click_at(const char *id) {
     const flow_box_t *b=flow_box_for(g.page.tree,probe_id(id));
     int32_t x=g.view.bounds.x+b->rect.x+2-g.sx, y=g.view.bounds.y+b->rect.y+2-g.sy;
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
     ev.mouse.x=x; ev.mouse.y=y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { view_event(&g.view,&g.ui,&ev); inputs_run(); }
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { view_event(&g.view,&g.ui,&ev); inputs_run(); }
 }
 /* A press and a release on a control's own widget, through libui, as a
  * person's click on it arrives. */
@@ -2421,9 +2465,11 @@ static void ui_click_on(const char *id) {
     g.root.bounds=g.view.bounds;        /* the fixture's root has no size of its own */
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
     ev.mouse.x=fw->w->bounds.x+2; ev.mouse.y=fw->w->bounds.y+2; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
-    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { os64_ui_dispatch(&g.ui,&ev); inputs_run(); }
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
-    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    if(g.modern && scripts_live()) pointer_window(ev.type,ev.mouse.x,ev.mouse.y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    else { os64_ui_dispatch(&g.ui,&ev); inputs_run(); }
 }
 static void ui_key_space(void) {
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' '}};
@@ -2572,7 +2618,7 @@ static void input_hover(void) {
     uint64_t tasks=yonder_scripts_tasks(g.page.scripts);
     size_t before=attempts;
     const flow_box_t *b=flow_box_for(g.page.tree,probe_id("quiet"));
-    for(int i=0;i<20;i++) { hover(b->rect.x+2+i,b->rect.y+2); inputs_run(); }
+    for(int i=0;i<20;i++) pointer_move(b->rect.x+2+i,b->rect.y+2,0);
     check(yonder_scripts_tasks(g.page.scripts)==tasks && attempts-before<200,
         "input: pointer moves over a page that listens to nothing run no task");
     probe_drop();
@@ -2584,9 +2630,9 @@ static void input_hover(void) {
     script_turn();
     /* A listener's change relays the page out: each box is found again. */
     #define AT(id,dx) flow_box_for(g.page.tree,probe_id(id))->rect.x+(dx),flow_box_for(g.page.tree,probe_id(id))->rect.y+2
-    hover(AT("a",2)); inputs_run();
-    hover(AT("a",3)); inputs_run();
-    hover(AT("b",2)); inputs_run();
+    pointer_move(AT("a",2),0);
+    pointer_move(AT("a",3),0);
+    pointer_move(AT("b",2),0);
     #undef AT
     check(probe_text_is("log","over a from none|out a to b|over b"),
         "input: mouseover and mouseout follow the element under the pointer, with relatedTarget");
@@ -2661,17 +2707,17 @@ static void input_ui_events(void) {
         "(e.submitter?e.submitter.id:'none'));e.preventDefault()});</script>",true);
     script_turn();
     input_click_at("a");
-    check(probe_text_is("log","mousedown MouseEvent 1 1 true|mouseup MouseEvent 1 0 true|click MouseEvent 1 0 true"),
+    check(probe_text_is("log","mousedown MouseEvent 1 1 true|mouseup MouseEvent 1 0 true|click PointerEvent 1 0 true"),
         "input: a press, a release and a click are MouseEvents of one click, the button held only while pressed");
     const flow_box_t *b=flow_box_for(g.page.tree,probe_id("a"));
     int32_t x=g.view.bounds.x+b->rect.x+2-g.sx, y=g.view.bounds.y+b->rect.y+2-g.sy;
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
     ev.mouse.x=x; ev.mouse.y=y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
-    hover(x+1,y); inputs_run();
+    pointer_window(ev.type,x,y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    pointer_move(x+1,y,1);
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
-    view_event(&g.view,&g.ui,&ev); inputs_run();
-    hover(x+2,y); inputs_run();
+    pointer_window(ev.type,x,y,0,ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN?1:0);
+    pointer_move(x+2,y,0);
     check(strstr(probe_text_of("log"),"|move 1|")!=NULL && strstr(probe_text_of("log"),"|move 0")!=NULL,
         "input: a move while the button is down says so, and one after it is let go does not");
     FormWidget *first=probe_field("one"), *second=probe_field("two");
@@ -5650,7 +5696,7 @@ static void join_every_kind_counts(void) {
           audit_forced("script http://fixture.test/a.js",1),
         "join: blocking, connected and ready scripts each count their own layout");
     check(audit_forced("DOMContentLoaded",1) && audit_forced("load",1) && audit_forced("timer",1) &&
-          audit_forced("click",1),
+          audit_forced("pointer",1),
         "join: DOMContentLoaded, load, a timer and an event each count their own layout");
     audit_keep=false;
     s_script_audit=false;
@@ -5658,8 +5704,8 @@ static void join_every_kind_counts(void) {
 }
 
 /* A click listener that runs out its time inside a forced layout: the
- * overrun sentence after the count, the runtime retired, and the link it
- * was on still followed by its default action. */
+ * overrun sentence after the count and the runtime retired. A failed packet
+ * cancels its activation; a fresh click still follows the ordinary link. */
 static void join_click_overrun(void) {
     loop_page("<a id=go href=next.html>go</a><div id=box></div><script>"
         "document.getElementById('go').addEventListener('click',function(){"
@@ -5674,13 +5720,15 @@ static void join_click_overrun(void) {
      * page keeps what its scripts said. */
     const char *said=yonder_scripts_note(g.page.scripts);
     check(said!=NULL && strstr(said,"Script forced 1 layouts in")==said &&
-          strstr(said,"; Script click event: execution stopped after 5 s (this page runs without script)")!=NULL,
+          strstr(said,"; Script pointer input: execution stopped after 5 s (this page runs without script)")!=NULL,
         "join: the overrun inside a forced layout gets the count and the overrun sentence");
     check(!yonder_scripts_alive(g.page.scripts) && os64_html_attr(probe_id("box"),"data-after")==NULL,
         "join: the runtime is retired and the listener stops where it was");
+    check(!g.stream.active,"join: a failed pointer packet cannot activate its link");
+    input_click_at("go");
     check(g.stream.active && pool_work.job!=NULL &&
           os64_streq(((yonder_trip_t *)pool_work.job)->url,"http://fixture.test/next.html"),
-        "join: the link still navigates by its default action");
+        "join: a fresh click with scripts retired still follows the link");
     if(pool_work.job!=NULL) {
         const yonder_trip_t *t=pool_work.job;
         check(t->metadata.site==WAY_SITE_SAME_ORIGIN && t->metadata.activation &&
@@ -5766,6 +5814,8 @@ static uint32_t *stand_in_shot(void) {
     return screen.surf.pixels;
 }
 #include "test_yonder_svg_images.inc"
+#include "test_yonder_canvas.inc"
+#include "test_yonder_animation.inc"
 #include "test_yonder_data_pictures.inc"
 #include "test_yonder_picture_sizes.inc"
 
@@ -6130,6 +6180,7 @@ static void svg_window_cases(void)
  * label says, that a canvas has no paper, and what laying labels out costs. */
 static void stand_in_paint_cases(void)
 {
+    probe_modern_off=true;
     /* A full-viewport canvas over the page, as confetti and snow are: the
      * page shows through, and only the outline and the corner label are
      * the stand-in's. */
@@ -6178,6 +6229,7 @@ static void stand_in_paint_cases(void)
     px=stand_in_shot();
     check(s_stand_in_labels-before==1,"stand-in: two thousand canvases in view cost one label a paint");
     os64_free(px); probe_drop();
+    probe_modern_off=false;
 }
 
 static void inserted_frame_cases(void)
@@ -6266,6 +6318,10 @@ static void classic_browser_cases(void)
 /* What reads the host's own files directly is the suite's alone: a unit
  * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
  * of it, so the replay runner's every file goes through its own door. */
+#include "test_yonder_layout_profile.inc"
+#include "test_yonder_restyle.inc"
+#include "test_yonder_graft.inc"
+
 #ifndef YONDER_HOST_FAKES_ONLY
 /* Optional consumer proof reads locally downloaded primary scripts. Site
  * sources stay outside the repository; regular regressions are original. */
@@ -6391,7 +6447,7 @@ static void hover_batch_cases(void)
         YonderEventBatch batch={0};os64_gui_event_t event;
         while(yonder_event_batch_next(&batch,&event,hover_poll,&queue)) {
             dispatched++;
-            hover(event.mouse.x,event.mouse.y);inputs_run();
+            pointer_move(event.mouse.x,event.mouse.y,0);
         }
         turns++;
         check(batch.consumed<=YONDER_EVENT_BATCH_MAX,"hover burst: turn has bounded input work");
@@ -7059,7 +7115,7 @@ static void diag_style_case(void) {
     probe_page(html,false);
     free(html);
     g.page.diag=diag_new_claimed("http://big.test/",1);
-    const garb_parsed_t *sheet=g.page.nsheets==1 ? &g.page.sheets[0].parsed : NULL;
+    const garb_parsed_t *sheet=g.page.nsheets==1 ? &g.page.sheets[0].source->parsed : NULL;
     size_t parsed=sheet!=NULL ? os64_arena_stats(sheet->arena).used_bytes : 0;
     bool whole=sheet!=NULL && !sheet->incomplete;
     for(int i=0;i<8 && whole;i++) {
@@ -7431,7 +7487,7 @@ static void diag_page_cases(void) {
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"MISSING script importmap") && !has(text,"MISSING script module") &&
-        has(text,"MISSING element canvas (2)\n") &&
+        !has(text,"MISSING element canvas") &&
         has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
         has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
         has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
@@ -7440,7 +7496,7 @@ static void diag_page_cases(void) {
         "drawn, are not");
     loop_drop();
     text=diag_file("/tmp/diag",name);
-    check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");
+    check(!has(text,"MISSING element canvas"),"diag: supported canvases remain absent from missing elements at departure");
 
     /* A frame's document is not loaded into it, and an embed makes no box:
      * both are recorded. An object shows its fallback and is not. */
@@ -7454,9 +7510,10 @@ static void diag_page_cases(void) {
     check(!has(text,"unsupported"),"diag: a frame, whose stand-in takes a click to its document, is never unsupported");
     loop_drop();
 
-    /* A canvas is the page's failure, one line for the kind however many
+    /* With Modern Web off a canvas is the page's failure, one line however many
      * there are, a script's own among them; with scripts off it is its
      * fallback, and no failure. */
+    loop_modern_off=true;
     loop_page("<canvas></canvas><canvas width=10 height=10></canvas>"
         "<script>document.body.appendChild(document.createElement('canvas'))</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with canvases arrives");
@@ -7485,6 +7542,8 @@ static void diag_page_cases(void) {
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"unsupported"),"diag: an svg's canvas is no HTML canvas, and no failure");
     loop_drop();
+
+    loop_modern_off=false;
 
     /* An address that spells a token keeps it out of the plain lines. */
     stream_window(); g.scripts_on=true;
@@ -8317,7 +8376,7 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
                      "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
-                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, downloads 0\n")!=NULL &&
+                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, frames 0, downloads 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
@@ -8545,6 +8604,35 @@ static void webfont_cases(void) {
     pictures_settle();
     check(!s_web.moved && first_text_font()!=before && first_text_font()!=0,
           "web fonts: the page is laid out again in the face, named twice and listed once");
+
+    /* Canvas resolves fonts after layout has released its temporary cascade. */
+    {
+        os64_font_family_name_t name={"Web",3};
+        os64_font_family_list_t families={.names=&name,.count=1,.generic=OS64_FONT_FAMILY_SERIF};
+        os64_text_run_t *run=NULL;os64_text_run_view_t view;
+        WebFontFamilies laying_before=s_web.laying, shown_before=s_web.families;
+        uint8_t uses_before[GARB_FONT_FACES_MAX];
+        memcpy(uses_before,s_web.face_laying,sizeof(uses_before));
+        check(s_laying.cascade==NULL && s_laying.entry==NULL,"Canvas font: outside layout");
+        check(canvas_text_layout(g.page.way.doc,&families,false,false,16,
+              (const uint8_t *)"hello",5,&run)==OS64_FONT_OK &&
+              os64_text_run_view(run,&view)==OS64_FONT_OK && view.glyph_count>0 &&
+              view.glyphs[0].font_identity==first_text_font(),
+              "Canvas font: loaded page face matches DOM text outside layout");
+        os64_text_run_release(run);
+        check(s_laying.cascade==NULL && s_laying.entry==NULL && s_web.nfiles==1,
+              "Canvas font: leaves layout context and file cache intact");
+        run=NULL;
+        check(canvas_text_layout(NULL,&families,false,false,16,(const uint8_t *)"hello",5,&run)==OS64_FONT_OK &&
+              os64_text_run_view(run,&view)==OS64_FONT_OK && view.glyph_count>0 &&
+              view.glyphs[0].font_identity!=first_text_font(),
+              "Canvas font: an unrelated document cannot borrow the shown page's face");
+        os64_text_run_release(run);
+        check(!memcmp(&laying_before,&s_web.laying,sizeof(laying_before)) &&
+              !memcmp(&shown_before,&s_web.families,sizeof(shown_before)) &&
+              !memcmp(uses_before,s_web.face_laying,sizeof(uses_before)),
+              "Canvas font: preserves layout font diagnostics");
+    }
 
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(strstr(record,"MISSING font")==NULL,"web fonts: a family a face serves is not missing");
@@ -9794,6 +9882,35 @@ static void webfont_cases(void) {
     check(font_cancels==cancels+1 && s_web.nfiles==0 && s_web.waiting==0,"web fonts: leaving cancels and clears");
     web_drop();
     cascade_swap_case();
+    web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}p{font-family:Web}</style>"
+        "<p id=font-kept>kept text</p><p id=font-changed>changed text</p><p>padding</p><p>padding</p>"
+        "<p>padding</p><p>padding</p><p>padding</p><p>padding</p>");
+    check(font_land("web.ttf","A",NULL),"graft fonts: loaded face");
+    pictures_settle();
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page) && last_graft_profile.reused>0,
+          "graft fonts: unchanged text copies geometry with a loaded web face");
+    bool reported=false;
+    for(int32_t i=0;i<s_web.families.n;i++)
+        reported |= !strcmp(s_web.families.f[i].name,"Web") && s_web.families.f[i].served==WF_SERVED_PAGE;
+    check(reported && (s_web.face_use[0]&WF_USE_LISTED),
+          "graft fonts: copied text retains current family and face-use reporting");
+    uint64_t revision=s_layout_resources.fonts;
+    os64_html_set_text(g.page.way.doc,probe_id("font-changed")->first_child,"new characters",14);
+    check(script_rebuild() && s_layout_resources.fonts>revision && !last_graft_profile.reused,
+          "graft fonts: document character changes invalidate unicode-range-dependent answers");
+    web_drop();
+    web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}</style>"
+        "<p>text<span id=metric-only style='font-family:Web'></span></p><p>padding</p>");
+    check(font_land("web.ttf","A",NULL),"graft fonts: empty span's face loads");
+    pictures_settle();
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page) && last_graft_profile.reused>0,
+          "graft fonts: empty span's line copies geometry");
+    reported=false;
+    for(int32_t i=0;i<s_web.families.n;i++)
+        reported |= !strcmp(s_web.families.f[i].name,"Web") && s_web.families.f[i].served==WF_SERVED_PAGE;
+    check(reported && (s_web.face_use[0]&WF_USE_LISTED),
+          "graft fonts: metric-only span retains family and face-use reporting");
+    web_drop();
     os64_font_family_cache_destroy(s_faces.families);
     s_faces.families=NULL; s_faces.text=NULL;
 }
@@ -11128,21 +11245,81 @@ static void exit_when_loaded_cases(void) {
     check(exit_due()==YONDER_NEVER,"exit: without the switch, never");
 }
 
+#include "test_yonder_pointer.inc"
+
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
  * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
+#include "test_yonder_svg_hit.inc"
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if(getenv("YONDER_POINTER_ONLY")) {
+        pointer_window_cases(); input_links(); input_hover(); input_ui_events(); hover_batch_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"pointer: text released");
+        check(live==0,"pointer: heap empty");
+        printf("yonder pointer: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_CANVAS_ONLY")) {
+        canvas_window_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"canvas: text released");
+        check(live==0,"canvas: heap empty");
+        printf("yonder canvas: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_ANIMATION_ONLY")) {
+        animation_window_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"frames: text released");
+        check(live==0,"frames: heap empty");
+        printf("yonder animation: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_GRAFT_FONTS_ONLY")) {
+        webfont_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"graft fonts: text released");
+        check(live==0,"graft fonts: heap empty");
+        printf("yonder graft fonts: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_RESTYLE_ONLY")) {
+        graft_browser_cases();graft_base_cases();
+        restyle_browser_cases();
+        restyle_fallback_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"restyle: text released");
+        check(live==0,"restyle: heap empty");
+        printf("yonder restyle: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_PROFILE_ONLY")) {
+        layout_profile_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"profile: text released");
+        check(live==0,"profile: heap empty");
+        printf("yonder profile: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    pointer_window_cases();
+    animation_window_cases();
     classic_browser_cases();
     address_key_cases();
     interface_font_cases();
     inserted_frame_cases();
     stand_in_paint_cases();
+    canvas_window_cases();
+    layout_profile_cases();
+    graft_browser_cases();graft_base_cases();
+    restyle_browser_cases();
+    restyle_fallback_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();
@@ -11161,6 +11338,7 @@ int main(void)
     hover_batch_cases();
     classic_hover_profile();
     geometry_cases();
+    svg_fill_hit_cases();
     geometry_pseudo_cases();
     geometry_body_cases();
     geometry_publish_cases();

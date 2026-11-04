@@ -161,6 +161,11 @@
       "reason": "A module read that fails part way (an allocation refused) is unlisted and freed: upstream dropped one of its two references, leaving a half-read module on the context's list under its name, which the GC then walked through entry counts whose arrays were never allocated."
     },
     {
+      "path": "patches/0017-cstring-failure-reference.patch",
+      "sha256": "55f52a5d578edab1acc68294986a1e6f2ef5ad2d35f1889c4ffc0beddf3e1f87",
+      "reason": "Release the source reference held by JS_ToCStringLen2 when allocating its UTF-8 export fails; upstream returned NULL holding the string, including a newly linearized rope."
+    },
+    {
       "path": "patches/0017-dynbuf-refusal-sticky.patch",
       "sha256": "7f2401e82b0f3def6b25c2253e4d1be38ecbdc03091d7b06dbdbc4c458f23bb0",
       "reason": "A compile whose bytecode buffer is refused memory is freed safely: an errored DynBuf has no room (dbuf_set_error, which a refused growth calls too), so every later put is refused and no hole is left; resolve_labels patches nothing once its output has errored (a relocation recorded after the error pointed inside the last instruction written, and its patch wrote over that instruction's atom); a refused relocation marks the output errored in place of upstream's unsafe fail path, which is gone; and the refused output is what the definition's free walks."

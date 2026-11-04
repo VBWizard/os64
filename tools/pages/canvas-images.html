@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Canvas — Picture This</title>
+<style>
+body{margin:0;background:#ecf0f7;color:#283449;font:18px sans-serif}
+main{max-width:960px;margin:32px auto;padding:0 24px}h1{font-size:42px;margin:8px 0 12px}h2{font-size:23px;margin:0 0 12px}
+p{line-height:1.5}.eyebrow{color:#687da4;font-size:14px;letter-spacing:3px}.cards{display:flex;flex-wrap:wrap;gap:20px}
+.card{width:400px;flex-shrink:0;padding:20px;border:1px solid #becadd;background:#fffdf6;border-radius:12px}
+canvas{width:100%;height:180px;display:block;background:#dce6ed;border:1px solid #a4b6cc}
+button{margin-top:12px;padding:10px 16px;background:#365b85;color:white;border:0;border-radius:6px;font-size:16px}
+.caption{font-size:15px;min-height:66px}.small{font-size:14px;color:#596a83}#source,#original{display:none}
+</style>
+<main><p class="eyebrow">YONDER / CANVAS 2D / C4</p><h1>Picture This</h1>
+<p>Borrow a picture. Move its pixels. Make a picture of your own.</p>
+<p id="status">Enable Scripts and Modern Web, then reload.</p>
+<div class="cards">
+<section class="card"><h2>1. A stamp of approval</h2><canvas id="stamps" width="400" height="180"></canvas>
+<p class="caption">An SVG becomes an image source. Each click places another rotated stamp; the sixth starts a fresh sheet.</p><button id="stamp">Stamp another</button></section>
+<section class="card"><h2>2. Close enough to count</h2><canvas id="crop" width="400" height="180"></canvas>
+<p class="caption">A crop from a tiny canvas, enlarged two ways. The left stays crisp; the right blends neighboring pixels.</p><button id="inspect">Move the magnifier</button></section>
+<section class="card"><h2>3. Copy, scoot, repeat</h2><canvas id="echo" width="400" height="180"></canvas>
+<p class="caption">This canvas copies overlapping parts of itself. The source is snapshotted, so the colors travel without smearing.</p><button id="scoot">Scoot the pixels</button></section>
+<section class="card"><h2>4. Out and back again</h2><canvas id="returned" width="400" height="180"></canvas>
+<p class="caption">A drawing is exported as a PNG data URL, decoded as an image, and drawn back here.</p><button id="export">Make another PNG</button><p id="receipt" class="small">Waiting for the first picture.</p></section>
+</div><canvas id="source" width="16" height="16"></canvas><canvas id="original" width="400" height="180"></canvas>
+<p>Try 25%–400% zoom. The magnifier intentionally shows bitmap pixels. Buttons draw immediately; scheduled animation comes later.</p></main>
+<script>
+(function(){
+ function context(id){return document.getElementById(id).getContext('2d');}
+ var stamps=context('stamps'),crop=context('crop'),echo=context('echo'),returned=context('returned'),source=context('source'),original=context('original');
+ var count=0,offset=0,tick=0,edition=0,loading=false;
+ var colors=['#335f7b','#6d9e96','#efbb65','#d77969','#a891bc','#e4ecca'];
+ for(var y=0;y<16;y++)for(var x=0;x<16;x++){source.fillStyle=colors[(x+Math.floor(y/2))%colors.length];source.fillRect(x,y,1,1);}
+ var seal=new Image();
+ seal.onload=function(){stamp();document.getElementById('status').textContent='SVG loaded. Four live image experiments, ready for your buttons.';};
+ seal.onerror=function(){document.getElementById('status').textContent='The SVG image did not load.';};
+ seal.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46" fill="#6d9e96"/><circle cx="50" cy="50" r="38" fill="#fff4cf"/><path d="M27 51l15 16 32-35" fill="none" stroke="#335f7b" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+ function stamp(){if(!seal.complete||!seal.naturalWidth)return;if(count===5){count=0;stamps.clearRect(0,0,400,180);}stamps.save();stamps.translate(53+count*73,90+(count%2?22:-15));stamps.rotate((count-2)*.19);stamps.drawImage(seal,-45,-45,90,90);stamps.restore();count++;}
+ function inspect(){crop.clearRect(0,0,400,180);crop.imageSmoothingEnabled=false;crop.drawImage(source.canvas,offset,4,5,5,12,12,174,156);crop.imageSmoothingEnabled=true;crop.drawImage(source.canvas,offset,4,5,5,214,12,174,156);offset=(offset+1)%11;}
+ function initializeEcho(){for(var x=0;x<400;x+=20){echo.fillStyle=colors[(x/20)%6];echo.fillRect(x,0,20,180);}echo.fillStyle='#fff4cf';echo.fillRect(25,30,50,120);echo.fillStyle='#335f7b';echo.fillRect(40,55,20,70);}
+ function scoot(){echo.imageSmoothingEnabled=false;echo.drawImage(echo.canvas,0,0,388,180,12,0,388,180);echo.fillStyle=colors[(tick++)%6];echo.fillRect(0,0,12,180);}
+ function exportPicture(){if(loading)return;loading=true;edition=edition%6+1;original.reset();original.fillStyle=colors[edition%6];original.fillRect(0,0,400,180);original.fillStyle='#fff4cf';original.beginPath();original.arc(90,90,58,0,Math.PI*2);original.fill();original.save();original.translate(280,90);original.rotate(edition*.2);original.fillStyle='#335f7b';original.fillRect(-65,-45,130,90);original.restore();
+  var png=original.canvas.toDataURL('image/png'),image=new Image();
+  image.onload=function(){returned.clearRect(0,0,400,180);returned.drawImage(image,0,0);document.getElementById('receipt').textContent='PNG '+edition+': '+Math.floor(png.length/1024)+' KiB data URL, decoded and redrawn.';loading=false;};
+  image.onerror=function(){document.getElementById('receipt').textContent='PNG reload failed.';loading=false;};image.src=png;
+ }
+ document.getElementById('stamp').onclick=stamp;document.getElementById('inspect').onclick=inspect;document.getElementById('scoot').onclick=scoot;document.getElementById('export').onclick=exportPicture;
+ inspect();initializeEcho();exportPicture();
+})();
+</script>

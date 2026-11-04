@@ -6,9 +6,10 @@
 # P2b: requestIdleCallback, cancelIdleCallback and IdleDeadline. Each fails
 # with the switch off. What still fails: callback-timeout-when-busy, whose
 # idle callback runs in the 4 ms gaps between a busy page's clamped timers
-# (HTML lets an idle period start there; Chromium's come after frames, which
-# yonder does not draw on a schedule), and callback-timeout, whose busy loop
-# reads Date.now(), which the runner's clock never moves.
+# (HTML lets an idle period start there), and callback-timeout, whose busy loop
+# reads Date.now(), which the runner's clock never moves. The two max-rAF
+# deadline checks assume 60 Hz (16.67 ms); this OS profile grants up to 20 ms
+# before its 50 Hz frame deadline. Keep those failures visible.
 basic.html	cancelIdleCallback cancels callbacks
 basic.html	requestIdleCallback schedules callbacks
 basic.html	window.cancelIdleCallback is defined
@@ -32,9 +33,6 @@ callback-iframe-different-origin.html	needs a frame (IFRAME.md, Tier 1)
 callback-removed-frame.html	needs a frame (IFRAME.md, Tier 1)
 callback-timeRemaining-cross-realm-method.html	needs a frame (IFRAME.md, Tier 1)
 callback-suspended.html	opens a second window, which this browser does not have
-callback-idle-periods.html	needs requestAnimationFrame (slice 5d)
-deadline-max-rAF.html	needs requestAnimationFrame (slice 5d)
-deadline-max-rAF-dynamic.html	needs requestAnimationFrame (slice 5d)
 idlharness.window.html	needs WPT's interfaces/ WebIDL files, which the runner does not fetch
 [passing]
 basic.html	cancelIdleCallback cancels callbacks
@@ -44,6 +42,7 @@ basic.html	window.cancelIdleCallback() returns undefined
 basic.html	window.requestIdleCallback is defined
 basic.html	window.requestIdleCallback() returns a number
 callback-exception.html	requestIdleCallback callback exceptions are reported to error handler
+callback-idle-periods.html	Check that if an idle callback calls requestIdleCallback the new callback doesn't run in the current idle period.
 callback-invoked.html	requestIdleCallback callback is invoked at least once before the timeout
 callback-multiple-calls.html	requestIdleCallback callbacks should be invoked in order (called iteratively)
 callback-multiple-calls.html	requestIdleCallback callbacks should be invoked in order (called recursively)

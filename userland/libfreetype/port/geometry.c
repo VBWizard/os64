@@ -413,6 +413,8 @@ static Status stroke_with_caps(Context *c, const Command *commands, size_t n,
     o->owner = c;
     o->frame = f;
     FT_Stroker st = NULL;
+    FT_Vector *dots = NULL;
+    unsigned dot_count = 0;
     FT_Error e = 0;
     if (!style->width)
         goto success;
@@ -439,7 +441,7 @@ static Status stroke_with_caps(Context *c, const Command *commands, size_t n,
         }
         FT_Vector start = vector(f, commands[i].p[0]);
         FT_Vector current = start;
-        bool drawable = false, segments = false;
+        bool drawable = false, segments = false, nonzero = false, compact = true;
         for (size_t j = i + 1; j < finish; ++j) {
             if (!spend(c, 1)) {
                 s = c->why;
@@ -456,15 +458,31 @@ static Status stroke_with_caps(Context *c, const Command *commands, size_t n,
             for (unsigned k = 0; k < point_count(commands[j].verb); ++k) {
                 FT_Vector p = vector(f, commands[j].p[k]);
                 FT_Pos dx = p.x - current.x, dy = p.y - current.y;
+                nonzero |= commands[j].p[k].x != commands[i].p[0].x ||
+                           commands[j].p[k].y != commands[i].p[0].y;
+                compact &= absolute(p.x - start.x) <= 1 && absolute(p.y - start.y) <= 1;
                 drawable |= dx <= -minimum || dx >= minimum || dy <= -minimum || dy >= minimum;
                 current = p;
             }
         }
+        bool closed = commands[finish - 1].verb == OS64_GEOMETRY_CLOSE;
         if (!drawable && segments && style->cap != OS64_GEOMETRY_BUTT) {
+            /* A nonzero open round stroke confined to one working unit of
+             * its start converges to a disk. Keep that tip when quantization
+             * erases the centerline. Round joins cannot create miter spikes;
+             * drifting discarded curves, square caps and exact degeneracies
+             * still require the caller's explicit fallback geometry. */
+            if (nonzero && compact && !closed && style->cap == OS64_GEOMETRY_ROUND_CAP &&
+                style->join == OS64_GEOMETRY_ROUND_JOIN) {
+                if (!dots) dots = allocate(c, n * sizeof(*dots));
+                if (!dots) { s = c->why; goto fail; }
+                dots[dot_count++] = start;
+                i = finish;
+                continue;
+            }
             s = UNSUPPORTED;
             goto fail;
         }
-        bool closed = commands[finish - 1].verb == OS64_GEOMETRY_CLOSE;
         e = FT_Stroker_BeginSubPath(st, &start, !closed);
         for (size_t j = i + 1; j < finish && !e; ++j) {
             if (!spend(c, 1)) {
@@ -510,6 +528,14 @@ static Status stroke_with_caps(Context *c, const Command *commands, size_t n,
         cap_points += point_count(cap_commands[i].verb);
         cap_contours += cap_commands[i].verb == OS64_GEOMETRY_MOVE;
     }
+    if (dot_count > OS64_GEOMETRY_POINT_MAX / 13 ||
+        cap_points > OS64_GEOMETRY_POINT_MAX - dot_count * 13) {
+        s = LIMIT;
+        goto fail;
+    }
+    unsigned supplied_points = cap_points;
+    cap_points += dot_count * 13;
+    cap_contours += dot_count;
     if (points > OS64_GEOMETRY_POINT_MAX || cap_points > OS64_GEOMETRY_POINT_MAX - points) {
         s = LIMIT;
         goto fail;
@@ -544,8 +570,24 @@ static Status stroke_with_caps(Context *c, const Command *commands, size_t n,
                                                                          : FT_CURVE_TAG_CUBIC;
         }
     }
-    if (cap_points)
+    if (supplied_points)
         o->ft.contours[closed++] = (unsigned short)(written - 1);
+    /* Four cubic quarter arcs, like the native stroker's round caps. Append
+     * them to the same outline so overlaps receive one coverage/composite.
+     * Repeat the on-curve start so reversing winding keeps a legal start. */
+    FT_Pos radius = rounded(style->width * .5 * f.scale);
+    FT_Pos control = rounded(radius * 0.5522847498307936);
+    FT_Vector circle[13] = {{radius,0},{radius,control},{control,radius},{0,radius},
+        {-control,radius},{-radius,control},{-radius,0},{-radius,-control},
+        {-control,-radius},{0,-radius},{control,-radius},{radius,-control},{radius,0}};
+    for (unsigned i = 0; i < dot_count; ++i) {
+        if (!spend(c, 13)) { s = c->why; goto fail; }
+        for (unsigned j = 0; j < 13; ++j) {
+            o->ft.points[written] = (FT_Vector){dots[i].x + circle[j].x, dots[i].y + circle[j].y};
+            o->ft.tags[written++] = j % 3 ? FT_CURVE_TAG_CUBIC : FT_CURVE_TAG_ON;
+        }
+        o->ft.contours[closed++] = (unsigned short)(written - 1);
+    }
     if (reverse_caps) {
         unsigned first = points;
         for (unsigned i = contours; i < closed; ++i) {
@@ -568,11 +610,13 @@ static Status stroke_with_caps(Context *c, const Command *commands, size_t n,
     o->ft.n_points = (unsigned short)written;
     o->ft.n_contours = (unsigned short)closed;
 success:
+    free_block(c, dots);
     FT_Stroker_Done(st);
     ++c->stats.live_outlines;
     *out = o;
     return leave(c, OK);
 fail:
+    free_block(c, dots);
     FT_Stroker_Done(st);
     discard(c, o);
     return leave(c, s);

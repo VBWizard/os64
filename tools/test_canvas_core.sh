@@ -16,6 +16,6 @@ PY
     -fno-tree-loop-distribute-patterns -fno-fast-math -ffp-contract=off \
     -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer \
     -Iuserland/libdraw2d/include -Iuserland/libcanvas/include -Iuserland/libos64/include \
-    "${sources[@]}" tools/test_canvas_core.c -o "$work/canvas-core"
+    "${sources[@]}" tools/test_canvas_core.c -lm -o "$work/canvas-core"
 ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1} UBSAN_OPTIONS=halt_on_error=1 \
     "$work/canvas-core" 2>&1 | tee "$work/results.txt"

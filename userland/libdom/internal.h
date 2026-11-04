@@ -12,7 +12,41 @@
 #define D_SET 0x1000
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
 #define D_CLONE_HELD 34
+#include <canvas/canvas.h>
+#include <dom/canvas.h>
+#include <dom/pointer.h>
+
+/* Embedded consumers of libdom's document listener. Registration happens
+ * during binding construction; callbacks borrow records and never enter JS. */
+typedef struct DMutationConsumer {
+    struct DMutationConsumer *next;
+    void (*changed)(os64_dom_t *, const os64_html_change_t *);
+} DMutationConsumer;
+void d_mutation_register(os64_dom_t *, DMutationConsumer *,
+                         void (*)(os64_dom_t *, const os64_html_change_t *));
+void d_mutation_start(os64_dom_t *);
+void d_mutation_stop(os64_dom_t *);
+int64_t d_non_negative(const char *);
+JSValue d_computed_property(os64_dom_t *,JSContext *,const os64_html_node_t *,int32_t,const char *);
+JSValue d_computed_color(os64_dom_t *, JSContext *, const os64_html_node_t *);
+int d_canvas_install(os64_dom_t *, JSContext *, JSValueConst);
+
 typedef struct DValue DValue;
+void d_canvas_free(DValue *);
+void d_canvas_sync(DValue *);
+canvas_status_t d_canvas_prepare(DValue *);
+os64_geometry_status_t d_canvas_allocate(void *,size_t,void **);
+void d_canvas_release(void *,void *,size_t);
+void d_image_changed(os64_dom_t *,const os64_html_change_t *);
+JSValue d_image_dimension(os64_dom_t *, JSContext *, const os64_html_node_t *, bool height);
+int d_canvas_images_install(os64_dom_t *,JSContext *,JSValueConst);
+JSValue d_canvas_result(JSContext *,canvas_status_t);
+int d_canvas_text_install(os64_dom_t *,JSContext *,JSValueConst,JSValueConst);
+int d_path2d_install(os64_dom_t *,JSContext *,JSValueConst global);
+void d_path2d_free(DValue *);
+JSValue d_path2d_draw(JSContext *,DValue *context,DValue *path,canvas_path_operation_t,bool);
+int d_canvas_paths_install(os64_dom_t *,JSContext *,JSValueConst);
+int d_double_sequence(os64_dom_t *,JSContext *,JSValueConst,size_t,JSValue **,size_t *);
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
@@ -29,11 +63,13 @@ typedef struct DRequest DRequest;
 typedef struct DClone DClone;
 typedef struct DMessage DMessage;
 typedef struct DIdle DIdle;
+typedef struct DAnimation DAnimation;
 typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
  * HTML_ELEMENT, or one of the HTML kinds when it has one of its own; an
- * element in the SVG namespace is an SVG; an element of another namespace
+ * element in the SVG namespace has the SVG family, with graphics/geometry
+ * prototypes refined by svg_geometry.c; an element of another namespace
  * is an ELEMENT. A text node is a TEXT and a comment a COMMENT, each under
  * CHARACTER_DATA, which no node is itself. ATTR is Attr's, which is a Node
  * and no tree node: no Node member is installed on it, and it shadows
@@ -59,7 +95,7 @@ enum {
  * need another representation. */
 _Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
 #define D_KIND(kind) ((uint64_t)1 << (kind))
-/* The kind of `node`'s wrapper: its prototype's (node.c). */
+/* The wrapper's base family; SVG graphics refine its prototype separately. */
 int d_node_kind(const os64_html_node_t *node);
 /* A content attribute reflected as an IDL attribute (HTML § 2.6.1), by
  * one of HTML's rules: a string (null as "null", or as "" for WebIDL's
@@ -121,7 +157,10 @@ enum {
     D_EVENT_LANGUAGECHANGE, D_EVENT_ERROR, D_EVENT_UNHANDLEDREJECTION,
     D_EVENT_REJECTIONHANDLED, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
     D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED, D_EVENT_MESSAGE, D_EVENT_MESSAGEERROR,
-    D_EVENT_INVALID, D_EVENT_COUNT
+    D_EVENT_INVALID, D_EVENT_POINTERDOWN, D_EVENT_POINTERUP, D_EVENT_POINTERMOVE,
+    D_EVENT_POINTEROVER, D_EVENT_POINTEROUT, D_EVENT_POINTERENTER, D_EVENT_POINTERLEAVE,
+    D_EVENT_POINTERCANCEL, D_EVENT_GOTPOINTERCAPTURE, D_EVENT_LOSTPOINTERCAPTURE,
+    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
  * five that inherit it, then HTML's SubmitEvent, which inherits Event. An
@@ -129,7 +168,7 @@ enum {
  * has a prototype on the binding with the Modern Web switch on. */
 enum {
     D_UI_NONE, D_UI_EVENT, D_UI_MOUSE, D_UI_KEYBOARD, D_UI_FOCUS, D_UI_INPUT, D_UI_COMPOSITION,
-    D_UI_SUBMIT, D_UI_KINDS
+    D_UI_SUBMIT, D_UI_POINTER, D_UI_KINDS
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
@@ -145,6 +184,13 @@ struct DValue {
     DValue *style, *class_list, *rel_list, *for_list, *dataset, *attributes;
     /* An Attr's own entry: its record (attr.c). */
     struct DAttr *attr;
+    /* Canvas bitmap and stable context identity belong to the element entry. */
+    canvas_context_t *canvas;
+    DValue *canvas_object;
+    canvas_gradient_t *canvas_gradient;
+    struct DPath2D *canvas_path2d;
+    bool canvas_reset_pending;
+    bool image_reported;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
@@ -264,8 +310,22 @@ typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
     int32_t delta;
+    bool user_activated;
     char url[OS64_DOM_URL_MAX];
 } DNavigation;
+/* Native mouse state is held by the document, not by synthetic Event objects. */
+typedef struct {
+    const os64_html_node_t *physical, *effective, *legacy, *pending, *capture, *down[3];
+    os64_dom_event_t last;
+    uint16_t buttons;
+    bool available, running, cancel_owed, canceling, draining, suppress, over_owed, mouse_over_owed;
+    DMutationConsumer mutations;
+} DPointer;
+int d_pointer_install(os64_dom_t *, JSContext *, JSValueConst);
+void d_pointer_drain(os64_dom_t *);
+int d_event_in_task(os64_dom_t *, JSContext *, const os64_html_node_t *, const os64_dom_event_t *,
+                    bool *, os64_js_outcome_t *);
+
 struct os64_dom {
     os64_js_runtime_t *runtime;
     JSRuntime *engine;
@@ -274,8 +334,18 @@ struct os64_dom {
     os64_dom_options_t options;
     size_t bytes, retained;
     bool closed;
+    DPointer pointer;
+    DMutationConsumer *mutation_consumers, canvas_mutations;
+    bool mutation_installed;
+    size_t canvas_bytes;
+    os64_dom_image_provider_t image_provider;
+    JSClassID canvas_class, gradient_class, metrics_class, path2d_class;
+    os64_dom_text_provider_t canvas_text;
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;
+    os64_dom_svg_hit_provider_t svg_hit;
+    void *svg_hit_opaque;
+    DValue *svg_graphics_proto, *svg_geometry_proto;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
     /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
@@ -525,11 +595,17 @@ struct os64_dom {
     DMessage *messages, *messages_last;
     size_t messages_held;
     DValue *message_prototype;
+    DAnimation *animations, *animation_last;
+    size_t animation_count;
+    uint32_t animation_handle;
+    uint64_t animation_due;
+    bool animation_running;
     DIdle *idle;
     size_t idle_count, idle_cap, idle_head, idle_split, idle_live, idle_runnable;
     uint32_t idle_handle;
     bool idle_open, idle_fresh, idle_running;
     uint64_t idle_start_ms, idle_start_us, idle_rested_ms;
+    uint64_t idle_render_due; /* host rendering deadline, UINT64_MAX when unbounded */
     /* 0f's P8: each UI event interface's prototype (event.c), indexed by
      * D_UI_*; all NULL with the switch off. */
     DValue *ui_prototypes[D_UI_KINDS];
@@ -538,7 +614,7 @@ struct os64_dom {
     struct DCustomState *custom;
     /* MutationObserver (observer.c): its registrations, observers and their
      * record queues, NULL with the switch off; and how many observer objects
-     * registrations hold (the registry's eighth list). */
+     * registrations hold. */
     struct DObservers *observers;
     size_t observers_held;
 };
@@ -601,6 +677,12 @@ JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node
  * tree. */
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
+int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
+int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
+bool d_svg_geometry_node(const os64_html_node_t *);
+JSValueConst d_svg_prototype(os64_dom_t *, const os64_html_node_t *);
+int d_svg_geometry_prototypes(os64_dom_t *, JSContext *);
+int d_svg_geometry_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_geometry_install(os64_dom_t *dom, JSContext *ctx);
 int d_node_install(os64_dom_t *dom, JSContext *ctx);
 int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -887,6 +969,15 @@ bool d_secure_context(const os64_dom_t *context);
 int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_image_data_install(os64_dom_t *, JSContext *, JSValueConst);
+int d_image_data_settings(JSContext *, JSValueConst);
+/* Clone reads internal fields, not page-replaceable getters. The returned
+ * array is borrowed; the constructor below takes its own reference. */
+bool d_image_data_parts(JSValueConst, JSValue *array, uint32_t *width, uint32_t *height);
+JSValue d_image_data_from_array(JSContext *, JSValueConst, uint32_t width, uint32_t height);
+JSValue d_image_data_new(JSContext *, uint32_t width, uint32_t height);
+/* Borrowed bytes expire on the next call into page code. */
+int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *);
 /* The frames row (frames.c; IFRAME.md § The cluster and the window proxy):
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -1378,6 +1469,9 @@ int d_clone_transfer(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *ar
 int d_clone_objects(JSContext *ctx, const JSValue *list, size_t count);
 int d_clone_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_message_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+double d_performance_now(const os64_dom_t *dom);
+int d_animation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_animation_drain(os64_dom_t *dom);
 int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* What os64_dom_drain releases (the messages' values and clones, the idle
  * callbacks), and what os64_dom_free frees (the idle entries). */
@@ -1404,7 +1498,7 @@ JSValue d_submit_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node
  * an element has activation behaviour, and the halves before and after the
  * click's listeners, the second told whether the click was cancelled and
  * given what the first kept. Each -1 with an exception pending. */
-typedef struct { bool checkable, checkbox, was, was_indeterminate; } DActivation;
+typedef struct { bool checkable, checkbox, was, was_indeterminate, native; } DActivation;
 bool d_activation_has(const os64_html_node_t *node);
 int d_activation_before(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, DActivation *saved);
 int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, bool canceled,
@@ -1497,7 +1591,6 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
 int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *copy);
 /* Teardown: the listener taken away with the engine's values; the
  * records and definitions' memory after the engine. */
-void d_custom_drain(os64_dom_t *dom);
 void d_custom_free(os64_dom_t *dom);
 /* THE [CEReactions] TABLE (ce_reactions.inc, written by
  * tools/ce_reactions.py from the standard's IDL): a row's interface, its
@@ -1521,8 +1614,8 @@ typedef struct {
 int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char ***out, size_t *count);
 void d_strings_free(os64_dom_t *dom, char **strings, size_t count);
 /* ── MutationObserver (observer.c; CUSTOM_ELEMENTS.md, the third cut) ──
- * The row; the document's listener's first reader (custom.c's `changed`
- * hands it every change); whether a notify is owed between tasks, and
+ * The row; the shared mutation dispatcher's first reader;
+ * whether a notify is owed between tasks, and
  * running it (os64_dom_reactions_run); teardown, as custom elements'. */
 int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_observers_changed(os64_dom_t *dom, const os64_html_change_t *change);

@@ -51,6 +51,7 @@ struct yonder_diag_claim {
 };
 
 struct yonder_diag {
+    yonder_layout_stats_t layout, layout_stream;
     char *url;
     uint32_t seq;
     struct yonder_diag_claim claim;
@@ -1332,4 +1333,61 @@ uint32_t yonder_diag_next_seq(const char *dir)
     }
     os64_close((int32_t)h);
     return high < UINT32_MAX ? high + 1 : high;
+}
+
+/* Saturating totals preserve the meaning of a long-lived page's report. */
+static uint64_t layout_sum(uint64_t a, uint64_t b)
+{
+    return b > UINT64_MAX - a ? UINT64_MAX : a + b;
+}
+static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
+                       yonder_layout_stats_t *total, const char *key)
+{
+    if (!sample) return;
+#define ADD(member) total->member = layout_sum(total->member, sample->member)
+    ADD(model_us); ADD(cascade_us); ADD(style_us); ADD(boxes_us); ADD(layout_us); ADD(public_us);
+    ADD(elements); ADD(boxes); ADD(measures); ADD(reused);
+    ADD(styles_reused); ADD(cascade_updates);
+    ADD(intrinsic_hits); ADD(marker_measures);
+    if (sample->metadata_peak > total->metadata_peak) total->metadata_peak = sample->metadata_peak;
+    for (size_t i = 0; i < YONDER_LAYOUT_REUSE_REASONS; ++i)
+        total->reuse_refused[i] = layout_sum(total->reuse_refused[i], sample->reuse_refused[i]);
+    ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
+#undef ADD
+    const yonder_layout_stats_t *s = total;
+    char line[768];
+    os64_snprintf(line, sizeof(line),
+        "totals: model rebuild %lu us, cascade %lu us, style %lu us, boxes %lu us, "
+        "layout %lu us, public %lu us; elements %lu, boxes %lu, measures %lu, reused %lu; "
+        "%lu model rebuilds, %lu layout attempts, %lu refused/partial, %lu clock errors; "
+        "styles reused %lu, cascade updates %lu",
+        (unsigned long)s->model_us, (unsigned long)s->cascade_us, (unsigned long)s->style_us,
+        (unsigned long)s->boxes_us, (unsigned long)s->layout_us, (unsigned long)s->public_us,
+        (unsigned long)s->elements, (unsigned long)s->boxes, (unsigned long)s->measures, (unsigned long)s->reused,
+        (unsigned long)s->model_calls, (unsigned long)s->layouts, (unsigned long)s->refusals,
+        (unsigned long)s->clock_errors, (unsigned long)s->styles_reused, (unsigned long)s->cascade_updates);
+    yonder_diag_fact(d, key, line);
+    char graft_key[64];
+    os64_snprintf(graft_key, sizeof(graft_key), "%s graft", key);
+    os64_snprintf(line, sizeof(line), "intrinsic hits %lu, marker measures %lu, peak new metadata %lu bytes; "
+        "refused [no source, incomplete, inputs, history, budget, memory, structure, dirty, style, motion, role, call, floats, marker, translation, retain]: "
+        "%lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu",
+        (unsigned long)s->intrinsic_hits, (unsigned long)s->marker_measures, (unsigned long)s->metadata_peak,
+        (unsigned long)s->reuse_refused[0], (unsigned long)s->reuse_refused[1],
+        (unsigned long)s->reuse_refused[2], (unsigned long)s->reuse_refused[3],
+        (unsigned long)s->reuse_refused[4], (unsigned long)s->reuse_refused[5],
+        (unsigned long)s->reuse_refused[6], (unsigned long)s->reuse_refused[7],
+        (unsigned long)s->reuse_refused[8], (unsigned long)s->reuse_refused[9],
+        (unsigned long)s->reuse_refused[10], (unsigned long)s->reuse_refused[11],
+        (unsigned long)s->reuse_refused[12], (unsigned long)s->reuse_refused[13],
+        (unsigned long)s->reuse_refused[14], (unsigned long)s->reuse_refused[15]);
+    yonder_diag_fact(d, graft_key, line);
+}
+void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample)
+{
+    if (d) layout_add(d, sample, &d->layout, "layout");
+}
+void yonder_diag_layout_stream_add(yonder_diag_t *d, const yonder_layout_stats_t *sample)
+{
+    if (d) layout_add(d, sample, &d->layout_stream, "layout stream");
 }

@@ -20,6 +20,7 @@ FREETYPE_UPSTREAM_SRCS := \
     libfreetype/upstream/src/base/ftstroke.c \
     libfreetype/upstream/src/base/ftglyph.c \
     libfreetype/upstream/src/base/ftbitmap.c \
+    libfreetype/upstream/src/base/ftbbox.c \
     libfreetype/upstream/src/cff/cff.c \
     libfreetype/upstream/src/psaux/psaux.c \
     libfreetype/upstream/src/pshinter/pshinter.c \

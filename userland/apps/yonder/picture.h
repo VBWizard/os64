@@ -36,6 +36,7 @@ typedef struct {
     // `url` may not hold one whole, and the page's catalog may be gone before
     // the worker is: yonder_picture_release frees it, product or none.
     char *data_url;
+    unsigned canvas_request;        // 0 display; 1 no-cors; 2 anonymous; 3 use-credentials
     // The browser's cookies and the page's address for the Referer: a
     // picture is fetched as the page is (YONDER.md § Y3b); the agent's
     // preset lines and the picture's Fetch Metadata; and the browser's
@@ -46,7 +47,8 @@ typedef struct {
     // drawn, or 0 x 0 for none known: a still raster bigger than that is
     // kept at yonder_picture_kept_size's answer (a resample's rectangle, a
     // kept size already, as it is), reduced here, and the full
-    // decode never leaves the worker (PICTURE_SIZES.md). `resample` marks a
+    // decode never leaves the worker (PICTURE_SIZES.md). Canvas requests keep
+    // full-resolution default-frame pixels regardless of cover size. `resample` marks a
     // picture the page already has (shown, or past the memory kept) asked
     // for again at a new size, which replaces its pixels on arrival instead
     // of arriving as new.
@@ -59,6 +61,7 @@ typedef struct {
 // temporary SVG rasterization has a separate serialized working allowance.
 typedef struct {
     yonder_picture_kind_t kind;
+    bool origin_clean;             // native Canvas request passed its origin/CORS checks
     yonder_svg_document_t *svg;      // when kind is YONDER_PICTURE_SVG
     // Its own size in CSS pixels, any kind (an SVG's default object size),
     // which layout reads; a raster's `image` may be smaller (cover_w/h).

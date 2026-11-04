@@ -80,7 +80,7 @@ static void window_rejection_case(void) {
         "window: and each rejection it left is a line of its own");
     check(strstr(window_record_text(),"caught")==NULL,"window: a caught rejection is no failure");
     input_click_at("b");
-    check(window_record_has("FAILED script click event: unhandled rejection: TypeError: in a click, "
+    check(window_record_has("FAILED script pointer input: unhandled rejection: TypeError: in a click, "
                             "at inline:1:475 (1)"),
         "window: an async click handler that throws is the click's FAILED line, at its handler");
     check(status_says("unhandled rejection: TypeError: in a click"),
@@ -173,7 +173,7 @@ static void window_frame_case(void) {
           window_record_has("unhandled rejection: Error: same, at inline:2:25 (1)"),
         "window: the same failure at two places is two lines");
     input_click_at("c");
-    check(window_record_has("FAILED script click event: TypeError: cannot read property 'z' of null, "
+    check(window_record_has("FAILED script pointer input: TypeError: cannot read property 'z' of null, "
                             "at onclick onclick attribute:2:5 (1)"),
         "window: a place in no script the binding named is the engine's own name for it");
     loop_drop();

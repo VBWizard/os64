@@ -383,11 +383,13 @@ static void collapsed_curves(void)
                     }
                     Outline *out = (void *)1;
                     Status result = api->stroke(c, path, n, &identity, 1.0 / 64, &style, &out);
-                    if (result != UNSUPPORTED)
-                        printf("collapsed curve: cubic=%u square=%u closed=%u placement=%u "
-                               "status=%u\n",
-                               cubic, square, closed, placement, (unsigned)result);
-                    assert(result == UNSUPPORTED && !out);
+                    if (!square && !closed) {
+                        assert(result == OK && out);
+                        uint8_t pixels[W * H];
+                        assert(draw(c, out, identity, pixels, false) == OK);
+                        assert(pixels[20 * W + 20] == 255);
+                        assert(api->release(c, out) == OK);
+                    } else assert(result == UNSUPPORTED && !out);
                     assert(api->stats(c, &after) == OK && after.live_bytes == before.live_bytes &&
                            !after.live_outlines);
                 }

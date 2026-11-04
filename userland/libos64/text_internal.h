@@ -55,6 +55,7 @@ struct text_image {
 };
 struct os64_text_run {
     os64_text_context_t *context;
+    size_t refs;
     os64_text_run_view_t view;
     os64_text_font_t *fonts[OS64_TEXT_FALLBACK_MAX];
     size_t font_count;

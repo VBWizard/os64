@@ -209,7 +209,7 @@ static void glyph_release(os64_font_glyph_t *glyph)
 static const os64_font_backend_t backend = {
     OS64_FONT_BACKEND_REVISION, sizeof(os64_font_backend_t), engine_create,
     engine_destroy, engine_stats, face_open, face_close, face_info, lookup,
-    pair_adjust, render, glyph_view, glyph_release
+    pair_adjust, render, glyph_view, glyph_release, NULL
 };
 
 const os64_font_backend_t *os64_fake_font_backend(void) { return &backend; }

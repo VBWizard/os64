@@ -83,6 +83,11 @@ then, out loud. v1 declines.)
    ruled OVERHEAD for this OS (verdict delivered from the floor, laughing).
    Knuth's own baseline ran the world's timesharing systems on exactly
    this. The code will be right there if regret ever arrives.
+   **Follow-up, 2026-11-01:** this records the original ruling. The
+   2026-10-28 measurements met the gate for the size-bin plan in
+   [HEAP_BINS.md](../pending/HEAP_BINS.md). The maximum-bookkeeping change
+   below preserves first-fit while that separate search-policy change is
+   pending.
 4. **Canary/marker, round two** — the os32 marker protocol returns. One
    change urged from experience: the os32 silent-skip on a bad marker at
    reuse time ("not even a debug print... for shame" — Chris, about his own
@@ -184,6 +189,42 @@ be violated silently; `t_shrink_coalesce` pins it. Found by Fable's review
 of the code plus Chris's tester making the complaint loud — the boundary
 tags flexing again: the design's own tripwire caught the design's own bug,
 it just filed the report under the wrong crime.
+
+## Exact maximum without repeated intermediate scans — 2026-11-01
+
+Reviewed for the Canvas integration branch; not yet merged to userland.
+Phoria's point-light animation exposed a cost in maintaining the heap report:
+removing the largest free block rescanned the list immediately, even when a
+split or coalesce in the same transaction would supply its replacement.
+Fragmented heaps multiplied that accounting cost across repeated drawing
+allocations. The allocation search itself was not the expensive walk in this
+case.
+
+The allocator retains a pointer to a maximum free block and a conservative
+upper bound on the other free blocks' payload sizes. Removing that maximum
+clears its pointer. An insertion meeting the retained bound proves a new
+maximum without scanning; otherwise `report_end()` scans before publishing
+an even generation. Ties participate in the bound. The published
+`largest_free` stays exact, including zero for an empty free list. The heap
+lock protects both cached values along with the existing allocator state.
+
+This changes bookkeeping, not first-fit selection, block layout, splitting,
+coalescing, region give-back, or the report ABI. A maximum at the list head
+with a runner-up close enough that a split falls below it still requires a
+scan. Planned size bins will limit that fallback to the highest occupied
+bin; this optimization does not replace the bins plan.
+
+The runtime verifier checks the cached maximum's identity and payload, the
+reported free-block count and maximum, and the bound on other free blocks
+against its physical pool walk. It compares pointer identities without
+dereferencing the cached pointer. These checks run through explicit heap
+verification and `HEAPCHECK`; the latter checks resolved state before a
+mutation, even though the report generation has already become odd.
+
+The [design and evidence](../pending/HEAP_MAXIMUM_REVIEW.md) record the
+360-frame replay, matching output hashes, hardware acceptance, remaining
+scan shape and corruption tests. This is a reduction in observed accounting
+work, not a constant-time allocation guarantee.
 
 ## OPEN decisions — RULED 2026-08-15
 

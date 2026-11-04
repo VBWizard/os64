@@ -621,6 +621,162 @@ static void moved(HDoc *d)
     d->disturbed = true;
 }
 
+/* The log owns identity holds without collecting while a verb is midway
+ * through its links. Stable reader boundaries and the verbs collect them. */
+struct HChange {
+    os64_html_change_entry_t entry;
+    size_t bytes;
+};
+struct os64_html_reader {
+    HDoc *doc;
+    os64_html_reader_t *next;
+    uint64_t version;
+};
+static void log_ref(HDoc *d, const HNode *node, bool add)
+{
+    if (node) d_ref(d, node, false, add);
+}
+static void log_refs(HDoc *d, const os64_html_change_entry_t *e, bool add)
+{
+    log_ref(d, e->target, add);
+    log_ref(d, e->previous_sibling, add);
+    log_ref(d, e->next_sibling, add);
+    for (size_t i = 0; i < e->nadded; ++i) log_ref(d, e->added[i], add);
+    for (size_t i = 0; i < e->nremoved; ++i) log_ref(d, e->removed[i], add);
+}
+static void log_drop(HDoc *d)
+{
+    HChange *c = d->log_head;
+    if (!c) return;
+    d->log_head = (HChange *)c->entry.next;
+    if (!d->log_head) d->log_tail = NULL;
+    if (c->entry.version > d->log_floor) d->log_floor = c->entry.version;
+    d->log_bytes -= c->bytes;
+    log_refs(d, &c->entry, false);
+    h_free(d, c);
+}
+static void log_prune(HDoc *d)
+{
+    uint64_t oldest = d->version;
+    for (os64_html_reader_t *r = d->readers; r; r = r->next)
+        if (r->version < oldest) oldest = r->version;
+    while (d->log_head && d->log_head->entry.version <= oldest) log_drop(d);
+}
+static size_t log_limit(const HDoc *d)
+{
+    return d->log_limited ? d->log_limit : d->budget / 16;
+}
+static void log_lost(HDoc *d)
+{
+    while (d->log_head) log_drop(d);
+    d->log_floor = d->version;
+}
+os64_html_reader_t *os64_html_reader_new(os64_html_document_t *doc, uint64_t version)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || version > d->version) return NULL;
+    int64_t why = OS64_HTML_OK;
+    os64_html_reader_t *r = d_alloc(d, sizeof(*r), &why);
+    if (!r) return NULL;
+    if (!d->readers) d->log_floor = d->version;
+    r->doc = d; r->version = version; r->next = d->readers; d->readers = r;
+    return r;
+}
+void os64_html_reader_free(os64_html_reader_t *r)
+{
+    if (!r) return;
+    HDoc *d = r->doc;
+    os64_html_reader_t **at = &d->readers;
+    while (*at && *at != r) at = &(*at)->next;
+    if (!*at) d_fatal("libhtml: change reader is not registered\n");
+    *at = r->next;
+    h_free(d, r);
+    log_prune(d);
+    d_collect(d);
+}
+int64_t os64_html_changes(os64_html_reader_t *r, const os64_html_change_entry_t **out)
+{
+    if (out) *out = NULL;
+    if (!r || !out) return -1;
+    HDoc *d = r->doc;
+    log_prune(d);
+    int64_t count = 0;
+    if (r->version < d->log_floor) count = -1;
+    else for (HChange *c = d->log_head; c; c = (HChange *)c->entry.next) {
+        if (c->entry.version <= r->version) continue;
+        if (!*out) *out = &c->entry;
+        ++count;
+    }
+    r->version = d->version;
+    d_collect(d);
+    return count;
+}
+void os64_html_changes_limit(os64_html_document_t *doc, size_t bytes)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d) return;
+    d->log_limited = true; d->log_limit = bytes;
+    while (d->log_head && d->log_bytes > bytes) log_drop(d);
+    d_collect(d);
+}
+size_t os64_html_changes_bytes(const os64_html_document_t *doc)
+{
+    return doc ? ((const HDoc *)doc)->log_bytes : 0;
+}
+static char *log_string(char **at, const char *s)
+{
+    if (!s) return NULL;
+    size_t n = h_len(s) + 1;
+    char *result = *at;
+    for (size_t i = 0; i < n; ++i) result[i] = s[i];
+    *at += n;
+    return result;
+}
+static void log_change(HDoc *d, const os64_html_change_t *c)
+{
+    if (!d->readers) return;
+    log_prune(d);
+    size_t cap = log_limit(d), bytes = sizeof(HChange);
+    if (c->nadded > (SIZE_MAX - bytes) / sizeof(HNode *)) { log_lost(d); return; }
+    bytes += c->nadded * sizeof(HNode *);
+    if (c->nremoved > (SIZE_MAX - bytes) / sizeof(HNode *)) { log_lost(d); return; }
+    bytes += c->nremoved * sizeof(HNode *);
+    const char *names[] = {c->attr_name, c->attr_ns, c->attr_local};
+    for (size_t i = 0; i < H_ARRAY(names); ++i) if (names[i]) {
+        size_t n = h_len(names[i]) + 1;
+        if (n > SIZE_MAX - bytes) { log_lost(d); return; }
+        bytes += n;
+    }
+    if (bytes > cap) { log_lost(d); return; }
+    while (d->log_head && bytes > cap - d->log_bytes) log_drop(d);
+    int64_t why = OS64_HTML_OK;
+    size_t before = d->pub.arena_bytes;
+    HChange *copy = d_alloc(d, bytes, &why);
+    if (!copy) { log_lost(d); return; }
+    copy->bytes = d->pub.arena_bytes - before;
+    /* Include the allocator's header in the cap, without duplicating its
+     * private layout. A refused log never refuses the mutation itself. */
+    while (d->log_head && copy->bytes > cap - d->log_bytes) log_drop(d);
+    if (copy->bytes > cap) { h_free(d, copy); log_lost(d); return; }
+    os64_html_change_entry_t *e = &copy->entry;
+    e->version = d->version; e->kind = c->kind; e->target = c->target;
+    e->previous_sibling = c->previous_sibling; e->next_sibling = c->next_sibling;
+    e->nadded = c->nadded; e->nremoved = c->nremoved;
+    const HNode **nodes = (const HNode **)(copy + 1);
+    e->added = nodes;
+    const HNode *node = c->added;
+    for (size_t i = 0; i < c->nadded; ++i) { nodes[i] = node; node = node->next; }
+    nodes += c->nadded; e->removed = nodes; node = c->removed;
+    for (size_t i = 0; i < c->nremoved; ++i) { nodes[i] = node; node = node->next; }
+    char *strings = (char *)(nodes + c->nremoved);
+    e->attr_name = log_string(&strings, c->attr_name);
+    e->attr_ns = log_string(&strings, c->attr_ns);
+    e->attr_local = log_string(&strings, c->attr_local);
+    log_refs(d, e, true);
+    if (d->log_tail) d->log_tail->entry.next = e; else d->log_head = copy;
+    d->log_tail = copy; d->log_bytes += copy->bytes;
+}
+
 /* ── The listener (html.h, THE LISTENER) ─────────────────────────────── */
 
 void os64_html_observe(os64_html_document_t *doc,
@@ -632,10 +788,11 @@ void os64_html_observe(os64_html_document_t *doc,
     d->changed = changed;
     d->changed_opaque = changed ? opaque : NULL;
 }
-static void tell(HDoc *d, os64_html_change_t *c)
+static void tell(HDoc *d, os64_html_change_t *c, bool log)
 {
     c->version = d->version;
-    d->changed(d->changed_opaque, c);
+    if (log) log_change(d, c);
+    if (d->changed) d->changed(d->changed_opaque, c);
 }
 /* The standard's insert names the sibling before the reference child as it
  * stood before anything moved, and the node's own place in the parent it is
@@ -644,7 +801,7 @@ static void tell(HDoc *d, os64_html_change_t *c)
 void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *seen)
 {
     *seen = (HSeen){0};
-    if (!d->changed)
+    if (!d->changed && !d->readers)
         return;
     seen->previous = before ? before->prev : parent->last_child;
     if (node->kind == FRAGMENT) {
@@ -657,20 +814,20 @@ void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *see
         seen->from_next = node->next;
     }
 }
-void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *next)
+void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *next, bool log)
 {
-    if (!d->changed)
+    if (!d->changed && !d->readers)
         return;
     os64_html_change_t c = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = parent, .removed = node,
                             .nremoved = 1, .previous_sibling = prev, .next_sibling = next};
-    tell(d, &c);
+    tell(d, &c, log);
 }
 /* The fragment's record, or the moved node's removal, comes before the
  * parent's, as the standard queues them. */
 void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *replaced,
-                   const HSeen *seen)
+                   const HSeen *seen, bool log)
 {
-    if (!d->changed)
+    if (!d->changed && !d->readers)
         return;
     HNode *added = node;
     size_t nadded = 1;
@@ -680,31 +837,31 @@ void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *re
         if (nadded) {
             os64_html_change_t drained = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = node,
                                           .removed = added, .nremoved = nadded};
-            tell(d, &drained);
+            tell(d, &drained, log);
         }
     } else if (seen->from)
-        d_tell_removed(d, seen->from, node, seen->from_prev, seen->from_next);
+        d_tell_removed(d, seen->from, node, seen->from_prev, seen->from_next, log);
     os64_html_change_t c = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = parent,
                             .added = nadded ? added : NULL, .nadded = nadded,
                             .removed = replaced, .nremoved = replaced != NULL,
                             .previous_sibling = seen->previous, .next_sibling = before};
-    tell(d, &c);
+    tell(d, &c, log);
 }
-void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len)
+void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len, bool log)
 {
-    if (!d->changed)
+    if (!d->changed && !d->readers)
         return;
     os64_html_change_t c = {.kind = OS64_HTML_CHANGE_TEXT, .target = node, .text_old = old,
                             .text_old_len = old_len};
-    tell(d, &c);
+    tell(d, &c, log);
 }
 /* An attribute's local name is its qualified name past the prefix, and a
  * prefix only a namespaced attribute has: `foo:bar` in no namespace is all
  * local name. */
 static void tell_attr(HDoc *d, HNode *e, const char *name, const char *ns, const char *old,
-                      size_t old_len)
+                      size_t old_len, bool log)
 {
-    if (!d->changed)
+    if (!d->changed && !d->readers)
         return;
     const char *local = name;
     for (const char *c = name; ns && *c; c++)
@@ -715,7 +872,7 @@ static void tell_attr(HDoc *d, HNode *e, const char *name, const char *ns, const
     os64_html_change_t c = {.kind = OS64_HTML_CHANGE_ATTR, .target = e, .attr_name = name,
                             .attr_ns = ns, .attr_local = local, .attr_old = old,
                             .attr_old_len = old_len};
-    tell(d, &c);
+    tell(d, &c, log);
 }
 
 static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
@@ -771,7 +928,7 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     place(d, parent, node, before);
     if (!stays || d->records != records)
         moved(d);
-    d_tell_placed(d, parent, node, before, NULL, &seen);
+    d_tell_placed(d, parent, node, before, NULL, &seen, !stays || d->records != records);
     if (node->kind == FRAGMENT)
         d_detached(d, node);
     d_collect(d);
@@ -798,7 +955,7 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
         HSeen seen;
         d_seen(d, parent, node, old->next, &seen);
         seen.previous = old->prev;
-        d_tell_placed(d, parent, node, old->next, NULL, &seen);
+        d_tell_placed(d, parent, node, old->next, NULL, &seen, false);
         return OS64_HTML_OK;
     }
     HNode *before = old->next;
@@ -813,7 +970,7 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     place(d, parent, node, before);
     if (touched)
         landmarks(d, NULL);
-    d_tell_placed(d, parent, node, before, old, &seen);
+    d_tell_placed(d, parent, node, before, old, &seen, true);
     d_detached(d, old);
     if (node->kind == FRAGMENT)
         d_detached(d, node);
@@ -836,7 +993,7 @@ int64_t os64_html_remove(os64_html_document_t *doc, HNode *node)
     take_out(d, node, NULL);
     if (touched)
         landmarks(d, NULL);
-    d_tell_removed(d, parent, node, prev, next);
+    d_tell_removed(d, parent, node, prev, next, true);
     d_detached(d, node);
     d_collect(d);
     return OS64_HTML_OK;
@@ -920,7 +1077,7 @@ void d_seat_html(HDoc *d)
     d->version++;
     if (d->disturbed)
         landmarks(d, NULL);
-    d_tell_placed(d, &d->root, &d->html, NULL, NULL, &seen);
+    d_tell_placed(d, &d->root, &d->html, NULL, NULL, &seen, true);
 }
 
 /* ── New nodes ───────────────────────────────────────────────────────── */
@@ -1195,7 +1352,7 @@ int64_t d_attr_add(HDoc *d, HNode *e, const HAttr *a)
     while (*slot)
         slot = &(*slot)->next;
     *slot = fresh;
-    tell_attr(d, e, fresh->name, fresh->ns, NULL, 0);
+    tell_attr(d, e, fresh->name, fresh->ns, NULL, 0, true);
     return OS64_HTML_OK;
 }
 /* A listed control was given a `form` attribute, or a new value for one:
@@ -1223,9 +1380,9 @@ static bool attrs_equal(const HAttr *a, const HAttr *b)
  * namespace of a record it replaces, and a name removed and set again comes
  * back in none, as set_attrs builds it. */
 static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
-                       const os64_html_attr_change_t *changes, size_t count)
+                       const os64_html_attr_change_t *changes, size_t count, bool log)
 {
-    if (!d->changed)
+    if (!d->changed && !d->readers)
         return;
     for (size_t i = 0; i < count; i++) {
         const os64_html_attr_change_t *c = &changes[i];
@@ -1246,7 +1403,7 @@ static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
             }
         }
         if (!c->remove || value)
-            tell_attr(d, e, c->name, ns, value, len);
+            tell_attr(d, e, c->name, ns, value, len, log);
     }
 }
 
@@ -1268,7 +1425,7 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
         effective |= c->remove ? a != NULL : !a || !same_bytes(a->value, c->value, c->value_len);
     }
     if (!effective) {
-        tell_attrs(d, e, e->attrs, changes, count);
+        tell_attrs(d, e, e->attrs, changes, count, false);
         return OS64_HTML_OK;
     }
     size_t peak = d->pub.peak_arena_bytes;
@@ -1301,7 +1458,7 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     if (attrs_equal(e->attrs, prospective.attrs)) {
         attrs_discard(d, prospective.attrs);
         d->pub.peak_arena_bytes = peak;
-        tell_attrs(d, e, e->attrs, changes, count);
+        tell_attrs(d, e, e->attrs, changes, count, false);
         return OS64_HTML_OK;
     }
     HAttr *old = e->attrs;
@@ -1314,7 +1471,7 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     for (size_t i = 0; i < count; i++)
         if (!changes[i].remove)
             form_attr_set(d, e, changes[i].name);
-    tell_attrs(d, e, old, changes, count);
+    tell_attrs(d, e, old, changes, count, true);
     if (private)
         while (old) {
             HAttr *next = old->next;
@@ -1337,7 +1494,7 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
      * the version stays. A control with a `form` attribute has no record to
      * void. The listener is told all the same, as the standard tells. */
     if (existing && same_bytes(existing->value, value, value_len)) {
-        tell_attr(d, e, name, existing->ns, existing->value, h_len(existing->value));
+        tell_attr(d, e, name, existing->ns, existing->value, h_len(existing->value), false);
         return OS64_HTML_OK;
     }
     /* The new record first, so that a failure after it has one block to give
@@ -1358,7 +1515,7 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
     *slot = fresh;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     form_attr_set(d, e, name);
-    tell_attr(d, e, name, fresh->ns, old ? old->value : NULL, old ? h_len(old->value) : 0);
+    tell_attr(d, e, name, fresh->ns, old ? old->value : NULL, old ? h_len(old->value) : 0, true);
     d_retire(d, old);
     return OS64_HTML_OK;
 }
@@ -1378,7 +1535,7 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *n
     d->version++;
     *slot = old->next;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
-    tell_attr(d, e, name, old->ns, old->value, h_len(old->value));
+    tell_attr(d, e, name, old->ns, old->value, h_len(old->value), true);
     d_retire(d, old);
     return OS64_HTML_OK;
 }
@@ -1394,7 +1551,7 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
     /* The text it has already: as in set_attr, nothing is replaced, and the
      * listener is told. */
     if (same_bytes(n->text, utf8, len)) {
-        d_tell_text(d, n, n->text, n->text_len);
+        d_tell_text(d, n, n->text, n->text_len, false);
         return OS64_HTML_OK;
     }
     int64_t why = OS64_HTML_OK;
@@ -1410,7 +1567,7 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
     n->text = bytes;
     n->text_len = len;
     *h_word(n) = len + 1;
-    d_tell_text(d, n, was, was_len);
+    d_tell_text(d, n, was, was_len, true);
     d_retire(d, old);
     return OS64_HTML_OK;
 }
@@ -1425,6 +1582,8 @@ int64_t os64_html_set_ce(os64_html_document_t *doc, HNode *e, os64_html_ce_t ce)
     if (e->ce != ce) {
         d->version++;
         e->ce = (uint8_t)ce;
+        os64_html_change_t change = {.kind = OS64_HTML_CHANGE_STATE, .target = e};
+        log_change(d, &change);
     }
     return OS64_HTML_OK;
 }

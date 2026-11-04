@@ -399,7 +399,7 @@ os64_font_status_t os64_font_render_psf2(const os64_font_psf2_options_t *options
     if (backend == NULL)
         backend = os64_freetype_backend_v1();
     if (backend == NULL || backend->revision != OS64_FONT_BACKEND_REVISION ||
-        backend->struct_size < sizeof(*backend))
+        backend->struct_size < offsetof(os64_font_backend_t,glyph_release)+sizeof(backend->glyph_release))
         return OS64_FONT_BAD_ARGUMENT;
 
     os64_font_engine_options_t eo = { .memory = options->memory };

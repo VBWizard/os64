@@ -40,6 +40,30 @@ static bool at_root(Context *c, svg_bounds_t *b, const Point *p, unsigned degree
             q[i] = lerp(q[i], q[i + 1], t);
     return include(c, b, q[0]);
 }
+unsigned svg_bezier_extrema(const Point *p, unsigned degree, unsigned axis, double roots[2])
+{
+    if (degree < 2) return 0;
+    double v[4], scale = 0;
+    for (unsigned i=0;i<=degree;i++) {
+        v[i]=axis?p[i].y:p[i].x;scale=fmax(scale,fabs(v[i]));
+    }
+    if (!scale) return 0;
+    /* Normalize before differences: finite endpoints need not have a
+     * representable difference or unscaled polynomial coefficient. */
+    for(unsigned i=0;i<=degree;i++) v[i]/=scale;
+    double d0=v[1]-v[0],d1=v[2]-v[1];
+    if(degree==2) {
+        if(d0==d1)return 0;
+        roots[0]=d0/(d0-d1);return 1;
+    }
+    double d2=v[3]-v[2],a=d0-2*d1+d2,b=2*(d1-d0),cc=d0;
+    if(!a) {if(!b)return 0;roots[0]=-cc/b;return 1;}
+    double disc=b*b-4*a*cc;
+    if(disc<0)return 0;
+    double q=-.5*(b+(b<0?-sqrt(disc):sqrt(disc)));
+    if(!q) {roots[0]=-b/(2*a);return 1;}
+    roots[0]=q/a;roots[1]=cc/q;return 2;
+}
 static bool bezier(Context *c, svg_bounds_t *b, const Point *p, unsigned degree)
 {
     for (unsigned i = 0; i <= degree; ++i)
@@ -49,40 +73,10 @@ static bool bezier(Context *c, svg_bounds_t *b, const Point *p, unsigned degree)
         }
     if (!include(c, b, p[0]) || !include(c, b, p[degree]))
         return false;
-    for (unsigned axis = 0; axis < 2; ++axis) {
-        double v[4], scale = 0;
-        for (unsigned i = 0; i <= degree; ++i) {
-            v[i] = axis ? p[i].y : p[i].x;
-            scale = fmax(scale, fabs(v[i]));
-        }
-        if (!scale)
-            continue;
-        /* Normalize before differences: finite endpoints need not have a
-         * representable difference or unscaled polynomial coefficient. */
-        for (unsigned i = 0; i <= degree; ++i)
-            v[i] /= scale;
-        double d0 = v[1] - v[0], d1 = v[2] - v[1];
-        if (degree == 2) {
-            if (d0 != d1 && !at_root(c, b, p, degree, d0 / (d0 - d1)))
-                return false;
-            continue;
-        }
-        double d2 = v[3] - v[2];
-        double a = d0 - 2 * d1 + d2, bb = 2 * (d1 - d0), cc = d0;
-        if (!a) {
-            if (bb && !at_root(c, b, p, degree, -cc / bb))
-                return false;
-            continue;
-        }
-        double disc = bb * bb - 4 * a * cc;
-        if (disc < 0)
-            continue;
-        double q = -.5 * (bb + (bb < 0 ? -sqrt(disc) : sqrt(disc)));
-        if (!q) {
-            if (!at_root(c, b, p, degree, -bb / (2 * a)))
-                return false;
-        } else if (!at_root(c, b, p, degree, q / a) || !at_root(c, b, p, degree, cc / q))
-            return false;
+    for (unsigned axis=0;axis<2;axis++) {
+        double roots[2];unsigned count=svg_bezier_extrema(p,degree,axis,roots);
+        for(unsigned i=0;i<count;i++)
+            if(!at_root(c,b,p,degree,roots[i]))return false;
     }
     return true;
 }

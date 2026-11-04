@@ -88,6 +88,11 @@ static double coarse(int64_t us)
     return (double)tenths / 10.0;
 }
 
+double d_performance_now(const os64_dom_t *dom)
+{
+    return coarse((int64_t)(now_us(dom) - dom->time_origin_us));
+}
+
 static void timing_read(const os64_dom_t *dom, os64_dom_timing_t *t)
 {
     os64_memset(t, 0, sizeof(*t));
@@ -644,7 +649,7 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
     if (JS_GetOpaque(self, os64_js_class_id(&performance_slot)) == NULL)
         return JS_ThrowTypeError(ctx, "Expected the Performance object");
     switch (magic) {
-    case M_NOW: return JS_NewFloat64(ctx, coarse((int64_t)(now_us(dom) - dom->time_origin_us)));
+    case M_NOW: return JS_NewFloat64(ctx, d_performance_now(dom));
     case M_TIME_ORIGIN: return JS_NewFloat64(ctx, coarse(dom->time_origin_epoch_us));
     case M_TIMING: return JS_DupValue(ctx, dom->performance_timing->value);
     case M_NAVIGATION: return JS_DupValue(ctx, dom->performance_navigation->value);

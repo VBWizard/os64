@@ -152,9 +152,11 @@ typedef struct {
 } os64_geometry_backend_t;
 
 /* Width zero produces an empty outline. ARCS joins and non-butt degenerate
- * subpaths containing segments return UNSUPPORTED, including curves discarded
- * by the stroker's working-grid epsilon. SVG must supply fallback join/cap
- * geometry explicitly. Move-only contours paint nothing.
+ * subpaths containing segments return UNSUPPORTED. Nonzero open strokes with
+ * round caps/joins whose discarded control polygon stays within one working
+ * unit of its start instead retain a round tip. Other curves discarded by
+ * the stroker's working-grid epsilon need explicit caller fallback geometry,
+ * as do exact degeneracies. Move-only contours paint nothing.
  * Miter limits below one are invalid. The backend never clamps coordinates or
  * divides a filled outline to evade a point limit. */
 #if defined(__GNUC__)

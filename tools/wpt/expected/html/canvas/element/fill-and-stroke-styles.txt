@@ -1,0 +1,198 @@
+# WPT's html/canvas/element/fill-and-stroke-styles in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/canvas/element/fill-and-stroke-styles --update
+# rewrites [passing].
+[required]
+2d.gradient.interpolate.coloralpha.html	Canvas test: 2d.gradient.interpolate.coloralpha
+2d.gradient.radial.cone.behind.html	Canvas test: 2d.gradient.radial.cone.behind
+2d.gradient.radial.transform.1.html	Radial gradient coordinates are relative to the coordinate space at the time of filling
+[excluded]
+[passing]
+2d.fillStyle.default.html	Canvas test: 2d.fillStyle.default
+2d.fillStyle.get.halftransparent.html	Canvas test: 2d.fillStyle.get.halftransparent
+2d.fillStyle.get.semitransparent.html	Canvas test: 2d.fillStyle.get.semitransparent
+2d.fillStyle.get.solid.html	Canvas test: 2d.fillStyle.get.solid
+2d.fillStyle.get.transparent.html	Canvas test: 2d.fillStyle.get.transparent
+2d.fillStyle.invalidstring.html	Canvas test: 2d.fillStyle.invalidstring
+2d.fillStyle.invalidtype.html	Canvas test: 2d.fillStyle.invalidtype
+2d.fillStyle.parse.css-color-4-hsl-1.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-1
+2d.fillStyle.parse.css-color-4-hsl-2.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-2
+2d.fillStyle.parse.css-color-4-hsl-3.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-3
+2d.fillStyle.parse.css-color-4-hsl-4.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-4
+2d.fillStyle.parse.css-color-4-hsl-5.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-5
+2d.fillStyle.parse.css-color-4-hsl-6.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-6
+2d.fillStyle.parse.css-color-4-hsl-7.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-7
+2d.fillStyle.parse.css-color-4-hsl-8.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-8
+2d.fillStyle.parse.css-color-4-hsl-9.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsl-9
+2d.fillStyle.parse.css-color-4-hsla-1.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-1
+2d.fillStyle.parse.css-color-4-hsla-2.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-2
+2d.fillStyle.parse.css-color-4-hsla-3.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-3
+2d.fillStyle.parse.css-color-4-hsla-4.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-4
+2d.fillStyle.parse.css-color-4-hsla-5.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-5
+2d.fillStyle.parse.css-color-4-hsla-6.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-6
+2d.fillStyle.parse.css-color-4-hsla-7.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-7
+2d.fillStyle.parse.css-color-4-hsla-8.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-8
+2d.fillStyle.parse.css-color-4-hsla-9.html	Canvas test: 2d.fillStyle.parse.css-color-4-hsla-9
+2d.fillStyle.parse.css-color-4-rgb-1.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgb-1
+2d.fillStyle.parse.css-color-4-rgb-2.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgb-2
+2d.fillStyle.parse.css-color-4-rgb-3.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgb-3
+2d.fillStyle.parse.css-color-4-rgb-4.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgb-4
+2d.fillStyle.parse.css-color-4-rgb-5.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgb-5
+2d.fillStyle.parse.css-color-4-rgb-6.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgb-6
+2d.fillStyle.parse.css-color-4-rgba-1.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgba-1
+2d.fillStyle.parse.css-color-4-rgba-2.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgba-2
+2d.fillStyle.parse.css-color-4-rgba-3.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgba-3
+2d.fillStyle.parse.css-color-4-rgba-4.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgba-4
+2d.fillStyle.parse.css-color-4-rgba-5.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgba-5
+2d.fillStyle.parse.css-color-4-rgba-6.html	Canvas test: 2d.fillStyle.parse.css-color-4-rgba-6
+2d.fillStyle.parse.current.basic.html	currentColor is computed from the canvas element
+2d.fillStyle.parse.current.changed.html	currentColor is computed when the attribute is set, not when it is painted
+2d.fillStyle.parse.current.removed.html	currentColor is solid black when the canvas element is not in a document
+2d.fillStyle.parse.hex3.html	Canvas test: 2d.fillStyle.parse.hex3
+2d.fillStyle.parse.hex4.html	Canvas test: 2d.fillStyle.parse.hex4
+2d.fillStyle.parse.hex6.html	Canvas test: 2d.fillStyle.parse.hex6
+2d.fillStyle.parse.hex8.html	Canvas test: 2d.fillStyle.parse.hex8
+2d.fillStyle.parse.hsl-1.html	Canvas test: 2d.fillStyle.parse.hsl-1
+2d.fillStyle.parse.hsl-2.html	Canvas test: 2d.fillStyle.parse.hsl-2
+2d.fillStyle.parse.hsl-3.html	Canvas test: 2d.fillStyle.parse.hsl-3
+2d.fillStyle.parse.hsl-4.html	Canvas test: 2d.fillStyle.parse.hsl-4
+2d.fillStyle.parse.hsl-5.html	Canvas test: 2d.fillStyle.parse.hsl-5
+2d.fillStyle.parse.hsl-6.html	Canvas test: 2d.fillStyle.parse.hsl-6
+2d.fillStyle.parse.hsl-clamp-negative-saturation.html	Canvas test: 2d.fillStyle.parse.hsl-clamp-negative-saturation
+2d.fillStyle.parse.hsla-1.html	Canvas test: 2d.fillStyle.parse.hsla-1
+2d.fillStyle.parse.hsla-2.html	Canvas test: 2d.fillStyle.parse.hsla-2
+2d.fillStyle.parse.hsla-clamp-alpha-1.html	Canvas test: 2d.fillStyle.parse.hsla-clamp-alpha-1
+2d.fillStyle.parse.hsla-clamp-alpha-2.html	Canvas test: 2d.fillStyle.parse.hsla-clamp-alpha-2
+2d.fillStyle.parse.hsla-clamp-negative-saturation.html	Canvas test: 2d.fillStyle.parse.hsla-clamp-negative-saturation
+2d.fillStyle.parse.html4.html	Canvas test: 2d.fillStyle.parse.html4
+2d.fillStyle.parse.invalid.css-color-4-hsl-1.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsl-1
+2d.fillStyle.parse.invalid.css-color-4-hsl-2.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsl-2
+2d.fillStyle.parse.invalid.css-color-4-hsl-3.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsl-3
+2d.fillStyle.parse.invalid.css-color-4-hsl-4.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsl-4
+2d.fillStyle.parse.invalid.css-color-4-hsl-5.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsl-5
+2d.fillStyle.parse.invalid.css-color-4-hsl-6.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsl-6
+2d.fillStyle.parse.invalid.css-color-4-hsl-7.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsl-7
+2d.fillStyle.parse.invalid.css-color-4-hsla-1.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsla-1
+2d.fillStyle.parse.invalid.css-color-4-hsla-2.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsla-2
+2d.fillStyle.parse.invalid.css-color-4-hsla-3.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-hsla-3
+2d.fillStyle.parse.invalid.css-color-4-rgb-1.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgb-1
+2d.fillStyle.parse.invalid.css-color-4-rgb-2.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgb-2
+2d.fillStyle.parse.invalid.css-color-4-rgb-3.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgb-3
+2d.fillStyle.parse.invalid.css-color-4-rgb-4.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgb-4
+2d.fillStyle.parse.invalid.css-color-4-rgb-5.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgb-5
+2d.fillStyle.parse.invalid.css-color-4-rgb-6.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgb-6
+2d.fillStyle.parse.invalid.css-color-4-rgb-7.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgb-7
+2d.fillStyle.parse.invalid.css-color-4-rgba-1.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgba-1
+2d.fillStyle.parse.invalid.css-color-4-rgba-2.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgba-2
+2d.fillStyle.parse.invalid.css-color-4-rgba-3.html	Canvas test: 2d.fillStyle.parse.invalid.css-color-4-rgba-3
+2d.fillStyle.parse.invalid.hex1.html	Canvas test: 2d.fillStyle.parse.invalid.hex1
+2d.fillStyle.parse.invalid.hex2.html	Canvas test: 2d.fillStyle.parse.invalid.hex2
+2d.fillStyle.parse.invalid.hex3.html	Canvas test: 2d.fillStyle.parse.invalid.hex3
+2d.fillStyle.parse.invalid.hex4.html	Canvas test: 2d.fillStyle.parse.invalid.hex4
+2d.fillStyle.parse.invalid.hex5.html	Canvas test: 2d.fillStyle.parse.invalid.hex5
+2d.fillStyle.parse.invalid.hex6.html	Canvas test: 2d.fillStyle.parse.invalid.hex6
+2d.fillStyle.parse.invalid.hex7.html	Canvas test: 2d.fillStyle.parse.invalid.hex7
+2d.fillStyle.parse.invalid.hex8.html	Canvas test: 2d.fillStyle.parse.invalid.hex8
+2d.fillStyle.parse.invalid.hsl-1.html	Canvas test: 2d.fillStyle.parse.invalid.hsl-1
+2d.fillStyle.parse.invalid.hsl-2.html	Canvas test: 2d.fillStyle.parse.invalid.hsl-2
+2d.fillStyle.parse.invalid.hsl-3.html	Canvas test: 2d.fillStyle.parse.invalid.hsl-3
+2d.fillStyle.parse.invalid.hsl-4.html	Canvas test: 2d.fillStyle.parse.invalid.hsl-4
+2d.fillStyle.parse.invalid.hsl-5.html	Canvas test: 2d.fillStyle.parse.invalid.hsl-5
+2d.fillStyle.parse.invalid.hsl-6.html	Canvas test: 2d.fillStyle.parse.invalid.hsl-6
+2d.fillStyle.parse.invalid.hsla-1.html	Canvas test: 2d.fillStyle.parse.invalid.hsla-1
+2d.fillStyle.parse.invalid.hsla-2.html	Canvas test: 2d.fillStyle.parse.invalid.hsla-2
+2d.fillStyle.parse.invalid.hsla-3.html	Canvas test: 2d.fillStyle.parse.invalid.hsla-3
+2d.fillStyle.parse.invalid.name-1.html	Canvas test: 2d.fillStyle.parse.invalid.name-1
+2d.fillStyle.parse.invalid.name-2.html	Canvas test: 2d.fillStyle.parse.invalid.name-2
+2d.fillStyle.parse.invalid.name-3.html	Canvas test: 2d.fillStyle.parse.invalid.name-3
+2d.fillStyle.parse.invalid.name-4.html	Canvas test: 2d.fillStyle.parse.invalid.name-4
+2d.fillStyle.parse.invalid.name-5.html	Canvas test: 2d.fillStyle.parse.invalid.name-5
+2d.fillStyle.parse.invalid.rgb-1.html	Canvas test: 2d.fillStyle.parse.invalid.rgb-1
+2d.fillStyle.parse.invalid.rgb-2.html	Canvas test: 2d.fillStyle.parse.invalid.rgb-2
+2d.fillStyle.parse.invalid.rgb-3.html	Canvas test: 2d.fillStyle.parse.invalid.rgb-3
+2d.fillStyle.parse.invalid.rgba-1.html	Canvas test: 2d.fillStyle.parse.invalid.rgba-1
+2d.fillStyle.parse.invalid.rgba-2.html	Canvas test: 2d.fillStyle.parse.invalid.rgba-2
+2d.fillStyle.parse.invalid.rgba-3.html	Canvas test: 2d.fillStyle.parse.invalid.rgba-3
+2d.fillStyle.parse.invalid.rgba-4.html	Canvas test: 2d.fillStyle.parse.invalid.rgba-4
+2d.fillStyle.parse.invalid.rgba-5.html	Canvas test: 2d.fillStyle.parse.invalid.rgba-5
+2d.fillStyle.parse.rgb-clamp-1.html	Canvas test: 2d.fillStyle.parse.rgb-clamp-1
+2d.fillStyle.parse.rgb-clamp-2.html	Canvas test: 2d.fillStyle.parse.rgb-clamp-2
+2d.fillStyle.parse.rgb-clamp-3.html	Canvas test: 2d.fillStyle.parse.rgb-clamp-3
+2d.fillStyle.parse.rgb-clamp-4.html	Canvas test: 2d.fillStyle.parse.rgb-clamp-4
+2d.fillStyle.parse.rgb-clamp-5.html	Canvas test: 2d.fillStyle.parse.rgb-clamp-5
+2d.fillStyle.parse.rgb-eof.html	Canvas test: 2d.fillStyle.parse.rgb-eof
+2d.fillStyle.parse.rgb-num.html	Canvas test: 2d.fillStyle.parse.rgb-num
+2d.fillStyle.parse.rgb-percent.html	Canvas test: 2d.fillStyle.parse.rgb-percent
+2d.fillStyle.parse.rgba-clamp-1.html	Canvas test: 2d.fillStyle.parse.rgba-clamp-1
+2d.fillStyle.parse.rgba-clamp-2.html	Canvas test: 2d.fillStyle.parse.rgba-clamp-2
+2d.fillStyle.parse.rgba-eof.html	Canvas test: 2d.fillStyle.parse.rgba-eof
+2d.fillStyle.parse.rgba-num-1.html	Canvas test: 2d.fillStyle.parse.rgba-num-1
+2d.fillStyle.parse.rgba-num-2.html	Canvas test: 2d.fillStyle.parse.rgba-num-2
+2d.fillStyle.parse.rgba-percent.html	Canvas test: 2d.fillStyle.parse.rgba-percent
+2d.fillStyle.parse.rgba-solid-1.html	Canvas test: 2d.fillStyle.parse.rgba-solid-1
+2d.fillStyle.parse.rgba-solid-2.html	Canvas test: 2d.fillStyle.parse.rgba-solid-2
+2d.fillStyle.parse.rgba-solid-3.html	Canvas test: 2d.fillStyle.parse.rgba-solid-3
+2d.fillStyle.parse.rgba-solid-4.html	Canvas test: 2d.fillStyle.parse.rgba-solid-4
+2d.fillStyle.parse.svg-1.html	Canvas test: 2d.fillStyle.parse.svg-1
+2d.fillStyle.parse.svg-2.html	Canvas test: 2d.fillStyle.parse.svg-2
+2d.fillStyle.parse.transparent-1.html	Canvas test: 2d.fillStyle.parse.transparent-1
+2d.fillStyle.parse.transparent-2.html	Canvas test: 2d.fillStyle.parse.transparent-2
+2d.fillStyle.toStringFunctionCallback.html	Passing a function in to ctx.fillStyle or ctx.strokeStyle with a toString callback works as specified
+2d.gradient.conic.invalid.inputs.html	Conic gradient function with invalid inputs
+2d.gradient.conic.negative.rotation.html	Conic gradient with negative rotation
+2d.gradient.conic.positive.rotation.html	Conic gradient with positive rotation
+2d.gradient.empty.html	Canvas test: 2d.gradient.empty
+2d.gradient.interpolate.alpha.html	Canvas test: 2d.gradient.interpolate.alpha
+2d.gradient.interpolate.color.html	Canvas test: 2d.gradient.interpolate.color
+2d.gradient.interpolate.coloralpha.html	Canvas test: 2d.gradient.interpolate.coloralpha
+2d.gradient.interpolate.multiple.html	Canvas test: 2d.gradient.interpolate.multiple
+2d.gradient.interpolate.outside.html	Canvas test: 2d.gradient.interpolate.outside
+2d.gradient.interpolate.overlap.html	Canvas test: 2d.gradient.interpolate.overlap
+2d.gradient.interpolate.overlap2.html	Canvas test: 2d.gradient.interpolate.overlap2
+2d.gradient.interpolate.solid.html	Canvas test: 2d.gradient.interpolate.solid
+2d.gradient.interpolate.vertical.html	Canvas test: 2d.gradient.interpolate.vertical
+2d.gradient.interpolate.zerosize.fill.html	Canvas test: 2d.gradient.interpolate.zerosize.fill
+2d.gradient.interpolate.zerosize.fillRect.html	Canvas test: 2d.gradient.interpolate.zerosize.fillRect
+2d.gradient.interpolate.zerosize.fillText.html	Canvas test: 2d.gradient.interpolate.zerosize.fillText
+2d.gradient.interpolate.zerosize.stroke.html	Canvas test: 2d.gradient.interpolate.zerosize.stroke
+2d.gradient.interpolate.zerosize.strokeRect.html	Canvas test: 2d.gradient.interpolate.zerosize.strokeRect
+2d.gradient.interpolate.zerosize.strokeText.html	Canvas test: 2d.gradient.interpolate.zerosize.strokeText
+2d.gradient.linear.nonfinite.html	createLinearGradient() throws TypeError if arguments are not finite
+2d.gradient.linear.transform.1.html	Linear gradient coordinates are relative to the coordinate space at the time of filling
+2d.gradient.linear.transform.2.html	Linear gradient coordinates are relative to the coordinate space at the time of filling
+2d.gradient.linear.transform.3.html	Linear gradient transforms do not experience broken caching effects
+2d.gradient.object.compare.html	Canvas test: 2d.gradient.object.compare
+2d.gradient.object.crosscanvas.html	Canvas test: 2d.gradient.object.crosscanvas
+2d.gradient.object.current.html	Canvas test: 2d.gradient.object.current
+2d.gradient.object.invalidcolor.html	Canvas test: 2d.gradient.object.invalidcolor
+2d.gradient.object.invalidoffset.html	Canvas test: 2d.gradient.object.invalidoffset
+2d.gradient.object.return.html	createLinearGradient() and createRadialGradient() returns objects implementing CanvasGradient
+2d.gradient.object.type.html	window.CanvasGradient exists and has the right properties
+2d.gradient.object.update.html	Canvas test: 2d.gradient.object.update
+2d.gradient.radial.cone.behind.html	Canvas test: 2d.gradient.radial.cone.behind
+2d.gradient.radial.cone.beside.html	Canvas test: 2d.gradient.radial.cone.beside
+2d.gradient.radial.cone.bottom.html	Canvas test: 2d.gradient.radial.cone.bottom
+2d.gradient.radial.cone.cylinder.html	Canvas test: 2d.gradient.radial.cone.cylinder
+2d.gradient.radial.cone.front.html	Canvas test: 2d.gradient.radial.cone.front
+2d.gradient.radial.cone.shape1.html	Canvas test: 2d.gradient.radial.cone.shape1
+2d.gradient.radial.cone.shape2.html	Canvas test: 2d.gradient.radial.cone.shape2
+2d.gradient.radial.cone.top.html	Canvas test: 2d.gradient.radial.cone.top
+2d.gradient.radial.equal.html	Canvas test: 2d.gradient.radial.equal
+2d.gradient.radial.inside1.html	Canvas test: 2d.gradient.radial.inside1
+2d.gradient.radial.inside2.html	Canvas test: 2d.gradient.radial.inside2
+2d.gradient.radial.inside3.html	Canvas test: 2d.gradient.radial.inside3
+2d.gradient.radial.negative.html	createRadialGradient() throws INDEX_SIZE_ERR if either radius is negative
+2d.gradient.radial.nonfinite.html	createRadialGradient() throws TypeError if arguments are not finite
+2d.gradient.radial.outside1.html	Canvas test: 2d.gradient.radial.outside1
+2d.gradient.radial.outside2.html	Canvas test: 2d.gradient.radial.outside2
+2d.gradient.radial.outside3.html	Canvas test: 2d.gradient.radial.outside3
+2d.gradient.radial.touch1.html	Canvas test: 2d.gradient.radial.touch1
+2d.gradient.radial.touch2.html	Canvas test: 2d.gradient.radial.touch2
+2d.gradient.radial.touch3.html	Canvas test: 2d.gradient.radial.touch3
+2d.gradient.radial.transform.1.html	Radial gradient coordinates are relative to the coordinate space at the time of filling
+2d.gradient.radial.transform.2.html	Radial gradient coordinates are relative to the coordinate space at the time of filling
+2d.gradient.radial.transform.3.html	Radial gradient transforms do not experience broken caching effects
+2d.pattern.image.null.html	Canvas test: 2d.pattern.image.null
+2d.pattern.image.string.html	Canvas test: 2d.pattern.image.string
+2d.pattern.image.undefined.html	Canvas test: 2d.pattern.image.undefined
+2d.strokeStyle.default.html	Canvas test: 2d.strokeStyle.default

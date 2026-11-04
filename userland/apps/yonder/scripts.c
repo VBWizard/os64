@@ -512,9 +512,12 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
+    os64_dom_set_svg_hit(s->dom, s->options.svg_hit, s->options.opaque);
     if (s->options.view.read != NULL)
         os64_dom_set_view(s->dom, &s->options.view);
     os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
+    os64_dom_set_images(s->dom,&s->options.images);
+    os64_dom_set_text(s->dom,&s->options.canvas_text);
     if (s->options.history.update != NULL)
         os64_dom_set_history(s->dom, &s->options.history);
     // The state the session gave the document before there was a binding
@@ -1514,6 +1517,28 @@ static uint64_t handler_types(yonder_scripts_t *s)
     return s->handlers;
 }
 
+os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *s, const os64_dom_pointer_sample_t *sample,
+                                         os64_dom_pointer_default_t action, void *opaque,
+                                         bool *ran, os64_js_outcome_t *out)
+{
+    *ran = false;
+    os64_memset(out, 0, sizeof(*out));
+    if (!s || s->dead || !s->options.modern) return OS64_JS_OK;
+    s->task_address = NULL; s->task_us = -1; s->written = 0;
+    if (!ensure_runtime(s, out)) { retire(s); return out->status; }
+    os64_dom_pointer_dispatch(s->dom, sample, action, opaque, ran, out);
+    if (*ran) judged(s, out);
+    return out->status;
+}
+void yonder_scripts_pointer_cancel(yonder_scripts_t *s)
+{
+    if (s && !s->dead) os64_dom_pointer_cancel(s->dom);
+}
+bool yonder_scripts_pointer_active(const yonder_scripts_t *s)
+{
+    return s && !s->dead && os64_dom_pointer_active(s->dom);
+}
+
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_node_t *node,
                                          const os64_dom_event_t *event, bool *prevented,
                                          os64_js_outcome_t *out)
@@ -1635,6 +1660,25 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcom
     return true;
 }
 
+uint64_t yonder_scripts_animation_next(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_animation_next(s->dom) : UINT64_MAX;
+}
+
+bool yonder_scripts_animation_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s != NULL) {
+        s->written = 0;
+        s->task_address = NULL;
+        s->task_us = -1;
+    }
+    if (s == NULL || s->dead || !os64_dom_animation_fire(s->dom, now, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
 bool yonder_scripts_reactions_owed(const yonder_scripts_t *s)
 {
     return s != NULL && !s->dead && os64_dom_reactions_owed(s->dom);
@@ -1685,13 +1729,18 @@ uint64_t yonder_scripts_idle_next(const yonder_scripts_t *s)
 
 bool yonder_scripts_idle_run(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
+    return yonder_scripts_idle_before(s, UINT64_MAX, out);
+}
+
+bool yonder_scripts_idle_before(yonder_scripts_t *s, uint64_t render_due, os64_js_outcome_t *out)
+{
     os64_memset(out, 0, sizeof(*out));
     if (s == NULL || s->dead)
         return false;
     s->written = 0;
     s->task_address = NULL;
     s->task_us = -1;
-    if (!os64_dom_idle_run(s->dom, out))
+    if (!os64_dom_idle_before(s->dom, render_due, out))
         return false;
     judged(s, out);
     return true;
@@ -2046,4 +2095,28 @@ void yonder_scripts_storage_forget(yonder_scripts_t *s)
 {
     if (s != NULL && s->dom != NULL)
         os64_dom_storage_forget(s->dom);
+}
+
+/* These presentation reads enter no script and create no runtime. */
+bool yonder_scripts_canvas_bitmap(yonder_scripts_t *s, const os64_html_node_t *node, canvas_bitmap_t *out)
+{
+    return s && os64_dom_canvas_bitmap(s->dom, node, out);
+}
+void yonder_scripts_canvas_visit_damage(yonder_scripts_t *s,os64_dom_canvas_damage_fn visit,void *opaque)
+{
+    if(s)os64_dom_canvas_visit_damage(s->dom,visit,opaque);
+}
+void yonder_scripts_canvas_painted(yonder_scripts_t *s, const os64_html_node_t *node)
+{
+    if (s) os64_dom_canvas_painted(s->dom, node);
+}
+
+bool yonder_scripts_images_pending(const yonder_scripts_t *s)
+{ return s&&!s->dead&&os64_dom_image_event(s->dom,NULL,NULL,false); }
+bool yonder_scripts_image_fire(yonder_scripts_t *s,os64_js_outcome_t *out)
+{
+    const os64_html_node_t *node;bool failed;
+    if(!s||s->dead||!os64_dom_image_event(s->dom,&node,&failed,true))return false;
+    os64_dom_event_t event={.type=failed?"error":"load"};bool prevented=false;
+    yonder_scripts_dispatch(s,node,&event,&prevented,out);return true;
 }

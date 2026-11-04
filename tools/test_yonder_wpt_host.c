@@ -50,8 +50,8 @@
  * answered as WPT's server answers a static file, with the headers of its
  * `.headers` sidecar; one for a file that is not there is a 404. The
  * page's own head carries its sidecar's Last-Modified, the one header of
- * its head a document reads (document.lastModified). Pictures
- * and fonts always fail. The bytes are served as they are on disk, which
+ * its head a document reads (document.lastModified). Pictures use the real
+ * worker with the host's PNG/SVG decoders; other raster formats and fonts fail. The bytes are served as they are on disk, which
  * WPT writes in UTF-8, but for a `.sub.` file and one asked for with
  * `pipe=sub`, whose host, port and query templates are filled in
  * (wpt_substitute).
@@ -61,7 +61,7 @@
  * of that clock (180 s for a page that says its timeout is long), so the
  * harness's own timeout and every step_timeout fire as they would, in the
  * same order every run. The microsecond clock a script task's deadline is
- * measured against moves 1 ms at each read, so a script that never ends is
+ * measured against advances by the same wait and by 1 ms at each read, so a script that never ends is
  * ended, and its page has no results.
  *
  * THE RESULTS: one line per test, `STATUS<tab>page<tab>name`, and a tab
@@ -775,6 +775,30 @@ static void *wpt_product(size_t size) {
     return p;
 }
 
+/* Keep pictures separate from the navigation slot. Images can be requested
+ * while the document stream still owns that slot. */
+static struct {os64_work_t work;os64_work_id_t id;} wpt_images[32];
+static unsigned wpt_nimages;
+static os64_work_id_t wpt_submit(const os64_work_t *work)
+{
+    if(*(const uint32_t *)work->job==YONDER_JOB_PICTURE) {
+        if(wpt_nimages==32)return 0;
+        wpt_images[wpt_nimages].work=*work;wpt_images[wpt_nimages].id=++pool_ids;
+        return wpt_images[wpt_nimages++].id;
+    }
+    pool_submit_hook=NULL;
+    os64_work_id_t id=os64_work_submit(g.pool,work);
+    pool_submit_hook=wpt_submit;return id;
+}
+static bool wpt_cancel_image(os64_work_id_t id)
+{
+    for(unsigned i=0;i<wpt_nimages;++i)if(wpt_images[i].id==id) {
+        wpt_images[i].work.release(wpt_images[i].work.job,NULL);
+        wpt_images[i]=wpt_images[--wpt_nimages];return true;
+    }
+    return false;
+}
+
 /* The worker's answer to every fetch the window has out, as the pool would
  * reap them: true when there was one. */
 static bool wpt_answer(void) {
@@ -825,19 +849,13 @@ static bool wpt_answer(void) {
         reaped(id,job,got);
         any=true;
     }
-    /* The pool's one held job: a picture (failed, as a fetch that did not
-     * arrive), or a navigation the page asked for, which ends its turns. */
-    if(pool_work.job!=NULL) {
-        uint32_t kind=*(const uint32_t *)pool_work.job;
-        if(kind==YONDER_JOB_PICTURE) {
-            void *job=pool_work.job;
-            memset(&pool_work,0,sizeof(pool_work));
-            reaped(pool_work_id,job,NULL);
-            any=true;
-        } else if(kind==YONDER_JOB_TRIP) {
-            wpt_navigated=true;
-        }
+    while(wpt_nimages) {
+        os64_work_t work=wpt_images[0].work;os64_work_id_t id=wpt_images[0].id;
+        wpt_images[0]=wpt_images[--wpt_nimages];void *got=NULL;
+        work.run(work.job,NULL,NULL,&got);reaped(id,work.job,got);any=true;
     }
+    if(pool_work.job && *(const uint32_t *)pool_work.job==YONDER_JOB_TRIP)
+        wpt_navigated=true;
     return any;
 }
 
@@ -849,6 +867,10 @@ static bool wpt_turns(void) {
         more=coming_turn() || more;
         more=script_turn() || more;
         more=bodies_turn() || more;
+        motion_tick();
+        /* This headless runner presents no pixels, but completes the same
+         * frame boundary so subsequent animation requests can become due. */
+        motion_painted();
         more=wpt_answer() || more;
         if(wpt_navigated || !more) return true;
     }
@@ -959,6 +981,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     fake_fetch_reset();
     fake_resolve=wpt_fetch_resolve;
     stream_window();
+    pool_submit_hook=wpt_submit;pool_cancel_hook=wpt_cancel_image;
     g.scripts_on=true; g.script_ms=5000; now_ms=100; clock_step=1000;
     g.modern=!wpt_modern_off;
     wpt_navigated=false;
@@ -1008,6 +1031,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
             break;
         }
         now_ms+=WPT_TICK_MS;
+        clock_us+=(int64_t)WPT_TICK_MS*1000;
     }
     if(text!=NULL) {
         out->reported=true;
@@ -1017,6 +1041,8 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     }
     while(wpt_answer()) {}
     stream_window_drop();
+    pool_submit_hook=NULL;pool_cancel_hook=NULL;
+    check(wpt_nimages==0,"wpt: image jobs released");
     check(nscript_jobs==0,"wpt: every script fetch was answered or cancelled");
     nscript_jobs=0;
     clock_step=0;

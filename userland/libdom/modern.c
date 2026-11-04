@@ -83,6 +83,10 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"external", "External", NULL}, d_external_install},
     /* After the encoding row, whose DataView it tells a view by. */
     {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
+    {(const char *const[]){"DOMPointReadOnly", "DOMPoint", NULL}, d_point_install},
+    {(const char *const[]){"SVGGraphicsElement", "SVGGeometryElement", NULL}, d_svg_geometry_install},
+    {(const char *const[]){"ImageData", NULL}, d_image_data_install},
+    {(const char *const[]){"CanvasRenderingContext2D", "CanvasGradient", "TextMetrics", "Path2D", NULL}, d_canvas_install},
     {(const char *const[]){"onerror", "onunhandledrejection", "onrejectionhandled", "reportError", "ErrorEvent",
                            "PromiseRejectionEvent", NULL},
      d_report_install},
@@ -107,6 +111,7 @@ static const DModernRow kModern[] = {
      d_streams_install},
     {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
+    {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
     /* 0f's node row: members of Node's, Attr's, Text's and a template's
      * prototypes, none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},
@@ -144,8 +149,11 @@ static const DModernRow kModern[] = {
     {(const char *const[]){NULL}, d_import_map_install},
     /* 0f's P8: the UI event interfaces, which inherit Event. */
     {(const char *const[]){"UIEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "InputEvent", "CompositionEvent",
-                           "SubmitEvent", NULL},
+                           "SubmitEvent", "PointerEvent", NULL},
      d_ui_events_install},
+    {(const char *const[]){"onpointerdown", "onpointerup", "onpointermove", "onpointerover", "onpointerout",
+        "onpointerenter", "onpointerleave", "onpointercancel", "ongotpointercapture", "onlostpointercapture",
+        "onmouseenter", "onmouseleave", "onauxclick", NULL}, d_pointer_install},
     /* 0f's P1b: last, since every interface whose prototype inherits
      * EventTarget.prototype is made to inherit EventTarget. */
     {(const char *const[]){"EventTarget", "Window", NULL}, d_targets_install},

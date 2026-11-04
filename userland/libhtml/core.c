@@ -679,6 +679,8 @@ void os64_html_document_free(os64_html_document_t *doc)
     if (!doc)
         return;
     HDoc *d = (HDoc *)doc;
+    if (d->readers)
+        fatal("libhtml: a document was freed while change readers still owned it\n");
     if (d->held)
         fatal("libhtml: a document was freed while nodes were still held\n");
     for (size_t i = 0; i < H_PINS; i++)

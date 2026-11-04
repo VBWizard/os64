@@ -497,6 +497,9 @@ void f_blend_matrix(const flow_transform_t *f, int64_t w, int64_t h, double out[
 
 typedef struct {
     flow_style_t style;
+    // Style equality does not imply unchanged text or child order.
+    bool steady, subtree_steady, reuse_safe;
+    size_t list_cost;
     // The element's animations, or NULL for none (motion.c).
     FMotion *motion;
     // Pass 2's question, answered bottom-up here: does this element make,
@@ -585,6 +588,9 @@ const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n);
 typedef struct {
     const os64_html_document_t *doc;
     const flow_env_t *env;
+    flow_env_t inputs;
+    uint64_t cascade_generation, cascade_updates, reused;
+    bool lists_refused;
     FArena arena;
     FMap map;               // element node -> FStyled
     size_t lists_left;      // of F_STYLE_LISTS_BUDGET
@@ -608,6 +614,8 @@ typedef struct {
 // differently (LAYOUT.md § Proof, the prefix rule).
 FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
                        const flow_env_t *env);
+FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
+                              const flow_env_t *env, const FStyles *previous);
 // NULL for a node with no style: not an element, or inside a
 // `display: none` subtree, which pass 1 does not descend into.
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
@@ -629,6 +637,8 @@ typedef struct { double px, pct; bool number; } FNumeric;
 bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_font,
                      const garb_val_t *value, FNumeric *out);
 uint32_t f_style_colour(garb_color_t color);
+// Compare scalar and pointed-to style values, independent of their arenas.
+bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
 void f_style_free(FStyles *styles);
 // The styles pass 1 made for a tree, which live as long as it does.
 const FStyles *f_tree_styles(const flow_tree_t *tree);
@@ -714,6 +724,7 @@ static inline bool f_overflow_scrolls(flow_overflow_t o)
 }
 
 typedef struct FBox FBox;
+typedef struct FReuseCall FReuseCall;
 typedef struct FLine FLine;
 typedef struct FFrag FFrag;
 typedef struct FSpan FSpan;
@@ -884,6 +895,10 @@ struct FBox {
     int32_t grid_row, grid_col;
     int64_t area_dx;
     uint32_t laid;
+    // The post-clearance call origin moves with translate(). The optional
+    // signature is owned by this tree's bounded snapshot metadata.
+    int64_t origin_x, origin_y;
+    FReuseCall *reuse_call;
 };
 
 // One element that is a containing block (f_contains_absolute; POSITION.md):
@@ -942,6 +957,7 @@ typedef struct {
     FArena arena;
     const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
+    uint64_t count;              // boxes allocated, including anonymous boxes
     // Every containing block's entry, in tree order; and the out-of-flow
     // boxes of the initial containing block.
     FPos *positioned, *last_positioned;
@@ -951,6 +967,33 @@ typedef struct {
     // stopped at the first thing it could not make.
     bool incomplete;
 } FBoxes;
+
+// Relative call results remain valid when a parent translates a subtree.
+struct FReuseCall {
+    FBox *box;
+    int64_t cbw, cbh, forced_w, pm_pos, pm_neg;
+    int64_t delta_y, out_pos, out_neg, first_delta, float_min;
+    flow_text_align_t parent_align;
+    bool first_set, result_first_set, bfc, valid, float_free, has_queries;
+};
+typedef struct {
+    FBox *box;
+    const FBox *old;
+    size_t parent, subtree_count;
+    bool equal, ordinary;
+    flow_reuse_reason_t reason;
+} FReusePair;
+typedef struct { const void *from; void *to; } FReusePointer;
+typedef struct {
+    FReusePair *pairs;
+    uint32_t *slots;
+    FReusePointer *pointers;
+    size_t count, capacity, nslots, pointer_slots, bytes, staging_left;
+    flow_tree_t *tree;
+    const flow_tree_t *previous;
+} FReuseMatch;
+FReusePair *f_reuse_pair(const FReuseMatch *match, const FBox *box);
+void *f_reuse_pointer(const FReuseMatch *match, const void *old);
 
 // ── Pass 3: lines and fragments (layout.c) ──────────────────────────────
 
@@ -1027,7 +1070,7 @@ typedef struct {
     int64_t width, height;          // the page's, 26.6
     // How many times an inline formatting context was measured: the cost
     // the harness holds to a linear bound (LAYOUT.md § Bounds).
-    uint64_t measures;
+    uint64_t measures, reused;
     // How many steps the exclusion spaces walked, read and moved (FLOATS.md
     // § Bounds): what the harness holds linear in the floats and lines.
     uint64_t float_walk;
@@ -1056,6 +1099,9 @@ bool f_bfc_root(const FBox *b);
 // memory for the layout record.
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
                   const flow_env_t *env, int32_t width);
+FLayout *f_layout_reusing(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
+                          const flow_env_t *env, int32_t width, FReuseMatch *match,
+                          flow_reuse_stats_t *stats);
 void f_layout_free(FLayout *layout);
 
 // The most frames one sticky box's push may be worked from, itself, the

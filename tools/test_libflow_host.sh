@@ -2,9 +2,9 @@
 # libflow on the host, under the sanitizers: markup in, what libflow makes
 # of it out.
 #
-# The expected dumps in tools/test_libflow_*.inc are computed BY HAND from
-# the standard, never captured from the engine (LAYOUT.md § Proof), so a
-# case that passes says the engine agrees with the rule, not with itself.
+# Literal expected dumps in tools/test_libflow_*.inc are computed by hand
+# from the standard (LAYOUT.md § Proof). Incremental-layout oracles compare
+# independent whole layouts for equivalence and ownership.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 

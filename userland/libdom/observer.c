@@ -4,7 +4,7 @@
 /* MUTATIONOBSERVER (DOM § 4.3; CUSTOM_ELEMENTS.md, the third cut; RELAYOUT.md
  * § "MutationObserver reads the log", built on the document's listener).
  *
- * The listener (os64_html_observe, custom.c's `changed`) hands every change
+ * The shared dispatcher (mutation.c's `changed`) hands every change
  * here as it happens, inside the verb, and this runs the standard's "queue a
  * mutation record": it walks the target's inclusive ancestors as the tree
  * stands at that instant, finds each registration whose options match, and
@@ -719,8 +719,8 @@ static JSValue record_member(JSContext *ctx, JSValueConst self, int argc, JSValu
 }
 
 /* The MutationObserver row (modern.c): MutationObserver, which constructs,
- * and MutationRecord, an Illegal constructor. The document's listener is
- * the custom elements row's, which hands every change here first. */
+ * and MutationRecord, an Illegal constructor. The shared mutation
+ * dispatcher hands each change here before feature consumers. */
 int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static const JSClassDef observer_def = {.class_name = "MutationObserver", .finalizer = observer_finalizer,
