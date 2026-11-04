@@ -81,6 +81,15 @@ static void io_containing_blocks(void) {
     check(loop_settle() && io_turns() && probe_text_is("out","in:false,abs:true,rin:true,rabs:false"),
           "io: the clip cuts its in-flow child, and an absolute box escapes it and its chain");
     loop_drop();
+    /* A scaled root's padding box is inset by its painted border, 2 x 10. */
+    loop_page("<style>body{margin:0}#r{overflow:hidden;width:100px;height:100px;border:10px solid;"
+        "transform:scale(2);transform-origin:0 0}#t{height:10px}</style>" IO_OUT IO_LOG
+        "<div id=r><div id=t></div></div><script>"
+        "new IntersectionObserver(function(es){var b=es[0].rootBounds;said([b.left,b.top,b.right,b.bottom].join(' '))},"
+        "{root:document.getElementById('r')}).observe(document.getElementById('t'));</script>");
+    check(loop_settle() && io_turns() && probe_text_is("out","20 20 220 220"),
+          "io: a transformed root's rectangle is its padding box where it is painted");
+    loop_drop();
 }
 
 /* The step runs after the animation frame callbacks, on the layout they

@@ -84,8 +84,8 @@ struct DIntersections {
     /* Targets waiting for their first observation. */
     size_t owed;
     /* The notify task is queued; an observer has died since the last
-     * sweep. */
-    bool queued, has_dead;
+     * sweep; the notify is walking the observers, and no sweep may run. */
+    bool queued, has_dead, walking;
     /* Observations not made, or entries not kept, for want of memory:
      * reported at the next notify, which a loss queues. */
     uint64_t lost;
@@ -162,6 +162,8 @@ static void target_remove(os64_dom_t *dom, DTarget *t)
     o->ntargets--;
     s->observed--;
     if (t->previous_index < 0) s->owed--;
+    /* With nothing observed no step runs, so no delay can be owed one. */
+    if (s->observed == 0) s->delayed_due = UINT64_MAX;
     os64_html_release(dom->document, t->node);
     d_free(dom, t);
 }
@@ -187,11 +189,13 @@ static void observer_unlink_free(os64_dom_t *dom, DIObserver *o)
     d_free(dom, o);
 }
 
-/* Observers whose objects are gone, freed: only between walks. */
+/* Observers whose objects are gone, freed: only between walks. The step,
+ * the notify and every new observer sweep, so a page that makes and drops
+ * observers holds no more of them than it has made since its last. */
 static void sweep(os64_dom_t *dom)
 {
     struct DIntersections *s = dom->intersections;
-    if (!s->has_dead) return;
+    if (!s->has_dead || s->walking) return;
     s->has_dead = false;
     for (DIObserver *o = s->observers; o != NULL;) {
         DIObserver *next = o->next;
@@ -536,8 +540,10 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
         if (ctx != NULL) report_lost(dom, ctx);
         /* The observers made by a callback meanwhile wait for the next
          * task; none of those visited can be freed under the walk, since
-         * the sweep runs only between walks. */
+         * no sweep runs while it walks (`walking`), a constructor's in a
+         * callback included. */
         DIObserver *last = s->observers_last;
+        s->walking = true;
         for (DIObserver *o = s->observers; ctx != NULL && o != NULL && !dom->closed;) {
             DIObserver *next = o == last ? NULL : o->next;
             if (o->first != NULL && !o->dead && JS_IsObject(o->object)) {
@@ -571,6 +577,7 @@ bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *out)
             }
             o = next;
         }
+        s->walking = false;
         d_task_finish(dom, out);
     }
     d_task_close(dom, name, out);
@@ -785,14 +792,31 @@ static int read_thresholds(os64_dom_t *dom, JSContext *ctx, JSValueConst value, 
     return number_each(n, ctx, value);
 }
 
-/* Ascending, in place: a page's list of thresholds is short. */
+static void sift_down(double *v, size_t at, size_t n)
+{
+    for (;;) {
+        size_t big = at, l = 2 * at + 1, r = l + 1;
+        if (l < n && v[l] > v[big]) big = l;
+        if (r < n && v[r] > v[big]) big = r;
+        if (big == at) return;
+        double x = v[at];
+        v[at] = v[big];
+        v[big] = x;
+        at = big;
+    }
+}
+
+/* Ascending, in place, a heap sort: a page may hand over as long a list
+ * as its quota holds, and the constructor must not take quadratic time
+ * over it. */
 static void sort_numbers(double *v, size_t n)
 {
-    for (size_t i = 1; i < n; i++) {
-        double x = v[i];
-        size_t j = i;
-        for (; j > 0 && v[j - 1] > x; j--) v[j] = v[j - 1];
-        v[j] = x;
+    for (size_t i = n / 2; i-- > 0;) sift_down(v, i, n);
+    for (size_t end = n; end > 1; end--) {
+        double x = v[0];
+        v[0] = v[end - 1];
+        v[end - 1] = x;
+        sift_down(v, 0, end - 1);
     }
 }
 
@@ -840,6 +864,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     struct DIntersections *s = dom->intersections;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
         return JS_ThrowTypeError(ctx, "IntersectionObserver needs a callback");
+    sweep(dom);
     /* IntersectionObserverInit converted whole first, its members read in
      * WebIDL's order (lexicographic): delay, root, rootMargin,
      * scrollMargin, threshold, trackVisibility. Then the standard's

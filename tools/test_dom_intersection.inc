@@ -455,6 +455,35 @@ static void dom_intersection_step_cases(void)
     check(os64_dom_intersections_owed(f.binding), "intersection: its delay run, the step is owed though nothing moved");
     check(io_frame(&f, "intersection: past the delay"), "intersection: past the delay");
     io_script(&f, "assert(L.length===2&&!L[1].isIntersecting);dl.disconnect();", "intersection: delayed entry");
+    /* A target passed over and then let go owes nothing: no step runs
+     * with nothing observed, so its deadline must not wake the host. */
+    io_script(&f, "globalThis.d2=new IntersectionObserver(()=>{},{delay:100});d2.observe(one);",
+              "intersection: delayed and dropped");
+    check(io_frame(&f, "intersection: its first"), "intersection: delayed and dropped, first");
+    io_place("one", 0, 0, 10, 10);
+    p2b_advance(10);
+    (void)os64_dom_intersections_update(f.binding);
+    check(os64_dom_intersections_next(f.binding) != UINT64_MAX, "intersection: passed over, a deadline");
+    io_script(&f, "d2.disconnect();", "intersection: dropped");
+    check(os64_dom_intersections_next(f.binding) == UINT64_MAX && !os64_dom_intersections_owed(f.binding),
+          "intersection: with nothing observed, no deadline and nothing owed");
+
+    /* A long list is sorted exactly, and in less than quadratic time. */
+    io_script(&f,
+        "let list=[];for(let i=0;i<20000;i++)list.push(((i*7919)%20000)/20000);"
+        "let t=new IntersectionObserver(()=>{},{threshold:list}).thresholds;"
+        "assert(t.length===20000);for(let i=1;i<t.length;i++)if(t[i-1]>t[i])throw Error('unsorted at '+i);",
+        "intersection: thresholds sorted");
+
+    /* Observers a page makes and drops are freed when it makes the next,
+     * not kept to the page's end. */
+    io_script(&f, "for(let i=0;i<200;i++)new IntersectionObserver(()=>{},{threshold:[0.1,0.2,0.3]});",
+              "intersection: two hundred dropped");
+    os64_js_outcome_t gc;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc)));
+    size_t before = os64_dom_bytes(f.binding);
+    io_script(&f, "new IntersectionObserver(()=>{});", "intersection: one more");
+    check(os64_dom_bytes(f.binding) < before, "intersection: the next observer sweeps the dropped ones");
     fixture_free(&f);
 }
 

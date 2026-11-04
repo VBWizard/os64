@@ -149,9 +149,10 @@ geometry and view providers, and not a new mechanism.
    asked for**, the standard's order: animation frames, then style and
    layout, then intersections, then paint.
    - **In yonder's turn** that is after `script_turn` (the batch and the
-     `script_rebuild` that follows it) and after `motion_tick`'s layout, and
-     before `before_paint`. The geometry is the layout about to be painted,
-     so an entry describes the frame the person sees.
+     `script_rebuild` that follows it), after `motion_tick`'s layout and
+     `before_paint`'s catch-up ticks, and right before `glass_paint`. The
+     geometry is the layout about to be painted, so an entry describes the
+     frame the person sees.
    - **A turn with no animation callbacks runs it too.** A scroll moves
      targets without any script asking for a frame.
    - **While the window is covered it does not run**, as the animation
@@ -305,7 +306,8 @@ the judge, and each of these follows it:
     of the asked elements;
   - then each target's clip chain to its root.
 - **The step.** `intersections_turn` runs in the window loop after
-  `script_turn` and `motion_tick` and before `before_paint`:
+  `script_turn`, `motion_tick` and `before_paint`, right before
+  `glass_paint`:
   - it runs only when something moved since the last answered batch: a tree
     given to a Page, an animation tick that moved boxes, the page's or a
     box's scroll, the zoom, or the view's size;

@@ -2912,6 +2912,13 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
     return doc_rect_of(box, box->rect, scroll);
 }
 
+os64_gui_rect_t flow_box_doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll)
+{
+    if (box == NULL)
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    return doc_rect_of(box, local, scroll);
+}
+
 // A rect in box `box`'s coordinates where the page paints it: moved by the
 // frames it is in, and through each drawn-through transform, the bounds
 // of its corners.

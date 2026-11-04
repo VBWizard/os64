@@ -10348,8 +10348,10 @@ static Observed observed_now(void)
 
 // THE INTERSECTION STEP (INTERSECTION_OBSERVER.md § 5, rule 2): the
 // rendering step's, after the animation frame callbacks and the layout
-// they asked for (script_turn) and a CSS animation's (motion_tick), and
-// before the paint, when something an observation reads has moved since
+// they asked for (script_turn), a CSS animation's (motion_tick) and the
+// catch-up ticks a whole-view paint brings to now (before_paint), and
+// right before the paint, so it measures the frame shown, when something
+// an observation reads has moved since
 // the last batch was answered — a new layout, a tick that moved boxes,
 // the page's or a box's scroll, the zoom, the view's size — or one is owed
 // (a target waits for its first, or a delay passed one over and has run:
@@ -16358,8 +16360,8 @@ int main(int argc, char **argv)
         downloads_turn();
         pictures_settle();
         title_follow();
-        bool observed = intersections_turn();
         before_paint();
+        bool observed = intersections_turn();
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
         motion_painted();

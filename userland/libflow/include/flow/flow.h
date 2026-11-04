@@ -1417,6 +1417,10 @@ flow_point_t flow_box_layout_offset(const flow_box_t *box, flow_point_t scroll);
 // offset, and inside a drawn-through box the bounds of its four corners
 // taken out through every matrix (CSSOM View's rect of a transformed box).
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
+// The same for any rect `local` in the box's own coordinates (its rect's):
+// its padding box, say, taken out through the same offset and matrices, so
+// an inset is the painted one and not the layout's.
+os64_gui_rect_t flow_box_doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll);
 // The document point (x, y) in `box`'s own coordinates — its rect's — taken
 // in through every drawn-through box it is in: false where a matrix cannot
 // be undone (a scale of 0).

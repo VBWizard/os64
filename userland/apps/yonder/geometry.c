@@ -232,15 +232,17 @@ static void css_rect(const Bounds *b, flow_point_t scroll, double scale, double 
     out[3] = (double)(b->bottom - scroll.y) * scale;
 }
 
-// A box's padding box, where it is painted, in document pixels.
+// A box's padding box, where it is painted, in document pixels: inset in
+// the box's own coordinates first, then taken out through its transforms,
+// so a scaled border insets by its painted width.
 static Bounds padding_bounds(const flow_box_t *box, flow_point_t scroll)
 {
-    os64_gui_rect_t r = flow_box_doc_rect(box, scroll);
-    Bounds b = {true, (int64_t)r.x + border(box, FLOW_LEFT), (int64_t)r.y + border(box, FLOW_TOP),
-                (int64_t)r.x + r.w - border(box, FLOW_RIGHT), (int64_t)r.y + r.h - border(box, FLOW_BOTTOM)};
-    if (b.right < b.left) b.right = b.left;
-    if (b.bottom < b.top) b.bottom = b.top;
-    return b;
+    int64_t w = (int64_t)box->rect.w - border(box, FLOW_LEFT) - border(box, FLOW_RIGHT);
+    int64_t h = (int64_t)box->rect.h - border(box, FLOW_TOP) - border(box, FLOW_BOTTOM);
+    os64_gui_rect_t local = {box->rect.x + border(box, FLOW_LEFT), box->rect.y + border(box, FLOW_TOP),
+                             (int32_t)(w > 0 ? w : 0), (int32_t)(h > 0 ? h : 0)};
+    os64_gui_rect_t r = flow_box_doc_rect_of(box, local, scroll);
+    return (Bounds){true, r.x, r.y, (int64_t)r.x + r.w, (int64_t)r.y + r.h};
 }
 
 static bool connected(const os64_html_document_t *document, const os64_html_node_t *node)
