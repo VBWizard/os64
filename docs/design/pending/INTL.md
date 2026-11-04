@@ -5,7 +5,7 @@ the wall that empties all three of the GitHub pages before they draw, by
 module-scope constructions (`new Intl.DateTimeFormat(...)` first, then
 NumberFormat, Collator and ListFormat) that abort megabyte-long modules
 half made. Reviewed by Fable the same day (build it; ten findings, folded
-in); three rulings are Chris's (§ 9).*
+in); Chris ruled the rest the same day (§ 9).*
 
 ## 1. What pages ask of it, counted
 
@@ -313,18 +313,18 @@ hand because the census could not).
 ## 9. The cut, and the rulings
 
 Fable reviewed this design on 2026-11-04 (INTL_REVIEW.md, untracked):
-build it, with ten findings, all folded in above. Where each ruling
-stands:
+build it, with ten findings, all folded in above. Every ruling is
+made:
 
-1. **Fidelity (Chris's; Fable concurs).** Chrome's strings for en-US,
+1. **Fidelity (Chris RULED 2026-11-04; Fable concurred).** Chrome's strings for en-US,
    held byte for byte by captured fixtures (§ 8), over CLDR data with a
    named version (§ 4.2); where Chrome and Firefox disagree, Chrome.
-2. **Time-zone history (Chris's; Fable concurs).** Current rules; the
+2. **Time-zone history (Chris RULED 2026-11-04; Fable concurred).** Current rules; the
    transitions booked with their 400 KiB named (§ 5).
 3. **Lazy loading (Fable's, ruled).** Measure first; eager if a realm
    pays under the budget; otherwise real constructors and prototypes with
    only the data loaded on first use; never stub constructors (§ 6).
-4. **The switch (Chris's; Fable concurs).** In yonder, behind
+4. **The switch (Chris RULED 2026-11-04; Fable concurred).** In yonder, behind
    `modern = on` like every slice; with it off, a page sees today's
    QuickJS (no `Intl`, today's `toLocale*`). The `js` command installs it
    unconditionally: a shell has no Modern Web switch and no classic page
