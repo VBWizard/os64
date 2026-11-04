@@ -2115,6 +2115,8 @@ static int supports_doors(void)
         // A custom property's name is a string test; nothing else may
         // become one in the reading.
         {"--a.b", "1", 1}, {"--a b", "1", 1}, {" --\\0", "x", 0}, {"--x", "a;b", 0}, {"--x", "a)", 0},
+        // At any depth, but for `;`, which a function or block may hold.
+        {"--x", "foo(url(a b))", 0}, {"--x", "foo(])", 0}, {"--x", "foo(a;b)", 1}, {"--x", "[a;b]", 1},
     };
     garb_reading_t how = {0};
     int failed = 0;

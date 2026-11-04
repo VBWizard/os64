@@ -1200,17 +1200,29 @@ static bool sword(const garb_value_t *t, const char *w)
 
 static int supports_condition(garb_reading_t how, garb_parsed_t *owner, SCur *s);
 
-// Whether a custom property's value is a <declaration-value> (Syntax 3
-// § 8.2): no top-level `;`, no closing bracket with nothing open, and no
-// bad string or bad URL.
-static bool declaration_value(const garb_decl_t *d)
+// Whether component values hold no closing bracket with nothing open, no
+// bad string and no bad URL, at any depth (a function's arguments and a
+// block's contents included), and, at the top only, no `;`. The parser
+// bounds the depth this walks (GARB_DEPTH_MAX).
+static bool declaration_tokens(const garb_value_t *v, int32_t n, bool top)
 {
-    for (int32_t k = 0; k < d->nvalue; k++) {
-        garb_kind_t kind = d->value[k].kind;
-        if (kind == GARB_SEMICOLON || kind == GARB_UNMATCHED || kind == GARB_BAD_STRING || kind == GARB_BAD_URL)
+    for (int32_t k = 0; k < n; k++) {
+        garb_kind_t kind = v[k].kind;
+        if ((top && kind == GARB_SEMICOLON) || kind == GARB_UNMATCHED || kind == GARB_BAD_STRING ||
+            kind == GARB_BAD_URL)
+            return false;
+        if ((kind == GARB_FUNCTION || kind == GARB_BLOCK) &&
+            !declaration_tokens(v[k].children, v[k].nchildren, false))
             return false;
     }
     return true;
+}
+
+// Whether a custom property's value is a <declaration-value> (Syntax 3
+// § 8.2): declaration_tokens over its value.
+static bool declaration_value(const garb_decl_t *d)
+{
+    return declaration_tokens(d->value, d->nvalue, true);
 }
 
 // A declaration, as @supports and CSS.supports ask after one: supported if
