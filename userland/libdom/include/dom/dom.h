@@ -283,8 +283,10 @@ typedef struct {
     uint64_t layouts, elapsed_us;
     int32_t scroll_left, scroll_top;
     /* scrollWidth and scrollHeight (CSSOM View § 7): the element's scrolling
-     * area, for the viewport's element (the root, or the body in quirks)
-     * the viewport's; 0 for an element with no box. */
+     * area, the page's for the element whose scroll is the view's (the
+     * root in no-quirks mode, the body in quirks mode when it is not
+     * potentially scrollable); 0 for an element with no box. scroll_left
+     * and scroll_top read by the same rule. */
     int32_t scroll_width, scroll_height;
 } os64_dom_geometry_t;
 
@@ -512,16 +514,16 @@ typedef struct {
     void *opaque;
     /* An element's own scroll (CSSOM View § 7, "scroll an element"): the
      * page's layout made current, then the scroll container `element`
-     * makes scrolled to (x, y) CSS pixels, clamped to what it can scroll;
-     * an element that makes none is left alone and answers true. False
-     * when no current layout could be made. NULL: elements scroll nothing.
-     * The binding has answered the root and the quirks body (the view's)
-     * before asking. */
+     * makes scrolled to (x, y) CSS pixels, clamped to what it can scroll,
+     * an axis given as NaN left where it is; an element that makes none is
+     * left alone and answers true. False when no current layout could be
+     * made. NULL: elements scroll nothing. The binding has answered the
+     * elements whose scroll is the view's before asking. */
     bool (*scroll_element)(void *opaque, const os64_html_node_t *element, double x, double y,
                            os64_dom_geometry_stats_t *cost);
 } os64_dom_view_provider_t;
 /* Copied; NULL removes it, after which the view reads as zeros and a
- * scroll moves nothing. Both callbacks are owner-thread and must not enter
+ * scroll moves nothing. The callbacks are owner-thread and must not enter
  * JS or pump events. The view is read once now, so the first
  * os64_dom_view_step compares against the view as it stood here. Install
  * outside callbacks. */

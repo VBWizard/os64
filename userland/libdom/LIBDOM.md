@@ -793,7 +793,7 @@ location, [LegacyUnforgeable], with its own `valueOf` and
 over a prototype level of its own, empty without the switch, so its chain
 has the same levels either way, and each member checks that it is called
 on its object, with the switch or without).
-An element's own scroll is a fifth row (CSSOM View § 7, `view.c`'s
+An element's own scroll is a row of its own (CSSOM View § 7, `view.c`'s
 `d_element_scroll_install`): setters beside the classic `scrollLeft` and
 `scrollTop` getters, `scrollWidth` and `scrollHeight`, and `scroll`,
 `scrollTo` and `scrollBy`. The root, and the body in quirks mode when it

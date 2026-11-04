@@ -166,6 +166,35 @@ static void io_element_scroll(void) {
           "and the observer sees the item come in");
     check(g.sy==1000,"scroll: the page moved");
     loop_drop();
+    /* The getters read the scroller the setters move: a body that scrolls
+     * in standards mode (the app-shell layout), and an inline-block's
+     * container rather than its atom; scrollBy adds up on both. */
+    loop_page("<style>html{overflow:hidden}body{margin:0;overflow:auto;height:300px}"
+        "#ib{display:inline-block;overflow:auto;width:100px;height:50px}</style>" IO_OUT IO_LOG
+        "<span id=ib><div style='height:300px'></div></span><div style='height:4000px'></div><script>"
+        "setTimeout(function(){var b=document.body,ib=document.getElementById('ib');"
+        "b.scrollTop=500;b.scrollBy(0,100);b.scrollBy(0,100);ib.scrollTop=30;ib.scrollBy(0,10);"
+        "said([b.scrollTop,ib.scrollTop,ib.scrollHeight,ib.clientHeight].join(' '))},10);</script>");
+    check(loop_settle() && io_turns(),"scroll: an app shell arrives");
+    now_ms+=20;
+    bool shell=io_turns() && probe_text_is("out","700 40 300 50");
+    if(!shell) fprintf(stderr,"app shell said: %s\n",probe_text_of("out"));
+    check(shell,"scroll: a scrolling body and an inline-block read back what was set, and scrollBy adds");
+    loop_drop();
+    /* A script's scroll replaces an older one a later layout would bring
+     * back: scrolled down, emptied (the layout holds it at 0), set to 0,
+     * refilled: it stays at the top. */
+    loop_page("<style>body{margin:0}#l{height:100px;overflow:auto}.r{height:50px}</style>" IO_OUT IO_LOG
+        "<div id=l></div><script>var l=document.getElementById('l');"
+        "function fill(){for(var i=0;i<40;i++){var d=document.createElement('div');d.className='r';l.appendChild(d)}}"
+        "fill();setTimeout(function(){l.scrollTop=1000;said(l.scrollTop)},10);"
+        "setTimeout(function(){l.replaceChildren()},20);"
+        "setTimeout(function(){l.scrollTop=0;fill()},30);"
+        "setTimeout(function(){said(l.scrollTop)},40);</script>");
+    check(loop_settle() && io_turns(),"scroll: a list arrives");
+    for(int i=0;i<4;i++){ now_ms+=10; check(io_turns(),"scroll: the list's timers"); }
+    check(probe_text_is("out","1000,0"),"scroll: reset to the top and refilled, it stays at the top");
+    loop_drop();
 }
 
 static void io_cases(void) {

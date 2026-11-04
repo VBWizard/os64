@@ -1,4 +1,5 @@
 #include <float.h>
+#include <math.h>
 
 #include "internal.h"
 #include "garb/cascade.h"
@@ -10,9 +11,10 @@
  * scrollingElement, an element's own scroll (§ 7), matchMedia and its
  * MediaQueryLists, getComputedStyle, and the events the view owes a page
  * when it moves (os64_dom_view_step).
- * The host answers through two providers, the view's and the computed
- * style's (dom.h); every name here is a row of the Modern Web table
- * (modern.c). */
+ * The host answers through the view's and the computed style's providers,
+ * and an element's scroll reads its geometry through the geometry
+ * provider's (d_geometry_read; dom.h); every name here is a row of the
+ * Modern Web table (modern.c). */
 
 static JSClassID media_slot, computed_slot;
 
@@ -620,15 +622,17 @@ enum { SCROLLS_NOTHING, SCROLLS_VIEW, SCROLLS_OWN };
 
 // What scrolling `element` scrolls, as the setters' and scroll()'s steps
 // decide it: nothing for an element of a document that is not the
-// window's, a foreign one (outside the geometry contract), or the root in
-// quirks mode; the view for the root, and for the body in quirks mode when
-// it is not potentially scrollable; else its own scroll container. -1
-// with an exception pending.
+// window's or the root in quirks mode; the view for the root, whatever its
+// namespace, and for the body in quirks mode when it is not potentially
+// scrollable; nothing for another foreign element (outside the geometry
+// contract); else its own scroll container. yonder's geometry snapshot
+// reads by the same rule. -1 with an exception pending.
 static int scroll_owner(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element)
 {
-    if (!d_window_document(dom, element) || element->ns != OS64_HTML_NS_HTML) return SCROLLS_NOTHING;
+    if (!d_window_document(dom, element)) return SCROLLS_NOTHING;
     bool quirks = dom->document->quirks == OS64_HTML_QUIRKS;
     if (element == root_element(dom)) return quirks ? SCROLLS_NOTHING : SCROLLS_VIEW;
+    if (element->ns != OS64_HTML_NS_HTML) return SCROLLS_NOTHING;
     if (quirks && element == body_element(dom)) {
         int scrolls = body_scrolls(dom, ctx, element);
         if (scrolls < 0) return -1;
@@ -706,15 +710,20 @@ static JSValue element_scroll_member(JSContext *ctx, JSValueConst self, int argc
     int owner = scroll_owner(dom, ctx, element);
     if (owner < 0) return JS_EXCEPTION;
     if (owner == SCROLLS_NOTHING) return JS_UNDEFINED;
-    double now_x, now_y;
-    if (!element_scroll_now(dom, ctx, element, owner, &now_x, &now_y)) return JS_EXCEPTION;
+    // An axis the call leaves alone goes to an element's door as NaN, kept
+    // where it is: read back through the integer getter and written again
+    // it could move by a rounding. The view's door takes both numbers.
+    bool own = owner == SCROLLS_OWN;
+    double now_x = 0, now_y = 0;
+    if ((!own || (magic == E_SCROLL_BY && (has_x || has_y))) &&
+        !element_scroll_now(dom, ctx, element, owner, &now_x, &now_y))
+        return JS_EXCEPTION;
     if (magic == E_SCROLL_BY) {
-        x = now_x + x;
-        y = now_y + y;
-    } else {
-        if (!has_x) x = now_x;
-        if (!has_y) y = now_y;
+        if (has_x) x += now_x;
+        if (has_y) y += now_y;
     }
+    if (!has_x) x = own ? NAN : now_x;
+    if (!has_y) y = own ? NAN : now_y;
     return element_scroll_to(dom, ctx, element, owner, x, y);
 }
 

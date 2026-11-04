@@ -7,6 +7,7 @@
 #include <dom/dom.h>
 #include <html/html.h>
 #include <page/page.h>
+#include <math.h>
 
 int64_t os64_open(const char *path, const char *mode)
 { (void)path; (void)mode; return -1; }
@@ -357,7 +358,7 @@ static void dom_geometry_cases(void)
 typedef struct {
     DomFixture *fixture;
     double left, top;
-    unsigned scrolls;
+    unsigned scrolls, untouched;
     bool refuse;
 } ScrollFake;
 
@@ -389,8 +390,9 @@ static bool fake_scroll_box(void *opaque, const os64_html_node_t *element, doubl
     s->scrolls++;
     if (s->refuse) return false;
     if (!scroll_is_box(element)) return true;
-    s->left = x < 0 ? 0 : x > 300 ? 300 : x;
-    s->top = y < 0 ? 0 : y > 600 ? 600 : y;
+    s->untouched += isnan(x) + isnan(y);
+    if (!isnan(x)) s->left = x < 0 ? 0 : x > 300 ? 300 : x;
+    if (!isnan(y)) s->top = y < 0 ? 0 : y > 600 ? 600 : y;
     return true;
 }
 
@@ -431,6 +433,12 @@ static void dom_element_scroll_cases(void)
         "assert(scrollY===0,'an element of another document scrolls nothing');",
         "element scroll");
     check(s.scrolls > 0, "element scroll: the box's door was asked");
+    unsigned untouched = s.untouched;
+    dom_script(&f, GEOMETRY_ASSERT
+        "var b=document.getElementById('box');b.scrollLeft=9;b.scrollTop=4;b.scrollBy({top:1});"
+        "assert(b.scrollLeft===9&&b.scrollTop===5);",
+        "element scroll: one axis");
+    check(s.untouched == untouched + 3, "element scroll: the axis a call leaves alone is sent as NaN, not read back");
     s.refuse = true;
     dom_script(&f, GEOMETRY_ASSERT
         "throws('InvalidStateError',()=>{document.getElementById('box').scrollTop=3});",

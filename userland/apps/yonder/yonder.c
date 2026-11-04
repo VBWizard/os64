@@ -1460,16 +1460,39 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     return true;
 }
 
+static bool node_in_document(const os64_html_document_t *doc, const os64_html_node_t *node)
+{
+    while (node->parent != NULL)
+        node = node->parent;
+    return doc != NULL && node == doc->document;
+}
+
 // Remembers where a box was scrolled to, for the layouts after this one.
 // Out of memory, it is forgotten: the next layout starts the box at the
 // top, which is what it did before a person scrolled it.
 static void page_keep_box_scroll(Page *p, const os64_html_node_t *node, flow_point_t at)
 {
-    for (int32_t i = 0; i < p->nbox_scrolls; i++)
-        if (p->box_scrolls[i].node == node) {
-            p->box_scrolls[i].at = at;
-            return;
+    // A box at its start is forgotten, since a new layout starts it there,
+    // and one whose element has left the document is let go: a page that
+    // scrolls many short-lived boxes by script keeps only those it shows.
+    const os64_html_document_t *doc = page_doc(p);
+    bool start = at.x == 0 && at.y == 0, found = false;
+    int32_t kept = 0;
+    for (int32_t i = 0; i < p->nbox_scrolls; i++) {
+        BoxScroll e = p->box_scrolls[i];
+        if (e.node == node) {
+            found = true;
+            e.at = at;
         }
+        if ((e.node == node && start) || (e.node != node && !node_in_document(doc, e.node))) {
+            os64_html_release(doc, e.node);
+            continue;
+        }
+        p->box_scrolls[kept++] = e;
+    }
+    p->nbox_scrolls = kept;
+    if (found || start)
+        return;
     if (p->nbox_scrolls == p->cap_box_scrolls) {
         int32_t cap = p->cap_box_scrolls != 0 ? p->cap_box_scrolls * 2 : 8;
         BoxScroll *grown = os64_realloc(p->box_scrolls, (size_t)cap * sizeof(*grown));
@@ -11106,9 +11129,15 @@ static bool view_scroll_element(void *opaque, const os64_html_node_t *element, d
         return true;
     double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
     flow_point_t was = flow_scroll_at(g.page.tree, i);
-    flow_point_t now = flow_scroll_set(g.page.tree, i, (flow_point_t){device_px(x * z), device_px(y * z)});
+    // An axis asked as NaN stays where it is (dom.h).
+    flow_point_t to = {isnan(x) ? was.x : device_px(x * z), isnan(y) ? was.y : device_px(y * z)};
+    flow_point_t now = flow_scroll_set(g.page.tree, i, to);
+    // Kept whether or not it moved: the tree holds a position clamped to
+    // what the box can scroll now, while the kept one is what was asked,
+    // and a script's scroll to where the tree already is must replace an
+    // older wish a later layout would otherwise bring back.
+    page_keep_box_scroll(&g.page, element, now);
     if (now.x != was.x || now.y != was.y) {
-        page_keep_box_scroll(&g.page, element, now);
         mark_whole(WHOLE_SCROLL, false);
         forms_place();
         pictures_schedule();
