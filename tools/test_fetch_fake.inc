@@ -15,7 +15,9 @@
  *   - a request with a method_name follows no redirect: a 301, 302, 303,
  *     307 or 308 ends as REDIRECT_STOPPED with its head readable;
  *   - a HEAD's answer and a 204, 205 or 304 have no body;
- *   - max_body is refused on the read that would pass it, as LIMIT.
+ *   - max_body is refused on the read that would pass it, as LIMIT;
+ *   - a body may arrive in pieces, or break part way (fake_answer_t's
+ *     piece and cut), with a host's hook run between reads.
  *
  * An answer comes from fake_answers (the first whose method, when it names
  * one, and address match), else from fake_resolve when a host set one; an
@@ -36,7 +38,16 @@ typedef struct {
     const char *omitted;        /* "name\r\n" lines read by name alone */
     const char *body;
     size_t body_len;            /* 0 with a body: its strlen */
+    /* A body that arrives in pieces: at most `piece` bytes a read (0: as
+     * many as asked for), and, with `cut`, a connection that BROKE once
+     * `cut` bytes were read. */
+    size_t piece, cut;
 } fake_answer_t;
+
+/* Called before each read that hands over bytes, with the bytes read so
+ * far: a host turns its window there, as it would while a worker waits on
+ * the wire. NULL calls nothing. */
+static void (*fake_read_hook)(size_t at);
 
 #define FAKE_ANSWERS 64
 static fake_answer_t fake_answers[FAKE_ANSWERS];
@@ -70,6 +81,7 @@ __attribute__((unused)) static void fake_fetch_reset(void) {
     memset(fake_requests,0,sizeof(fake_requests)); nfake_requests=0;
     fake_reads=fake_closes=fake_opens=0;
     fake_resolve=NULL;
+    fake_read_hook=NULL;
 }
 
 __attribute__((unused)) static fake_answer_t *fake_answer(const char *method, const char *url, int32_t status, const char *headers,
@@ -211,8 +223,12 @@ int64_t os64_fetch_read(os64_fetch_t *f, void *buf, size_t cap) {
     if(cap==0) return -1;
     /* The status is the last outcome's: a read's, once one is made. */
     size_t left=f->body_len-f->at;
+    if(f->a.cut!=0 && f->at>=f->a.cut) { f->over=true; f->status=OS64_FETCH_BROKE; return -1; }
     if(left==0) { f->over=true; f->status=OS64_FETCH_OK; return 0; }
+    if(fake_read_hook!=NULL) fake_read_hook(f->at);
     size_t n=cap<left?cap:left;
+    if(f->a.piece!=0 && n>f->a.piece) n=f->a.piece;
+    if(f->a.cut!=0 && f->at+n>f->a.cut) n=f->a.cut-f->at;
     if(f->max_body && f->at+n>f->max_body) {
         if(f->at>=f->max_body) { f->over=true; f->status=OS64_FETCH_LIMIT; return -1; }
         n=(size_t)(f->max_body-f->at);

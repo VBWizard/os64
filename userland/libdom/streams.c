@@ -103,6 +103,11 @@ static JSValue streams_factory(JSContext *ctx)
     return JS_EvalFunction(ctx, function);
 }
 
+size_t d_streams_bytecode_kept(void)
+{
+    return __atomic_load_n(&s_bytecode_state, __ATOMIC_ACQUIRE) == CACHE_READY ? s_bytecode_length : 0;
+}
+
 /* An intrinsic: the name streams.js knows it by, and where it is, as a
  * dotted path from the global. GETTER takes the path's last member's own
  * getter instead of its value. */
@@ -156,6 +161,18 @@ static const struct {
      * a signal and on nothing else. */
     {"EventTarget_addEventListener", "AbortSignal.prototype.addEventListener", VALUE},
     {"EventTarget_removeEventListener", "AbortSignal.prototype.removeEventListener", VALUE},
+    /* The Encoding standard's streams decode and encode through the
+     * realm's TextDecoder and TextEncoder, and look at a string's code
+     * units through String's own methods. */
+    {"TextDecoder", "TextDecoder", VALUE},
+    {"TextDecoder_decode", "TextDecoder.prototype.decode", VALUE},
+    {"TextDecoder_encoding", "TextDecoder.prototype.encoding", GETTER},
+    {"TextDecoder_fatal", "TextDecoder.prototype.fatal", GETTER},
+    {"TextDecoder_ignoreBOM", "TextDecoder.prototype.ignoreBOM", GETTER},
+    {"TextEncoder", "TextEncoder", VALUE},
+    {"TextEncoder_encode", "TextEncoder.prototype.encode", VALUE},
+    {"String_charCodeAt", "String.prototype.charCodeAt", VALUE},
+    {"String_slice", "String.prototype.slice", VALUE},
 };
 
 /* The value at `path` from `global` (taken), JS_UNDEFINED when a step is
@@ -245,6 +262,7 @@ static const char *const kInterfaces[] = {
     "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController",
     "TransformStream", "TransformStreamDefaultController",
     "ByteLengthQueuingStrategy", "CountQueuingStrategy",
+    "TextDecoderStream", "TextEncoderStream",
 };
 
 int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
@@ -320,6 +338,11 @@ int d_stream_disturbed(os64_dom_t *dom, JSContext *ctx, JSValueConst stream)
     return door_bool(dom, ctx, "disturbed", stream);
 }
 
+int d_stream_readable(os64_dom_t *dom, JSContext *ctx, JSValueConst stream)
+{
+    return door_bool(dom, ctx, "readable", stream);
+}
+
 JSValue d_stream_spent(os64_dom_t *dom, JSContext *ctx, bool locked)
 {
     JSValueConst argv[1] = {JS_NewBool(ctx, locked)};
@@ -361,6 +384,33 @@ int d_stream_error(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, JSValue
 {
     JSValueConst argv[2] = {stream, reason};
     JSValue done = door_call(dom, ctx, "error", 2, argv);
+    if (JS_IsException(done)) return -1;
+    JS_FreeValue(ctx, done);
+    return 0;
+}
+
+JSValue d_stream_from_host(os64_dom_t *dom, JSContext *ctx, JSValueConst want, JSValueConst cancel)
+{
+    JSValueConst argv[2] = {want, cancel};
+    return door_call(dom, ctx, "fromHost", 2, argv);
+}
+
+int d_stream_enqueue(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, const uint8_t *bytes, size_t length)
+{
+    JSValue chunk = d_uint8_array(ctx, bytes, length);
+    if (JS_IsException(chunk)) return -1;
+    JSValueConst argv[2] = {stream, chunk};
+    JSValue taken = door_call(dom, ctx, "enqueue", 2, argv);
+    JS_FreeValue(ctx, chunk);
+    if (JS_IsException(taken)) return -1;
+    int yes = JS_ToBool(ctx, taken);
+    JS_FreeValue(ctx, taken);
+    return yes;
+}
+
+int d_stream_close(os64_dom_t *dom, JSContext *ctx, JSValueConst stream)
+{
+    JSValue done = door_call(dom, ctx, "close", 1, &stream);
     if (JS_IsException(done)) return -1;
     JS_FreeValue(ctx, done);
     return 0;

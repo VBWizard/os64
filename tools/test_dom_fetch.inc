@@ -22,6 +22,7 @@ size_t d_signal_dependents(JSValue signal);
 typedef struct {
     uint32_t token;
     uint64_t id;
+    unsigned mores;             /* how often the binding asked for more of its body */
     bool cancelled, preflight, has_body;
     char url[512], method[32], referrer[512];
     char headers[4096];
@@ -106,6 +107,13 @@ static void net_release(void *opaque, os64_dom_response_t *r)
     n->releases++;
 }
 
+static void net_more(void *opaque, uint64_t id)
+{
+    FakeNet *n = opaque;
+    for (size_t i = 0; i < n->count; i++)
+        if (n->seen[i].id == id) n->seen[i].mores++;
+}
+
 static DomFixture net_fixture_engine(const char *url, FakeNet *net, size_t engine_cap)
 {
     os64_dom_options_t options = os64_dom_default_options();
@@ -117,7 +125,7 @@ static DomFixture net_fixture_engine(const char *url, FakeNet *net, size_t engin
         f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
     }
     if (f.binding != NULL && net != NULL) {
-        const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, net};
+        const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, net, net_more};
         os64_dom_set_network(f.binding, &network);
     }
     return f;
@@ -144,6 +152,40 @@ static os64_js_status_t net_answer(DomFixture *f, FakeNet *n, size_t which, cons
     os64_js_status_t status = os64_dom_fetched(f->binding, n->seen[which].token, r, &outcome);
     if (status != OS64_JS_OK)
         fprintf(stderr, "fetched: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+/* A streamed answer to the request the net saw `which`th: its head, a
+ * piece of its body, its end; each a task. */
+static os64_js_status_t net_head(DomFixture *f, FakeNet *n, size_t which, const os64_dom_response_t *r)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetch_head(f->binding, n->seen[which].token, r, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "head: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+static os64_js_status_t net_piece_of(DomFixture *f, FakeNet *n, size_t which, const void *bytes, size_t length)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetch_body(f->binding, n->seen[which].token, bytes, length, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "piece: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+static os64_js_status_t net_piece(DomFixture *f, FakeNet *n, size_t which, const char *text)
+{
+    return net_piece_of(f, n, which, text, strlen(text));
+}
+
+static os64_js_status_t net_end(DomFixture *f, FakeNet *n, size_t which, bool ok)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetch_end(f->binding, n->seen[which].token, ok, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "end: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
     return status;
 }
 
@@ -1222,6 +1264,416 @@ static uint64_t fetch_steps_for(DomFixture *f, FakeNet *net, int kind, size_t n)
     return steps;
 }
 
+/* ── A streamed answer (STREAMS.md § 5, S3) ──────────────────────────── */
+
+/* The head settles the fetch; the body is a stream the host fills as the
+ * pieces come, asked for one piece per read; pieces nobody asked for wait
+ * in its queue; the end closes it or errors it; an abort, the page's
+ * cancel, and the page leaving each stop the host; a body method, a clone
+ * and a BYOB reader read it as they read a whole one. */
+static void dom_fetch_stream_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.log=[];fetch('/s').then(r=>{log.push('head:'+r.status+':'+r.headers.get('x-a'));"
+        "globalThis.rd=r.body.getReader();"
+        "const go=()=>rd.read().then(c=>{if(c.done){log.push('done');return}"
+        "log.push(new TextDecoder().decode(c.value));go()},e=>log.push('error:'+e.name));go()});",
+        "stream: a fetch whose answer streams");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/s", "X-A: 1\r\n", "");
+    check(net_piece(&f, &net, 0, "early") == OS64_JS_OK, "stream: a piece before the head does nothing");
+    check(net_head(&f, &net, 0, &head) == OS64_JS_OK, "stream: the head is a task");
+    check(os64_dom_fetches_pending(f.binding) == 1, "stream: a request whose head came is still out");
+    check(net_answer(&f, &net, 0, &head) == OS64_JS_OK && os64_dom_fetches_pending(f.binding) == 1,
+          "stream: a whole answer after the head does nothing");
+    check(net.seen[0].mores == 1, "stream: the page's read asks the host for more");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='head:200:1',log.join());",
+               "stream: the promise settles at the head");
+    check(net_piece(&f, &net, 0, "abc") == OS64_JS_OK, "stream: a piece is a task");
+    check(net.seen[0].mores == 2, "stream: the next read asks again");
+    check(net_piece(&f, &net, 0, "def") == OS64_JS_OK && net_end(&f, &net, 0, true) == OS64_JS_OK,
+          "stream: another piece, and the end");
+    check(os64_dom_fetches_pending(f.binding) == 0, "stream: the end ends the request");
+    check(!net.seen[0].cancelled, "stream: an ended request is not cancelled");
+    check(net_piece(&f, &net, 0, "late") == OS64_JS_OK && net_end(&f, &net, 0, true) == OS64_JS_OK,
+          "stream: a piece or an end after the end does nothing");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='head:200:1,abc,def,done',log.join());",
+               "stream: each piece read as it came, then done");
+
+    /* Pieces nobody asked for wait in the queue; a body method reads them
+     * and what follows, to the end. A body method called while the body
+     * still streams waits for its end. */
+    dom_script(&f,
+        "globalThis.log=[];fetch('/q').then(r=>{globalThis.rq=r});"
+        "fetch('/t').then(r=>r.text()).then(t=>log.push('text:'+t));",
+        "stream: two more fetches");
+    os64_dom_response_t hq = net_answer_of(200, "http://example.test/q", "", "");
+    net_head(&f, &net, 1, &hq);
+    net_piece(&f, &net, 1, "xyz");
+    net_piece(&f, &net, 1, "123");
+    net_end(&f, &net, 1, true);
+    check(net.seen[1].mores == 0, "stream: nobody read, nothing asked");
+    dom_script(&f, "rq.text().then(t=>log.push('queued:'+t));", "stream: read what waited");
+    net_head(&f, &net, 2, &hq);
+    check(net.seen[2].mores == 1, "stream: text() asks for the body");
+    net_piece(&f, &net, 2, "one,");
+    net_piece(&f, &net, 2, "two");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='queued:xyz123',log.join());",
+               "stream: queued pieces read whole; text() waits for the end");
+    net_end(&f, &net, 2, true);
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='queued:xyz123,text:one,two',log.join());",
+               "stream: text() of a body that streamed");
+
+    /* A network error part way errors the stream with a TypeError. */
+    dom_script(&f, "globalThis.log=[];fetch('/e').then(r=>r.arrayBuffer()).catch(e=>log.push(e.name+':'+e.message));",
+               "stream: a body that fails part way");
+    net_head(&f, &net, 3, &hq);
+    net_piece(&f, &net, 3, "partial");
+    net_end(&f, &net, 3, false);
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='TypeError:Failed to fetch',log.join());",
+               "stream: a network error part way rejects the read");
+
+    /* An abort under way stops the host and errors the stream; what the
+     * host sends after does nothing. */
+    dom_script(&f,
+        "globalThis.log=[];globalThis.ca=new AbortController();"
+        "fetch('/a',{signal:ca.signal}).then(r=>{globalThis.ra=r.body.getReader();"
+        "ra.read().then(c=>{log.push('read:'+c.value.length);return ra.read()}).catch(e=>log.push('abort:'+e.name))});",
+        "stream: a fetch to abort part way");
+    net_head(&f, &net, 4, &hq);
+    net_piece(&f, &net, 4, "ab");
+    dom_script(&f, "ca.abort();", "stream: abort");
+    check(net.seen[4].cancelled && os64_dom_fetches_pending(f.binding) == 0, "stream: an abort stops the host");
+    check(net_piece(&f, &net, 4, "cd") == OS64_JS_OK && net_end(&f, &net, 4, true) == OS64_JS_OK,
+          "stream: what came after the abort does nothing");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='read:2,abort:AbortError',log.join());",
+               "stream: the read after an abort rejects with its reason");
+    /* A body method on a body an abort errored part way answers the
+     * reason at once, however often it is asked; one the page's own reader
+     * holds is unusable. */
+    dom_script(&f,
+        "globalThis.log=[];globalThis.cb=new AbortController();"
+        "fetch('/m',{signal:cb.signal}).then(r=>{globalThis.rm=r});"
+        "globalThis.cl=new AbortController();fetch('/l',{signal:cl.signal}).then(r=>{globalThis.rl=r;r.body.getReader()});",
+        "stream: two fetches to abort before their bodies are read");
+    net_head(&f, &net, 5, &hq);
+    net_head(&f, &net, 6, &hq);
+    net_piece(&f, &net, 5, "ab");
+    dom_script(&f,
+        "cb.abort();cl.abort();const t=rm.text();t.catch(e=>log.push('text:'+e.name));"
+        "Promise.resolve().then(()=>log.push('next'));rm.json().catch(e=>log.push('json:'+e.name));"
+        "rl.text().catch(e=>log.push('locked:'+e.name));",
+        "stream: body methods after an abort part way");
+    dom_script(&f, FETCH_ASSERT
+        "assert(log.join()==='text:AbortError,next,json:AbortError,locked:TypeError'&&rm.bodyUsed,log.join());",
+        "stream: the reason at once, every time; a reader the page holds is unusable");
+
+    /* The page's cancel stops the host. */
+    dom_script(&f, "fetch('/c').then(r=>{globalThis.rc=r.body.getReader();rc.read();rc.cancel('no')});",
+               "stream: a fetch the page cancels");
+    net_head(&f, &net, 7, &hq);
+    check(net.seen[7].cancelled && os64_dom_fetches_pending(f.binding) == 0, "stream: the page's cancel stops the host");
+
+    /* A clone tees the stream: each branch reads every piece. */
+    dom_script(&f,
+        "globalThis.log=[];fetch('/k').then(r=>{const c=r.clone();"
+        "r.text().then(t=>log.push('r:'+t));c.text().then(t=>log.push('c:'+t))});",
+        "stream: a clone of a body that streams");
+    net_head(&f, &net, 8, &hq);
+    net_piece(&f, &net, 8, "both");
+    net_piece(&f, &net, 8, "!");
+    net_end(&f, &net, 8, true);
+    dom_script(&f, FETCH_ASSERT "assert(log.sort().join()==='c:both!,r:both!',log.join());",
+               "stream: each branch reads every piece");
+
+    /* A BYOB reader reads a piece into its own buffer, and the rest from the
+     * queue; a body that ends inside an element of a BYOB read rejects it. */
+    dom_script(&f,
+        "globalThis.log=[];fetch('/b').then(r=>{const b=r.body.getReader({mode:'byob'});"
+        "b.read(new Uint8Array(2)).then(c=>{log.push(String.fromCharCode(...c.value));"
+        "return b.read(new Uint8Array(8))}).then(c=>log.push(String.fromCharCode(...c.value)))});"
+        "fetch('/o').then(r=>r.body.getReader({mode:'byob'}).read(new Uint16Array(1))).catch(e=>log.push('odd:'+e.name));",
+        "stream: BYOB reads of bodies that stream");
+    net_head(&f, &net, 9, &hq);
+    net_piece(&f, &net, 9, "abcd");
+    net_head(&f, &net, 10, &hq);
+    net_piece(&f, &net, 10, "x");
+    net_end(&f, &net, 10, true);
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='ab,cd,odd:TypeError',log.join());",
+               "stream: a BYOB read fills its buffer; an odd end rejects");
+
+    /* A head with no body, or that is a network error, is the whole
+     * answer. */
+    dom_script(&f, "globalThis.log=[];fetch('/n').then(r=>log.push('null:'+r.body));"
+               "fetch('/f').catch(e=>log.push('net:'+e.name));", "stream: heads that are whole answers");
+    os64_dom_response_t empty = net_answer_of(204, "http://example.test/n", "", NULL);
+    os64_dom_response_t failed = {.ok = false};
+    net_head(&f, &net, 11, &empty);
+    net_head(&f, &net, 12, &failed);
+    check(os64_dom_fetches_pending(f.binding) == 1, "stream: those heads end their requests");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='null:null,net:TypeError',log.join());",
+               "stream: a null body and a network error at the head");
+
+    /* The page leaving cancels a body under way. */
+    unsigned cancels = net.cancels;
+    fixture_free(&f);
+    check(net.cancels == cancels + 1, "stream: drain cancels a body under way");
+
+    /* XMLHttpRequest: HEADERS_RECEIVED at the head; each piece kept, and
+     * LOADING, readystatechange and progress at most once in 50 ms; the
+     * end fires as a whole answer's does. */
+    FakeNet xnet = {0};
+    f = net_fixture("http://example.test/", &xnet);
+    if (!fixture_ready(&f)) return;
+    storage_clock = 5000;
+    dom_script(&f,
+        "globalThis.xl=[];var x=new XMLHttpRequest();x.open('GET','/x');"
+        "x.onreadystatechange=()=>xl.push('rs'+x.readyState+':'+x.responseText);"
+        "x.onprogress=e=>xl.push('p'+e.loaded+'/'+e.total);x.onload=()=>xl.push('load');x.send();",
+        "stream: an XMLHttpRequest whose answer streams");
+    os64_dom_response_t xh = net_answer_of(200, "http://example.test/x", "Content-Length: 6\r\n", "");
+    net_head(&f, &xnet, 0, &xh);
+    check(xnet.seen[0].mores == 1 && os64_dom_fetches_pending(f.binding) == 1,
+          "stream: an XMLHttpRequest asks for its body at the head");
+    net_piece(&f, &xnet, 0, "abc");
+    storage_clock += 10;
+    net_piece(&f, &xnet, 0, "de");
+    storage_clock += 50;
+    net_piece(&f, &xnet, 0, "f");
+    check(xnet.seen[0].mores == 4, "stream: each piece asks for the next");
+    net_end(&f, &xnet, 0, true);
+    dom_script(&f, FETCH_ASSERT
+        "assert(xl.join()==='rs2:,rs3:abc,p3/6,rs3:abcdef,p6/6,p6/6,rs4:abcdef,load',xl.join());",
+        "stream: an XMLHttpRequest's events as its body streams");
+    /* abort() part way stops the host. */
+    dom_script(&f, "globalThis.xa=new XMLHttpRequest();xa.open('GET','/y');xa.send();", "stream: another XHR");
+    net_head(&f, &xnet, 1, &xh);
+    net_piece(&f, &xnet, 1, "ab");
+    dom_script(&f, FETCH_ASSERT "xa.abort();assert(xa.readyState===0,xa.readyState);", "stream: abort() part way");
+    check(xnet.seen[1].cancelled && os64_dom_fetches_pending(f.binding) == 0, "stream: abort() stops the host");
+    fixture_free(&f);
+
+    /* A piece past the runtime's limit is that limit, as a whole body's is. */
+    FakeNet mnet = {0};
+    f = net_fixture_engine("http://example.test/", &mnet, 4 * 1024 * 1024);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "fetch('/big').then(r=>r.arrayBuffer());", "stream: a big body that streams");
+    net_head(&f, &mnet, 0, &hq);
+    size_t size = 6 * 1024 * 1024;
+    char *big = malloc(size);
+    if (big == NULL) abort();
+    memset(big, 'x', size);
+    os64_js_outcome_t outcome;
+    check(os64_dom_fetch_body(f.binding, mnet.seen[0].token, big, size, &outcome) == OS64_JS_LIMIT,
+          "stream: a piece past the limit is the runtime's limit");
+    free(big);
+    fixture_free(&f);
+}
+
+/* A streamed answer's steps (head, piece, end), with one of them cut at
+ * its `cut`th allocation, the engine's or the binding's (0: none): the
+ * allocations the cut step made. A page reads the body as it comes; an
+ * XMLHttpRequest beside it takes the same pieces. */
+static size_t stream_sweep_run(int step, bool engine, size_t cut)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return 0;
+    dom_script(&f,
+        "fetch('/s').then(r=>{const rd=r.body.getReader();const go=()=>rd.read().then(c=>{if(!c.done)go()},()=>{});go()},"
+        "()=>{});var x=new XMLHttpRequest();x.open('GET','/x');x.onprogress=()=>{};x.send();",
+        "stream sweep: a fetch and an XMLHttpRequest");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/s", "X-A: 1\r\nContent-Length: 3\r\n", "");
+    size_t *counter = engine ? &attempts : &dom_attempts;
+    size_t made = 0;
+    for (int s = 0; s < 3; s++) {
+        size_t start = *counter;
+        if (s == step && cut != 0) {
+            if (engine) fail_at = attempts + cut;
+            else dom_fail_at = dom_attempts + cut;
+        }
+        os64_js_outcome_t outcome;
+        for (size_t which = 0; which < net.count; which++) {
+            if (s == 0) os64_dom_fetch_head(f.binding, net.seen[which].token, &head, &outcome);
+            else if (s == 1) os64_dom_fetch_body(f.binding, net.seen[which].token, "abc", 3, &outcome);
+            else os64_dom_fetch_end(f.binding, net.seen[which].token, true, &outcome);
+        }
+        fail_at = 0;
+        dom_fail_at = 0;
+        if (s == step) made = *counter - start;
+    }
+    fixture_free(&f);
+    return made;
+}
+
+/* Every allocation a streamed answer's head, its piece and its end make,
+ * the engine's and the binding's, refused in turn: whatever each does (a
+ * rejection, an errored stream, the runtime's sticky failure), nothing
+ * crashes, what comes after it does no harm, and the teardown accounts
+ * for every byte (fixture_free). */
+static void dom_fetch_stream_sweep_cases(void)
+{
+    static const char *const kStep[] = {"head", "piece", "end"};
+    for (int step = 0; step < 3; step++)
+        for (int engine = 0; engine < 2; engine++) {
+            size_t count = stream_sweep_run(step, engine, 0);
+            printf("stream sweep: the %s's %s allocation points: %zu\n", kStep[step], engine ? "engine" : "binding",
+                   count);
+            for (size_t cut = 1; cut <= count; cut++) {
+                stream_sweep_run(step, engine, cut);
+                dom_sweeps++;
+            }
+        }
+}
+
+/* A speed test's downloads (fast.com's shape): `n` XMLHttpRequests whose
+ * bodies of `mib` MiB stream in 1 MiB pieces, side by side, in a page's
+ * 64 MiB runtime, with a Content-Length or chunked (`declared`). An
+ * XMLHttpRequest keeps every byte it receives (XHR § "received bytes"),
+ * in the runtime's memory, and no more than them: a body that fits is
+ * never a block grown to hold it, which would hold the old and the new at
+ * once. `fits` says whether they all do; past that is the runtime's
+ * memory limit. */
+static void dom_xhr_downloads_case(int n, int mib, bool declared, bool fits)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_engine("http://example.test/", &net, 64 * 1024 * 1024);
+    if (!fixture_ready(&f)) return;
+    char script[512];
+    snprintf(script, sizeof(script),
+             "globalThis.seen=0;for(let i=0;i<%d;i++){const x=new XMLHttpRequest();x.open('GET','/r'+i);"
+             "x.responseType='blob';x.onprogress=e=>{seen=e.loaded};x.send()}", n);
+    dom_script(&f, script, "downloads: a speed test's requests");
+    char length[64];
+    snprintf(length, sizeof(length), "Content-Length: %d\r\n", mib * 1024 * 1024);
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/r", declared ? length : "", "");
+    for (int i = 0; i < n; i++) net_head(&f, &net, (size_t)i, &head);
+    size_t piece = 1024 * 1024;
+    uint8_t *bytes = malloc(piece);
+    if (bytes == NULL) abort();
+    memset(bytes, 'x', piece);
+    os64_js_status_t status = OS64_JS_OK;
+    os64_js_outcome_t outcome = {0};
+    for (int k = 0; k < mib && status == OS64_JS_OK; k++)
+        for (int i = 0; i < n && status == OS64_JS_OK; i++)
+            status = os64_dom_fetch_body(f.binding, net.seen[i].token, bytes, piece, &outcome);
+    for (int i = 0; i < n && status == OS64_JS_OK; i++)
+        status = os64_dom_fetch_end(f.binding, net.seen[i].token, true, &outcome);
+    free(bytes);
+    char what[128];
+    if (fits) {
+        snprintf(what, sizeof(what), "downloads: %d of %d MiB%s stream whole in a 64 MiB page", n, mib,
+                 declared ? "" : ", chunked,");
+        if (status != OS64_JS_OK) fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
+        check(status == OS64_JS_OK, what);
+        char counted[512];
+        snprintf(counted, sizeof(counted), FETCH_ASSERT "assert(seen===%d,seen);", mib * 1024 * 1024);
+        dom_script(&f, counted, "downloads: the page still runs, and counted every byte");
+    } else {
+        snprintf(what, sizeof(what), "downloads: %d of %d MiB are the page's memory limit", n, mib);
+        if (status != OS64_JS_LIMIT || outcome.limit != OS64_JS_LIMIT_MEMORY)
+            fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
+        check(status == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_MEMORY, what);
+    }
+    fixture_free(&f);
+}
+
+/* An abort part way through a streamed body the page has already read
+ * from: the body is disturbed, so a body method answers a TypeError (Fetch
+ * § "consume body": unusable), not the abort's reason. */
+static void dom_fetch_abort_read_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.log=[];globalThis.cd=new AbortController();"
+        "fetch('/d',{signal:cd.signal}).then(async r=>{const rd=r.body.getReader();await rd.read();rd.releaseLock();"
+        "cd.abort();r.text().catch(e=>log.push(e.name))});",
+        "stream: a body read from, then aborted");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/d", "", "");
+    net_head(&f, &net, 0, &head);
+    net_piece(&f, &net, 0, "ab");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='TypeError',log.join());",
+               "stream: a body read from is unusable after an abort");
+    check(net.seen[0].cancelled, "stream: the abort stopped the host");
+    fixture_free(&f);
+}
+
+/* streams.c's compiled streams.js, kept for every later realm (internal.h). */
+size_t d_streams_bytecode_kept(void);
+
+/* The Encoding standard's streams: a decoder that holds a character split
+ * across chunks, its attributes and its RangeError, a fatal one's flush, a
+ * chunk that is no buffer; an encoder that pairs surrogates across chunks
+ * and writes a lead one left at the end as U+FFFD; and a body that streams
+ * piped through a decoder. The compiled streams.js still fits its cache. */
+static void dom_codec_stream_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    size_t kept = d_streams_bytecode_kept();
+    fprintf(stderr, "streams.js compiled: %zu bytes kept\n", kept);
+    check(kept != 0, "codec: the compiled streams.js fits the cache every realm reads");
+    /* One stream to a script, each in a block of its own: the fixture's
+     * runtime runs 100 jobs a turn, and a pipe takes a few a chunk. A
+     * TransformStream writes only when its readable side is read, so each
+     * case reads it. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.clog=[];const d=new TextDecoderStream('utf-8',{fatal:false});"
+        "assert(d.encoding==='utf-8'&&d.fatal===false&&d.ignoreBOM===false);"
+        "assert(d.readable instanceof ReadableStream&&d.writable instanceof WritableStream);"
+        "assert(Object.prototype.toString.call(d)==='[object TextDecoderStream]'&&TextDecoderStream.length===0);"
+        "assert(new TextDecoderStream('UTF-16LE',{ignoreBOM:true}).encoding==='utf-16le');"
+        "throws('RangeError',()=>new TextDecoderStream('nope'));"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(TextDecoderStream.prototype,'readable').get.call({}));",
+        "codec: a TextDecoderStream's attributes");
+    dom_script(&f,
+        "{const d=new TextDecoderStream();"
+        "const w=d.writable.getWriter();w.write(new Uint8Array([0xE2,0x82]));w.write(new Uint8Array([0xAC,0x41]));w.close();"
+        "d.readable.pipeTo(new WritableStream({write(c){clog.push(c)}})).then(()=>clog.push('end'));}",
+        "codec: a character split across a decoder's chunks");
+    dom_script(&f, FETCH_ASSERT
+        "{const e=new TextEncoderStream();assert(e.encoding==='utf-8'&&TextEncoderStream.length===0);"
+        "const ew=e.writable.getWriter();ew.write('a\\uD83D');ew.write('\\uDE00b');ew.write('\\uD800');ew.close();"
+        "e.readable.pipeTo(new WritableStream({write(c){clog.push('['+Array.from(c).join(' ')+']')}}));}",
+        "codec: an encoder's surrogates across chunks");
+    dom_script(&f,
+        "{const bad=new TextDecoderStream();bad.writable.getWriter().write(undefined).catch(x=>clog.push('bad:'+x.name));"
+        "bad.readable.getReader().read().catch(()=>{});}",
+        "codec: a chunk that is no buffer");
+    dom_script(&f,
+        "{const fat=new TextDecoderStream('utf-8',{fatal:true});const fw=fat.writable.getWriter();"
+        "fw.write(new Uint8Array([0xE2]));fw.close().catch(x=>clog.push('fatal:'+x.name));"
+        "fat.readable.getReader().read().catch(x=>clog.push('fatal-read:'+x.name));}",
+        "codec: a fatal decoder's flush");
+    /* Four streams settle in an order of their own; each is checked for
+     * what it said, and the encoder's chunks for their order. */
+    dom_script(&f, FETCH_ASSERT
+        "assert(clog.length===8,clog.join('|'));"
+        "for(const s of ['€A','end','bad:TypeError','fatal:TypeError','fatal-read:TypeError'])"
+        "assert(clog.includes(s),s+' in '+clog.join('|'));"
+        "assert(clog.filter(s=>s[0]==='[').join('|')==='[97]|[240 159 152 128 98]|[239 191 189]',clog.join('|'));",
+        "codec: each decoded, encoded and refused as the standard says");
+    /* The page's common pattern: a streamed body through a decoder, a
+     * character split across two pieces. */
+    dom_script(&f,
+        "globalThis.tlog=[];fetch('/u').then(r=>r.body.pipeThrough(new TextDecoderStream()).pipeTo("
+        "new WritableStream({write(c){tlog.push(c)},close(){tlog.push('closed')}})));",
+        "codec: a body that streams, through a decoder");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/u", "", "");
+    net_head(&f, &net, 0, &head);
+    net_piece(&f, &net, 0, "\xE2\x82");
+    net_piece(&f, &net, 0, "\xAC!");
+    net_end(&f, &net, 0, true);
+    dom_script(&f, FETCH_ASSERT "assert(tlog.join('|')==='€!|closed',tlog.join('|'));",
+               "codec: the split character decoded whole");
+    fixture_free(&f);
+}
+
 static void dom_fetch_bound_cases(void)
 {
     static const char *const kWhat[] = {"a Headers walked", "a server's block read", "getAllResponseHeaders"};
@@ -1321,8 +1773,15 @@ static void dom_fetch_cases(void)
     dom_signal_bound_cases();
     dom_xhr_cases();
     dom_xhr_sync_stall_case();
+    dom_fetch_stream_cases();
+    dom_codec_stream_cases();
+    dom_xhr_downloads_case(2, 25, true, true);
+    dom_xhr_downloads_case(1, 40, false, true);
+    dom_xhr_downloads_case(3, 25, true, false);
+    dom_fetch_abort_read_case();
     dom_fetch_bound_cases();
     dom_fetch_memory_cases();
     dom_fetch_modern_off_cases();
     dom_fetch_sweep_cases();
+    dom_fetch_stream_sweep_cases();
 }

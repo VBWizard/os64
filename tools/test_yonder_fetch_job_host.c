@@ -7,14 +7,18 @@
 
 #define _DEFAULT_SOURCE
 
+#include <pthread.h>
+#include <sched.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 
 #include "fetch_job.h"
+#include "fetch_pipe.h"
 #include "os64/date.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -22,17 +26,24 @@
 // ── The heap, the clocks, the console ───────────────────────────────────
 
 // fail_at: the allocation that fails first; with fail_once, the only one.
+// The counts are atomic: the streamed cases run a job on a thread of its
+// own beside the pipe's reader.
 static size_t allocations, fail_at, live;
 static bool fail_once;
 
+static bool allocation_fails(void)
+{
+    size_t n = __atomic_add_fetch(&allocations, 1, __ATOMIC_RELAXED);
+    return fail_at != 0 && (fail_once ? n == fail_at : n >= fail_at);
+}
+
 void *os64_malloc(size_t size)
 {
-    allocations++;
-    if (fail_at != 0 && (fail_once ? allocations == fail_at : allocations >= fail_at))
+    if (allocation_fails())
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
-        live++;
+        __atomic_add_fetch(&live, 1, __ATOMIC_RELAXED);
     return at;
 }
 
@@ -46,24 +57,33 @@ void *os64_calloc(size_t count, size_t size)
 
 void *os64_realloc(void *ptr, size_t size)
 {
-    allocations++;
-    if (fail_at != 0 && (fail_once ? allocations == fail_at : allocations >= fail_at))
+    if (allocation_fails())
         return NULL;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
-        live++;
+        __atomic_add_fetch(&live, 1, __ATOMIC_RELAXED);
     return at;
 }
 
 void os64_free(void *ptr)
 {
     if (ptr != NULL)
-        live--;
+        __atomic_sub_fetch(&live, 1, __ATOMIC_RELAXED);
     free(ptr);
 }
 
 void os64_yield(void)
 {
+    sched_yield();
+}
+
+// A pipe's writer waiting for room (fetch_pipe.h), counted.
+static unsigned sleeps;
+int64_t os64_sleep(uint64_t ms)
+{
+    __atomic_add_fetch(&sleeps, 1, __ATOMIC_RELAXED);
+    usleep((useconds_t)(ms * 1000));
+    return 0;
 }
 
 // libos64's file calls (os64_write among them) over POSIX, for libway's
@@ -1127,6 +1147,350 @@ static void cache_sweep(const char *page, CacheSweep how)
     expect(name, n < 2000, NULL);
 }
 
+// ── A body that streams (fetch_pipe.h) ──────────────────────────────────
+
+static unsigned rings;
+static void count_ring(void *ctx)
+{
+    (void)ctx;
+    __atomic_add_fetch(&rings, 1, __ATOMIC_RELAXED);
+}
+
+// The job of `a` with a pipe, whose reading side the case holds (`*pipe`).
+static yonder_fetch_job_t *piped_job(const Ask *a, yonder_fetch_pipe_t **pipe)
+{
+    yonder_fetch_job_t *j = job_of(a);
+    *pipe = j != NULL ? yonder_fetch_pipe_new(count_ring, NULL) : NULL;
+    if (j != NULL && *pipe == NULL) {
+        yonder_fetch_release(j, NULL);
+        return NULL;
+    }
+    if (j != NULL)
+        j->pipe = *pipe;
+    return j;
+}
+
+// The job of `a`, run here with a pipe: the product, and the pipe (its
+// reading side the case's).
+static yonder_fetched_t *run_piped(const Ask *a, yonder_fetch_pipe_t **pipe)
+{
+    yonder_fetch_job_t *j = piped_job(a, pipe);
+    if (j == NULL)
+        return NULL;
+    void *out = NULL;
+    yonder_fetch_run(j, cancel_cb, NULL, &out);
+    yonder_fetch_release(j, NULL);
+    return out;
+}
+
+// Every unread byte, taken `step` at a time, appended to `out` (`*len`
+// so far; what passes `cap` is counted, not kept).
+static void drain(yonder_fetch_pipe_t *pipe, size_t step, char *out, size_t *len, size_t cap)
+{
+    uint8_t *bytes;
+    size_t n;
+    while ((n = yonder_fetch_pipe_take(pipe, step, &bytes)) != 0) {
+        if (*len + n <= cap)
+            memcpy(out + *len, bytes, n);
+        *len += n;
+        os64_free(bytes);
+    }
+}
+
+// The pipe on its own: what rings, what a take hands over, and a side
+// left alone.
+static void pipe_cases(void)
+{
+    size_t base = live;
+    rings = 0;
+    yonder_fetch_pipe_t *p = yonder_fetch_pipe_new(count_ring, NULL);
+    yonder_fetched_t head = {.ok = true, .type = WAY_TYPE_BASIC, .status = 200, .url = "https://a.test/x",
+                             .headers = "A: 1\r\n", .headers_len = 6, .has_body = true};
+    yonder_fetch_pipe_state_t st;
+    yonder_fetch_pipe_look(p, &st);
+    expect("pipe: nothing yet", p != NULL && !st.headed && st.unread == 0 && !st.ended &&
+           yonder_fetch_pipe_headed(p) == NULL, NULL);
+    expect("pipe: the head rings", yonder_fetch_pipe_head(p, &head) && rings == 1, NULL);
+    const yonder_fetched_t *h = yonder_fetch_pipe_headed(p);
+    expect("pipe: the head is a copy", h != NULL && h != &head && h->status == 200 && h->url != head.url &&
+           !strcmp(h->url, "https://a.test/x") && h->headers_len == 6 && !strcmp(h->headers, "A: 1\r\n") &&
+           h->body == NULL, NULL);
+    yonder_fetch_pipe_look(p, &st);
+    expect("pipe: a piece nobody asked for does not ring", yonder_fetch_pipe_write(p, "ab", 2) && rings == 1, NULL);
+    yonder_fetch_pipe_ask(p);
+    expect("pipe: a piece asked for rings", yonder_fetch_pipe_write(p, "cd", 2) && rings == 2, NULL);
+    expect("pipe: once until the reader looks", yonder_fetch_pipe_write(p, "ef", 2) && rings == 2, NULL);
+    yonder_fetch_pipe_look(p, &st);
+    expect("pipe: the bytes wait unread", st.headed && st.unread == 6 && !st.ended, NULL);
+    uint8_t *bytes;
+    size_t n = yonder_fetch_pipe_take(p, 3, &bytes);
+    expect("pipe: a take crosses pieces", n == 3 && !memcmp(bytes, "abc", 3), NULL);
+    os64_free(bytes);
+    expect("pipe: a take clears the ask", yonder_fetch_pipe_write(p, "gh", 2) && rings == 2, NULL);
+    yonder_fetch_pipe_end(p, true);
+    expect("pipe: the end rings", rings == 3, NULL);
+    n = yonder_fetch_pipe_take(p, 100, &bytes);
+    expect("pipe: the rest, oldest first", n == 5 && !memcmp(bytes, "defgh", 5), NULL);
+    os64_free(bytes);
+    yonder_fetch_pipe_look(p, &st);
+    expect("pipe: ended whole, nothing unread", st.ended && st.ok && st.unread == 0 &&
+           yonder_fetch_pipe_take(p, 100, &bytes) == 0 && bytes == NULL, NULL);
+    expect("pipe: an empty piece is no piece", yonder_fetch_pipe_write(p, "", 0), NULL);
+    yonder_fetch_pipe_release(p);
+    expect("pipe: a writer alone writes nothing", !yonder_fetch_pipe_write(p, "x", 1), NULL);
+    expect("pipe: and waits for no room", !yonder_fetch_pipe_room(p, NULL, NULL), NULL);
+    yonder_fetch_pipe_release(p);
+    expect("pipe: the last side frees it", live == base, NULL);
+}
+
+// A job on a thread of its own, as a pool worker runs it.
+typedef struct {
+    yonder_fetch_job_t *job;
+    void *got;
+} Runner;
+
+static void *runner(void *arg)
+{
+    Runner *r = arg;
+    yonder_fetch_run(r->job, cancel_cb, NULL, &r->got);
+    return NULL;
+}
+
+// Looks until the writer has filled the window (or ended), up to ten
+// seconds of real time.
+static bool window_full(yonder_fetch_pipe_t *pipe, yonder_fetch_pipe_state_t *st)
+{
+    for (int i = 0; i < 10000; i++) {
+        yonder_fetch_pipe_look(pipe, st);
+        if (st->unread >= YONDER_FETCH_PIPE_WINDOW || st->ended)
+            return st->unread >= YONDER_FETCH_PIPE_WINDOW;
+        usleep(1000);
+    }
+    return false;
+}
+
+static void streamed_cases(void)
+{
+    // In pieces, run here: the head, every byte and the end go down the
+    // pipe; the product says how it went and keeps no copy (no cache asks).
+    fresh();
+    size_t base = live;
+    fake_answer(NULL, "https://a.test/s", 200, "Content-Type: text/plain\r\n", "abcdefghij")->piece = 4;
+    yonder_fetch_pipe_t *pipe;
+    rings = 0;
+    yonder_fetched_t *g = run_piped(&(Ask){"https://a.test/page", "https://a.test/s"}, &pipe);
+    yonder_fetch_pipe_state_t st;
+    yonder_fetch_pipe_look(pipe, &st);
+    const yonder_fetched_t *h = yonder_fetch_pipe_headed(pipe);
+    expect("streamed: the head went down the pipe", h != NULL && h->status == 200 && h->type == WAY_TYPE_BASIC &&
+           strstr(h->headers, "Content-Type: text/plain\r\n") != NULL && !strcmp(h->url, "https://a.test/s"), NULL);
+    expect("streamed: every byte, and the end", st.unread == 10 && st.ended && st.ok, NULL);
+    char text[64];
+    size_t len = 0;
+    drain(pipe, 7, text, &len, sizeof(text));
+    expect("streamed: the bytes as they were", len == 10 && !memcmp(text, "abcdefghij", 10), NULL);
+    expect("streamed: the product says so, and keeps no copy",
+           g != NULL && g->ok && g->streamed && g->body == NULL && g->body_len == 10, g ? g->why : NULL);
+    expect("streamed: the head and the end rang, once (nobody looked between)", rings == 1, NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+    expect("streamed: nothing leaked", live == base, NULL);
+
+    // A body that breaks part way: what came, then an end that says so.
+    fresh();
+    fake_answer_t *broke = fake_answer(NULL, "https://a.test/b", 200, "", "abcdefghij");
+    broke->piece = 4;
+    broke->cut = 6;
+    g = run_piped(&(Ask){"https://a.test/page", "https://a.test/b"}, &pipe);
+    yonder_fetch_pipe_look(pipe, &st);
+    expect("streamed: a break part way ends the pipe badly", st.headed && st.ended && !st.ok && st.unread == 6, NULL);
+    expect("streamed: and is a network error, with its reason", g != NULL && !g->ok && g->why[0] != '\0', NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+
+    // A body that is no body (a 204) and a network error before the head
+    // put nothing down the pipe: those answers are whole.
+    fresh();
+    fake_answer(NULL, "https://a.test/n", 204, "", NULL);
+    g = run_piped(&(Ask){"https://a.test/page", "https://a.test/n"}, &pipe);
+    expect("streamed: a null body answers whole", g != NULL && g->ok && !g->has_body && !g->streamed &&
+           yonder_fetch_pipe_headed(pipe) == NULL, NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+    g = run_piped(&(Ask){"https://a.test/page", "https://a.test/none"}, &pipe);
+    expect("streamed: a network error before the head answers whole", g != NULL && !g->ok &&
+           yonder_fetch_pipe_headed(pipe) == NULL, NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+
+    // A body past max_body streams on: the cap is not a streamed body's.
+    fresh();
+    fake_answer(NULL, "https://a.test/l", 200, "", "0123456789abcdef");
+    g = run_piped(&(Ask){"https://a.test/page", "https://a.test/l", .max_body = 8}, &pipe);
+    len = 0;
+    drain(pipe, 100, text, &len, sizeof(text));
+    expect("streamed: a body past max_body streams whole", g != NULL && g->ok && g->body_len == 16 && len == 16 &&
+           !memcmp(text, "0123456789abcdef", 16), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+
+    // BACKPRESSURE, on a thread of its own: a body past the window fills it
+    // and waits there, reading no further, until the reader takes; then it
+    // runs to its end, every byte in order.
+    fresh();
+    base = live;
+    size_t big_len = YONDER_FETCH_PIPE_WINDOW + 4 * 1024 * 1024;
+    char *big = malloc(big_len);
+    if (big == NULL)
+        abort();
+    for (size_t i = 0; i < big_len; i++)
+        big[i] = (char)('a' + (i * 7 + i / 4096) % 26);
+    fake_answer_t *a = fake_answer(NULL, "https://a.test/big", 200, "", big);
+    a->body_len = big_len;
+    Runner r = {piped_job(&(Ask){"https://a.test/page", "https://a.test/big"}, &pipe), NULL};
+    sleeps = 0;
+    pthread_t thread;
+    if (r.job == NULL || pthread_create(&thread, NULL, runner, &r) != 0)
+        abort();
+    bool full = window_full(pipe, &st);
+    usleep(100 * 1000);
+    yonder_fetch_pipe_state_t later;
+    yonder_fetch_pipe_look(pipe, &later);
+    expect("backpressure: the writer fills the window and waits there",
+           full && !later.ended && later.unread == st.unread && later.unread < YONDER_FETCH_PIPE_WINDOW + YONDER_FETCH_PIECE &&
+           __atomic_load_n(&sleeps, __ATOMIC_RELAXED) > 0, NULL);
+    size_t at = 0;
+    bool same = true;
+    for (int spins = 0; spins < 100000; spins++) {
+        uint8_t *bytes;
+        size_t n = yonder_fetch_pipe_take(pipe, YONDER_FETCH_PIPE_TAKE_MAX, &bytes);
+        if (n != 0) {
+            same = same && at + n <= big_len && !memcmp(bytes, big + at, n);
+            at += n;
+            os64_free(bytes);
+            continue;
+        }
+        yonder_fetch_pipe_look(pipe, &st);
+        if (st.ended && st.unread == 0)
+            break;
+        usleep(1000);
+    }
+    pthread_join(thread, NULL);
+    yonder_fetched_t *got = r.got;
+    expect("backpressure: once taken, every byte in order, and a whole end",
+           same && at == big_len && st.ended && st.ok && got != NULL && got->ok && got->body_len == big_len, NULL);
+    yonder_fetched_free(got);
+    yonder_fetch_release(r.job, NULL);
+    yonder_fetch_pipe_release(pipe);
+    expect("backpressure: nothing leaked", live == base, NULL);
+
+    // The reader lets go while the writer waits: the writer stops, as a
+    // cancelled job does.
+    fresh();
+    a = fake_answer(NULL, "https://a.test/big", 200, "", big);
+    a->body_len = big_len;
+    r = (Runner){piped_job(&(Ask){"https://a.test/page", "https://a.test/big"}, &pipe), NULL};
+    if (r.job == NULL || pthread_create(&thread, NULL, runner, &r) != 0)
+        abort();
+    full = window_full(pipe, &st);
+    yonder_fetch_pipe_release(pipe);
+    pthread_join(thread, NULL);
+    got = r.got;
+    expect("backpressure: a writer whose reader went stops waiting, and fails",
+           full && got != NULL && !got->ok && got->body_len < big_len, NULL);
+    yonder_fetched_free(got);
+    yonder_fetch_release(r.job, NULL);
+    expect("backpressure: the job's release frees the pipe", live == base, NULL);
+    free(big);
+
+    // Every allocation failed in turn: the answer is whole and ok, or a
+    // network error; a pipe that has the head has its end, and says what
+    // the product says; nothing leaks.
+    size_t n;
+    for (n = 1; n < 400; n++) {
+        fresh();
+        fake_answer(NULL, "https://a.test/s", 200, "Content-Type: text/plain\r\n", "abcdefghij")->piece = 4;
+        base = live;
+        allocations = 0;
+        fail_at = n;
+        g = run_piped(&(Ask){"https://a.test/page", "https://a.test/s"}, &pipe);
+        fail_at = 0;
+        char name[80];
+        if (pipe != NULL) {
+            yonder_fetch_pipe_look(pipe, &st);
+            len = 0;
+            drain(pipe, 100, text, &len, sizeof(text));
+            snprintf(name, sizeof(name), "streamed sweep %zu: a head has its end, as the product says", n);
+            expect(name, !st.headed || (st.ended && g != NULL && st.ok == g->ok), NULL);
+            snprintf(name, sizeof(name), "streamed sweep %zu: a whole end has every byte", n);
+            expect(name, !st.ended || !st.ok || (len == 10 && !memcmp(text, "abcdefghij", 10)), NULL);
+        }
+        yonder_fetched_free(g);
+        yonder_fetch_pipe_release(pipe);
+        snprintf(name, sizeof(name), "streamed sweep %zu: nothing leaked", n);
+        expect(name, live == base, NULL);
+        if (allocations < n)
+            break;
+    }
+    expect("streamed sweep reached the end", n < 400, NULL);
+}
+
+// A streamed body and the cache: a body under max_body is kept and served
+// after; one past it is not kept, and what was kept for the address goes.
+static void streamed_cache_cases(const char *page)
+{
+    fresh();
+    fake_answer(NULL, "https://cdn.test/kept.txt", 200, "Cache-Control: max-age=600\r\nAccess-Control-Allow-Origin: *\r\n",
+                "kept body")->piece = 3;
+    yonder_fetch_pipe_t *pipe;
+    yonder_fetched_t *g = run_piped(&(Ask){page, "https://cdn.test/kept.txt"}, &pipe);
+    expect("streamed cache: a streamed body is kept for the cache",
+           g != NULL && g->ok && g->streamed && g->body != NULL && g->body_len == 9 && !memcmp(g->body, "kept body", 9),
+           g ? g->why : NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+    g = run(&(Ask){page, "https://cdn.test/kept.txt"});
+    expect("streamed cache: and served from it after", g != NULL && g->ok && g->served == WAY_SERVED_KEPT &&
+           g->body_len == 9 && !memcmp(g->body, "kept body", 9), g ? g->why : NULL);
+    yonder_fetched_free(g);
+    fresh();
+    fake_answer(NULL, "https://cdn.test/kept.txt", 200, "Cache-Control: max-age=600\r\nAccess-Control-Allow-Origin: *\r\n",
+                "a body past the cap");
+    g = run_piped(&(Ask){page, "https://cdn.test/kept.txt", .max_body = 8, .cache_mode = WAY_CACHE_RELOAD}, &pipe);
+    expect("streamed cache: a body past max_body keeps no copy", g != NULL && g->ok && g->body == NULL &&
+           g->body_len == 19, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+    int before = nfake_requests;
+    g = run(&(Ask){page, "https://cdn.test/kept.txt"});
+    expect("streamed cache: and the old copy went with it", g != NULL && g->served == WAY_SERVED_NETWORK &&
+           nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+
+    // An unsafe method's answer invalidates the address before its head is
+    // published: the page may ask again before the body ends, and a body
+    // that then breaks leaves the request a network error.
+    fresh();
+    fake_answer("GET", "https://a.test/item", 200, "Cache-Control: max-age=600\r\n", "old");
+    fake_answer_t *posted = fake_answer("POST", "https://a.test/item", 200, "", "updated, then broken");
+    posted->piece = 4;
+    posted->cut = 8;
+    yonder_fetched_free(run(&(Ask){page, "https://a.test/item"}));
+    g = run(&(Ask){page, "https://a.test/item"});
+    expect("streamed cache: the GET is kept", g != NULL && g->served == WAY_SERVED_KEPT, g ? g->why : NULL);
+    yonder_fetched_free(g);
+    g = run_piped(&(Ask){page, "https://a.test/item", "POST", NULL, "x"}, &pipe);
+    expect("streamed cache: the POST's body broke part way", g != NULL && !g->ok && g->streamed,
+           g ? g->why : NULL);
+    yonder_fetched_free(g);
+    yonder_fetch_pipe_release(pipe);
+    before = nfake_requests;
+    g = run(&(Ask){page, "https://a.test/item"});
+    expect("streamed cache: the POST's head invalidated the kept GET", g != NULL && g->served == WAY_SERVED_NETWORK &&
+           nfake_requests == before + 1, NULL);
+    yonder_fetched_free(g);
+}
+
 static void http_cache_cases(void)
 {
     char root[] = "/tmp/fetch_cacheXXXXXX";
@@ -1517,6 +1881,7 @@ static void http_cache_cases(void)
     yonder_fetched_free(g);
 
     module_bytecode_cases(page);
+    streamed_cache_cases(page);
     cache_sweep(page, SWEEP_STORE);
     cache_sweep(page, SWEEP_KEPT);
     cache_sweep(page, SWEEP_CONFIRMED);
@@ -1543,6 +1908,8 @@ int main(void)
     fields();
     sweep();
     sweep_once();
+    pipe_cases();
+    streamed_cases();
     http_cache_cases();
     way_jar_free(jar);
     way_preflight_free(cache);

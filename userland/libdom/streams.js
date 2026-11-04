@@ -54,7 +54,9 @@ const NEEDED = ['Promise', 'Promise_then', 'Promise_reject', 'Reflect_apply',
     'Symbol_asyncIterator', 'Symbol_iterator', 'Symbol_toStringTag',
     'AbortController', 'AbortController_abort', 'AbortController_signal',
     'AbortSignal_aborted', 'AbortSignal_reason',
-    'EventTarget_addEventListener', 'EventTarget_removeEventListener', 'AsyncIteratorPrototype'];
+    'EventTarget_addEventListener', 'EventTarget_removeEventListener', 'AsyncIteratorPrototype',
+    'TextDecoder', 'TextDecoder_decode', 'TextDecoder_encoding', 'TextDecoder_fatal', 'TextDecoder_ignoreBOM',
+    'TextEncoder', 'TextEncoder_encode', 'String_charCodeAt', 'String_slice'];
 for (let i = 0; i < NEEDED.length; i++)
     if (!(NEEDED[i] in I)) throw 'os64-streams: the intrinsic ' + NEEDED[i] + ' is missing';
 
@@ -3145,6 +3147,11 @@ class TransformStream {
     }
 
     constructor(transformer = undefined, writableStrategy = undefined, readableStrategy = undefined) {
+        if (transformer === INTERNAL) {
+            this.#r = writableStrategy;
+            writableStrategy.pub = this;
+            return;
+        }
         if (transformer !== undefined && !isObject(transformer))
             throw new TypeError_('The transformer is not an object');
         const writableStrategyDict = new QueuingStrategyDict(writableStrategy);
@@ -3467,6 +3474,176 @@ class CountQueuingStrategy {
 
 // ── The interfaces' shapes (WebIDL) ──────────────────────────────────────
 webidlInterface(ReadableStream, 'ReadableStream', ['from']);
+// ── The Encoding standard's streams (§ 5.3, § 5.4) ───────────────────────
+// TextDecoderStream and TextEncoderStream: a TransformStream each, set up
+// as the Streams standard sets one up for another specification, over the
+// realm's own TextDecoder and TextEncoder (encoding.c), taken at its start.
+
+const TextDecoder_ = I.TextDecoder;
+const textDecoderDecode = I.TextDecoder_decode;
+const textDecoderEncoding = I.TextDecoder_encoding;
+const textDecoderFatal = I.TextDecoder_fatal;
+const textDecoderIgnoreBOM = I.TextDecoder_ignoreBOM;
+const textEncoderEncode = I.TextEncoder_encode;
+const stringCharCodeAt = I.String_charCodeAt;
+const stringSlice = I.String_slice;
+const textEncoder = new I.TextEncoder();
+// decode's options for a chunk: an own property of an object with no
+// prototype, so no getter a page put on Object.prototype is asked.
+const decodeStreaming = objectCreate(null);
+decodeStreaming.stream = true;
+
+// Streams' "set up" of a TransformStream for another specification: the
+// writable side's high-water mark 1, the readable's 0, every chunk's size
+// 1, and a throw in either algorithm a rejection. Each algorithm is given
+// the controller's record, to enqueue with.
+function createTransformStreamForOthers(transformAlgorithm, flushAlgorithm) {
+    const t = new TSRecord();
+    new TransformStream(INTERNAL, t);
+    const sizeOne = function () { return 1; };
+    initializeTransformStream(t, resolvedWith(undefined), 1, sizeOne, 0, sizeOne);
+    const c = new TSControllerRecord();
+    new TransformStreamDefaultController(INTERNAL, c);
+    setUpTSDefaultController(t, c, function (chunk) {
+        try {
+            transformAlgorithm(c, chunk);
+        } catch (e) {
+            return rejectedWith(e);
+        }
+        return resolvedWith(undefined);
+    }, function () {
+        try {
+            flushAlgorithm(c);
+        } catch (e) {
+            return rejectedWith(e);
+        }
+        return resolvedWith(undefined);
+    }, resolvedUndefined);
+    return t;
+}
+
+class CodecStreamRecord {
+    decoder;            // TextDecoderStream's decoder
+    pending;            // TextEncoderStream's lead surrogate, waiting for its pair
+    transform;          // the TSRecord
+    constructor() {
+        this.decoder = undefined;
+        this.pending = undefined;
+        this.transform = undefined;
+    }
+}
+
+let tdsOf, tesOf;
+
+// The readable and writable members both classes take from
+// GenericTransformStream.
+function codecReadable(r) {
+    if (r === undefined) throw new TypeError_('Illegal invocation');
+    return r.transform.readable.pub;
+}
+
+function codecWritable(r) {
+    if (r === undefined) throw new TypeError_('Illegal invocation');
+    return r.transform.writable.pub;
+}
+
+class TextDecoderStream {
+    #r;
+    static {
+        tdsOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+    }
+
+    // The label and options are TextDecoder's, read as its constructor
+    // reads them, with its RangeError for a label it does not decode.
+    constructor(label = undefined, options = undefined) {
+        const decoder = new TextDecoder_(label, options);
+        const r = new CodecStreamRecord();
+        r.decoder = decoder;
+        // "decode and enqueue a chunk": a chunk that is no buffer source is
+        // a TypeError, undefined among them (which decode itself would read
+        // as no input).
+        r.transform = createTransformStreamForOthers(function (c, chunk) {
+            if (chunk === undefined) throw new TypeError_('A chunk is not an ArrayBuffer or a view of one');
+            const output = apply(textDecoderDecode, decoder, [chunk, decodeStreaming]);
+            if (output !== '') tsControllerEnqueue(c, output);
+        }, function (c) {
+            const output = apply(textDecoderDecode, decoder, []);
+            if (output !== '') tsControllerEnqueue(c, output);
+        });
+        this.#r = r;
+    }
+
+    get encoding() {
+        const r = tdsOf(this);
+        if (r === undefined) throw new TypeError_('Illegal invocation');
+        return apply(textDecoderEncoding, r.decoder, []);
+    }
+
+    get fatal() {
+        const r = tdsOf(this);
+        if (r === undefined) throw new TypeError_('Illegal invocation');
+        return apply(textDecoderFatal, r.decoder, []);
+    }
+
+    get ignoreBOM() {
+        const r = tdsOf(this);
+        if (r === undefined) throw new TypeError_('Illegal invocation');
+        return apply(textDecoderIgnoreBOM, r.decoder, []);
+    }
+
+    get readable() { return codecReadable(tdsOf(this)); }
+
+    get writable() { return codecWritable(tdsOf(this)); }
+}
+
+class TextEncoderStream {
+    #r;
+    static {
+        tesOf = function (o) { return isObject(o) && #r in o ? o.#r : undefined; };
+    }
+
+    // "encode and enqueue a chunk": the chunk as a DOMString, after a lead
+    // surrogate the last chunk ended on; a lead surrogate this one ends on
+    // waits for the next. TextEncoder writes any other lone surrogate as
+    // U+FFFD, as the encoder's "convert code unit to scalar value" does.
+    // The flush writes a lead surrogate still waiting as U+FFFD.
+    constructor() {
+        const r = new CodecStreamRecord();
+        r.transform = createTransformStreamForOthers(function (c, chunk) {
+            let input = `${chunk}`;
+            if (r.pending !== undefined) {
+                input = r.pending + input;
+                r.pending = undefined;
+            }
+            const n = input.length;
+            const last = n > 0 ? apply(stringCharCodeAt, input, [n - 1]) : 0;
+            if (last >= 0xD800 && last <= 0xDBFF) {
+                r.pending = apply(stringSlice, input, [n - 1]);
+                input = apply(stringSlice, input, [0, n - 1]);
+            }
+            if (input === '') return;
+            tsControllerEnqueue(c, apply(textEncoderEncode, textEncoder, [input]));
+        }, function (c) {
+            if (r.pending === undefined) return;
+            const replacement = new Uint8Array_(3);
+            replacement[0] = 0xEF;
+            replacement[1] = 0xBF;
+            replacement[2] = 0xBD;
+            tsControllerEnqueue(c, replacement);
+        });
+        this.#r = r;
+    }
+
+    get encoding() {
+        if (tesOf(this) === undefined) throw new TypeError_('Illegal invocation');
+        return 'utf-8';
+    }
+
+    get readable() { return codecReadable(tesOf(this)); }
+
+    get writable() { return codecWritable(tesOf(this)); }
+}
+
 // `values` and @@asyncIterator are one function (WebIDL § 3.7.10).
 defineProperty(ReadableStream.prototype, asyncIteratorSymbol,
     {value: ReadableStream.prototype.values, writable: true, enumerable: false, configurable: true});
@@ -3482,6 +3659,8 @@ webidlInterface(TransformStream, 'TransformStream');
 webidlInterface(TransformStreamDefaultController, 'TransformStreamDefaultController');
 webidlInterface(ByteLengthQueuingStrategy, 'ByteLengthQueuingStrategy');
 webidlInterface(CountQueuingStrategy, 'CountQueuingStrategy');
+webidlInterface(TextDecoderStream, 'TextDecoderStream');
+webidlInterface(TextEncoderStream, 'TextEncoderStream');
 
 // The async iterator's prototype: next and return, over
 // %AsyncIteratorPrototype%, named as WebIDL names it.
@@ -3526,6 +3705,57 @@ function doorFromBytes(bytes) {
     return stream.pub;
 }
 
+// A body the host delivers as it arrives (a streamed answer, STREAMS.md §
+// 5's S3): a byte stream, like any body's, made at the answer's head. Its
+// pull asks the host for more (`want`, libdom's) and returns at once: the
+// bytes come later, through doorEnqueue, which answers the read waiting.
+// Its cancel tells the host to stop (`cancel`). The end comes through
+// doorClose, or doorError for a network error part way. The host may also
+// deliver bytes nobody asked for, which wait in the queue. As "set up with
+// byte reading support" says, a throw in either is a rejection.
+function doorFromHost(want, cancel) {
+    const stream = createReadableByteStream(noop, function () {
+        try {
+            apply(want, undefined, []);
+        } catch (e) {
+            return rejectedWith(e);
+        }
+        return resolvedWith(undefined);
+    }, function () {
+        try {
+            apply(cancel, undefined, []);
+        } catch (e) {
+            return rejectedWith(e);
+        }
+        return resolvedWith(undefined);
+    });
+    return stream.pub;
+}
+
+// A piece of a host's body: a Uint8Array libdom made for this stream
+// alone, so the stream may take its buffer. False when the stream takes no
+// more: the page cancelled it, an abort errored it, or it was closed.
+function doorEnqueue(value, bytes) {
+    const stream = rsOf(value);
+    if (stream.state !== 'readable' || stream.controller.closeRequested) return false;
+    rbsControllerEnqueue(stream.controller, viewFacts(bytes));
+    return true;
+}
+
+// A host's body ended whole: the stream closes, its queue still readable.
+// A pending BYOB read holding part of an element cannot be answered so;
+// the close errors the stream, the read rejects with a TypeError, and the
+// close's throw ends here (doorFromBytes says the same of its pull).
+function doorClose(value) {
+    const stream = rsOf(value);
+    if (stream.state !== 'readable' || stream.controller.closeRequested) return;
+    try {
+        rbsCloseForOthers(stream.controller);
+    } catch (e) {
+        // the stream is errored: its reads reject
+    }
+}
+
 // A body read whole before its stream was made: the stream closed and
 // disturbed, and locked when the read kept its reader.
 function doorSpent(locked) {
@@ -3550,6 +3780,9 @@ function doorIs(value) { return rsOf(value) !== undefined; }
 function doorLocked(value) { return isReadableStreamLocked(rsOf(value)); }
 
 function doorDisturbed(value) { return rsOf(value).disturbed; }
+
+// Whether the stream is readable: what doorError errors, and nothing else.
+function doorReadable(value) { return rsOf(value).state === 'readable'; }
 
 // Fetch's "fully read" (Streams' "read all bytes"): a reader taken and
 // never released, every chunk a Uint8Array, the bytes joined into one. A
@@ -3618,8 +3851,9 @@ function doorTee(value) {
     return [branches.branch1.pub, branches.branch2.pub];
 }
 
-// The Response's abort steps: a readable body's stream errored. The
-// stream may be a page's (new Response(stream)), of either kind.
+// The Response's abort steps, and a host's body that failed part way: a
+// readable body's stream errored. The stream may be a page's
+// (new Response(stream)), of either kind.
 function doorError(value, reason) {
     const stream = rsOf(value);
     if (stream.state !== 'readable') return;
@@ -3629,11 +3863,15 @@ function doorError(value, reason) {
 
 const door = objectCreate(null);
 door.fromBytes = doorFromBytes;
+door.fromHost = doorFromHost;
+door.enqueue = doorEnqueue;
+door.close = doorClose;
 door.spent = doorSpent;
 door.take = doorTake;
 door.is = doorIs;
 door.locked = doorLocked;
 door.disturbed = doorDisturbed;
+door.readable = doorReadable;
 door.readAllThen = doorReadAllThen;
 door.tee = doorTee;
 door.error = doorError;
@@ -3652,6 +3890,8 @@ exported.TransformStream = TransformStream;
 exported.TransformStreamDefaultController = TransformStreamDefaultController;
 exported.ByteLengthQueuingStrategy = ByteLengthQueuingStrategy;
 exported.CountQueuingStrategy = CountQueuingStrategy;
+exported.TextDecoderStream = TextDecoderStream;
+exported.TextEncoderStream = TextEncoderStream;
 exported.door = door;
 return exported;
 })

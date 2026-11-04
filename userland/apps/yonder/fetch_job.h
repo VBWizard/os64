@@ -27,7 +27,9 @@
 #include "way/origin.h"
 
 // A body's cap (fetch's max_body), and a response head's: the standard's
-// headers are kept whole or the fetch fails and says so.
+// headers are kept whole or the fetch fails and says so. A streamed body
+// has no cap: the page's runtime holds what the page keeps, and its memory
+// limit is the bound. The copy kept for the cache stops at the cap.
 #define YONDER_FETCH_BODY_MAX ((uint64_t)16 * 1024 * 1024)
 #define YONDER_FETCH_HEAD_MAX ((size_t)64 * 1024)
 // A data: URL is answered without the wire, and its text is bounded so a
@@ -38,6 +40,10 @@
 #define YONDER_FETCH_RESERVE ((size_t)YONDER_FETCH_BODY_MAX * 2 + ((size_t)4 << 20))
 // A module's job's: its compiled form read beside them.
 #define YONDER_FETCH_MODULE_RESERVE (YONDER_FETCH_RESERVE + SCRIPT_BYTECODE_MAX)
+// What a streamed body is read off the wire in, a read at a time.
+#define YONDER_FETCH_PIECE ((size_t)64 * 1024)
+
+typedef struct yonder_fetch_pipe yonder_fetch_pipe_t;
 
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_FETCH
@@ -73,6 +79,11 @@ typedef struct {
     // When the window handed it to the pool, on os64_micros' clock; 0
     // when it was not (a synchronous request runs where it is made).
     int64_t submitted_us;
+    // Where a body from the network is streamed (fetch_pipe.h), the job
+    // one of its two holders, which the job's release lets go; NULL
+    // answers whole. A body the cache or a data: URL gives is whole
+    // either way.
+    yonder_fetch_pipe_t *pipe;
 } yonder_fetch_job_t;
 
 typedef struct {
@@ -90,6 +101,11 @@ typedef struct {
     char *headers;                  // os64_malloc'd filtered header block
     size_t headers_len;
     bool has_body;                  // false: the body is null
+    // The body went down the job's pipe as it came: the head was
+    // published there, and the end. `body` is then the copy kept for the
+    // cache, NULL once the body passed max_body or when no cache asks,
+    // and `body_len` the bytes the body had.
+    bool streamed;
     uint8_t *body;                  // os64_malloc'd
     size_t body_len;
     way_cookies_short_t cookies_short;  // what its hops left out for want of room (way/jar.h)

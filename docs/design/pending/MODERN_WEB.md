@@ -420,9 +420,10 @@ Chris promotes it by name.
   stream, the Streams standard whole. A social site's sign-in pages die on
   `'ReadableStream' is not defined` before they draw, and GitHub's bundles
   name it after `MutationObserver`. STREAMS.md is the design, in three
-  cuts: S1 (the standard without byte streams, self-hosted) and S2 (byte
-  streams) are built; S3 (bodies that stream) is DEBTS.md's row. Oracle:
-  WPT `streams/`. Opus.
+  cuts, all built: S1 (the standard without byte streams, self-hosted),
+  S2 (byte streams) and S3 (bodies that stream, TextDecoderStream and
+  TextEncoderStream). What it booked is DEBTS.md's row. Oracle: WPT
+  `streams/`. Opus.
 
 ## How the slices run side by side (2026-10-21)
 

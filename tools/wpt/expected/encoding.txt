@@ -4971,6 +4971,15 @@ idlharness.any.html	TextDecoder interface: new TextDecoder() must inherit proper
 idlharness.any.html	TextDecoder must be primary interface of new TextDecoder()
 idlharness.any.html	TextDecoderStream includes GenericTransformStream: member names are unique
 idlharness.any.html	TextDecoderStream includes TextDecoderCommon: member names are unique
+idlharness.any.html	TextDecoderStream interface object length
+idlharness.any.html	TextDecoderStream interface object name
+idlharness.any.html	TextDecoderStream interface: attribute encoding
+idlharness.any.html	TextDecoderStream interface: attribute fatal
+idlharness.any.html	TextDecoderStream interface: attribute ignoreBOM
+idlharness.any.html	TextDecoderStream interface: existence and properties of interface object
+idlharness.any.html	TextDecoderStream interface: existence and properties of interface prototype object
+idlharness.any.html	TextDecoderStream interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	TextDecoderStream interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.any.html	TextEncoder includes TextEncoderCommon: member names are unique
 idlharness.any.html	TextEncoder interface object length
 idlharness.any.html	TextEncoder interface object name
@@ -4986,6 +4995,13 @@ idlharness.any.html	TextEncoder interface: new TextEncoder() must inherit proper
 idlharness.any.html	TextEncoder must be primary interface of new TextEncoder()
 idlharness.any.html	TextEncoderStream includes GenericTransformStream: member names are unique
 idlharness.any.html	TextEncoderStream includes TextEncoderCommon: member names are unique
+idlharness.any.html	TextEncoderStream interface object length
+idlharness.any.html	TextEncoderStream interface object name
+idlharness.any.html	TextEncoderStream interface: attribute encoding
+idlharness.any.html	TextEncoderStream interface: existence and properties of interface object
+idlharness.any.html	TextEncoderStream interface: existence and properties of interface prototype object
+idlharness.any.html	TextEncoderStream interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	TextEncoderStream interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.any.html	idl_test setup
 idlharness.any.html	idl_test validation
 replacement-encodings.any.html	csiso2022kr - empty input decodes to empty output.
@@ -5012,6 +5028,105 @@ single-byte-decoder.any.html?TextDecoder	windows-1252: us-ascii (TextDecoder)
 single-byte-decoder.any.html?TextDecoder	windows-1252: windows-1252 (TextDecoder)
 single-byte-decoder.any.html?TextDecoder	windows-1252: x-cp1252 (TextDecoder)
 sniffing.html	No (UTF-8) sniffing allowed
+streams/backpressure.any.html	additional writes should wait for backpressure to be relieved for class TextDecoderStream
+streams/backpressure.any.html	additional writes should wait for backpressure to be relieved for class TextEncoderStream
+streams/backpressure.any.html	write() should not complete until read relieves backpressure for TextDecoderStream
+streams/backpressure.any.html	write() should not complete until read relieves backpressure for TextEncoderStream
+streams/decode-attributes.any.html	a throwing fatal member should cause the constructor to throw
+streams/decode-attributes.any.html	a throwing ignoreBOM member should cause the constructor to throw
+streams/decode-attributes.any.html	constructing with a non-stringifiable encoding should throw
+streams/decode-attributes.any.html	constructing with an invalid encoding should throw
+streams/decode-attributes.any.html	encoding attribute should have correct value for 'ascii'
+streams/decode-attributes.any.html	encoding attribute should have correct value for 'unicode-1-1-utf-8'
+streams/decode-attributes.any.html	encoding attribute should have correct value for 'utf-16'
+streams/decode-attributes.any.html	setting fatal to '' should set the attribute to false
+streams/decode-attributes.any.html	setting fatal to '' should set the attribute to true
+streams/decode-attributes.any.html	setting fatal to '0' should set the attribute to false
+streams/decode-attributes.any.html	setting fatal to '1' should set the attribute to true
+streams/decode-attributes.any.html	setting fatal to '[object Object]' should set the attribute to true
+streams/decode-attributes.any.html	setting fatal to 'false' should set the attribute to false
+streams/decode-attributes.any.html	setting fatal to 'null' should set the attribute to false
+streams/decode-attributes.any.html	setting fatal to 'true' should set the attribute to true
+streams/decode-attributes.any.html	setting fatal to 'undefined' should set the attribute to false
+streams/decode-attributes.any.html	setting fatal to 'yes' should set the attribute to true
+streams/decode-attributes.any.html	setting ignoreBOM to '' should set the attribute to false
+streams/decode-attributes.any.html	setting ignoreBOM to '' should set the attribute to true
+streams/decode-attributes.any.html	setting ignoreBOM to '0' should set the attribute to false
+streams/decode-attributes.any.html	setting ignoreBOM to '1' should set the attribute to true
+streams/decode-attributes.any.html	setting ignoreBOM to '[object Object]' should set the attribute to true
+streams/decode-attributes.any.html	setting ignoreBOM to 'false' should set the attribute to false
+streams/decode-attributes.any.html	setting ignoreBOM to 'null' should set the attribute to false
+streams/decode-attributes.any.html	setting ignoreBOM to 'true' should set the attribute to true
+streams/decode-attributes.any.html	setting ignoreBOM to 'undefined' should set the attribute to false
+streams/decode-attributes.any.html	setting ignoreBOM to 'yes' should set the attribute to true
+streams/decode-bad-chunks.any.html	chunk of type array should error the stream
+streams/decode-bad-chunks.any.html	chunk of type null should error the stream
+streams/decode-bad-chunks.any.html	chunk of type numeric should error the stream
+streams/decode-bad-chunks.any.html	chunk of type object, not BufferSource should error the stream
+streams/decode-bad-chunks.any.html	chunk of type undefined should error the stream
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16be, split at character 0
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16be, split at character 1
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16be, split at character 2
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16be, split at character 3
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16le, split at character 0
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16le, split at character 1
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16le, split at character 2
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-16le, split at character 3
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-8, split at character 0
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-8, split at character 1
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-8, split at character 2
+streams/decode-ignore-bom.any.html	ignoreBOM should work for encoding utf-8, split at character 3
+streams/decode-incomplete-input.any.html	incomplete input with error mode "fatal" should error the stream
+streams/decode-incomplete-input.any.html	incomplete input with error mode "replacement" should end with a replacement character
+streams/decode-non-utf8.any.html	TextDecoderStream should be able to decode UTF-16BE
+streams/decode-non-utf8.any.html	TextDecoderStream should be able to decode UTF-16LE
+streams/decode-non-utf8.any.html	TextDecoderStream should be able to decode invalid sequences in UTF-16BE
+streams/decode-non-utf8.any.html	TextDecoderStream should be able to decode invalid sequences in UTF-16LE
+streams/decode-non-utf8.any.html	TextDecoderStream should be able to reject invalid sequences in UTF-16BE
+streams/decode-non-utf8.any.html	TextDecoderStream should be able to reject invalid sequences in UTF-16LE
+streams/decode-split-character.any.html	a code point should be emitted as soon as all bytes are available
+streams/decode-split-character.any.html	a code point split between chunks should not be emitted until all bytes are available; split point = 2
+streams/decode-split-character.any.html	a code point split between chunks should not be emitted until all bytes are available; split point = 3
+streams/decode-split-character.any.html	a code point split between chunks should not be emitted until all bytes are available; split point = 4
+streams/decode-split-character.any.html	a code point split between chunks should not be emitted until all bytes are available; split point = 5
+streams/decode-split-character.any.html	an empty chunk inside a code point split between chunks should not change the output; split point = 1
+streams/decode-split-character.any.html	an empty chunk inside a code point split between chunks should not change the output; split point = 2
+streams/decode-split-character.any.html	an empty chunk inside a code point split between chunks should not change the output; split point = 3
+streams/decode-split-character.any.html	an empty chunk inside a code point split between chunks should not change the output; split point = 4
+streams/decode-split-character.any.html	an empty chunk inside a code point split between chunks should not change the output; split point = 5
+streams/decode-split-character.any.html	an empty chunk inside a code point split between chunks should not change the output; split point = 6
+streams/decode-utf8.any.html	UTF-8 EOF handling - ArrayBuffer
+streams/decode-utf8.any.html	a trailing empty chunk should be ignored - ArrayBuffer
+streams/decode-utf8.any.html	an initial empty chunk should be ignored - ArrayBuffer
+streams/decode-utf8.any.html	decoding an empty chunk should give no output chunks - ArrayBuffer
+streams/decode-utf8.any.html	decoding one UTF-8 chunk should give one output string - ArrayBuffer
+streams/encode-bad-chunks.any.html	a chunk that cannot be converted to a string should error the streams
+streams/encode-bad-chunks.any.html	input of type array should be converted correctly to string
+streams/encode-bad-chunks.any.html	input of type null should be converted correctly to string
+streams/encode-bad-chunks.any.html	input of type numeric should be converted correctly to string
+streams/encode-bad-chunks.any.html	input of type object should be converted correctly to string
+streams/encode-bad-chunks.any.html	input of type undefined should be converted correctly to string
+streams/encode-utf8.any.html	a character following one split between chunks should be correctly encoded
+streams/encode-utf8.any.html	a character split between chunks should be correctly encoded
+streams/encode-utf8.any.html	a leading empty chunk should be ignored
+streams/encode-utf8.any.html	a leading surrogate chunk should be carried past empty chunks
+streams/encode-utf8.any.html	a leading surrogate chunk should error when it is clear it didn't form a pair
+streams/encode-utf8.any.html	a non-terminal unpaired leading surrogate should immediately be replaced
+streams/encode-utf8.any.html	a plain ASCII chunk should be converted
+streams/encode-utf8.any.html	a stream ending in a leading surrogate should emit a replacement character as a final chunk
+streams/encode-utf8.any.html	a terminal unpaired trailing surrogate should immediately be replaced
+streams/encode-utf8.any.html	a trailing empty chunk should be ignored
+streams/encode-utf8.any.html	an empty string should result in no output chunk
+streams/encode-utf8.any.html	an unmatched surrogate at the end of a chunk followed by a plane 1 character split into two chunks should result in the encoded plane 1 character appearing in the last output chunk
+streams/encode-utf8.any.html	an unmatched surrogate at the end of a chunk followed by an ascii character in the next chunk should be replaced with the replacement character at the start of the next output chunk
+streams/encode-utf8.any.html	an unmatched surrogate at the end of a chunk followed by an astral character in the next chunk should be replaced with the replacement character at the start of the next output chunk
+streams/encode-utf8.any.html	characters in the ISO-8859-1 range should be encoded correctly
+streams/encode-utf8.any.html	encoding one string of UTF-8 should give one complete chunk
+streams/encode-utf8.any.html	two consecutive astral characters each split down the middle should be correctly reassembled
+streams/encode-utf8.any.html	two consecutive astral characters each split down the middle with an invalid surrogate in the middle should be correctly encoded
+streams/encode-utf8.any.html	two leading chunks should result in two replacement characters
+streams/readable-writable-properties.any.html	TextDecoderStream readable and writable properties must pass brand checks
+streams/readable-writable-properties.any.html	TextEncoderStream readable and writable properties must pass brand checks
 textdecoder-arguments.any.html	TextDecoder decode() with array buffer detached during arg conversion
 textdecoder-arguments.any.html	TextDecoder decode() with explicit undefined
 textdecoder-arguments.any.html	TextDecoder decode() with undefined and options

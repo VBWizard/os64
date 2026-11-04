@@ -8,9 +8,12 @@
  * request. While its request is out, the request holds it (the registry's
  * fourth list), as the standard keeps an object with pending activity.
  *
- * The host answers a request whole, so the body arrives as one chunk: the
- * readystatechange to LOADING fires for it, and the one progress event a
- * browser's 50 ms throttle leaves for a small body fires at its end.
+ * The host answers a request whole or streamed (dom.h). A whole answer's
+ * body is one chunk: the readystatechange to LOADING fires for it, and the
+ * one progress event a browser's 50 ms throttle leaves for a small body
+ * fires at its end. A streamed answer's body comes in pieces, and XHR's
+ * "process response body" runs for each: the bytes kept, and, at most once
+ * in 50 ms, LOADING, readystatechange and progress.
  *
  * Everything here is engine memory: the author headers, the answer's
  * header block and body. A header list is a C array a page never reaches,
@@ -47,13 +50,30 @@ typedef struct {
     char *override_type;        /* NULL: none */
     /* The response: `error` is a network error. */
     bool error, has_body, response_failed;
+    /* A streamed body's throttle: whether its chunk steps have fired yet,
+     * and when they last did (now_ms). */
+    bool chunked;
+    uint64_t chunk_ms;
     int32_t status;
     char *status_text, *response_url, *response_headers;
     size_t response_headers_length;
+    /* The bytes received: `body_length` of them, the first `body_joined`
+     * in `body`, the rest in `pieces` as a streamed answer brought them.
+     * A piece is kept as it came, never copied onto the rest, so the body
+     * costs its own bytes and no more while it arrives (growing one block
+     * would hold the old and the new at once); body_whole joins them when
+     * the page reads the response. */
     uint8_t *body;
-    size_t body_length;
+    size_t body_length, body_joined;
+    struct XPiece *pieces, *last;
     JSValue response_object;
 } DXhr;
+
+typedef struct XPiece {
+    struct XPiece *next;
+    size_t length;
+    uint8_t bytes[];
+} XPiece;
 
 typedef struct {
     DValue target;
@@ -90,9 +110,14 @@ static void response_reset(JSRuntime *rt, DXhr *x)
     js_free_rt(rt, x->response_url);
     js_free_rt(rt, x->response_headers);
     js_free_rt(rt, x->body);
+    for (XPiece *p = x->pieces, *next; p != NULL; p = next) {
+        next = p->next;
+        js_free_rt(rt, p);
+    }
+    x->pieces = x->last = NULL;
     x->status_text = x->response_url = x->response_headers = NULL;
     x->body = NULL;
-    x->response_headers_length = x->body_length = 0;
+    x->response_headers_length = x->body_length = x->body_joined = 0;
     JS_FreeValueRT(rt, x->response_object);
     x->response_object = JS_UNDEFINED;
 }
@@ -250,7 +275,7 @@ static int response_take(JSContext *ctx, DXhr *x, const os64_dom_response_t *in)
     x->status = in->status;
     x->response_headers_length = in->headers != NULL ? in->headers_length : 0;
     x->has_body = in->has_body;
-    x->body_length = in->has_body ? in->body_length : 0;
+    x->body_length = x->body_joined = in->has_body ? in->body_length : 0;
     return 0;
 }
 
@@ -367,13 +392,39 @@ static bool final_charset(JSContext *ctx, const DXhr *x, char *charset, size_t c
     return true;
 }
 
+/* Every byte received, in one block (`body`): a streamed answer's pieces
+ * joined onto what was joined before, once, when the page reads them.
+ * NULL with the exception pending when there was no memory to join them,
+ * and for no bytes at all. */
+static const uint8_t *body_whole(JSContext *ctx, DXhr *x)
+{
+    if (x->pieces == NULL) return x->body;
+    uint8_t *whole = js_malloc(ctx, x->body_length + 1);
+    if (whole == NULL) return NULL;
+    if (x->body_joined != 0) os64_memcpy(whole, x->body, x->body_joined);
+    size_t at = x->body_joined;
+    for (XPiece *p = x->pieces, *next; p != NULL; p = next) {
+        next = p->next;
+        os64_memcpy(whole + at, p->bytes, p->length);
+        at += p->length;
+        js_free(ctx, p);
+    }
+    js_free(ctx, x->body);
+    x->pieces = x->last = NULL;
+    x->body = whole;
+    x->body_joined = x->body_length;
+    return whole;
+}
+
 /* The body as text, in the final encoding (UTF-8 without one). */
-static JSValue response_text(JSContext *ctx, const DXhr *x)
+static JSValue response_text(JSContext *ctx, DXhr *x)
 {
     if (x->error || !x->has_body || x->body_length == 0) return JS_NewString(ctx, "");
     char charset[WAY_MIME_CHARSET_MAX];
     if (!final_charset(ctx, x, charset, sizeof(charset))) return JS_EXCEPTION;   /* js_malloc threw */
-    return d_text_decode(ctx, charset[0] != '\0' ? charset : "utf-8", x->body, x->body_length);
+    const uint8_t *bytes = body_whole(ctx, x);
+    if (bytes == NULL) return JS_EXCEPTION;
+    return d_text_decode(ctx, charset[0] != '\0' ? charset : "utf-8", bytes, x->body_length);
 }
 
 /* XHR § "handle response end-of-body", from the progress at its head. */
@@ -394,21 +445,96 @@ static int end_of_body(os64_dom_t *dom, JSContext *ctx, JSValueConst self, os64_
     return fire(dom, ctx, &x->target, "loadend", true, transmitted, length, outcome) < 0 ? -1 : 0;
 }
 
-/* The host's answer to an asynchronous request, as one task. */
-static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
-                         os64_js_outcome_t *outcome)
+/* The request is answered: forgotten with the host (it answered, so it is
+ * not cancelled), the timer stopped. */
+static void answered_end(os64_dom_t *dom, DXhr *x, DRequest *request)
 {
-    JSValue self = JS_DupValue(ctx, request->held[0]);
     d_request_end(dom, request, false);
-    DXhr *x = xhr_state(self);
-    if (x == NULL) {
-        JS_FreeValue(ctx, self);
-        return;
-    }
     x->token = 0;
     if (x->timer != 0) {
         d_timer_cancel(dom, x->timer);
         x->timer = 0;
+    }
+}
+
+/* A streamed answer's piece, or its end (`bytes` NULL). A piece is XHR §
+ * "process response body"'s processBodyChunk: the bytes kept; unless the
+ * steps ran within the last 50 ms, LOADING, readystatechange and progress;
+ * then the host is asked for more. The end is "handle response
+ * end-of-body", or the request error steps for a network error part way. */
+static void xhr_part(os64_dom_t *dom, JSContext *ctx, DRequest *request, const uint8_t *bytes, size_t length, bool ok,
+                     os64_js_outcome_t *outcome)
+{
+    uint32_t token = request->token;
+    JSValue self = JS_DupValue(ctx, request->held[0]);
+    DXhr *x = xhr_state(self);
+    if (x == NULL) {
+        d_request_end(dom, request, true);
+        JS_FreeValue(ctx, self);
+        return;
+    }
+    if (bytes == NULL) {
+        answered_end(dom, x, request);
+        if (!ok) (void)request_error(dom, ctx, self, "error", outcome);
+        else (void)end_of_body(dom, ctx, self, outcome);
+        JS_FreeValue(ctx, self);
+        return;
+    }
+    /* The piece kept as it came (DXhr's body). */
+    XPiece *piece = js_malloc(ctx, sizeof(*piece) + length);
+    if (piece == NULL) {
+        /* No room for the body: the runtime's memory limit, met as any
+         * allocation a script makes meets it. */
+        terminate(dom, x);
+        JS_FreeValue(ctx, self);
+        return;
+    }
+    piece->next = NULL;
+    piece->length = length;
+    os64_memcpy(piece->bytes, bytes, length);
+    if (x->last != NULL) x->last->next = piece;
+    else x->pieces = piece;
+    x->last = piece;
+    x->body_length += length;
+    uint64_t now = now_ms(dom);
+    int failed = 0;
+    if (!x->chunked || now - x->chunk_ms >= 50) {
+        uint32_t generation = x->generation;
+        x->chunked = true;
+        x->chunk_ms = now;
+        if (x->state == HEADERS_RECEIVED) x->state = LOADING;
+        failed = fire(dom, ctx, &x->target, "readystatechange", false, 0, 0, outcome);
+        x = xhr_state(self);
+        if (failed == 0 && x->generation == generation)
+            failed = fire(dom, ctx, &x->target, "progress", true, (double)x->body_length, response_length(x), outcome);
+    }
+    /* A listener may have ended the request (abort(), open()): it is
+     * looked up again, by its token. */
+    request = failed == 0 ? d_request_find(dom, token) : NULL;
+    if (request != NULL) d_request_more(dom, request);
+    JS_FreeValue(ctx, self);
+}
+
+/* The host's answer to an asynchronous request, as one task: a whole
+ * answer, or a streamed one's head, which leaves the request out for its
+ * body (xhr_part). */
+static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
+                         os64_js_outcome_t *outcome)
+{
+    bool headed = request->headed;
+    uint32_t token = request->token;
+    JSValue self = JS_DupValue(ctx, request->held[0]);
+    DXhr *x = xhr_state(self);
+    if (x == NULL) {
+        d_request_end(dom, request, headed);
+        JS_FreeValue(ctx, self);
+        return;
+    }
+    if (headed) {
+        request->part = xhr_part;
+        x->chunked = false;
+    } else {
+        answered_end(dom, x, request);
     }
     uint32_t generation = x->generation;
     if (!response->ok) {
@@ -433,8 +559,15 @@ static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, con
                 failed = fire(dom, ctx, upload_target(x), "loadend", true, sent, sent, outcome);
         }
     }
-    /* processResponse: the response is the object's, then the headers. */
-    if (failed == 0 && xhr_state(self)->generation == generation && response_take(ctx, x, response) < 0) {
+    /* processResponse: the response is the object's, then the headers. A
+     * streamed head's has no bytes yet. */
+    os64_dom_response_t head = *response;
+    if (headed) {
+        head.body = NULL;
+        head.body_length = 0;
+    }
+    if (failed == 0 && xhr_state(self)->generation == generation && response_take(ctx, x, &head) < 0) {
+        terminate(dom, x);
         (void)request_error(dom, ctx, self, "error", outcome);
         JS_FreeValue(ctx, self);
         return;
@@ -442,6 +575,14 @@ static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, con
     if (failed == 0 && xhr_state(self)->generation == generation) {
         x->state = HEADERS_RECEIVED;
         failed = fire(dom, ctx, &x->target, "readystatechange", false, 0, 0, outcome);
+    }
+    /* A streamed body comes in pieces, the first when the host is asked;
+     * a listener that ended the request (abort(), open()) asks nothing. */
+    if (headed) {
+        request = failed == 0 ? d_request_find(dom, token) : NULL;
+        if (request != NULL) d_request_more(dom, request);
+        JS_FreeValue(ctx, self);
+        return;
     }
     /* The body's one chunk: LOADING. Its progress event waits for the end
      * of the body, as a browser's throttle holds one back for a small
@@ -898,7 +1039,9 @@ static JSValue response_object(os64_dom_t *dom, JSContext *ctx, JSValueConst sel
     DXhr *x = xhr_state(self);
     if (x->state != DONE || x->error || x->response_failed) return JS_NULL;
     if (!JS_IsUndefined(x->response_object)) return JS_DupValue(ctx, x->response_object);
-    const uint8_t *bytes = x->body != NULL ? x->body : (const uint8_t *)"";
+    const uint8_t *bytes = body_whole(ctx, x);
+    if (bytes == NULL && x->body_length != 0) return JS_EXCEPTION;
+    if (bytes == NULL) bytes = (const uint8_t *)"";
     JSValue made = JS_NULL;
     switch (x->response_type) {
     case RT_ARRAYBUFFER: made = JS_NewArrayBufferCopy(ctx, bytes, x->body_length); break;
