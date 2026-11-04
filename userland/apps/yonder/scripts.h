@@ -97,11 +97,15 @@ typedef struct {
     // `cancel`), 0 when it could not be begun; its answer comes back through
     // yonder_scripts_answered. `run` runs a synchronous XMLHttpRequest's to
     // its end on this thread, filling `*response`, which `release` frees.
-    // A NULL `request`: every request is a network error.
+    // `more` is the binding asking for the next bytes of job `id`'s
+    // streamed body (os64_dom_network_t's more), which come back through
+    // yonder_scripts_piece. A NULL `request`: every request is a network
+    // error.
     uint64_t (*request)(void *opaque, uint64_t serial, uint32_t token, const os64_dom_request_t *request);
     bool (*run)(void *opaque, uint64_t serial, const os64_dom_request_t *request, bool (*stop)(void *stop_ctx),
                 void *stop_ctx, os64_dom_response_t *response);
     void (*release)(void *opaque, os64_dom_response_t *response);
+    void (*more)(void *opaque, uint64_t id);
     // The document's own request, for P1-Da's members (os64_dom_options_t):
     // the Referer it carried ("" or NULL for none), copied; and its
     // response's Last-Modified, epoch seconds, 0 for none (which a zeroed
@@ -274,6 +278,15 @@ bool yonder_scripts_idle_before(yonder_scripts_t *scripts, uint64_t render_due, 
 // cache holds its body (fetch_job.h), is TAKEN, and freed for any other.
 bool yonder_scripts_answered(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *response,
                              yonder_bytecode_t *bytecode, os64_js_outcome_t *outcome);
+// A streamed answer to the page's request `token`, a task each: its head
+// (os64_dom_fetch_head), a piece of its body (os64_dom_fetch_body), its
+// end (os64_dom_fetch_end). False when nothing ran: the runtime is gone,
+// or never was, or nothing waits on the token.
+bool yonder_scripts_head(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *head,
+                         os64_js_outcome_t *outcome);
+bool yonder_scripts_piece(yonder_scripts_t *scripts, uint32_t token, const uint8_t *bytes, size_t length,
+                          os64_js_outcome_t *outcome);
+bool yonder_scripts_end(yonder_scripts_t *scripts, uint32_t token, bool ok, os64_js_outcome_t *outcome);
 // The navigation the last task asked for; nodes arrive held.
 bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigation_t *ask);
 // A new task budget, from the next task on, and the budget tasks have.

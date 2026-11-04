@@ -1148,6 +1148,7 @@ static RpEnd rp_settle(uint64_t budget_ms, uint32_t next) {
         bool more=stream_turn();
         more=coming_turn() || more;
         more=script_turn() || more;
+        more=bodies_turn() || more;
         pictures_settle();
         if(g.coming.active && yonder_now_ms()>=g.coming.due) { coming_show(); more=true; }
         if(!rp_navigated && s_diag.next!=next) {

@@ -1214,14 +1214,24 @@ JSValue d_form_data_parse(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes,
  * exception pending. */
 int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *out, bool *has_type);
 /* The requests out (fetch.c, xhr.c): each a token the host's answer names,
- * the host's id for cancel, and what waits on it. */
+ * the host's id for cancel, and what waits on it. `answer` takes a whole
+ * answer, or a streamed one's head (`headed` is set before it is called);
+ * a request whose head came stays out for its body, which `part` takes a
+ * piece at a time (`bytes`), then at its end (`bytes` NULL, `ok` false for
+ * a network error part way). Either may end the request, and may run page
+ * code that ends it, so a caller looks it up again by its token. */
 typedef void (*DAnswer)(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
                         os64_js_outcome_t *outcome);
+typedef void (*DPart)(os64_dom_t *dom, JSContext *ctx, DRequest *request, const uint8_t *bytes, size_t length,
+                      bool ok, os64_js_outcome_t *outcome);
 struct DRequest {
     DRequest *next;
     uint32_t token;
     uint64_t id;
     DAnswer answer;
+    DPart part;
+    bool headed;                /* its head came: the body is under way */
+    bool asked;                 /* the host has been asked for more and has not answered */
     JSValue held[3];            /* C-held: the registry's fourth list, drain releases them */
 };
 DRequest *d_request_start(os64_dom_t *dom, JSContext *ctx, const os64_dom_request_t *request, DAnswer answer);
@@ -1229,6 +1239,9 @@ DRequest *d_request_find(os64_dom_t *dom, uint32_t token);
 /* Forgets a request: cancels it with the host when it is still out
  * (`cancel`), releases what it held and frees it. */
 void d_request_end(os64_dom_t *dom, DRequest *request, bool cancel);
+/* Asks the host for the next bytes of a headed request's body, unless it
+ * has been asked already (the network's `more`). */
+void d_request_more(os64_dom_t *dom, DRequest *request);
 void d_fetch_drain(os64_dom_t *dom);
 void d_fetch_free(os64_dom_t *dom);
 /* WebIDL's ByteString (fetch.c): a string whose every code unit is a byte,
@@ -1253,6 +1266,10 @@ JSValue d_headers_from_block(os64_dom_t *dom, JSContext *ctx, const char *block,
  * A realm without one (the modern switch off) has no streams: each verb
  * throws a TypeError, where d_stream_is answers 0. */
 int d_streams_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The length of the compiled streams.js the process keeps for its realms,
+ * 0 until a realm kept it, and 0 for good when it outgrew the cache (each
+ * realm then compiles it). */
+size_t d_streams_bytecode_kept(void);
 /* A ReadableStream over a copy of `bytes`: one Uint8Array chunk, handed
  * over at the first read, and closed behind it; closed from its creation
  * when `length` is 0. */
@@ -1260,9 +1277,11 @@ JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size
 /* Whether `value` is a ReadableStream of this realm: 1, 0, or -1 with the
  * exception pending. */
 int d_stream_is(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
-/* A stream's state, as a body asks it: 1 yes, 0 no, -1 an exception. */
+/* A stream's state, as a body asks it: 1 yes, 0 no, -1 an exception.
+ * Readable is what d_stream_error errors. */
 int d_stream_locked(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
 int d_stream_disturbed(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
+int d_stream_readable(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
 /* The stream of a body read whole before its stream was made: closed and
  * disturbed, and locked when `locked` (the read kept its reader). */
 JSValue d_stream_spent(os64_dom_t *dom, JSContext *ctx, bool locked);
@@ -1280,6 +1299,19 @@ int d_stream_tee(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, JSValue o
 /* A readable stream errored with `reason` (the Response's abort steps); a
  * stream already closed or errored is left alone. 0, or -1. */
 int d_stream_error(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, JSValueConst reason);
+/* A body the host delivers as it arrives (a streamed answer): a byte
+ * stream whose pull calls `want` and whose cancel calls `cancel`, each with
+ * no arguments; d_stream_enqueue gives it its bytes, d_stream_close or
+ * d_stream_error its end. */
+JSValue d_stream_from_host(os64_dom_t *dom, JSContext *ctx, JSValueConst want, JSValueConst cancel);
+/* A copy of `bytes` (length not 0) queued on such a stream: 1, 0 when the
+ * stream takes no more (cancelled, errored or closed), -1 with the
+ * exception pending. */
+int d_stream_enqueue(os64_dom_t *dom, JSContext *ctx, JSValueConst stream, const uint8_t *bytes, size_t length);
+/* Such a stream closed, its queue still readable; a pending BYOB read
+ * holding part of an element errors it instead (streams.js doorClose).
+ * 0, or -1. */
+int d_stream_close(os64_dom_t *dom, JSContext *ctx, JSValueConst stream);
 /* A promise settled with `value` (taken), or rejected with the pending
  * exception when `value` is JS_EXCEPTION (blob.c). */
 JSValue d_promise_settled(JSContext *ctx, JSValue value);

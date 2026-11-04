@@ -223,6 +223,14 @@ int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out) {
 static int64_t clock_us=10000000, clock_step, geometry_layout_delay;
 static bool geometry_refuse_layout;
 int64_t os64_micros(void) { return clock_us+=clock_step; }
+/* A sleep is a fetch job's writer waiting for its pipe's reader (the
+ * window, fetch_pipe.h), which on this host runs on the same thread and
+ * so could never answer: no case may reach one. */
+int64_t os64_sleep(uint64_t ms) {
+    fprintf(stderr,"os64_sleep(%llu): a pipe's writer waited for the window, which cannot run\n",
+            (unsigned long long)ms);
+    abort();
+}
 /* THE SYSTEM'S ENTROPY, faked (libtls's door, which crypto.getRandomValues
  * reads through scripts.c): a fixed sequence from a fixed seed, so a page
  * that makes ids from it replays the same every run (REPLAY.md § 3), and
@@ -3528,7 +3536,7 @@ static void loop_page(const char *rest) {
 /* Turns until one says there is nothing more to do now; false if the
  * stream never said so (a loop that rings itself for ever). */
 static bool loop_settle(void) {
-    for(int i=0;i<200;i++) if(!stream_turn() && !coming_turn()) return true;
+    for(int i=0;i<200;i++) if(!stream_turn() && !coming_turn() && !bodies_turn()) return true;
     return false;
 }
 static void loop_drop(void) {

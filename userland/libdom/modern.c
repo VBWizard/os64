@@ -100,13 +100,14 @@ static const DModernRow kModern[] = {
      * all installed above. */
     {(const char *const[]){"structuredClone", NULL}, d_clone_install},
     /* The Streams standard (streams.c), after the rows its captures take
-     * from: queueMicrotask (browsing), AbortController (abort) and
-     * structuredClone (clone), which a tee's second branch is cloned by. */
+     * from: TextDecoder and TextEncoder (encoding), queueMicrotask
+     * (browsing), AbortController (abort) and structuredClone (clone),
+     * which a tee's second branch is cloned by. */
     {(const char *const[]){"ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamDefaultController",
                            "ReadableStreamBYOBReader", "ReadableByteStreamController",
                            "ReadableStreamBYOBRequest", "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController",
                            "TransformStream", "TransformStreamDefaultController", "ByteLengthQueuingStrategy",
-                           "CountQueuingStrategy", NULL},
+                           "CountQueuingStrategy", "TextDecoderStream", "TextEncoderStream", NULL},
      d_streams_install},
     {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},

@@ -866,6 +866,7 @@ static bool wpt_turns(void) {
         bool more=stream_turn();
         more=coming_turn() || more;
         more=script_turn() || more;
+        more=bodies_turn() || more;
         motion_tick();
         /* This headless runner presents no pixels, but completes the same
          * frame boundary so subsequent animation requests can become due. */

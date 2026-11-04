@@ -980,9 +980,11 @@ typedef struct {
 /* The host's network, all on the owner thread, none entering JS.
  * start: begin `request` for the binding's request `token`, answering an id
  * for cancel, or 0 when it could not be begun (the request fails as a
- * network error); its answer comes back through os64_dom_fetched.
+ * network error); its answer comes back through os64_dom_fetched, or in
+ * pieces (os64_dom_fetch_head, below).
  * cancel: the id's answer is no longer wanted (a fetch aborted, an XHR's
- * abort(), a page leaving); a cancelled request never answers.
+ * abort(), a body's stream cancelled, a page leaving); a cancelled request
+ * never answers, not even the rest of a body.
  * run: a synchronous XMLHttpRequest's request, run to its end before this
  * returns, filling `*response`, which stays the host's until `release`;
  * false when it could not be run, which the page sees as a network error.
@@ -990,6 +992,12 @@ typedef struct {
  * yes: the binding's answer is the script task's own budget (the task's
  * deadline, and libjs's cancel), so a synchronous request ends when the
  * task that made it would, as one mechanism.
+ * more: the binding wants the next bytes of the id's body (a streamed
+ * answer's, below): a reader waits on it. It is called from inside a
+ * task, so the host answers later, never inside the call: a piece through
+ * os64_dom_fetch_body once it has one, and the binding asks again when it
+ * wants another. Pieces nobody asked for are the host's to send too (the
+ * streamed answer below). NULL leaves the host to deliver as it pleases.
  * With no network, every request is a network error. Copied; NULL removes
  * it. Install before the first script. */
 typedef struct {
@@ -999,6 +1007,7 @@ typedef struct {
                 os64_dom_response_t *response);
     void (*release)(void *opaque, os64_dom_response_t *response);
     void *opaque;
+    void (*more)(void *opaque, uint64_t id);
 } os64_dom_network_t;
 void os64_dom_set_network(os64_dom_t *dom, const os64_dom_network_t *network);
 /* The answer to request `token`, as ONE TASK: the bytes are copied into the
@@ -1009,6 +1018,23 @@ void os64_dom_set_network(os64_dom_t *dom, const os64_dom_network_t *network);
  * nothing. The outcome is the task's, as os64_dom_dispatch's is. */
 os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *response,
                                   os64_js_outcome_t *outcome);
+/* A STREAMED ANSWER (STREAMS.md § 5, S3): the answer in pieces, each ONE
+ * TASK as os64_dom_fetched's is, in this order. First the head: the
+ * response with no bytes (`body` is not read), which settles the fetch's
+ * promise with a Response whose body is a stream, or takes an
+ * XMLHttpRequest to HEADERS_RECEIVED. A head that is a network error, or
+ * has a null body, is the whole answer. Then the body's bytes as they
+ * arrive, a piece at a time (none of zero length), into the runtime's
+ * memory, which is their cap as it is a whole body's; then its end, `ok`
+ * false for a network error part way. The host delivers a piece when the
+ * binding asks (the network's `more`) and may deliver the rest unasked,
+ * which the body's stream queues. A piece or an end for a token whose head
+ * never came, or that nothing waits on, does nothing. */
+os64_js_status_t os64_dom_fetch_head(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *head,
+                                     os64_js_outcome_t *outcome);
+os64_js_status_t os64_dom_fetch_body(os64_dom_t *dom, uint32_t token, const void *bytes, size_t length,
+                                     os64_js_outcome_t *outcome);
+os64_js_status_t os64_dom_fetch_end(os64_dom_t *dom, uint32_t token, bool ok, os64_js_outcome_t *outcome);
 /* How many requests the binding has out. os64_dom_drain cancels each
  * through the network's cancel and forgets it. */
 size_t os64_dom_fetches_pending(const os64_dom_t *dom);

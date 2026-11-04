@@ -406,6 +406,128 @@ static void request_long_address_case(void) {
     request_drop();
 }
 
+/* A BODY THAT STREAMS (STREAMS.md § 5, S3): the job writes the body down
+ * its pipe a piece at a time, and the window hands the page each piece it
+ * asks for while the job is still reading. The fake's read hook is where
+ * the window turns, as it would while a worker waits on the wire; each
+ * turn notes what the page had then. What the page never asked for is
+ * handed over when the job is reaped, and so is the end. */
+static char stream_seen[512];
+static uint64_t stream_step_ms;
+static void stream_hook(size_t at) {
+    (void)at;
+    now_ms+=stream_step_ms;
+    bodies_turn();
+    script_rebuild();
+    size_t n=strlen(stream_seen);
+    snprintf(stream_seen+n,sizeof(stream_seen)-n,"%s%s",n?"|":"",probe_text_of("out"));
+}
+
+static void request_stream_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/s",200,"Content-Type: text/plain\r\n","aaaabbbbcccc")->piece=4;
+    loop_page("<p id=out>-</p><script>var log=[];function say(){document.getElementById('out').textContent=log.join(',')}"
+        "fetch('/s').then(r=>{log.push('head');say();const rd=r.body.getReader();"
+        "const go=()=>rd.read().then(c=>{if(c.done){log.push('done');say();return}"
+        "log.push(new TextDecoder().decode(c.value));say();go()});go()});</script>");
+    check(loop_settle() && nrequest_jobs==1,"stream: the fetch is out");
+    stream_seen[0]='\0';
+    stream_step_ms=0;
+    fake_read_hook=stream_hook;
+    bool landed=request_land("/s");
+    fake_read_hook=NULL;
+    check(landed && !strcmp(stream_seen,"head|head,aaaa|head,aaaa,bbbb"),
+          "stream: the head, then each piece, reach the page while the job reads");
+    if(strcmp(stream_seen,"head|head,aaaa|head,aaaa,bbbb")) fprintf(stderr,"stream: seen %s\n",stream_seen);
+    check(loop_settle() && script_rebuild() && probe_text_is("out","head,aaaa,bbbb,cccc,done"),
+          "stream: the last piece and the end come with the job's reap");
+    check(strstr(request_record_text(),"request GET http://fixture.test/s: 200 basic, 0 hops, 12 bytes")!=NULL,
+          "stream: the record counts the bytes that streamed");
+    check(s_streamed==NULL,"stream: the window holds no pipe once the request is done");
+    request_drop();
+
+    /* Nobody reads while the job runs: the whole body is handed over at the
+     * reap, queued, and read whole later. */
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/q",200,"","0123456789")->piece=3;
+    loop_page("<p id=out>-</p><script>fetch('/q').then(r=>{window.held=r});"
+        "setTimeout(()=>held.text().then(t=>{document.getElementById('out').textContent=t}),50);</script>");
+    check(loop_settle() && request_land("/q") && loop_settle(),"stream: a body nobody reads yet");
+    now_ms+=60;
+    check(script_turn() && script_rebuild() && probe_text_is("out","0123456789"),
+          "stream: what waited is read whole later");
+    request_drop();
+
+    /* A body that breaks part way: the page's read rejects, and the record
+     * says why. */
+    fake_fetch_reset();
+    fake_answer_t *broke=fake_answer("GET","http://fixture.test/b",200,"","abcdefghij");
+    broke->piece=4;
+    broke->cut=6;
+    loop_page("<p id=out>-</p><script>fetch('/b').then(r=>r.text()).then(t=>{document.getElementById('out').textContent=t},"
+        "e=>{document.getElementById('out').textContent=e.name})</script>");
+    check(loop_settle() && request_land("/b") && loop_settle() && script_rebuild() && probe_text_is("out","TypeError"),
+          "stream: a body that breaks part way rejects the page's read");
+    check(strstr(request_record_text(),"FAILED request: GET http://fixture.test/b: ")!=NULL,
+          "stream: the record has the broken request, as a FAILED line");
+    request_drop();
+
+    /* The page cancels part way: the job stops reading at its next piece. */
+    fake_fetch_reset();
+    static char big[4096];
+    memset(big,'x',sizeof(big)-1);
+    fake_answer("GET","http://fixture.test/c",200,"",big)->piece=16;
+    loop_page("<script>fetch('/c').then(r=>{const rd=r.body.getReader();rd.read().then(()=>rd.cancel())});</script>");
+    stream_seen[0]='\0';
+    fake_read_hook=stream_hook;
+    check(loop_settle() && request_land("/c"),"stream: a body the page cancels");
+    fake_read_hook=NULL;
+    check(fake_reads<8 && s_streamed==NULL,"stream: the job stopped reading once the page cancelled");
+    request_drop();
+
+    /* What a reaped job's pipe still holds goes a piece a turn, never all
+     * in one turn: the window paints between them. */
+    fake_fetch_reset();
+    static char three[3 * 1024 * 1024 + 512];
+    memset(three,'z',sizeof(three)-1);
+    fake_answer("GET","http://fixture.test/p",200,"",three);
+    loop_page("<p id=out>-</p><script>var got=0;fetch('/p').then(r=>{const rd=r.body.getReader();"
+        "const go=()=>rd.read().then(c=>{if(c.done){document.getElementById('out').textContent='done '+got;return}"
+        "got+=c.value.length;document.getElementById('out').textContent=String(got);go()});go()});</script>");
+    check(loop_settle() && request_land("/p"),"stream: a body still in its pipe when its job is reaped");
+    char paced[160]="";
+    for(int t=0;t<4;t++) {
+        bodies_turn();
+        script_rebuild();
+        size_t n=strlen(paced);
+        snprintf(paced+n,sizeof(paced)-n,"%s%s",n?"|":"",probe_text_of("out"));
+    }
+    check(!strcmp(paced,"-|1048576|2097152|3145728"),"stream: the head, then a piece a turn");
+    if(strcmp(paced,"-|1048576|2097152|3145728")) fprintf(stderr,"stream: paced %s\n",paced);
+    check(loop_settle() && script_rebuild() && probe_text_is("out","done 3146239") && s_streamed==NULL,
+          "stream: then the rest and the end");
+    request_drop();
+
+    /* XMLHttpRequest: LOADING and progress as the pieces come, at most once
+     * in 50 ms; the rest, and the end, at the reap. */
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/x",200,"Content-Type: text/plain\r\n","aaaabbbbcccc")->piece=4;
+    loop_page("<p id=out>-</p><script>var log=[];var x=new XMLHttpRequest();x.open('GET','/x');"
+        "x.onreadystatechange=()=>{log.push(x.readyState+':'+x.responseText.length);"
+        "document.getElementById('out').textContent=log.join(',')};x.send();</script>");
+    stream_seen[0]='\0';
+    stream_step_ms=60;
+    fake_read_hook=stream_hook;
+    check(loop_settle() && request_land("/x"),"stream: an XMLHttpRequest whose body streams");
+    fake_read_hook=NULL;
+    stream_step_ms=0;
+    check(!strcmp(stream_seen,"2:0|2:0,3:4|2:0,3:4,3:8"),"stream: LOADING as each piece comes");
+    if(strcmp(stream_seen,"2:0|2:0,3:4|2:0,3:4,3:8")) fprintf(stderr,"stream: xhr seen %s\n",stream_seen);
+    check(loop_settle() && script_rebuild() && probe_text_is("out","2:0,3:4,3:8,4:12"),
+          "stream: the last piece inside the throttle, then DONE");
+    request_drop();
+}
+
 static void request_cases(void) {
     request_long_address_case();
     navigation_cases();
@@ -416,4 +538,5 @@ static void request_cases(void) {
     request_cors_case();
     request_xhr_case();
     request_cancel_case();
+    request_stream_case();
 }

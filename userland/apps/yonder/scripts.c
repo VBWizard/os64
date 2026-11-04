@@ -391,6 +391,13 @@ static void net_release(void *opaque, os64_dom_response_t *response)
         s->options.release(s->options.opaque, response);
 }
 
+static void net_more(void *opaque, uint64_t id)
+{
+    yonder_scripts_t *s = opaque;
+    if (s->options.more != NULL)
+        s->options.more(s->options.opaque, id);
+}
+
 static yonder_modules_t *module_map_new(yonder_scripts_t *s);
 
 size_t yonder_script_stack_limit(size_t stack)
@@ -535,7 +542,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     if (s->options.diag != NULL)
         os64_dom_set_global_miss(s->dom, global_missed, s);
     if (s->options.request != NULL) {
-        const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, s};
+        const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, s, net_more};
         os64_dom_set_network(s->dom, &network);
     }
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK) {
@@ -1757,6 +1764,45 @@ bool yonder_scripts_answered(yonder_scripts_t *s, uint32_t token, const os64_dom
     os64_dom_fetched(s->dom, token, response, out);
     judged(s, out);
     return true;
+}
+
+// A streamed answer's step for a host whose page waits on the token, as
+// yonder_scripts_answered runs a whole one.
+enum { STEP_HEAD, STEP_PIECE, STEP_END };
+
+static bool streamed_step(yonder_scripts_t *s, uint32_t token, int step, const os64_dom_response_t *head,
+                          const uint8_t *bytes, size_t length, bool ok, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || !os64_dom_fetch_waiting(s->dom, token))
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    if (step == STEP_HEAD)
+        os64_dom_fetch_head(s->dom, token, head, out);
+    else if (step == STEP_PIECE)
+        os64_dom_fetch_body(s->dom, token, bytes, length, out);
+    else
+        os64_dom_fetch_end(s->dom, token, ok, out);
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_head(yonder_scripts_t *s, uint32_t token, const os64_dom_response_t *head,
+                         os64_js_outcome_t *out)
+{
+    return streamed_step(s, token, STEP_HEAD, head, NULL, 0, false, out);
+}
+
+bool yonder_scripts_piece(yonder_scripts_t *s, uint32_t token, const uint8_t *bytes, size_t length,
+                          os64_js_outcome_t *out)
+{
+    return streamed_step(s, token, STEP_PIECE, NULL, bytes, length, false, out);
+}
+
+bool yonder_scripts_end(yonder_scripts_t *s, uint32_t token, bool ok, os64_js_outcome_t *out)
+{
+    return streamed_step(s, token, STEP_END, NULL, NULL, 0, ok, out);
 }
 
 bool yonder_scripts_take_navigation(yonder_scripts_t *s, os64_dom_navigation_t *ask)
