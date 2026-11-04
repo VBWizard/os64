@@ -69,6 +69,13 @@ typedef struct {
     // blob (libjs's, taken) to be kept where `where` says (BYTECODE_CACHE.md
     // § 9). NULL keeps nothing.
     void (*keep)(void *opaque, const yonder_bytecode_t *where, uint8_t *blob, size_t length);
+    // A module's fetch as the loader received it, for the page's record
+    // (diag.h, a `module` line): by its map token, the address asked for
+    // and the one it came from, and its source as read, or `source` NULL
+    // when the fetch failed or its answer was not a module. Borrowed for
+    // the call. NULL keeps nothing.
+    void (*kept)(void *opaque, uint32_t token, const char *url, const char *final, const char *source,
+                 size_t length);
 } yonder_modules_net_t;
 
 // A map for a page, its record `diag` (borrowed; NULL keeps none). NULL on

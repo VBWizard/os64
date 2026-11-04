@@ -160,6 +160,12 @@ index:comment	# what this page fetched, as yonder received it
 index:entry	1	script	https://a.test/x.js	came	https://a.test/x.js		3
 index:entry	2	sheet	https://a.test/k.css	failed	https://a.test/k.css	utf-8	0
 index:entry	3	sheet	https://a.test/a%25b\\c.css	came	https://cdn.a.test/a.css		1
+# a module's line: version 2's shape alone, its identity the map's token
+index:entry	4	module	https://a.test/m.js	came	https://cdn.a.test/m.js		2147483649
+index:entry	5	module	https://a.test/gone.js	failed	https://a.test/gone.js		2147483650
+index:REFUSED	1	module	https://a.test/m.js	came	https://a.test/m.js	
+index:REFUSED	1	modules	https://a.test/m.js	came	https://a.test/m.js		1
+index:REFUSED	1	module		came	https://a.test/m.js		1
 index:entry-v1	1	script	https://a.test/x.js	came	https://a.test/x.js	
 index:REFUSED	1	script	https://a.test/x.js	came
 index:REFUSED	1	scr

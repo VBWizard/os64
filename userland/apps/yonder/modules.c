@@ -190,6 +190,17 @@ static bool header_named(const char *name, size_t length, const char *want)
 // script"): ok, a 2xx status, typed as JavaScript, no longer than a script
 // may be. Its text read as UTF-8 into `*source`, or `why` says what was
 // wrong.
+// Module `i`'s fetch handed to the page's record (net.kept), `source` its
+// source as accept() read it or NULL; before anything takes the source.
+static void kept(yonder_modules_t *m, int32_t i, const os64_dom_response_t *response, const char *source,
+                 size_t length)
+{
+    if (m->net.kept == NULL)
+        return;
+    const char *final = response->url != NULL && response->url[0] != '\0' ? response->url : m->mods[i].name;
+    m->net.kept(m->net.opaque, YONDER_MODULE_TOKEN | (uint32_t)(i + 1), m->mods[i].name, final, source, length);
+}
+
 static bool accept(const os64_dom_response_t *response, char **source, size_t *length, const char **why)
 {
     *source = NULL;
@@ -400,6 +411,8 @@ static bool engine_source(void *opaque, const char *name, const char **bytes, si
     m->mods[i].job = 0;
     os64_dom_response_t response;
     if (m->net.run == NULL || !m->net.run(m->net.opaque, name, &response)) {
+        const os64_dom_response_t none = {0};
+        kept(m, i, &none, NULL, 0);
         fail(m, i, "the module could not be fetched");
         return false;
     }
@@ -407,6 +420,7 @@ static bool engine_source(void *opaque, const char *name, const char **bytes, si
     size_t got;
     const char *why = NULL;
     bool ok = accept(&response, &source, &got, &why);
+    kept(m, i, &response, ok ? source : NULL, ok ? got : 0);
     char *base = ok ? copy(response.url != NULL && response.url[0] != '\0' ? response.url : name) : NULL;
     if (m->net.release != NULL)
         m->net.release(m->net.opaque, &response);
@@ -590,7 +604,9 @@ void yonder_modules_answered(yonder_modules_t *m, uint32_t token, const os64_dom
     char *source;
     size_t length;
     const char *why = NULL;
-    if (!accept(response, &source, &length, &why)) {
+    bool ok = accept(response, &source, &length, &why);
+    kept(m, (int32_t)slot, response, ok ? source : NULL, ok ? length : 0);
+    if (!ok) {
         fail(m, (int32_t)slot, why);
         return;
     }

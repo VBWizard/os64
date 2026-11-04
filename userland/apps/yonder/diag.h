@@ -243,14 +243,16 @@ int64_t yonder_diag_keep_bytes_end(const yonder_diag_claim_t *c);
 
 // What a kept sub-resource is: its file's extension, and the word the
 // index names it by.
-typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kept_t;
+typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET, YONDER_DIAG_KEPT_MODULE } yonder_diag_kept_t;
 
 // One sub-resource as the window received it: when it came, written whole
-// as the next `<name>.d/<n>.js` or `.css`; when its fetch failed (`bytes`
-// NULL), no file, since a replay must fail it as the page saw it fail. The
+// as the next `<name>.d/<n>.js` (a script's or a module's) or `.css`; when
+// its fetch failed (`bytes` NULL), no file, since a replay must fail it as
+// the page saw it fail. The
 // index is written again whole with its line, and the record's `kept lines`
 // fact says how many it holds. `job` is the job's own identity (a
-// script's token, a sheet's place in its page's table), so a replay gives
+// script's token, a sheet's place in its page's table, a module's place in
+// its page's map), so a replay gives
 // two jobs of one kind and address each the outcome its own fetch had;
 // `url` is the address its job carried, `final` the one it came from after
 // redirects, `label` the charset its response named (a sheet's: a replay
@@ -265,8 +267,11 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 // line shape and leaves these as they are; the version moves only when a
 // shape that exists changes. A replay reads every line as a kind it
 // knows, and takes a line it does not as damage, so the slice that keeps
-// a new kind teaches the replay it in the same change. A script's and a
-// sheet's line carries
+// a new kind teaches the replay it in the same change. A `module` line is
+// read and not served: a module's fetch is the page's own request, which a
+// replay does not answer (REPLAY.md § 3), so its line is there for whoever
+// reads the page's sources and never makes a replay incomplete. A
+// script's, a sheet's and a module's line carries
 //     <url> TAB came|failed TAB <final> TAB <label> TAB <job>
 // with a byte below 0x20, 0x7F and a backslash in a field written `\xHH`
 // and `\\`, as a page file writes them. Version 2 added `<job>`; a replay

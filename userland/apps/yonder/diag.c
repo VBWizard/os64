@@ -1240,9 +1240,9 @@ int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept
     if (folder == NULL)
         return keep_failed(d);
     uint32_t number = d->keep.resources + 1;
-    const char *word = kind == YONDER_DIAG_KEPT_SCRIPT ? "script" : "sheet";
+    const char *word = kind == YONDER_DIAG_KEPT_SCRIPT ? "script" : kind == YONDER_DIAG_KEPT_MODULE ? "module" : "sheet";
     int p = os64_snprintf(path, sizeof(path), "%s/%lu.%s", folder, (unsigned long)number,
-                          kind == YONDER_DIAG_KEPT_SCRIPT ? "js" : "css");
+                          kind == YONDER_DIAG_KEPT_SHEET ? "css" : "js");
     int i = os64_snprintf(index, sizeof(index), "%s/index", folder);
     if (p <= 0 || (size_t)p >= sizeof(path) || i <= 0 || (size_t)i >= sizeof(index) ||
         (bytes != NULL && !write_whole(path, bytes, n)))
@@ -1254,9 +1254,9 @@ int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept
     static const char kHeader[] =
         "# yonder kept index " DIAG_VERSION(YONDER_DIAG_INDEX_VERSION) "\n"
         "# what this page fetched, as yonder received it: <n>\t<kind>\tthen what the kind carries\n"
-        "# script, sheet: <address asked for>\tcame|failed\t<address after redirects>\t<charset label>\t"
+        "# script, sheet, module: <address asked for>\tcame|failed\t<address after redirects>\t<charset label>\t"
         "<the job's own identity>; the file <n>.js or <n>.css when it came\n"
-        "# fonts and pictures are not kept\n";
+        "# fonts and pictures are not kept; a replay does not serve modules\n";
 #undef DIAG_VERSION
 #undef DIAG_STRING
     char lead[32], tail[16];
