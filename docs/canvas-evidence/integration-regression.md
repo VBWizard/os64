@@ -93,7 +93,10 @@ relevant local galleries. Hardware regression should cover normal browsing,
 links/forms, scrolling, window resize and zoom, Canvas drawing/animation,
 SVG/raster images, navigation away from active scenes, and ordinary userland
 applications sharing libos64. It is a functional regression pass, not a new
-performance acceptance campaign. Hardware acceptance remains pending.
+performance acceptance campaign. On 2026-11-03 the user reported that the
+Canvas sites and general browsing regression worked without issues, including
+the subsequent rainbow and frame-deadline candidates. The later Streams S2
+merge-forward is distinguished below from that hardware-tested cohort.
 
 Software-triangle JavaScript throughput and previously recorded external-site
 startup dependencies remain follow-ups. They are not new merge gates.
@@ -148,4 +151,22 @@ their message/idle/clone probes pass 647 and 6,665 checks respectively. The comp
 UBSan and LeakSanitizer remain enabled. The native DOM library builds.
 
 The frozen candidate reuses the accepted rainbow cohort and replaces only
-`libdom.so`. P5 performance and responsiveness confirmation remain pending.
+`libdom.so`. The user reported faster progress and subsequently accepted the
+Canvas regression. The candidate P5 record reports 222 paints in 7.4 seconds
+(30.0 paints/s) and 70% main-loop utilization, versus 162 in 6.6 seconds
+(24.5 paints/s) and 58% before. The candidate viewport was 1478 by 850,
+35.6% more pixels than the preceding 1539 by 602 viewport. These different
+sizes and sampled scene windows make the 22.2% higher paint rate an
+observational comparison, not a controlled speedup claim.
+
+## Final review candidate
+
+The accepted follow-ups are `575ff2ee` (tiny round strokes) and `975d9c52`
+(frame deadlines). The complete review candidate also merges userland through
+`8faadcf5`, the approved Streams S2 byte-stream implementation and its review
+fixes. This merge is conflict-free. It changes the installed Streams surface
+and fetched-body behavior; it does not edit Canvas rendering, geometry or
+frame scheduling. The final merged bytes have not had a new P5 pass.
+
+The architectural review entry point is
+[the integration brief](../design/pending/CANVAS_INTEGRATION_REVIEW_BRIEF.md).

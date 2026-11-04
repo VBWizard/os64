@@ -706,15 +706,16 @@ while strokes, shadows, clipping and clearing composite operations retain their
 normal paths. The P5 browsing pass approved Starfield without blinking. Game of
 Life's remaining startup dependency is Window named access (WINDOW_DOCUMENT
 P3c), deferred to a separate browser slice; an explicit-lookup diagnostic runs
-its animation successfully. These Canvas fixes are ready for review; see [C6e validation](../../canvas-evidence/c6e-validation.md).
+its animation successfully. See [C6e validation](../../canvas-evidence/c6e-validation.md)
+for the slice's checks and the integration brief below for final review status.
 
-Danlegt's wall and selected rainbow cursor render in the broader captured
-replay. Its game startup reaches missing observer/media APIs, and its modal
-layout still needs native investigation. The isolated signature-editor and
-CD-ROM checks remain narrower evidence. The current release checks use
-Curran's examples instead; the [target checkpoint](../../canvas-evidence/c6-target-checkpoint.md)
-separates these outcomes from full-site support. Acceptance is not a fixed
-count of remaining PRs.
+Danlegt's signature wall and feature-section rainbow cursor are confirmed on
+the P5, including the rainbow's stop-and-resume case after the tiny round-stroke
+fix. Its scratch-off still encounters an Audio startup dependency. The earlier
+captured-replay and isolated signature-editor/CD-ROM checks are recorded in
+the [target checkpoint](../../canvas-evidence/c6-target-checkpoint.md); those
+checks do not establish full-site support. Release acceptance also uses
+Curran's examples and the original Phoria Canvas 2D demos.
 
 See [C6a validation and target checkpoint](../../canvas-evidence/c6a-validation.md).
 
@@ -731,4 +732,8 @@ full-target coverage. See [UV validation](../../canvas-evidence/phoria-uv.md).
 
 The combined userland/Canvas regression pass and merge resolutions are recorded
 in [integration regression](../../canvas-evidence/integration-regression.md).
-Hardware regression of the frozen combined candidate precedes the userland merge.
+The user accepted the frozen combined candidate and the rainbow/frame-deadline
+follow-ups on the P5. A subsequent conflict-free merge brings in userland's
+Streams S2; the final architectural review and that merge's verification are
+tracked in [the integration brief](CANVAS_INTEGRATION_REVIEW_BRIEF.md).
+The integration remains unmerged to userland pending review.

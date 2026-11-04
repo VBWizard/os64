@@ -103,7 +103,8 @@ static const DModernRow kModern[] = {
      * from: queueMicrotask (browsing), AbortController (abort) and
      * structuredClone (clone), which a tee's second branch is cloned by. */
     {(const char *const[]){"ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamDefaultController",
-                           "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController",
+                           "ReadableStreamBYOBReader", "ReadableByteStreamController",
+                           "ReadableStreamBYOBRequest", "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController",
                            "TransformStream", "TransformStreamDefaultController", "ByteLengthQueuingStrategy",
                            "CountQueuingStrategy", NULL},
      d_streams_install},

@@ -125,6 +125,23 @@ static const struct {
     {"RangeError", "RangeError", VALUE},
     {"Uint8Array", "Uint8Array", VALUE},
     {"Uint8Array_set", "Uint8Array.prototype.set", VALUE},
+    /* A byte stream's buffers and views: streams.js takes the getters and
+     * transfer() it needs from ArrayBuffer's and DataView's prototypes,
+     * and builds the view a BYOB read is answered with from these
+     * constructors. */
+    {"ArrayBuffer", "ArrayBuffer", VALUE},
+    {"DataView", "DataView", VALUE},
+    {"Int8Array", "Int8Array", VALUE},
+    {"Uint8ClampedArray", "Uint8ClampedArray", VALUE},
+    {"Int16Array", "Int16Array", VALUE},
+    {"Uint16Array", "Uint16Array", VALUE},
+    {"Int32Array", "Int32Array", VALUE},
+    {"Uint32Array", "Uint32Array", VALUE},
+    {"Float16Array", "Float16Array", VALUE},
+    {"Float32Array", "Float32Array", VALUE},
+    {"Float64Array", "Float64Array", VALUE},
+    {"BigInt64Array", "BigInt64Array", VALUE},
+    {"BigUint64Array", "BigUint64Array", VALUE},
     {"queueMicrotask", "queueMicrotask", VALUE},
     {"structuredClone", "structuredClone", VALUE},
     {"Symbol_asyncIterator", "Symbol.asyncIterator", VALUE},
@@ -224,6 +241,7 @@ fail:
  * Modern Web's table lists the same names (modern.c). */
 static const char *const kInterfaces[] = {
     "ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamDefaultController",
+    "ReadableStreamBYOBReader", "ReadableByteStreamController", "ReadableStreamBYOBRequest",
     "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController",
     "TransformStream", "TransformStreamDefaultController",
     "ByteLengthQueuingStrategy", "CountQueuingStrategy",

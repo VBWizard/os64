@@ -10,10 +10,10 @@ animation. Fable approved the architecture on 2026-11-01, requesting an
 in-process cache audit and alignment with the existing size-bin plan; those
 follow-ups are included below. No kernel allocator or syscall changes are involved.
 
-The implementation is an uncommitted change on `codex/canvas-phoria`, above
-`82290ed4`. The production patch is confined to `heap.c`; the associated tests
-are linked below. Earlier Phoria image and rasterization changes are separate
-from this review.
+The implementation and agreed review follow-ups are committed as `b33e2be7`
+and included in `canvas-integration`. The production patch is confined to
+`heap.c`; the associated tests are linked below. Earlier Phoria image and
+rasterization changes are separate from this review.
 
 ## Why this change exists
 
