@@ -92,13 +92,14 @@ typedef struct {
      * staged allocations. Engine, document and control-state budgets remain
      * separately enforced by their owning libraries. Zero is a literal cap. */
     size_t max_bytes;
-    /* The bytes of the responses the page holds (XHR_BYTES.md): an
-     * XMLHttpRequest's body, and the Blobs and ArrayBuffers made over it,
-     * which live in the process's memory, outside the engine's heap. A
-     * response whose bytes would pass it fails as a network error and the
-     * page goes on; a responseText read while LOADING, which joins what
-     * has come so far, throws QuotaExceededError instead and the response
-     * goes on arriving. Zero is a literal cap (an empty body passes it). */
+    /* The bytes the page keeps outside the engine's heap, in the process's
+     * memory (XHR_BYTES.md): an XMLHttpRequest's body and the Blobs and
+     * ArrayBuffers made over it, and the Blobs the page makes. A response
+     * whose bytes would pass it fails as a network error and the page goes
+     * on; a responseText read while LOADING, which joins what has come so
+     * far, and a Blob the page makes throw QuotaExceededError instead, and
+     * the response goes on arriving. Zero is a literal cap (an empty body
+     * passes it). */
     size_t max_body_bytes;
     bool scripting;
     /* The Modern Web arc's surface (MODERN_WEB.md § The rules that keep the
@@ -689,10 +690,10 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
-/* The responses' bytes the page holds now, against max_body_bytes, and how
- * many responses failed since the binding was made because their bytes
- * could not be kept: past that bound, or the process had no memory. NULL
- * answers zero. */
+/* The bytes the page keeps outside the engine now (responses' and Blobs'),
+ * against max_body_bytes, and how many responses failed since the binding
+ * was made because their bytes could not be kept: past that bound, or the
+ * process had no memory. NULL answers zero. */
 void os64_dom_body_stats(const os64_dom_t *dom, size_t *held, uint64_t *refused);
 
 /* EVENTS. The host dispatches at a node, or at window when node is NULL

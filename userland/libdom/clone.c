@@ -1211,7 +1211,7 @@ static JSValue item_make(DReader *r, DItem *item, bool *container)
     }
     case K_BLOB: {
         DData *data = item->data;
-        DBytes bytes = {data->bytes, data->length, data->type};
+        DBytes bytes = {data->bytes, data->length, data->type, NULL};
         data->bytes = NULL;
         data->type = NULL;
         if (!data->file) return d_blob_new(dom, ctx, &bytes);

@@ -29,6 +29,10 @@ typedef struct {
     size_t headers_length;
     char body[4096];
     size_t body_length;
+    /* The whole body, past what `body` keeps: its length and a sum of its
+     * bytes, each times its position plus one (an upload's proof). */
+    size_t body_sent;
+    uint64_t body_sum;
     way_mode_t mode;
     way_credentials_t credentials;
     way_redirect_t redirect;
@@ -57,6 +61,8 @@ static void net_record(NetSeen *s, const os64_dom_request_t *q)
     s->has_body = q->body != NULL;
     s->body_length = q->body_length < sizeof(s->body) - 1 ? q->body_length : sizeof(s->body) - 1;
     if (s->body_length != 0) memcpy(s->body, q->body, s->body_length);
+    s->body_sent = q->body != NULL ? q->body_length : 0;
+    for (size_t i = 0; i < s->body_sent; i++) s->body_sum += (uint64_t)((const uint8_t *)q->body)[i] * (i + 1);
     s->mode = q->mode;
     s->credentials = q->credentials;
     s->redirect = q->redirect;
@@ -1665,6 +1671,118 @@ static void dom_xhr_downloads_case(int n, int mib, bool declared, int bound_mib,
     fixture_free(&f);
 }
 
+/* A speed test's uploads (fast.com's shape): a string of `mib` MiB made
+ * into `n` Blobs, each sent by an XMLHttpRequest, in a page whose runtime
+ * holds 64 MiB and whose body bound is `bound_mib` MiB. A Blob the page
+ * makes keeps its bytes outside the engine and a send refers to them
+ * (XHR_BYTES.md § 7): the first `made` Blobs are made, the next throws a
+ * QuotaExceededError the page catches, and every made one is sent whole.
+ * The string and 28 MiB of filler stay held throughout, leaving the heap
+ * no room for a copy of one Blob's bytes at any step. */
+static void dom_xhr_uploads_case(int n, int mib, int bound_mib, int made)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 64 * 1024 * 1024,
+                                       (size_t)bound_mib * 1024 * 1024);
+    if (!fixture_ready(&f)) return;
+    char script[640];
+    snprintf(script, sizeof(script),
+             "globalThis.s='0123456789abcdef'.repeat(%d*65536);globalThis.fill=new ArrayBuffer(28*1048576);"
+             "globalThis.blobs=[];globalThis.thrown='';"
+             "try{for(let i=0;i<%d;i++)blobs.push(new Blob([s]))}catch(e){thrown=e.name}"
+             "blobs.forEach((b,i)=>{const x=new XMLHttpRequest();x.open('POST','/u'+i);x.send(b)});"
+             "s=null;fill=null;", mib, n);
+    char what[160];
+    snprintf(what, sizeof(what), "uploads: %d of %d MiB in a 64 MiB page with a %d MiB body bound", n, mib, bound_mib);
+    dom_script(&f, script, what);
+    size_t length = (size_t)mib * 1024 * 1024;
+    uint64_t sum = 0;
+    for (size_t i = 0; i < length; i++) sum += (uint64_t)"0123456789abcdef"[i % 16] * (i + 1);
+    bool whole = net.count == (size_t)made;
+    for (size_t i = 0; i < net.count; i++)
+        whole = whole && net.seen[i].body_sent == length && net.seen[i].body_sum == sum;
+    check(whole, "uploads: every Blob made is sent whole");
+    char counted[512];
+    snprintf(counted, sizeof(counted),
+             FETCH_ASSERT "assert(blobs.length===%d&&thrown===%s,blobs.length+' made, '+thrown);", made,
+             made < n ? "'QuotaExceededError'" : "''");
+    dom_script(&f, counted, "uploads: the page runs on, past the bound a QuotaExceededError it catches");
+    size_t held = 0;
+    os64_dom_body_stats(f.binding, &held, NULL);
+    check(held >= (size_t)made * length, "uploads: the Blobs' bytes held outside the engine");
+    fixture_free(&f);
+}
+
+/* A Blob's bytes made from each kind of part, kept outside the engine:
+ * USVString's lone surrogate, native endings, a buffer, a Blob, an object's
+ * string; and the doors that hold such bytes elsewhere — a Response, a
+ * Request, fetch()'s body, a FormData File — each read back whole. */
+static void dom_blob_kept_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.got={};"
+        "const hex=b=>b.arrayBuffer().then(a=>Array.from(new Uint8Array(a),x=>x.toString(16).padStart(2,'0')).join(''));"
+        "const inner=new Blob(['in']);"
+        "globalThis.b=new Blob(['a\\r\\nb\\rc\\u00e9\\ud800z',new Uint8Array([1,2]),inner,{toString(){return '!'}}],"
+        "{endings:'native'});"
+        "hex(b).then(h=>{got.native=h});"
+        "hex(new Blob(['a\\r\\nb'])).then(h=>{got.transparent=h});"
+        "hex(new Blob([])).then(h=>{got.empty=h+':'+new Blob([]).size});"
+        "new Response(new Blob(['hey'])).text().then(t=>{got.response=t});"
+        "new Request('/q',{method:'POST',body:new Blob(['yo'])}).text().then(t=>{got.request=t});"
+        "fetch('/f',{method:'POST',body:new Blob(['sent'])});"
+        "const fd=new FormData();fd.append('f',new Blob(['form'],{type:'text/x'}),'n.txt');"
+        "const e=fd.get('f');e.text().then(t=>{got.form=t+':'+e.name+':'+e.type+':'+e.size});"
+        // Each part converted as it is yielded: a toString that pops the
+        // next part leaves the iteration one part short.
+        "const arr=[{toString(){arr.pop();return 'P'}},{toString(){return 'F'}}];"
+        "new Blob(arr).text().then(t=>{got.order=t});",
+        "kept blobs: each kind of part, and each door");
+    dom_script(&f, FETCH_ASSERT
+        "assert(got.native==='610a620a63c3a9efbfbd7a0102696e21',got.native);"
+        "assert(got.transparent==='610d0a62',got.transparent);assert(got.empty===':0',got.empty);"
+        "assert(got.response==='hey'&&got.request==='yo',got.response+' '+got.request);"
+        "assert(got.form==='form:n.txt:text/x:4',got.form);assert(got.order==='P',got.order);",
+        "kept blobs: every byte as the File API makes it");
+    check(net.count == 1 && net.seen[0].body_sent == 4 && memcmp(net.seen[0].body, "sent", 4) == 0,
+          "kept blobs: fetch() sends a kept Blob's bytes");
+    fixture_free(&f);
+}
+
+/* A Blob's record is charged to the bound as its bytes are (a response's
+ * is not): under a bound of zero an empty Blob is refused, and under a
+ * small one a page that makes Blobs in a loop is stopped by a
+ * QuotaExceededError it can catch, every charge given back once the Blobs
+ * go. */
+static void dom_blob_records_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 0, 0);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "let refused='';try{new Blob([])}catch(e){refused=e.name}"
+        "assert(refused==='QuotaExceededError',refused);",
+        "blob records: an empty Blob past a bound of zero");
+    fixture_free(&f);
+    f = net_fixture_bounded("http://example.test/", &net, 0, 64 * 1024);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.many=[];let refused='';"
+        "try{for(let i=0;i<100000;i++)many.push(new Blob([]))}catch(e){refused=e.name}"
+        "assert(refused==='QuotaExceededError'&&many.length>0&&many.length<100000,refused+' '+many.length);"
+        "many=null;",
+        "blob records: empty Blobs in a loop stop at a small bound");
+    os64_js_outcome_t gc;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc)));
+    size_t held = 0;
+    os64_dom_body_stats(f.binding, &held, NULL);
+    check(held == 0, "blob records: every record's charge given back");
+    fixture_free(&f);
+}
+
 /* An abort part way through a streamed body the page has already read
  * from: the body is disturbed, so a body method answers a TypeError (Fetch
  * § "consume body": unusable), not the abort's reason. */
@@ -1875,6 +1993,13 @@ static void dom_fetch_cases(void)
     dom_xhr_downloads_case(8, 25, false, 256, 8);
     dom_xhr_downloads_case(3, 25, true, 64, 2);
     dom_xhr_downloads_case(3, 25, false, 64, 1);
+    /* Four 25 MiB Blobs of one string, past the 64 MiB runtime, within
+     * the bound; under a 64 MiB bound, two are made and the third is
+     * refused. */
+    dom_xhr_uploads_case(4, 25, 256, 4);
+    dom_xhr_uploads_case(4, 25, 64, 2);
+    dom_blob_kept_case();
+    dom_blob_records_case();
     dom_fetch_abort_read_case();
     dom_fetch_bound_cases();
     dom_fetch_memory_cases();

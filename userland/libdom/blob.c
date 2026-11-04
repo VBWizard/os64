@@ -3,22 +3,24 @@
 #include "os64/fmt.h"
 
 /* Blob and File (the File API, § 3 and § 4) and FormData (XHR § 4): the
- * bytes a request body carries and the forms a page builds. Their bytes are
- * ENGINE memory (js_malloc), counted against the runtime's memory limit as
- * anything else a script makes is, and freed with the object — except a
- * Blob over a response's body (d_blob_new_received) and its slices, which
- * refer to the body's bytes in process memory (received.c) and hold it.
- * Nothing here is a container a page can reach: a FormData's entries are a
- * C array, read by index and looked up again after anything that can run
- * page code. */
+ * bytes a request body carries and the forms a page builds. A Blob the page
+ * makes (new Blob, new File), a Blob over a response's body
+ * (d_blob_new_kept), and their slices refer to bytes the page keeps in
+ * process memory (kept.c) and hold them, so they cost the scripts' heap
+ * nothing (XHR_BYTES.md § 7). A Blob d_blob_new or d_file_new makes from
+ * bytes in the engine (a fetch() body's blob(), a structured clone's), and
+ * its slices, own engine memory, counted against the runtime's memory limit
+ * as anything else a script makes is, and freed with the object. Nothing
+ * here is a container a page can reach: a FormData's entries are a C array,
+ * read by index and looked up again after anything that can run page code. */
 
 static JSClassID blob_slot, form_slot, form_iterator_slot;
 
 typedef struct {
-    /* Owned engine memory, or, with `body`, the body's bytes, borrowed for
-     * as long as the reference is held. */
+    /* Owned engine memory, or, with `kept`, the kept bytes, borrowed for as
+     * long as the reference is held. */
     uint8_t *bytes;
-    DReceived *body;
+    DKept *kept;
     size_t length;
     char *type;                 /* "" for none; lowercase printable ASCII */
     bool file;
@@ -71,7 +73,31 @@ static void iterator_close(JSContext *ctx, JSValueConst iterator)
     JS_Throw(ctx, pending);
 }
 
-static int sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count, bool numbers)
+/* How sequence() converts each item as it is yielded: not at all, to a
+ * number, or to a BlobPart (a BufferSource or a Blob as it is, anything
+ * else its string). */
+enum { SEQ_ANY, SEQ_NUMBERS, SEQ_BLOB_PARTS };
+
+/* A BlobPart: `item` (taken) as it is, or its string; JS_EXCEPTION. The
+ * ToString half of USVString, which can run page code; the lone surrogates
+ * are replaced as the parts are processed, which runs none. */
+static JSValue blob_part(os64_dom_t *dom, JSContext *ctx, JSValue item)
+{
+    const uint8_t *bytes;
+    size_t length;
+    const char *type;
+    int kind = d_buffer_source(dom, ctx, item, &bytes, &length);
+    if (kind < 0) {
+        JS_FreeValue(ctx, item);
+        return JS_EXCEPTION;
+    }
+    if (kind > 0 || d_blob_get(item, &bytes, &length, &type) || JS_IsString(item)) return item;
+    JSValue text = JS_ToString(ctx, item);
+    JS_FreeValue(ctx, item);
+    return text;
+}
+
+static int sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count, int convert)
 {
     *out = NULL;
     *count = 0;
@@ -125,12 +151,15 @@ static int sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t 
         JSValue item = JS_GetPropertyStr(ctx, step, "value");
         JS_FreeValue(ctx, step);
         if (JS_IsException(item)) { result = -1; break; }
-        if (numbers) {
+        if (convert == SEQ_NUMBERS) {
             double number;
             int converted = JS_ToFloat64(ctx, &number, item);
             JS_FreeValue(ctx, item);
             if (converted < 0) { iterator_close(ctx, iterator); result = -1; break; }
             item = JS_NewFloat64(ctx, number);
+        } else if (convert == SEQ_BLOB_PARTS) {
+            item = blob_part(dom, ctx, item);
+            if (JS_IsException(item)) { iterator_close(ctx, iterator); result = -1; break; }
         }
         if (n == max) {
             JS_FreeValue(ctx, item);
@@ -163,20 +192,34 @@ static int sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t 
     return 0;
 }
 int d_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count)
-{ return sequence(dom,ctx,value,max,out,count,false); }
+{ return sequence(dom,ctx,value,max,out,count,SEQ_ANY); }
 /* WebIDL numeric sequences convert each yielded value before requesting the
  * next item, including iterator closing when that conversion throws. */
 int d_double_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count)
-{ return sequence(dom,ctx,value,max,out,count,true); }
+{ return sequence(dom,ctx,value,max,out,count,SEQ_NUMBERS); }
 
 
 void d_bytes_free(JSContext *ctx, DBytes *b)
 {
-    js_free(ctx, b->bytes);
+    if (b->kept != NULL) d_kept_unref(b->kept);
+    else js_free(ctx, b->bytes);
     js_free(ctx, b->type);
     b->bytes = NULL;
+    b->kept = NULL;
     b->type = NULL;
     b->length = 0;
+}
+
+bool d_bytes_own(JSContext *ctx, DBytes *b)
+{
+    if (b->kept == NULL) return true;
+    uint8_t *copy = js_malloc(ctx, b->length + 1);
+    if (copy == NULL) return false;
+    if (b->length != 0) os64_memcpy(copy, b->bytes, b->length);
+    d_kept_unref(b->kept);
+    b->kept = NULL;
+    b->bytes = copy;
+    return true;
 }
 
 /* A string's text as UTF-8 in ENGINE memory (a body may be megabytes, past
@@ -252,7 +295,7 @@ static void blob_finalizer(JSRuntime *rt, JSValue value)
 {
     DBlob *b = JS_GetOpaque(value, os64_js_class_id(&blob_slot));
     if (b == NULL) return;
-    if (b->body != NULL) d_received_unref(b->body);
+    if (b->kept != NULL) d_kept_unref(b->kept);
     else js_free_rt(rt, b->bytes);
     js_free_rt(rt, b->type);
     js_free_rt(rt, b->name);
@@ -272,6 +315,12 @@ bool d_blob_get(JSValueConst value, const uint8_t **bytes, size_t *length, const
     *length = b->length;
     *type = b->type;
     return true;
+}
+
+DKept *d_blob_kept(JSValueConst value)
+{
+    DBlob *b = blob_state(value);
+    return b != NULL ? b->kept : NULL;
 }
 
 /* The File API's type rule: a type with a byte outside U+0020..U+007E is
@@ -316,6 +365,37 @@ static JSValue blob_make(JSContext *ctx, JSValueConst prototype, uint8_t *bytes,
     return object;
 }
 
+/* A Blob (or a File, with `file`) over `length` of `kept`'s bytes from
+ * `bytes`, with `prototype`: a reference to the kept bytes taken for it,
+ * `type` and `name` taken. */
+static JSValue blob_over(JSContext *ctx, JSValueConst prototype, DKept *kept, const uint8_t *bytes, size_t length,
+                         char *type, bool file, char *name, int64_t last_modified)
+{
+    JSValue made = blob_make(ctx, prototype, NULL, length, type, file, name, last_modified);
+    if (JS_IsException(made)) return made;
+    DBlob *b = blob_state(made);
+    b->bytes = (uint8_t *)bytes;
+    b->kept = d_kept_ref(kept);
+    return made;
+}
+
+/* A Blob or File of `bytes` (taken: owned engine memory, or a kept
+ * reference), with `prototype`; `type` and `name` taken. */
+static JSValue blob_of(JSContext *ctx, JSValueConst prototype, DBytes *bytes, char *type, bool file, char *name,
+                       int64_t last_modified)
+{
+    JSValue made;
+    if (bytes->kept != NULL) {
+        made = blob_over(ctx, prototype, bytes->kept, bytes->bytes, bytes->length, type, file, name, last_modified);
+        d_kept_unref(bytes->kept);
+    } else made = blob_make(ctx, prototype, bytes->bytes, bytes->length, type, file, name, last_modified);
+    bytes->bytes = NULL;
+    bytes->kept = NULL;
+    bytes->type = NULL;
+    bytes->length = 0;
+    return made;
+}
+
 JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes)
 {
     (void)dom;
@@ -324,29 +404,12 @@ JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes)
         d_bytes_free(ctx, bytes);
         return JS_EXCEPTION;
     }
-    JSValue blob = blob_make(ctx, JS_UNDEFINED, bytes->bytes, bytes->length, type, false, NULL, 0);
-    bytes->bytes = NULL;
-    bytes->type = NULL;
-    bytes->length = 0;
-    return blob;
+    return blob_of(ctx, JS_UNDEFINED, bytes, type, false, NULL, 0);
 }
 
-/* A Blob over `length` of `body`'s bytes from `bytes`, with `prototype`:
- * a reference to the body taken for it, `type` taken. */
-static JSValue blob_over(JSContext *ctx, JSValueConst prototype, DReceived *body, const uint8_t *bytes, size_t length,
-                         char *type)
+JSValue d_blob_new_kept(JSContext *ctx, DKept *body, char *type)
 {
-    JSValue made = blob_make(ctx, prototype, NULL, length, type, false, NULL, 0);
-    if (JS_IsException(made)) return made;
-    DBlob *b = blob_state(made);
-    b->bytes = (uint8_t *)bytes;
-    b->body = d_received_ref(body);
-    return made;
-}
-
-JSValue d_blob_new_received(JSContext *ctx, DReceived *body, char *type)
-{
-    return blob_over(ctx, JS_UNDEFINED, body, d_received_bytes(body), d_received_length(body), type);
+    return blob_over(ctx, JS_UNDEFINED, body, d_kept_bytes(body), d_kept_length(body), type, false, NULL, 0);
 }
 
 bool d_blob_file(JSValueConst value, const char **name, int64_t *last_modified)
@@ -368,30 +431,21 @@ JSValue d_file_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes, char *name, i
         d_bytes_free(ctx, bytes);
         return JS_EXCEPTION;
     }
-    JSValue file = blob_make(ctx, dom->file_prototype->value, bytes->bytes, bytes->length, type, true, name,
-                             last_modified);
-    bytes->bytes = NULL;
-    bytes->type = NULL;
-    bytes->length = 0;
-    return file;
+    return blob_of(ctx, dom->file_prototype->value, bytes, type, true, name, last_modified);
 }
 
 /* sequence<BlobPart>, converted ONCE, as WebIDL converts the argument
- * before the options are read: the items, and for each one that is
- * neither a BufferSource nor a Blob its USVString (engine memory; NULL for
- * the others, whose bytes are read when the parts are processed). */
+ * before the options are read: each item as it is yielded (blob_part), so
+ * a part's toString that changes the array is seen by the iteration. A
+ * string stays the engine's own: its bytes are written out one part at a
+ * time. */
 typedef struct {
     JSValue *items;
-    char **texts;
-    size_t *lengths;
     size_t count;
 } Parts;
 
 static void parts_free(JSContext *ctx, Parts *p)
 {
-    for (size_t i = 0; p->texts != NULL && i < p->count; i++) js_free(ctx, p->texts[i]);
-    js_free(ctx, p->texts);
-    js_free(ctx, p->lengths);
     d_sequence_free(ctx, p->items, p->count);
     *p = (Parts){0};
 }
@@ -400,57 +454,83 @@ static int parts_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst parts, Pa
 {
     *out = (Parts){0};
     if (JS_IsUndefined(parts)) return 0;
-    if (d_sequence(dom, ctx, parts, D_SEQUENCE_MAX, &out->items, &out->count) < 0) return -1;
-    if (out->count == 0) return 0;
-    out->texts = js_mallocz(ctx, out->count * sizeof(*out->texts));
-    out->lengths = js_mallocz(ctx, out->count * sizeof(*out->lengths));
-    if (out->texts == NULL || out->lengths == NULL) {
-        parts_free(ctx, out);
-        return -1;
-    }
-    for (size_t i = 0; i < out->count; i++) {
-        const uint8_t *bytes;
-        size_t length;
-        const char *type;
-        int kind = d_buffer_source(dom, ctx, out->items[i], &bytes, &length);
-        if (kind < 0 ||
-            (kind == 0 && !d_blob_get(out->items[i], &bytes, &length, &type) &&
-             !engine_text(ctx, out->items[i], true, &out->texts[i], &out->lengths[i]))) {
-            parts_free(ctx, out);
-            return -1;
+    return sequence(dom, ctx, parts, D_SEQUENCE_MAX, &out->items, &out->count, SEQ_BLOB_PARTS);
+}
+
+/* One string part's bytes: its UTF-8, each lone surrogate U+FFFD
+ * (USVString), its line endings "\n" when `native`. Written to `out` in
+ * runs when it is not NULL; counted into `*length` either way. The UTF-8
+ * is the engine's for as long as this runs (for a string the engine holds
+ * as 16-bit units, three bytes a unit reserved whole), and none at all for
+ * a string it holds as ASCII bytes, which it hands over as they are. False
+ * with an exception pending, or when `out` refuses a run. */
+static bool part_text(JSContext *ctx, JSValueConst text, bool native, DKept *out, size_t *length)
+{
+    size_t n;
+    const char *utf8 = JS_ToCStringLen(ctx, &n, text);
+    if (utf8 == NULL) return false;
+    const uint8_t *s = (const uint8_t *)utf8;
+    size_t run = 0, count = 0;
+    bool kept = true;
+    for (size_t k = 0; k < n && kept; k++) {
+        const char *instead = NULL;
+        size_t replaced = 0;
+        if (s[k] == 0xed && k + 2 < n && s[k + 1] >= 0xa0) {
+            instead = "\xef\xbf\xbd";
+            replaced = 3;
+        } else if (native && s[k] == '\r') {
+            instead = "\n";
+            replaced = k + 1 < n && s[k + 1] == '\n' ? 2 : 1;
         }
+        if (instead == NULL) continue;
+        size_t said = os64_strlen(instead);
+        if (out != NULL)
+            kept = d_kept_append(out, s + run, k - run) && d_kept_append(out, (const uint8_t *)instead, said);
+        count += k - run + said;
+        k += replaced - 1;
+        run = k + 1;
     }
-    return 0;
+    if (kept && out != NULL) kept = d_kept_append(out, s + run, n - run);
+    count += n - run;
+    JS_FreeCString(ctx, utf8);
+    *length += count;
+    return kept;
 }
 
 /* The File API's "process blob parts", over the parts converted above:
- * each part's bytes, a string's as UTF-8 with its line endings made "\n"
- * when `native`. */
-static int parts_process(os64_dom_t *dom, JSContext *ctx, const Parts *p, bool native, Buf *out)
+ * each part's bytes, a string's as part_text writes them, into bytes the
+ * page keeps (kept.c), measured first so they are one block. NULL with an
+ * exception pending: a QuotaExceededError when the page's bound (or the
+ * process's memory) refuses them. No page code runs here, so nothing a
+ * part holds changes between the measure and the copy. */
+static DKept *parts_process(os64_dom_t *dom, JSContext *ctx, const Parts *p, bool native)
 {
-    for (size_t i = 0; i < p->count; i++) {
-        const char *text = p->texts[i];
-        size_t n = p->lengths[i];
-        if (text == NULL) {
+    DKept *out = NULL;
+    for (int pass = 0; pass < 2; pass++) {
+        size_t total = 0;
+        for (size_t i = 0; i < p->count; i++) {
             const uint8_t *bytes;
             size_t length;
             const char *type;
+            if (JS_IsString(p->items[i])) {
+                if (!part_text(ctx, p->items[i], native, out, &total)) goto failed;
+                continue;
+            }
             int kind = d_buffer_source(dom, ctx, p->items[i], &bytes, &length);
-            if (kind < 0) return -1;
-            if ((kind > 0 || d_blob_get(p->items[i], &bytes, &length, &type)) && !buf_put(ctx, out, bytes, length))
-                return -1;
-            continue;
+            if (kind < 0) goto failed;
+            if (kind > 0 || d_blob_get(p->items[i], &bytes, &length, &type)) {
+                if (out != NULL && !d_kept_append(out, bytes, length)) goto failed;
+                total += length;
+            }
         }
-        for (size_t k = 0; k < n; k++) {
-            bool put;
-            if (native && text[k] == '\r') {
-                if (k + 1 < n && text[k + 1] == '\n') k++;
-                put = buf_put(ctx, out, "\n", 1);
-            } else put = buf_put(ctx, out, text + k, 1);
-            if (!put) return -1;
-        }
+        if (pass == 0 && (out = d_kept_new_whole(dom, total)) == NULL) goto failed;
     }
-    return 0;
+    if (d_kept_join(out)) return out;
+failed:
+    d_kept_unref(out);
+    if (!JS_HasException(ctx))
+        d_error(ctx, "QuotaExceededError", "The blob is past what the page may keep");
+    return NULL;
 }
 
 /* BlobPropertyBag (endings, type) and FilePropertyBag's lastModified, read
@@ -524,7 +604,7 @@ static JSValue blob_construct(JSContext *ctx, JSValueConst new_target, int argc,
     if (file && argc < 2) return JS_ThrowTypeError(ctx, "File needs its bits and a name");
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
     if (JS_IsException(prototype)) return prototype;
-    Buf bytes = {0};
+    DKept *kept = NULL;
     char *name = NULL, *type = NULL;
     size_t name_length = 0;
     bool native = false;
@@ -537,16 +617,17 @@ static JSValue blob_construct(JSContext *ctx, JSValueConst new_target, int argc,
     if (parts_convert(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &parts) < 0 ||
         (file && !engine_text(ctx, argv[1], true, &name, &name_length)) ||
         blob_options(dom, ctx, options, file, &native, &type, &last_modified) < 0 ||
-        parts_process(dom, ctx, &parts, native, &bytes) < 0) {
+        (kept = parts_process(dom, ctx, &parts, native)) == NULL) {
         parts_free(ctx, &parts);
-        js_free(ctx, bytes.bytes);
         js_free(ctx, name);
         js_free(ctx, type);
         JS_FreeValue(ctx, prototype);
         return JS_EXCEPTION;
     }
     parts_free(ctx, &parts);
-    JSValue made = blob_make(ctx, prototype, bytes.bytes, bytes.length, type, file, name, last_modified);
+    JSValue made = blob_over(ctx, prototype, kept, d_kept_bytes(kept), d_kept_length(kept), type, file, name,
+                             last_modified);
+    d_kept_unref(kept);
     JS_FreeValue(ctx, prototype);
     return made;
 }
@@ -661,9 +742,9 @@ static JSValue blob_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         size_t from = relative(start, b->length), to = relative(end, b->length);
         size_t span = to > from ? to - from : 0;
         JSValue prototype = JS_GetClassProto(ctx, os64_js_class_id(&blob_slot)), made;
-        if (b->body != NULL) {
-            /* A slice of a response's body refers to the same body. */
-            made = blob_over(ctx, prototype, b->body, b->bytes + from, span, type);
+        if (b->kept != NULL) {
+            /* A slice of kept bytes refers to the same bytes. */
+            made = blob_over(ctx, prototype, b->kept, b->bytes + from, span, type, false, NULL, 0);
         } else {
             uint8_t *bytes = js_malloc(ctx, span + 1);
             if (bytes != NULL && span != 0) os64_memcpy(bytes, b->bytes + from, span);
@@ -797,20 +878,23 @@ static int entry_make(os64_dom_t *dom, JSContext *ctx, JSValueConst name, JSValu
             return -1;
         }
     }
-    /* The conversion ran page code: the blob is read again. */
+    /* The conversion ran page code: the blob is read again. A File over
+     * kept bytes refers to them; one over engine bytes copies them. */
     blob = blob_state(value);
-    uint8_t *bytes = js_malloc(ctx, blob->length + 1);
+    uint8_t *bytes = blob->kept != NULL ? blob->bytes : js_malloc(ctx, blob->length + 1);
     char *type = bytes != NULL ? engine_copy(ctx, blob->type, os64_strlen(blob->type)) : NULL;
     if (type == NULL) {
-        js_free(ctx, bytes);
+        if (blob->kept == NULL) js_free(ctx, bytes);
         js_free(ctx, file_name);
         entry_free(ctx, out);
         return -1;
     }
-    if (blob->length != 0) os64_memcpy(bytes, blob->bytes, blob->length);
+    if (blob->kept == NULL && blob->length != 0) os64_memcpy(bytes, blob->bytes, blob->length);
     int64_t modified = blob->file ? blob->last_modified : now_epoch_ms();
     JSValue prototype = dom->file_prototype != NULL ? JS_DupValue(ctx, dom->file_prototype->value) : JS_UNDEFINED;
-    out->file = blob_make(ctx, prototype, bytes, blob->length, type, true, file_name, modified);
+    out->file = blob->kept != NULL
+        ? blob_over(ctx, prototype, blob->kept, bytes, blob->length, type, true, file_name, modified)
+        : blob_make(ctx, prototype, bytes, blob->length, type, true, file_name, modified);
     JS_FreeValue(ctx, prototype);
     if (JS_IsException(out->file)) {
         out->file = JS_UNDEFINED;

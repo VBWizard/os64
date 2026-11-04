@@ -407,9 +407,9 @@ bool yonder_scripts_intersections_fire(yonder_scripts_t *scripts, os64_js_outcom
 size_t yonder_scripts_resizes_observed(const yonder_scripts_t *scripts);
 bool yonder_scripts_resizes_owed(const yonder_scripts_t *scripts);
 bool yonder_scripts_resizes_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
-// The responses' bytes the page holds outside its script heap, and how many
-// responses failed because their bytes could not be kept (dom.h,
-// XHR_BYTES.md); zeros once the page's scripts are gone.
+// The bytes the page keeps outside its script heap (its responses' and its
+// Blobs'), and how many responses failed because their bytes could not be
+// kept (dom.h, XHR_BYTES.md); zeros once the page's scripts are gone.
 void yonder_scripts_body_stats(const yonder_scripts_t *scripts, size_t *held, uint64_t *refused);
 // Whether the page asked to keep its own scroll across its entries
 // (history.scrollRestoration = "manual").

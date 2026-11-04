@@ -629,10 +629,10 @@ struct os64_dom {
     size_t resizes_held;
     os64_dom_resizes_provider_t resizes_provider;
     void *resizes_opaque;
-    /* Responses' bytes (received.c): every body, what they hold against
-     * options.max_body_bytes, and how many responses failed because their
-     * bytes could not be kept. */
-    struct DReceived *received;
+    /* Bytes the page keeps outside the engine (kept.c): every response
+     * body and Blob's, what they hold against options.max_body_bytes, and
+     * how many responses failed because their bytes could not be kept. */
+    struct DKept *kept;
     size_t body_bytes;
     uint64_t bodies_refused;
 };
@@ -1220,41 +1220,57 @@ extern uint64_t d_signal_steps;
 /* fetch.c: a fetch's abort, the algorithm its signal runs. `answered` is
  * the Response's state once the fetch answered, else NULL. */
 void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answered, JSValueConst reason);
-/* Bytes and their type (blob.c, fetch.c): js_malloc'd; `type` NULL or "" for none. */
+/* Bytes and their type (blob.c, fetch.c): `bytes` js_malloc'd, or, with
+ * `kept`, borrowed from bytes the page keeps (a reference held, which
+ * d_bytes_free gives back); `type` js_malloc'd, NULL or "" for none. */
 typedef struct {
     uint8_t *bytes;
     size_t length;
     char *type;
+    struct DKept *kept;
 } DBytes;
 void d_bytes_free(JSContext *ctx, DBytes *b);
+/* `b`'s bytes made its own engine memory (a copy, when they were kept), for
+ * a holder that frees them with js_free. False with nothing changed when
+ * the engine has no memory. */
+bool d_bytes_own(JSContext *ctx, DBytes *b);
 /* A Blob's (or File's) bytes and type, borrowed; false for anything else. */
 bool d_blob_get(JSValueConst value, const uint8_t **bytes, size_t *length, const char **type);
+/* The kept bytes a Blob's refer to, borrowed; NULL for a Blob whose bytes
+ * are the engine's, and for anything else. */
+struct DKept *d_blob_kept(JSValueConst value);
 /* A new Blob of `bytes` and their type, both taken. */
 JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes);
-/* A RESPONSE'S BYTES OUTSIDE THE ENGINE (received.c; XHR_BYTES.md): process
- * memory charged to the page's body bound, refcounted. d_received_new answers
- * NULL, and append and join false, when the bound or the process refuses.
- * `declared`, when not 0, is the length a response announced: one block
- * from the start when the bound has room. A body's bytes are read only once
- * it is joined (d_received_join; a body that only ever filled its block is
- * joined already). An ArrayBuffer made over a joined body takes a
- * reference and writes the body's bytes, so its maker reads them no more;
- * a Blob over one (d_blob_new_received) takes a reference and only reads. */
-typedef struct DReceived DReceived;
-DReceived *d_received_new(os64_dom_t *dom, size_t declared);
-bool d_received_append(DReceived *body, const uint8_t *bytes, size_t length);
-bool d_received_join(DReceived *body);
-const uint8_t *d_received_bytes(const DReceived *body);
-size_t d_received_length(const DReceived *body);
-DReceived *d_received_ref(DReceived *body);
-void d_received_unref(DReceived *body);
-JSValue d_received_array_buffer(JSContext *ctx, DReceived *body);
-/* Every body still held, freed: os64_dom_free's, after the engine, for the
- * holders whose finalizers a reclaiming teardown never ran. */
-void d_received_free_all(os64_dom_t *dom);
+/* BYTES A PAGE KEEPS OUTSIDE THE ENGINE (kept.c; XHR_BYTES.md): a
+ * response's body, or a Blob the page made; process memory charged to the
+ * page's body bound, refcounted. d_kept_new answers NULL when the process
+ * has no memory for the record (which is not charged); append and join
+ * answer false when the bound or the process refuses. `declared`, when not
+ * 0, is the length a response announced: one block from the start when the
+ * bound has room, else none and the pieces decide. d_kept_new_whole is a
+ * Blob's: its record charged too, and NULL when the bound or the process
+ * refuses the record or the whole block.
+ * The bytes are read only once joined (d_kept_join; bytes that only ever
+ * filled their block are joined already). An ArrayBuffer made over joined
+ * bytes takes a reference and writes them, so their maker reads them no
+ * more; a Blob over them (d_blob_new_kept, and every Blob the page makes)
+ * takes a reference and only reads. */
+typedef struct DKept DKept;
+DKept *d_kept_new(os64_dom_t *dom, size_t declared);
+DKept *d_kept_new_whole(os64_dom_t *dom, size_t length);
+bool d_kept_append(DKept *body, const uint8_t *bytes, size_t length);
+bool d_kept_join(DKept *body);
+const uint8_t *d_kept_bytes(const DKept *body);
+size_t d_kept_length(const DKept *body);
+DKept *d_kept_ref(DKept *body);
+void d_kept_unref(DKept *body);
+JSValue d_kept_array_buffer(JSContext *ctx, DKept *body);
+/* Every kept body still held, freed: os64_dom_free's, after the engine, for
+ * the holders whose finalizers a reclaiming teardown never ran. */
+void d_kept_free_all(os64_dom_t *dom);
 /* A new Blob over a joined `body`'s bytes (a reference taken, not the
  * caller's) with `type` (taken). */
-JSValue d_blob_new_received(JSContext *ctx, DReceived *body, char *type);
+JSValue d_blob_new_kept(JSContext *ctx, DKept *body, char *type);
 bool d_form_data_is(JSValueConst value);
 /* A FormData as multipart/form-data (HTML § 4.10.21.8), its type naming
  * the boundary. -1 with an exception pending. */
@@ -1264,7 +1280,8 @@ int d_form_data_encode(os64_dom_t *dom, JSContext *ctx, JSValueConst form, DByte
 JSValue d_form_data_parse(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length, const char *type);
 /* Fetch § 5.2 "extract a body": a string, a BufferSource, a Blob, a
  * FormData or a URLSearchParams, as bytes and a type (NULL for a
- * BufferSource's none). 1 extracted, 0 not one of those, -1 with an
+ * BufferSource's none): a Blob's kept bytes referred to (out->kept), the
+ * rest copied into the engine. 1 extracted, 0 not one of those, -1 with an
  * exception pending. */
 int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *out, bool *has_type);
 /* The requests out (fetch.c, xhr.c): each a token the host's answer names,
