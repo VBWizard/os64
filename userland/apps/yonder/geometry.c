@@ -128,7 +128,10 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     // added: the standard adds it past the children's MARGIN boxes, which a
     // public box does not carry, and adding it past their border boxes
     // miscounts every negative margin. Positioned descendants deeper down
-    // are not counted either (DEBTS). Its own border is no part of it. The
+    // are not counted either, and a child counts where layout put it, not
+    // where a transform draws it: a scroll container's range has both from
+    // libflow, whose frames are its own (DEBTS). Its own border is no part
+    // of it. The
     // root in quirks mode scrolls nothing but still has an area: its box's.
     // An inline-block's or inline-flex's atom holds the element's own
     // container, borders and all, so the area is that container's: counted
