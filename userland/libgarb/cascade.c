@@ -1202,13 +1202,16 @@ static int supports_condition(garb_reading_t how, garb_parsed_t *owner, SCur *s)
 
 // Whether component values hold no closing bracket with nothing open, no
 // bad string and no bad URL, at any depth (a function's arguments and a
-// block's contents included), and, at the top only, no `;`. The parser
-// bounds the depth this walks (GARB_DEPTH_MAX).
+// block's contents included), and, at the top only, no `;` and no `!` (a
+// trailing `!important` is the declaration's, not its value's: the parser
+// has taken it off). The parser bounds the depth this walks
+// (GARB_DEPTH_MAX).
 static bool declaration_tokens(const garb_value_t *v, int32_t n, bool top)
 {
     for (int32_t k = 0; k < n; k++) {
         garb_kind_t kind = v[k].kind;
-        if ((top && kind == GARB_SEMICOLON) || kind == GARB_UNMATCHED || kind == GARB_BAD_STRING ||
+        bool bang = kind == GARB_DELIM && v[k].len == 1 && v[k].text[0] == '!';
+        if ((top && (kind == GARB_SEMICOLON || bang)) || kind == GARB_UNMATCHED || kind == GARB_BAD_STRING ||
             kind == GARB_BAD_URL)
             return false;
         if ((kind == GARB_FUNCTION || kind == GARB_BLOCK) &&

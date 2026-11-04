@@ -2100,7 +2100,8 @@ static int supports_doors(void)
         {"not (display: grid-ish)", 1}, {"(display: grid) and (color: red)", 1},
         {"(display: grid) and (color: 12q)", 0}, {"(display: grid-ish) or (color: red)", 1},
         {"selector(div > p)", 1}, {"selector(div >>> p)", 0}, {"", 0}, {"display", 0},
-        {"(--custom: anything at all)", 1}, {"(display: grid", 1},
+        {"(--custom: anything at all)", 1}, {"(display: grid", 1}, {"(--custom: a !important)", 1},
+        {"(--custom: a ! b)", 0},
         // The grammar failing is false, `not` before it included; a
         // parenthesis or a function of anything is <general-enclosed>,
         // valid and false.
@@ -2115,8 +2116,10 @@ static int supports_doors(void)
         // A custom property's name is a string test; nothing else may
         // become one in the reading.
         {"--a.b", "1", 1}, {"--a b", "1", 1}, {" --\\0", "x", 0}, {"--x", "a;b", 0}, {"--x", "a)", 0},
-        // At any depth, but for `;`, which a function or block may hold.
+        // At any depth, but for `;` and `!`, which a function or block may
+        // hold.
         {"--x", "foo(url(a b))", 0}, {"--x", "foo(])", 0}, {"--x", "foo(a;b)", 1}, {"--x", "[a;b]", 1},
+        {"--x", "a ! b", 0}, {"--x", "a !ie", 0}, {"--x", "foo(a ! b)", 1}, {"--x", "{a ! b}", 1},
     };
     garb_reading_t how = {0};
     int failed = 0;
