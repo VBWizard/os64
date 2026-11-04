@@ -16,7 +16,7 @@
  * in 50 ms, LOADING, readystatechange and progress.
  *
  * The author headers and the answer's header block are engine memory; the
- * answer's body is not (received.c, XHR_BYTES.md): it is the process's,
+ * answer's body is not (kept.c, XHR_BYTES.md): it is the process's,
  * under the page's body bound, and a body past that bound fails the
  * request as a network error. A header list is a C array a page never reaches,
  * and each step that runs page code is followed by a look at the object's
@@ -60,10 +60,10 @@ typedef struct {
     char *status_text, *response_url, *response_headers;
     size_t response_headers_length;
     /* The bytes received, `body_length` of them: a body of the process's
-     * memory, not the engine's (received.c, XHR_BYTES.md), joined into one
+     * memory, not the engine's (kept.c, XHR_BYTES.md), joined into one
      * block at the end of the response, before DONE. NULL for none, and
      * after an arraybuffer response took it. */
-    DReceived *body;
+    DKept *body;
     size_t body_length;
     JSValue response_object;
 } DXhr;
@@ -102,7 +102,7 @@ static void response_reset(JSRuntime *rt, DXhr *x)
     js_free_rt(rt, x->status_text);
     js_free_rt(rt, x->response_url);
     js_free_rt(rt, x->response_headers);
-    d_received_unref(x->body);
+    d_kept_unref(x->body);
     x->status_text = x->response_url = x->response_headers = NULL;
     x->body = NULL;
     x->response_headers_length = x->body_length = 0;
@@ -245,7 +245,7 @@ static double response_length(const DXhr *x);
 
 /* The host's answer copied into the object: its head in the runtime's
  * memory, its body (none yet for a streamed head) a body of its own
- * (received.c), one block when its length is known. -1 when there was no
+ * (kept.c), one block when its length is known. -1 when there was no
  * memory, or the page's body bound refused the bytes, which is counted. */
 static int response_take(os64_dom_t *dom, JSContext *ctx, DXhr *x, const os64_dom_response_t *in)
 {
@@ -268,14 +268,14 @@ static int response_take(os64_dom_t *dom, JSContext *ctx, DXhr *x, const os64_do
     x->has_body = in->has_body;
     if (in->has_body) {
         double declared = in->body != NULL ? (double)in->body_length : response_length(x);
-        x->body = d_received_new(dom, declared > 0 && declared < (double)SIZE_MAX ? (size_t)declared : 0);
-        if (x->body == NULL || (in->body != NULL && !d_received_append(x->body, (const uint8_t *)in->body,
-                                                                    in->body_length))) {
+        x->body = d_kept_new(dom, declared > 0 && declared < (double)SIZE_MAX ? (size_t)declared : 0);
+        if (x->body == NULL || (in->body != NULL && !d_kept_append(x->body, (const uint8_t *)in->body,
+                                                                in->body_length))) {
             dom->bodies_refused++;
             response_reset(JS_GetRuntime(ctx), x);
             return -1;
         }
-        x->body_length = d_received_length(x->body);
+        x->body_length = d_kept_length(x->body);
     }
     return 0;
 }
@@ -400,18 +400,18 @@ static bool final_charset(JSContext *ctx, const DXhr *x, char *charset, size_t c
 static const uint8_t *body_whole(DXhr *x)
 {
     if (x->body == NULL) return (const uint8_t *)"";
-    return d_received_join(x->body) ? d_received_bytes(x->body) : NULL;
+    return d_kept_join(x->body) ? d_kept_bytes(x->body) : NULL;
 }
 
 /* The body as text, in the final encoding (UTF-8 without one). */
 static JSValue response_text(JSContext *ctx, DXhr *x)
 {
-    if (x->error || !x->has_body || x->body == NULL || d_received_length(x->body) == 0) return JS_NewString(ctx, "");
+    if (x->error || !x->has_body || x->body == NULL || d_kept_length(x->body) == 0) return JS_NewString(ctx, "");
     char charset[WAY_MIME_CHARSET_MAX];
     if (!final_charset(ctx, x, charset, sizeof(charset))) return JS_EXCEPTION;   /* js_malloc threw */
     const uint8_t *bytes = body_whole(x);
     if (bytes == NULL) return d_error(ctx, "QuotaExceededError", "The response is past the page's body bound");
-    return d_text_decode(ctx, charset[0] != '\0' ? charset : "utf-8", bytes, d_received_length(x->body));
+    return d_text_decode(ctx, charset[0] != '\0' ? charset : "utf-8", bytes, d_kept_length(x->body));
 }
 
 /* XHR § "handle response end-of-body", from the progress at its head. */
@@ -464,7 +464,7 @@ static void xhr_part(os64_dom_t *dom, JSContext *ctx, DRequest *request, const u
         answered_end(dom, x, request);
         /* The end joins the body, before DONE: a join the bound refuses is
          * the response's failure, as a piece it refuses is. */
-        bool kept = !ok || x->body == NULL || d_received_join(x->body);
+        bool kept = !ok || x->body == NULL || d_kept_join(x->body);
         if (!kept) dom->bodies_refused++;
         if (!ok || !kept) (void)request_error(dom, ctx, self, "error", outcome);
         else (void)end_of_body(dom, ctx, self, outcome);
@@ -474,8 +474,8 @@ static void xhr_part(os64_dom_t *dom, JSContext *ctx, DRequest *request, const u
     /* The piece kept in the body (DXhr's body). Past the page's body bound,
      * or past the process's memory, the response fails as a network error
      * and the page goes on (XHR_BYTES.md). */
-    if (x->body == NULL) x->body = d_received_new(dom, 0);
-    if (x->body == NULL || !d_received_append(x->body, bytes, length)) {
+    if (x->body == NULL) x->body = d_kept_new(dom, 0);
+    if (x->body == NULL || !d_kept_append(x->body, bytes, length)) {
         dom->bodies_refused++;
         terminate(dom, x);
         (void)request_error(dom, ctx, self, "error", outcome);
@@ -1040,9 +1040,9 @@ static JSValue response_object(os64_dom_t *dom, JSContext *ctx, JSValueConst sel
         if (x->body == NULL) {
             made = JS_NewArrayBufferCopy(ctx, bytes, 0);
         } else {
-            made = d_received_array_buffer(ctx, x->body);
+            made = d_kept_array_buffer(ctx, x->body);
             if (!JS_IsException(made)) {
-                d_received_unref(x->body);
+                d_kept_unref(x->body);
                 x->body = NULL;
             }
         }
@@ -1052,19 +1052,19 @@ static JSValue response_object(os64_dom_t *dom, JSContext *ctx, JSValueConst sel
         if (type == NULL) {
             made = JS_EXCEPTION;
         } else if (x->body == NULL) {
-            DBytes none = {js_malloc(ctx, 1), 0, type};
+            DBytes none = {js_malloc(ctx, 1), 0, type, NULL};
             made = none.bytes != NULL ? d_blob_new(dom, ctx, &none) : JS_EXCEPTION;
             if (none.bytes == NULL) d_bytes_free(ctx, &none);
         } else {
             /* A Blob over the body: no copy, and the body stays the page's
              * own for as long as the Blob or the object holds it. */
-            made = d_blob_new_received(ctx, x->body, type);
+            made = d_blob_new_kept(ctx, x->body, type);
         }
         break;
     }
     case RT_JSON: {
         if (!x->has_body) return JS_NULL;
-        JSValue text = d_utf8_decode(ctx, bytes, x->body != NULL ? d_received_length(x->body) : 0);
+        JSValue text = d_utf8_decode(ctx, bytes, x->body != NULL ? d_kept_length(x->body) : 0);
         size_t n;
         const char *utf8 = JS_IsException(text) ? NULL : JS_ToCStringLen(ctx, &n, text);
         JS_FreeValue(ctx, text);

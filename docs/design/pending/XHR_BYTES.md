@@ -33,7 +33,7 @@ reads them; the arraybuffer and the blob need not cost it at all.
 
 ## 3. The choice
 
-**A body is a libdom object of its own (`DReceived`, `received.c`: XHR's "received bytes"): bytes in the process's
+**A body is a libdom object of its own (`DKept`, `kept.c`: XHR's "received bytes"): bytes in the process's
 memory, not the engine's, refcounted, with a bound of their own.**
 
 - **While it arrives** a body is its pieces, each kept as it came (as
@@ -59,9 +59,10 @@ memory, not the engine's, refcounted, with a bound of their own.**
   borrowed contiguous pointer, so no reader changes). A slice of such a
   Blob refers to the same body.
 - **The bound** is the page's, across every body it holds: XHR bodies,
-  Blobs over them, ArrayBuffers made over them. Passing it fails THAT
-  REQUEST as a network error (its `error` event, status 0) and frees its
-  bytes; the page and its runtime go on. A page that outgrows its scripts'
+  Blobs over them, ArrayBuffers made over them, and (§ 7) the Blobs the
+  page makes, so either kind can leave the other no room. Passing it with
+  a response fails THAT REQUEST as a network error (its `error` event,
+  status 0) and frees its bytes; the page and its runtime go on. A page that outgrows its scripts'
   heap is a broken page; one that asked for one download too many has a
   failed download, which is what other browsers' storage limits look like
   too.
@@ -89,10 +90,10 @@ memory, not the engine's, refcounted, with a bound of their own.**
 - **fetch()'s Response bodies** stay in the heap: since Streams they are
   chunks of a ReadableStream the page may read as they come, which is a
   different shape (S1–S3's), and `arrayBuffer()`/`blob()` join them there.
-  The same `DReceived` would serve them; booked.
+  The same `DKept` would serve them; booked.
 - **Spilling to disk** (other browsers' blob storage): no.
-- **A Blob made by the page** (`new Blob([...])`) stays engine memory; only
-  a response's bytes move.
+- **A Blob made by the page** (`new Blob([...])`) stayed engine memory in
+  the first cut; § 7 moved it.
 
 ## 6. Proof
 
@@ -110,3 +111,69 @@ memory, not the engine's, refcounted, with a bound of their own.**
 - WPT `xhr/`, `fetch/`, `streams/`: nothing lost.
 - QEMU: a page (`tools/pages/`) that keeps more responses than the script
   heap holds, with scripts still running after.
+
+## 7. Uploads: the Blobs a page makes, and what sends them
+
+*Opus, 2026-11-04, after the P5: fast.com measured its download and then
+ended "runtime limit exceeded" at the upload.*
+
+**Measured.** The upload test makes a string of 25 MiB, a Blob of it, and
+sends the Blob with an XMLHttpRequest. The string is the page's, 25 MiB of
+the 64 MiB heap. The Blob constructor then copied it twice more into the
+heap (its UTF-8, then a growing buffer of the parts, at up to twice its
+length while it grew), and `send()` copied the Blob's bytes a third time
+into the request's body. The second of those passes the heap.
+
+**The choice: a Blob the page makes keeps its bytes where a response's
+are (`DKept`, `kept.c`, renamed from `DReceived` because the bytes are no
+longer only received), under the same bound, and what sends a Blob refers
+to its bytes instead of copying them.**
+
+- **The constructor** converts its parts as WebIDL does, each as the
+  iteration yields it (a part that is neither a BufferSource nor a Blob
+  becomes its string then, since `toString` is page code and may change
+  the array), then processes them in two passes that run no
+  page code: it measures every part, reserves ONE block of exactly that
+  length, and writes each part into it. A string is written one part at a
+  time from the engine's UTF-8 of it, which for a string of ASCII is the
+  string itself (QuickJS hands an 8-bit ASCII string over without a copy),
+  so making a Blob of the speed test's string costs the heap nothing. The
+  lone surrogates (USVString) and the native endings are applied as the
+  part is written, in runs.
+- **Past the bound** the constructor throws a QuotaExceededError the page
+  can catch. A Blob is the page's own making, so its failure is the page's
+  to see, and it is not counted among the refused responses; a response's
+  failure stays a network error (§ 3).
+- **A Blob's record is charged** with its bytes (a response's is not, so an
+  empty response passes a bound of zero): a page makes Blobs as fast as it
+  likes, and a million empty ones would otherwise be process memory
+  nothing counts.
+- **Sending** (`d_body_extract`) refers to a kept Blob's bytes with a
+  reference held for as long as the request is being made (`DBytes.kept`),
+  and the host copies the body into its own job as it always has. A holder
+  that keeps the bytes as engine memory past that — a `Request`'s or a
+  `Response`'s constructed body, which fetch()'s streams read as chunks —
+  takes its own copy (`d_bytes_own`), which is what it did before.
+- **A slice, and a FormData's File** of a kept Blob refer to the same
+  bytes.
+
+**Cut, booked:** fetch()'s request bodies (the `Request` constructor's
+copy, above), a FormData's multipart encoding (built in the heap from its
+entries), and structured clone's copy of a Blob (postMessage) stay the
+heap's. A string that is not ASCII costs the heap its UTF-8 while that
+part is measured and again while it is written, one part at a time: for a
+string QuickJS holds as 16-bit units that is three bytes a unit, reserved
+whole, so a part of 25 million such units still passes a 64 MiB heap. A
+string built by `+=` is flattened into the heap at its first pass (once;
+QuickJS keeps the flat copy).
+
+**Proof:** the DOM host's `dom_xhr_uploads_case` (four 25 MiB Blobs of one
+string in a 64 MiB page that holds the string and 28 MiB more throughout,
+each sent whole, the fake network summing every byte it is handed; under a
+64 MiB bound, two made and the third a QuotaExceededError the page
+catches), `dom_blob_kept_case` (each kind of part, native and transparent
+endings, a lone surrogate, the empty Blob, a part's `toString` changing
+the array, and the Response, Request, fetch() and FormData doors read back
+whole) and `dom_blob_records_case` (the record's charge); WPT `xhr/`,
+`fetch/api/` and `webmessaging/` (the WPT checkout here has no `FileAPI/`);
+QEMU, the speed test's shape served from the host.

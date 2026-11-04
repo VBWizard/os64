@@ -1119,13 +1119,16 @@ int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *
         return 1;
     }
     if (d_blob_get(value, &bytes, &length, &type)) {
-        out->bytes = js_malloc(ctx, length + 1);
+        /* A Blob over kept bytes is sent from them, a reference held. */
+        DKept *kept = d_blob_kept(value);
+        out->kept = kept != NULL ? d_kept_ref(kept) : NULL;
+        out->bytes = kept != NULL ? (uint8_t *)bytes : js_malloc(ctx, length + 1);
         out->type = out->bytes != NULL ? engine_dup(ctx, type, os64_strlen(type)) : NULL;
         if (out->type == NULL) {
             d_bytes_free(ctx, out);
             return -1;
         }
-        if (length != 0) os64_memcpy(out->bytes, bytes, length);
+        if (kept == NULL && length != 0) os64_memcpy(out->bytes, bytes, length);
         out->length = length;
         *has_type = type[0] != '\0';
         return 1;
@@ -1227,7 +1230,7 @@ static JSValue body_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst header
     case BODY_ARRAY_BUFFER: return JS_NewArrayBufferCopy(ctx, bytes, length);
     case BODY_BYTES: return d_uint8_array(ctx, bytes, length);
     case BODY_BLOB: {
-        DBytes copy = {js_malloc(ctx, length + 1), length, body_type(ctx, headers)};
+        DBytes copy = {js_malloc(ctx, length + 1), length, body_type(ctx, headers), NULL};
         if (copy.bytes == NULL || copy.type == NULL) {
             d_bytes_free(ctx, &copy);
             return JS_EXCEPTION;
@@ -1775,7 +1778,10 @@ static int request_init(os64_dom_t *dom, JSContext *ctx, JSValueConst object, JS
         DBytes extracted;
         bool has_type;
         if (d_body_extract(dom, ctx, init.body, &extracted, &has_type) < 0) result = -1;
-        else {
+        else if (!d_bytes_own(ctx, &extracted)) {
+            d_bytes_free(ctx, &extracted);
+            result = -1;
+        } else {
             q = request_state(object);
             q->body.bytes = extracted.bytes;
             q->body.length = extracted.length;
@@ -2049,7 +2055,10 @@ static int response_initialize(os64_dom_t *dom, JSContext *ctx, JSValueConst obj
         if (null_body_status(r->status)) {
             JS_ThrowTypeError(ctx, "A response with a null body status cannot have a body");
             result = -1;
+        } else if (!d_bytes_own(ctx, body)) {
+            result = -1;
         } else {
+            /* A Response's bytes are the engine's (XHR_BYTES.md § 5). */
             r->body.bytes = body->bytes;
             r->body.length = body->length;
             r->body.has = true;

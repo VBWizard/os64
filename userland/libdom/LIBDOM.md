@@ -1112,11 +1112,13 @@ the end of the body (the order WPT's event-order tests hold). A streamed
 answer's body runs XHR's "process response body" for each piece: the
 bytes kept, and at most once in 50 ms LOADING, readystatechange and
 progress, then the end as a whole answer's. The body's bytes are not the
-engine's (`received.c`, XHR_BYTES.md): the process's memory under the
+engine's (`kept.c`, XHR_BYTES.md): the process's memory under the
 page's `max_body_bytes`, one block when the length was declared, joined at
 the end otherwise; a `blob` response refers to them, an `arraybuffer` one
 owns them, and a response past the bound fails as a network error while
-the page runs on. A synchronous request
+the page runs on. A Blob the page makes keeps its bytes there too, under
+the same bound (a QuotaExceededError past it), and `send(blob)` refers to
+them instead of copying (XHR_BYTES.md § 7). A synchronous request
 is the host's `run`, handed a `stop` that is the script task's own budget
 (`os64_js_check_budget`): it ends when the task would, and a task it
 outlives ends LIMIT, as any script out of time does. `responseType`
