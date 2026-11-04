@@ -40,9 +40,6 @@ bool os64_dom_image_event(os64_dom_t *,const os64_html_node_t **,bool *failed,bo
  * creates a JS context. Applies pending resets. False for absent/lost/closed
  * contexts. The view expires at the next Canvas call or DOM mutation. */
 bool os64_dom_canvas_bitmap(os64_dom_t *, const os64_html_node_t *, canvas_bitmap_t *);
-/* Pending pixels/resets need presentation, not layout. The host may dirty a
- * conservative viewport; hidden pixels will be sampled when exposed. */
-bool os64_dom_canvas_dirty(os64_dom_t *, bool (*visible)(void *, const os64_html_node_t *), void *);
 /* Visit connected canvases with pending presentation damage. No script runs;
  * the callback must not mutate the DOM or Canvas. A NULL damage pointer means
  * a pending reset and requires conservative invalidation. Otherwise width,

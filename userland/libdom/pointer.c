@@ -88,6 +88,8 @@ static bool emit(Packet *q, const char *type, const os64_html_node_t *node,
     e.type = type; e.kind = pointer ? OS64_DOM_EVENT_POINTER : OS64_DOM_EVENT_MOUSE;
     e.bubbles = bubbles; e.cancelable = cancelable; e.related = related;
     e.pointer_id = 1; e.pointer_type = "mouse"; e.is_primary = true;
+    /* PE3 4.2.7 preserves the last sample on cancellation, including pressure.
+     * pointerup instead has no pressed buttons and reports zero. */
     e.pressure = os64_streq(type, "pointercancel") ? q->dom->pointer.last.pressure : e.buttons ? 0.5 : 0;
     e.detail = !pointer && (os64_streq(type, "mousedown") || os64_streq(type, "mouseup")) ? 1 : 0;
     if (!pointer && os64_streq(type, "mousemove")) e.button = 0;

@@ -74,10 +74,12 @@ static void dom_pointer_cases(void)
         "assert(pe.width===1&&pe.height===1&&!pe.isPrimary&&pe.tiltX===0&&pe.twist===0);"
         "document.body.innerHTML='<div id=outer><div id=a></div><div id=b></div></div>';"
         "globalThis.a=document.getElementById('a');globalThis.b=document.getElementById('b');"
-        "globalThis.log=[];"
+        "globalThis.log=[];globalThis.pressures=[];"
         "for(let n of ['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture',"
         "'mousedown','mousemove','mouseup','click','auxclick'])document.addEventListener(n,e=>{"
-        "log.push(n+':'+(e.target.id||'doc'));if(n==='pointerdown')assert(e.clientX===10/3&&e.pageX===16.5)});"
+        "log.push(n+':'+(e.target.id||'doc'));"
+        "if(['pointerdown','pointermove','pointerup','pointercancel'].includes(n))pressures.push(n+':'+e.pressure);"
+        "if(n==='pointerdown')assert(e.clientX===10/3&&e.pageX===16.5)});"
         "var bad=false;try{a.setPointerCapture(1)}catch(e){bad=e.name==='NotFoundError'}assert(bad);"
         "a.onpointerdown=e=>{a.setPointerCapture(e.pointerId);assert(a.hasPointerCapture(1));e.preventDefault()};",
         "pointer: constructors and capture setup");
@@ -86,13 +88,14 @@ static void dom_pointer_cases(void)
     pointer_send(&f,"b",OS64_DOM_POINTER_UP,0,0);
     dom_script(&f, POINTER_ASSERT
         "assert(log.join()==='pointerdown:a,gotpointercapture:a,pointermove:a,pointerup:a,lostpointercapture:a,click:a',log.join());"
+        "assert(pressures.join()==='pointerdown:0.5,pointermove:0.5,pointerup:0',pressures.join());"
         "assert(!a.hasPointerCapture(1));log=[];a.onpointerdown=null;",
         "pointer: capture, suppression and captured click ordering");
     pointer_send(&f,"a",OS64_DOM_POINTER_DOWN,0,1);
     pointer_send(&f,"b",OS64_DOM_POINTER_UP,0,0);
     dom_script(&f, POINTER_ASSERT
         "assert(log.join()==='pointerdown:a,mousedown:a,pointerup:b,mouseup:b,click:outer',log.join());"
-        "log=[];a.onpointerdown=e=>a.setPointerCapture(e.pointerId);",
+        "log=[];pressures=[];a.onpointerdown=e=>a.setPointerCapture(e.pointerId);",
         "pointer: uncaptured common-ancestor activation");
     pointer_send(&f,"a",OS64_DOM_POINTER_DOWN,0,1);
     pointer_send(&f,"b",OS64_DOM_POINTER_MOVE,-1,1);
@@ -101,6 +104,7 @@ static void dom_pointer_cases(void)
     pointer_send(&f,"b",OS64_DOM_POINTER_UP,0,0);
     dom_script(&f, POINTER_ASSERT
         "assert(log.includes('pointercancel:a')&&log.includes('lostpointercapture:a'));"
+        "assert(pressures.join()==='pointerdown:0.5,pointermove:0.5,pointercancel:0.5',pressures.join());"
         "assert(!log.some(x=>x.startsWith('click:')||x.startsWith('pointerup:')),log.join());"
         "log=[];a.onpointerdown=null;",
         "pointer: loss cancels and consumes the physical tail");

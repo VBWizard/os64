@@ -3,6 +3,13 @@
 Prepared for Fable, 2026-11-03. Review branch: `canvas-integration`.
 Destination: `userland`. Existing integration PR: #458.
 
+Review completed at `2c2a7518`: [Fable's verdict](CANVAS_INTEGRATION_FABLE.md)
+is to merge. [The response](CANVAS_INTEGRATION_RESPONSE.md) records each
+finding and the subsequent userland S3 merge (`afad35b5`, merged as
+`43b60349`). The original review scope and S2 evidence below are historical;
+compare `afad35b5...canvas-integration` for the current candidate. The
+combined S3/Canvas P5 check is pending.
+
 Chris has accepted the Canvas 2D functionality and his browsing regression.
 This review asks whether the combined architecture is ready to land in
 userland: ownership, invalidation, scheduling, shared interfaces, and the
@@ -18,14 +25,14 @@ trail whose round strokes shrink below the geometry grid) and `975d9c52`
 have host regression evidence and P5 acceptance, but have not had a separate
 Codex review.
 
-The final merge-forward incorporates userland through `8faadcf5` (Streams S2,
+The reviewed merge-forward incorporates userland through `8faadcf5` (Streams S2,
 PR #457), including its byte-stream review fixes. It is conflict-free. Use
 this pinned base so later userland work does not silently change the scope:
 
 ```sh
-git diff --stat 8faadcf5...canvas-integration
-git diff 8faadcf5...canvas-integration
-git log --oneline 8faadcf5..canvas-integration
+git diff --stat 8faadcf5...2c2a7518
+git diff 8faadcf5...2c2a7518
+git log --oneline 8faadcf5..2c2a7518
 ```
 
 Read the combined head. The incoming Streams implementation is already in the
@@ -91,7 +98,7 @@ merged bytes is claimed. Review findings come before the final userland merge.
 After this milestone, the agreed next work is keyboard input/Breakout, followed
 by selecting one online Canvas 2D game and addressing its actual requirements.
 
-## Final merge-forward verification
+## Reviewed S2 merge-forward verification
 
 The combined tree passes:
 

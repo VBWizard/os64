@@ -170,3 +170,45 @@ frame scheduling. The final merged bytes have not had a new P5 pass.
 
 The architectural review entry point is
 [the integration brief](../design/pending/CANVAS_INTEGRATION_REVIEW_BRIEF.md).
+
+## S3 combination and architectural review disposition
+
+Fable reviewed `2c2a7518` and recommended merging. His
+[review](../design/pending/CANVAS_INTEGRATION_FABLE.md) and the
+[dispositions](../design/pending/CANVAS_INTEGRATION_RESPONSE.md) are retained.
+The three performance costs are booked in DEBTS. The unused boolean damage
+query and its host wrapper are removed; the damage visitor and acknowledgement
+remain the presentation interface. Cancellation pressure is unchanged, with
+explicit regression assertions distinguishing it from pointerup.
+
+Chris requested merging current userland before the cleanup. Merge `43b60349`
+brings in userland `afad35b5` (Streams S3, #459). Conflicts were reconciled in
+fetch response handling, the window loop, the WPT loop and the fetch tests:
+
+- Native images retain complete bounded bodies and the origin verdict;
+  script responses may stream and do not expose opaque bodies.
+- Per-hop unsafe-method cache invalidation precedes redirect rewriting and
+  streamed head publication. This subsumes S3's final-response-only call.
+  Both cache/redirect regressions and streaming tests remain enabled.
+- The main loop and WPT runner service body delivery alongside animation.
+  Body bells and Canvas frame/idle follow-ups retain their separate roles.
+
+Final combined-source checks, with ASan/UBSan and leak detection enabled:
+
+| Check | Result |
+| --- | --- |
+| Fetch worker, streaming, images, cache, allocation/cancellation | 809 checks, zero failures |
+| DOM fetch/Streams, target engine | 1,100 checks, zero failures |
+| DOM fetch/Streams, sanitized engine | 7,774 checks, zero failures |
+| DOM pointer, each engine profile | 493 checks, zero failures |
+| DOM animation, each engine profile | 92 checks, zero failures |
+| Scripted browser after cleanup | 16,328 checks, zero failures |
+| Native Yonder and library dependencies after cleanup | Build succeeds |
+
+The frozen P5 cohort preserves unchanged files from the accepted
+frame-deadline delivery, updates changed runtime dependencies and the Streams
+fixture, and includes source metadata and a SHA-256 manifest. Earlier native
+QEMU evidence remains evidence for its recorded cohorts; no new QEMU run is
+claimed for S3. Chris has tested S2/S3 separately on userland and will test
+this combined cohort before the final merge to userland. That acceptance is
+pending; this is a functional browsing check, not another timed campaign.

@@ -733,7 +733,8 @@ full-target coverage. See [UV validation](../../canvas-evidence/phoria-uv.md).
 The combined userland/Canvas regression pass and merge resolutions are recorded
 in [integration regression](../../canvas-evidence/integration-regression.md).
 The user accepted the frozen combined candidate and the rainbow/frame-deadline
-follow-ups on the P5. A subsequent conflict-free merge brings in userland's
-Streams S2; the final architectural review and that merge's verification are
-tracked in [the integration brief](CANVAS_INTEGRATION_REVIEW_BRIEF.md).
-The integration remains unmerged to userland pending review.
+follow-ups on the P5. Fable's architectural
+review recommends merging; the dispositions and subsequent Streams S3 merge
+are tracked in [the review response](CANVAS_INTEGRATION_RESPONSE.md).
+The integration remains unmerged to userland pending the combined P5 check
+and final acceptance.

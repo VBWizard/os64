@@ -403,19 +403,6 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
     d_canvas_sync(e);
     return e->canvas && canvas_bitmap(e->canvas, out) == CANVAS_OK;
 }
-bool os64_dom_canvas_dirty(os64_dom_t *dom, bool (*visible)(void *, const os64_html_node_t *), void *opaque)
-{
-    if (!dom || dom->closed) return false;
-    for (DValue *e = dom->values; e; e = e->next) {
-        if (!e->canvas_object || !d_in_window_tree(dom, e->node) || (visible && !visible(opaque, e->node)))
-            continue;
-        if (e->canvas_reset_pending) return true;
-        draw2d_damage_t damage;
-        if (e->canvas && canvas_damage(e->canvas, &damage) == CANVAS_OK &&
-            damage.x0 < damage.x1 && damage.y0 < damage.y1) return true;
-    }
-    return false;
-}
 void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visit,void *opaque)
 {
     if(!dom || dom->closed || !visit)return;
