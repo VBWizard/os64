@@ -102,7 +102,7 @@ static DomFixture io_fixture(void)
     DomFixture f = fixture_new(&options);
     if (!fixture_ready(&f)) return f;
     io_view = (ViewFake){.view = {.width = 800, .height = 600}};
-    os64_dom_view_provider_t view = {fake_view_read, fake_view_scroll, &io_view};
+    os64_dom_view_provider_t view = {fake_view_read, fake_view_scroll, &io_view, NULL};
     os64_dom_set_view(f.binding, &view);
     os64_dom_set_intersections(f.binding, io_provider, NULL);
     return f;

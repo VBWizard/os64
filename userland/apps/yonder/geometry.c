@@ -100,18 +100,75 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
         out->client_width = css_integer(width, zoom);
         out->client_height = css_integer(height, zoom);
     }
-    if ((is_root && document->quirks != OS64_HTML_QUIRKS) ||
-        (is_body && document->quirks == OS64_HTML_QUIRKS)) {
+    // Whose scroll an element's scroll members read, by the same rule the
+    // binding's setters write by (view.c's scroll_owner, CSSOM View § 7):
+    // the view's for the root in no-quirks mode, and for the body in quirks
+    // mode when it is not potentially scrollable, which is when it makes no
+    // scroll container of its own (its overflow went to the viewport);
+    // nothing for the root in quirks mode; else the container the element
+    // makes (flow_scroller_for, the one the setters move: an inline-block's
+    // container, not its atom).
+    bool quirks = document->quirks == OS64_HTML_QUIRKS;
+    int32_t own = flow_scroller_for(tree, node);
+    bool views = (is_root && !quirks) || (is_body && quirks && own < 0);
+    if (views) {
         out->scroll_left = css_integer(scroll.x, zoom);
         out->scroll_top = css_integer(scroll.y, zoom);
-    } else if (principal != NULL && !is_root && !is_body) {
-        for (int32_t i = 0; i < flow_nscrollers(tree); i++)
-            if (flow_scroller(tree, i) == principal) {
-                flow_point_t at = flow_scroll_at(tree, i);
-                out->scroll_left = css_integer(at.x, zoom);
-                out->scroll_top = css_integer(at.y, zoom);
-                break;
+    } else if (own >= 0 && !(is_root && quirks)) {
+        flow_point_t at = flow_scroll_at(tree, own);
+        out->scroll_left = css_integer(at.x, zoom);
+        out->scroll_top = css_integer(at.y, zoom);
+    }
+    // scrollWidth and scrollHeight (CSSOM View § 7, "scrolling area"): the
+    // view's element answers the page's, never less than the viewport; a
+    // scroll container its padding box and as far as it can scroll; any
+    // other box its padding box, or as far as its content reaches past its
+    // padding edge: its in-flow children's overflow, and its absolute
+    // children only where it is their containing block. No end padding is
+    // added: the standard adds it past the children's MARGIN boxes, which a
+    // public box does not carry, and adding it past their border boxes
+    // miscounts every negative margin. Positioned descendants deeper down
+    // are not counted either, and a child counts where layout put it, not
+    // where a transform draws it: a scroll container's range has both from
+    // libflow, whose frames are its own (DEBTS). Its own border is no part
+    // of it. The
+    // root in quirks mode scrolls nothing but still has an area: its box's.
+    // An inline-block's or inline-flex's atom holds the element's own
+    // container, borders and all, so the area is that container's: counted
+    // as the atom's child, its border would read as overflow.
+    const flow_box_t *area = principal;
+    if (area != NULL && area->kind == FLOW_BOX_ATOMIC && area->first != NULL && area->first->node == node &&
+        area->first->pseudo == 0)
+        area = area->first;
+    if (views) {
+        int32_t w = flow_width(tree), h = flow_height(tree);
+        out->scroll_width = css_integer(w > width ? w : width, zoom);
+        out->scroll_height = css_integer(h > height ? h : height, zoom);
+    } else if (area != NULL && area->kind != FLOW_BOX_SPAN) {
+        int64_t pad_w = (int64_t)area->rect.w - border(area, FLOW_LEFT) - border(area, FLOW_RIGHT);
+        int64_t pad_h = (int64_t)area->rect.h - border(area, FLOW_TOP) - border(area, FLOW_BOTTOM);
+        int64_t w = pad_w, h = pad_h;
+        if (own >= 0) {
+            flow_point_t range = flow_scroll_range(tree, own);
+            w += range.x;
+            h += range.y;
+        } else {
+            int64_t left = (int64_t)area->rect.x + border(area, FLOW_LEFT);
+            int64_t top = (int64_t)area->rect.y + border(area, FLOW_TOP);
+            for (const flow_box_t *c = area->first; c != NULL; c = c->next) {
+                const flow_style_t *cs = c->style;
+                bool out_of_flow = cs != NULL && c->node != NULL && c->node != node &&
+                                   (cs->position == FLOW_POSITION_ABSOLUTE || cs->position == FLOW_POSITION_FIXED);
+                if (out_of_flow && (flow_clip_parent(tree, c->node) != node || c->fixed != area->fixed))
+                    continue;
+                int64_t right = (int64_t)c->overflow.x + c->overflow.w - left;
+                int64_t bottom = (int64_t)c->overflow.y + c->overflow.h - top;
+                if (right > w) w = right;
+                if (bottom > h) h = bottom;
             }
+        }
+        out->scroll_width = css_integer(w > 0 ? w : 0, zoom);
+        out->scroll_height = css_integer(h > 0 ? h : 0, zoom);
     }
     if (first == NULL) return true;
     if (!visual.present) include(&visual, first_visual);

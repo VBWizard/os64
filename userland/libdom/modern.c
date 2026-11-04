@@ -49,6 +49,10 @@ static const DModernRow kModern[] = {
                            "innerHeight", "outerWidth", "outerHeight", "scroll", "scrollTo",
                            "scrollBy", "onscroll", "onresize", "focus", "blur", NULL},
      d_view_install},
+    /* CSSOM View § 7: an element's scroll, members of Element's prototype
+     * and none of window's (as P1-Da's row); scrollLeft and scrollTop gain
+     * setters beside the classic getters. */
+    {(const char *const[]){NULL}, d_element_scroll_install},
     {(const char *const[]){"matchMedia", "MediaQueryList", "MediaQueryListEvent", NULL}, d_media_install},
     {(const char *const[]){"getComputedStyle", "CSSStyleDeclaration", NULL}, d_computed_install},
     {(const char *const[]){"onpopstate", "onhashchange", "PopStateEvent", "HashChangeEvent", NULL},

@@ -7,6 +7,7 @@
 #include <dom/dom.h>
 #include <html/html.h>
 #include <page/page.h>
+#include <math.h>
 
 int64_t os64_open(const char *path, const char *mode)
 { (void)path; (void)mode; return -1; }
@@ -351,6 +352,123 @@ static void dom_geometry_cases(void)
     fixture_free(&f);
 }
 
+/* CSSOM View § 7: an element's scroll. A fake box `box` that can scroll
+ * 300 across and 600 down, whose geometry reads where it is; the root's
+ * scroll is the view's. */
+typedef struct {
+    DomFixture *fixture;
+    double left, top;
+    unsigned scrolls, untouched;
+    bool refuse;
+} ScrollFake;
+
+static bool scroll_is_box(const os64_html_node_t *node)
+{
+    const os64_html_attr_t *id = os64_html_attr(node, "id");
+    return id != NULL && !strcmp(id->value, "box");
+}
+
+static bool fake_scroll_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
+{
+    ScrollFake *s = opaque;
+    *out = (os64_dom_geometry_t){0};
+    if (scroll_is_box(node))
+        *out = (os64_dom_geometry_t){.client_width = 200, .client_height = 300, .scroll_left = (int32_t)s->left,
+                                     .scroll_top = (int32_t)s->top, .scroll_width = 500, .scroll_height = 900};
+    return true;
+}
+
+/* The view provider's opaque is the view fake's, so the box's door finds
+ * its fake here. */
+static ScrollFake *scroll_fake;
+
+static bool fake_scroll_box(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
+                            os64_dom_geometry_stats_t *cost)
+{
+    (void)opaque; (void)cost;
+    ScrollFake *s = scroll_fake;
+    s->scrolls++;
+    if (s->refuse) return false;
+    if (!scroll_is_box(element)) return true;
+    s->untouched += isnan(x) + isnan(y);
+    if (by) {
+        x += s->left;
+        y += s->top;
+    }
+    if (!isnan(x)) s->left = x < 0 ? 0 : x > 300 ? 300 : x;
+    if (!isnan(y)) s->top = y < 0 ? 0 : y > 600 ? 600 : y;
+    return true;
+}
+
+static void dom_element_scroll_cases(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = "http://scroll.test/";
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    ScrollFake s = {.fixture = &f};
+    scroll_fake = &s;
+    os64_dom_set_geometry(f.binding, fake_scroll_geometry, &s);
+    ViewFake v = {.view = {.width = 800, .height = 600}};
+    os64_dom_view_provider_t view = {fake_view_read, fake_view_scroll, &v, fake_scroll_box};
+    os64_dom_set_view(f.binding, &view);
+    dom_script(&f, GEOMETRY_ASSERT
+        "var box=document.getElementById('box');"
+        "var d=Object.getOwnPropertyDescriptor(Element.prototype,'scrollTop');"
+        "assert(typeof d.get==='function'&&typeof d.set==='function'&&d.enumerable&&d.configurable);"
+        "assert(box.scrollWidth===500&&box.scrollHeight===900&&box.scrollTop===0);"
+        "box.scrollTop=120;assert(box.scrollTop===120&&box.scrollLeft===0,'the setter scrolls its own box');"
+        "box.scrollLeft=NaN;assert(box.scrollLeft===0,'NaN is 0');"
+        "box.scrollTop=1e9;assert(box.scrollTop===600,'held to the range');"
+        "box.scroll(10,20);assert(box.scrollLeft===10&&box.scrollTop===20,'two numbers');"
+        "box.scrollTo({top:5});assert(box.scrollLeft===10&&box.scrollTop===5,'a missing member keeps its axis');"
+        "box.scrollBy(1,2);assert(box.scrollLeft===11&&box.scrollTop===7,'scrollBy adds');"
+        "box.scrollBy({left:4});assert(box.scrollLeft===15&&box.scrollTop===7);"
+        "box.scrollTo();assert(box.scrollLeft===15&&box.scrollTop===7,'no arguments, no move');"
+        "throws('TypeError',()=>box.scroll('x'));throws('TypeError',()=>box.scroll({behavior:'jump'}));"
+        "assert(box.scroll.length===0&&box.scrollBy.name==='scrollBy');"
+        "throws('TypeError',()=>Element.prototype.scrollBy.call({},1,1));"
+        "document.getElementById('one').scrollTop=40;assert(document.getElementById('one').scrollTop===0,"
+        "'an element that makes no container scrolls nothing');"
+        "document.documentElement.scrollTop=50;assert(scrollY===50&&box.scrollTop===7,'the root is the view');"
+        "document.documentElement.scrollBy({left:3});assert(scrollX===3&&scrollY===50);"
+        "document.documentElement.scroll(0,0);"
+        "var other=document.implementation.createHTMLDocument('').body;other.scrollTop=9;"
+        "assert(scrollY===0,'an element of another document scrolls nothing');",
+        "element scroll");
+    check(s.scrolls > 0, "element scroll: the box's door was asked");
+    unsigned untouched = s.untouched;
+    dom_script(&f, GEOMETRY_ASSERT
+        "var b=document.getElementById('box');b.scrollLeft=9;b.scrollTop=4;b.scrollBy({top:1});"
+        "assert(b.scrollLeft===9&&b.scrollTop===5);",
+        "element scroll: one axis");
+    check(s.untouched == untouched + 3, "element scroll: the axis a call leaves alone is sent as NaN, not read back");
+    /* The fake's place is fractional where its getter reads whole pixels:
+     * scrollBy is the host's sum, so moving by 0 moves nothing. */
+    dom_script(&f, GEOMETRY_ASSERT
+        "var b=document.getElementById('box');b.scrollTop=0.5;assert(b.scrollTop===0);b.scrollBy(0,0);"
+        "b.scrollBy({left:0.25});",
+        "element scroll: by");
+    check(s.top == 0.5 && s.left == 9.25, "element scroll: scrollBy adds to where the box is, not to its getter");
+    s.refuse = true;
+    dom_script(&f, GEOMETRY_ASSERT
+        "throws('InvalidStateError',()=>{document.getElementById('box').scrollTop=3});",
+        "element scroll: no current layout");
+    s.refuse = false;
+    fixture_free(&f);
+
+    options.modern = false;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, GEOMETRY_ASSERT
+        "var owner=document.body;while(!Object.prototype.hasOwnProperty.call(owner,'scrollTop'))"
+        "owner=Object.getPrototypeOf(owner);var d=Object.getOwnPropertyDescriptor(owner,'scrollTop');"
+        "assert(typeof d.get==='function'&&d.set===undefined,'classic: a getter alone');"
+        "assert(!('scrollBy' in document.body)&&!('scrollHeight' in document.body),'classic: none of the row');",
+        "element scroll: classic");
+    fixture_free(&f);
+}
+
 /* Patch 0008: what a lookup on the global object did not find, heard
  * without changing the answer the page gets (YONDER_DIAGNOSTICS.md). */
 typedef struct { char names[1024]; unsigned heard; } MissFixture;
@@ -449,6 +567,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -480,6 +599,7 @@ int main(int argc, char **argv)
     dom_intersection_cases();
     dom_import_map_cases();
     dom_geometry_cases();
+    dom_element_scroll_cases();
     dom_global_miss_cases();
     dom_surface_cases();
     dom_identity_cases();

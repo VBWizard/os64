@@ -1460,16 +1460,39 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     return true;
 }
 
+static bool node_in_document(const os64_html_document_t *doc, const os64_html_node_t *node)
+{
+    while (node->parent != NULL)
+        node = node->parent;
+    return doc != NULL && node == doc->document;
+}
+
 // Remembers where a box was scrolled to, for the layouts after this one.
 // Out of memory, it is forgotten: the next layout starts the box at the
 // top, which is what it did before a person scrolled it.
 static void page_keep_box_scroll(Page *p, const os64_html_node_t *node, flow_point_t at)
 {
-    for (int32_t i = 0; i < p->nbox_scrolls; i++)
-        if (p->box_scrolls[i].node == node) {
-            p->box_scrolls[i].at = at;
-            return;
+    // A box at its start is forgotten, since a new layout starts it there,
+    // and one whose element has left the document is let go: a page that
+    // scrolls many short-lived boxes by script keeps only those it shows.
+    const os64_html_document_t *doc = page_doc(p);
+    bool start = at.x == 0 && at.y == 0, found = false;
+    int32_t kept = 0;
+    for (int32_t i = 0; i < p->nbox_scrolls; i++) {
+        BoxScroll e = p->box_scrolls[i];
+        if (e.node == node) {
+            found = true;
+            e.at = at;
         }
+        if ((e.node == node && start) || (e.node != node && !node_in_document(doc, e.node))) {
+            os64_html_release(doc, e.node);
+            continue;
+        }
+        p->box_scrolls[kept++] = e;
+    }
+    p->nbox_scrolls = kept;
+    if (found || start)
+        return;
     if (p->nbox_scrolls == p->cap_box_scrolls) {
         int32_t cap = p->cap_box_scrolls != 0 ? p->cap_box_scrolls * 2 : 8;
         BoxScroll *grown = os64_realloc(p->box_scrolls, (size_t)cap * sizeof(*grown));
@@ -9073,6 +9096,8 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
 
 static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
+static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
+                                os64_dom_geometry_stats_t *cost);
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
@@ -9139,7 +9164,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
         .intersections = script_intersections, .opaque = doc,
-        .view = {view_read, view_scroll, doc}, .computed = script_computed,
+        .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
@@ -11079,6 +11104,47 @@ static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stat
         return false;
     double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
     scroll_to(device_px(x * z), device_px(y * z));
+    return true;
+}
+
+// An element's own scroll (the view provider's scroll_element): the page
+// on screen's layout made current, the scroll container the element makes
+// moved to a place or, `by`, from where it stands in device pixels, held
+// to its range, and kept for the layouts after it, as a wheel's move is
+// (wheel_box). A page not yet shown has no box to move, and an element
+// that makes no container scrolls nothing; both answer true, as the
+// standard's steps end there quietly.
+static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
+                                os64_dom_geometry_stats_t *cost)
+{
+    Page *p = page_of_doc(opaque);
+    if (p == NULL)
+        return false;
+    if (p != &g.page)
+        return true;
+    flow_env_t env;
+    if (layout_current(opaque, &env, &cost->layouts, &cost->elapsed_us) == NULL)
+        return false;
+    int32_t i = flow_scroller_for(g.page.tree, element);
+    if (i < 0)
+        return true;
+    double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
+    flow_point_t was = flow_scroll_at(g.page.tree, i);
+    // An axis asked as NaN stays where it is (dom.h).
+    double from_x = by ? was.x : 0, from_y = by ? was.y : 0;
+    flow_point_t to = {isnan(x) ? was.x : device_px(from_x + x * z), isnan(y) ? was.y : device_px(from_y + y * z)};
+    flow_point_t now = flow_scroll_set(g.page.tree, i, to);
+    // Kept whether or not it moved: the tree holds a position clamped to
+    // what the box can scroll now, while the kept one is what was asked,
+    // and a script's scroll to where the tree already is must replace an
+    // older wish a later layout would otherwise bring back.
+    page_keep_box_scroll(&g.page, element, now);
+    if (now.x != was.x || now.y != was.y) {
+        mark_whole(WHOLE_SCROLL, false);
+        forms_place();
+        pictures_schedule();
+        hover(g.pointer_x, g.pointer_y);
+    }
     return true;
 }
 

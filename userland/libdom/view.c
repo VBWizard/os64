@@ -1,4 +1,5 @@
 #include <float.h>
+#include <math.h>
 
 #include "internal.h"
 #include "garb/cascade.h"
@@ -7,11 +8,13 @@
 
 /* THE WINDOW'S VIEW (CSSOM View § Extensions to the Window interface;
  * MODERN_WEB.md § Slice 1b): the scroll and size members, the document's
- * scrollingElement, matchMedia and its MediaQueryLists, getComputedStyle,
- * and the events the view owes a page when it moves (os64_dom_view_step).
- * The host answers through two providers, the view's and the computed
- * style's (dom.h); every name here is a row of the Modern Web table
- * (modern.c). */
+ * scrollingElement, an element's own scroll (§ 7), matchMedia and its
+ * MediaQueryLists, getComputedStyle, and the events the view owes a page
+ * when it moves (os64_dom_view_step).
+ * The host answers through the view's and the computed style's providers,
+ * and an element's scroll reads its geometry through the geometry
+ * provider's (d_geometry_read; dom.h); every name here is a row of the
+ * Modern Web table (modern.c). */
 
 static JSClassID media_slot, computed_slot;
 
@@ -127,6 +130,20 @@ static int scroll_options(JSContext *ctx, JSValueConst options, bool *has_left, 
     return 0;
 }
 
+// The view scrolled to (x, y) through the provider, which clamps it; the
+// layout it made is charged to the script. With no provider, nothing.
+static JSValue view_scroll_to(os64_dom_t *dom, JSContext *ctx, double x, double y)
+{
+    if (dom->view.scroll == NULL) return JS_UNDEFINED;
+    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    os64_dom_geometry_stats_t cost = {0};
+    bool ready = dom->view.scroll(dom->view.opaque, x, y, &cost);
+    charge(dom, cost.layouts, cost.elapsed_us);
+    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (!ready) return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
+    return JS_UNDEFINED;
+}
+
 // scroll()/scrollTo() and scrollBy(), with two numbers or one dictionary
 // (CSSOM View § The Window's scroll methods). One argument that is not a
 // dictionary is a TypeError, as WebIDL's overloads make it. A smooth
@@ -150,14 +167,7 @@ static JSValue scroll_method(os64_dom_t *dom, JSContext *ctx, int argc, JSValueC
         x += now.scroll_x;
         y += now.scroll_y;
     }
-    if (dom->view.scroll == NULL) return JS_UNDEFINED;
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
-    os64_dom_geometry_stats_t cost = {0};
-    bool ready = dom->view.scroll(dom->view.opaque, x, y, &cost);
-    charge(dom, cost.layouts, cost.elapsed_us);
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
-    if (!ready) return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
-    return JS_UNDEFINED;
+    return view_scroll_to(dom, ctx, x, y);
 }
 
 // ── The computed style ──────────────────────────────────────────────────
@@ -603,6 +613,140 @@ static JSValue scrolling_element(os64_dom_t *dom, JSContext *ctx)
     int scrolls = body_scrolls(dom, ctx, body);
     if (scrolls < 0) return JS_EXCEPTION;
     return scrolls ? JS_NULL : d_wrap(dom, ctx, body);
+}
+
+// ── An element's scroll (CSSOM View § 7, Extensions to the Element
+// interface) ──────────────────────────────────────────────────────────
+
+enum { SCROLLS_NOTHING, SCROLLS_VIEW, SCROLLS_OWN };
+
+// What scrolling `element` scrolls, as the setters' and scroll()'s steps
+// decide it: nothing for an element of a document that is not the
+// window's or the root in quirks mode; the view for the root, whatever its
+// namespace, and for the body in quirks mode when it is not potentially
+// scrollable; nothing for another foreign element (outside the geometry
+// contract); else its own scroll container. yonder's geometry snapshot
+// reads by the same rule. -1 with an exception pending.
+static int scroll_owner(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element)
+{
+    if (!d_window_document(dom, element)) return SCROLLS_NOTHING;
+    bool quirks = dom->document->quirks == OS64_HTML_QUIRKS;
+    if (element == root_element(dom)) return quirks ? SCROLLS_NOTHING : SCROLLS_VIEW;
+    if (element->ns != OS64_HTML_NS_HTML) return SCROLLS_NOTHING;
+    if (quirks && element == body_element(dom)) {
+        int scrolls = body_scrolls(dom, ctx, element);
+        if (scrolls < 0) return -1;
+        if (!scrolls) return SCROLLS_VIEW;
+    }
+    return SCROLLS_OWN;
+}
+
+// `element` scrolled to (x, y), or by it when `by`: the view, or its own
+// container through the provider, which clamps it. The view's scroll is
+// always given as a place. Answers JS_UNDEFINED or JS_EXCEPTION.
+static JSValue element_scroll_to(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, int owner,
+                                 double x, double y, bool by)
+{
+    if (owner == SCROLLS_VIEW) return view_scroll_to(dom, ctx, x, y);
+    if (owner != SCROLLS_OWN || dom->view.scroll_element == NULL) return JS_UNDEFINED;
+    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    os64_dom_geometry_stats_t cost = {0};
+    bool ready = dom->view.scroll_element(dom->view.opaque, element, x, y, by, &cost);
+    charge(dom, cost.layouts, cost.elapsed_us);
+    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (!ready) return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
+    return JS_UNDEFINED;
+}
+
+enum { E_LEFT, E_TOP, E_WIDTH, E_HEIGHT, E_SCROLL, E_SCROLL_BY };
+
+static JSValue element_scroll_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                     JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *element = d_node(dom, ctx, self);
+    if (element == NULL) return JS_EXCEPTION;
+    if (element->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Scrolling requires an element");
+    bool set = (magic & D_SET) != 0;
+    magic &= ~D_SET;
+    if (magic == E_WIDTH || magic == E_HEIGHT) {
+        os64_dom_geometry_t g;
+        if (!d_geometry_read(dom, ctx, element, &g)) return JS_EXCEPTION;
+        return JS_NewInt32(ctx, magic == E_WIDTH ? g.scroll_width : g.scroll_height);
+    }
+    // The setters and the methods read their arguments before anything
+    // else, as WebIDL converts them.
+    double x = 0, y = 0;
+    bool has_x = false, has_y = false;
+    if (set) {
+        double v;
+        if (finite_number(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &v) < 0) return JS_EXCEPTION;
+        if (magic == E_LEFT) x = v, has_x = true;
+        else y = v, has_y = true;
+    } else if (argc >= 2) {
+        if (finite_number(ctx, argv[0], &x) < 0 || finite_number(ctx, argv[1], &y) < 0) return JS_EXCEPTION;
+        has_x = has_y = true;
+    } else if (scroll_options(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &has_x, &x, &has_y, &y) < 0) {
+        return JS_EXCEPTION;
+    }
+    int owner = scroll_owner(dom, ctx, element);
+    if (owner < 0) return JS_EXCEPTION;
+    if (owner == SCROLLS_NOTHING) return JS_UNDEFINED;
+    // An element's door is never handed a place read back through the
+    // integer getter, which could move it by a rounding: an axis the call
+    // leaves alone goes as NaN, kept where it is, and scrollBy goes as the
+    // delta for the host to add. The view's door takes both numbers, made
+    // from the view's own place.
+    bool by = magic == E_SCROLL_BY;
+    if (owner == SCROLLS_OWN) {
+        if (!has_x) x = NAN;
+        if (!has_y) y = NAN;
+        return element_scroll_to(dom, ctx, element, owner, x, y, by);
+    }
+    os64_dom_view_t now = view_now(dom);
+    x = !has_x ? now.scroll_x : by ? x + now.scroll_x : x;
+    y = !has_y ? now.scroll_y : by ? y + now.scroll_y : y;
+    return element_scroll_to(dom, ctx, element, owner, x, y, false);
+}
+
+/* The element scroll row (modern.c): scrollLeft and scrollTop given their
+ * setters beside the geometry's getters, scrollWidth and scrollHeight, and
+ * scroll, scrollTo and scrollBy; members of Element's prototype and none of
+ * window's. */
+int d_element_scroll_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    (void)global;
+    JSValueConst element = dom->prototypes[D_PROTO_ELEMENT]->value;
+    static const struct { const char *name; int magic; } kSetters[] = {{"scrollLeft", E_LEFT}, {"scrollTop", E_TOP}};
+    for (int i = 0; i < 2; i++) {
+        JSAtom atom = JS_NewAtom(ctx, kSetters[i].name);
+        if (atom == JS_ATOM_NULL) return -1;
+        JSPropertyDescriptor desc;
+        int found = JS_GetOwnProperty(ctx, &desc, element, atom);
+        if (found <= 0) {
+            JS_FreeAtom(ctx, atom);
+            if (found == 0) JS_ThrowTypeError(ctx, "Element has no %s getter", kSetters[i].name);
+            return -1;
+        }
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.setter);
+        JSValue setter = JS_NewCFunctionData(ctx, element_scroll_member, 1, kSetters[i].magic | D_SET, 1,
+                                             &dom->anchor->value);
+        int status = JS_IsException(setter) ? -1
+            : JS_DefinePropertyGetSet(ctx, element, atom, desc.getter, setter,
+                                      JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        if (JS_IsException(setter)) JS_FreeValue(ctx, desc.getter);
+        JS_FreeAtom(ctx, atom);
+        if (status < 0) return -1;
+    }
+    if (d_accessor(dom, ctx, element, "scrollWidth", element_scroll_member, E_WIDTH, false) < 0 ||
+        d_accessor(dom, ctx, element, "scrollHeight", element_scroll_member, E_HEIGHT, false) < 0 ||
+        d_method_named(dom, ctx, element, "scroll", element_scroll_member, 0, E_SCROLL) < 0 ||
+        d_method_named(dom, ctx, element, "scrollTo", element_scroll_member, 0, E_SCROLL) < 0 ||
+        d_method_named(dom, ctx, element, "scrollBy", element_scroll_member, 0, E_SCROLL_BY) < 0)
+        return -1;
+    return 0;
 }
 
 static JSValue view_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,

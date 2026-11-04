@@ -145,7 +145,81 @@ static void io_covered(void) {
     loop_drop();
 }
 
+/* CSSOM View § 7 on real layout: a script scrolls a box and the page, the
+ * box's scroll reads back held to its range with its scrolling area, the
+ * page's is the view's, and an observer of the box's item sees it come in
+ * (what WPT's observers do to move their roots). */
+static void io_element_scroll(void) {
+    loop_page("<style>body{margin:0}#box{height:200px;width:300px;overflow:auto}#gap{height:500px}"
+        "#item{height:50px}</style>" IO_OUT IO_LOG
+        "<div id=box><div id=gap></div><div id=item></div></div><div style='height:5000px'></div><script>"
+        "var box=document.getElementById('box');"
+        "new IntersectionObserver(function(es){said('io:'+es[0].isIntersecting)},{root:box})"
+        ".observe(document.getElementById('item'));"
+        "setTimeout(function(){box.scrollTop=1e6;document.documentElement.scrollTop=1000;"
+        "said([box.scrollTop,box.scrollHeight,box.clientHeight,scrollY,document.documentElement.scrollHeight>5000].join(' '))},10);"
+        "</script>");
+    check(loop_settle() && io_turns() && probe_text_is("out","io:false"),"scroll: the item starts out of its box");
+    now_ms+=20;
+    check(io_turns() && probe_text_is("out","io:false,350 550 200 1000 true,io:true"),
+          "scroll: a script's scrollTop scrolls the box to its range, the root's scrolls the page, "
+          "and the observer sees the item come in");
+    check(g.sy==1000,"scroll: the page moved");
+    loop_drop();
+    /* The getters read the scroller the setters move: a body that scrolls
+     * in standards mode (the app-shell layout), and an inline-block's
+     * container rather than its atom; scrollBy adds up on both. */
+    loop_page("<style>html{overflow:hidden}body{margin:0;overflow:auto;height:300px}"
+        "#ib{display:inline-block;overflow:auto;width:100px;height:50px}</style>" IO_OUT IO_LOG
+        "<span id=ib><div style='height:300px'></div></span><div style='height:4000px'></div><script>"
+        "setTimeout(function(){var b=document.body,ib=document.getElementById('ib');"
+        "b.scrollTop=500;b.scrollBy(0,100);b.scrollBy(0,100);ib.scrollTop=30;ib.scrollBy(0,10);"
+        "said([b.scrollTop,ib.scrollTop,ib.scrollHeight,ib.clientHeight].join(' '))},10);</script>");
+    check(loop_settle() && io_turns(),"scroll: an app shell arrives");
+    now_ms+=20;
+    bool shell=io_turns() && probe_text_is("out","700 40 300 50");
+    if(!shell) fprintf(stderr,"app shell said: %s\n",probe_text_of("out"));
+    check(shell,"scroll: a scrolling body and an inline-block read back what was set, and scrollBy adds");
+    loop_drop();
+    /* An inline-block's and an inline-flex's own border is not overflow,
+     * and the root in quirks mode, which scrolls nothing, has an area. */
+    loop_page("<style>body{margin:0}.a{width:100px;height:50px;border:10px solid;padding:0}</style>" IO_OUT IO_LOG
+        "<span id=ib class=a style='display:inline-block'></span><span id=if class=a style='display:inline-flex'>"
+        "</span><div style='height:3000px'></div><script>setTimeout(function(){var ib=document.getElementById('ib'),"
+        "f=document.getElementById('if');said([ib.scrollWidth,ib.scrollHeight,f.scrollWidth,f.scrollHeight].join(' '))"
+        "},10)</script>");
+    check(loop_settle() && io_turns(),"scroll: bordered atoms arrive");
+    now_ms+=20;
+    bool atoms=io_turns() && probe_text_is("out","100 50 100 50");
+    if(!atoms) fprintf(stderr,"atoms said: %s\n",probe_text_of("out"));
+    check(atoms,"scroll: an inline-block's and an inline-flex's border is not their overflow");
+    os64_html_document_t *doc=g.page.way.doc;
+    os64_html_quirks_t mode=doc->quirks;
+    doc->quirks=OS64_HTML_QUIRKS;
+    os64_dom_geometry_t root;
+    bool measured=yonder_geometry_snapshot(doc,g.page.tree,doc->html,800,600,1000,(flow_point_t){0,0},&root);
+    doc->quirks=mode;
+    check(measured && root.scroll_height>=3000 && root.scroll_top==0,
+          "scroll: the root in quirks mode scrolls nothing and has its box's area");
+    loop_drop();
+    /* A script's scroll replaces an older one a later layout would bring
+     * back: scrolled down, emptied (the layout holds it at 0), set to 0,
+     * refilled: it stays at the top. */
+    loop_page("<style>body{margin:0}#l{height:100px;overflow:auto}.r{height:50px}</style>" IO_OUT IO_LOG
+        "<div id=l></div><script>var l=document.getElementById('l');"
+        "function fill(){for(var i=0;i<40;i++){var d=document.createElement('div');d.className='r';l.appendChild(d)}}"
+        "fill();setTimeout(function(){l.scrollTop=1000;said(l.scrollTop)},10);"
+        "setTimeout(function(){l.replaceChildren()},20);"
+        "setTimeout(function(){l.scrollTop=0;fill()},30);"
+        "setTimeout(function(){said(l.scrollTop)},40);</script>");
+    check(loop_settle() && io_turns(),"scroll: a list arrives");
+    for(int i=0;i<4;i++){ now_ms+=10; check(io_turns(),"scroll: the list's timers"); }
+    check(probe_text_is("out","1000,0"),"scroll: reset to the top and refilled, it stays at the top");
+    loop_drop();
+}
+
 static void io_cases(void) {
+    io_element_scroll();
     io_scroll_into_view();
     io_container_root();
     io_containing_blocks();
