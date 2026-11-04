@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Responses outside the script heap</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; }
+  .row { margin: 6px 0; }
+  #verdict { font-weight: bold; margin-top: 16px; }
+</style>
+<h1>Responses outside the script heap</h1>
+<p>Twenty requests for a 4 MiB file, each kept as a Blob: about 80 MiB, past the
+64 MiB a page's scripts have. The bytes are the page's body bound's
+(XHR_BYTES.md), so the page's scripts should keep running after.</p>
+<p>Serve this page over http from a directory holding a file of 4 MiB or more
+named <code>xhr-bytes.bin</code> (yonder, like other browsers, refuses a
+request for a file: address): <code>head -c 4194304 /dev/urandom &gt;
+xhr-bytes.bin; python3 -m http.server</code>.</p>
+<div class="row">Loaded: <span id="loaded">0</span> of <span id="asked">20</span></div>
+<div class="row">Failed: <span id="failed">0</span></div>
+<div class="row">Kept: <span id="kept">0</span> MiB</div>
+<div class="row">Ticks after the last load: <span id="ticks">0</span></div>
+<div id="verdict">waiting</div>
+<script>
+  const asked = 20, kept = [];
+  let loaded = 0, failed = 0, ticks = 0;
+  const say = (id, v) => { document.getElementById(id).textContent = v; };
+  function done() {
+    if (loaded + failed < asked) return;
+    const mib = kept.reduce((a, b) => a + b.size, 0) / 1048576;
+    say('kept', mib.toFixed(1));
+    // A timer that keeps firing is the proof that the scripts still run.
+    const tick = setInterval(() => {
+      say('ticks', ++ticks);
+      if (ticks === 5) {
+        clearInterval(tick);
+        say('verdict', loaded === asked && mib > 64 ? 'PASS: ' + mib.toFixed(1) + ' MiB kept, scripts running'
+                                                  : 'FAIL: ' + loaded + ' loaded, ' + failed + ' failed');
+      }
+    }, 200);
+  }
+  for (let i = 0; i < asked; i++) {
+    const x = new XMLHttpRequest();
+    x.open('GET', 'xhr-bytes.bin');
+    x.responseType = 'blob';
+    x.onload = () => { kept.push(x.response); say('loaded', ++loaded); done(); };
+    x.onerror = () => { say('failed', ++failed); done(); };
+    x.send();
+  }
+</script>

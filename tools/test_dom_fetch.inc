@@ -114,11 +114,13 @@ static void net_more(void *opaque, uint64_t id)
         if (n->seen[i].id == id) n->seen[i].mores++;
 }
 
-static DomFixture net_fixture_engine(const char *url, FakeNet *net, size_t engine_cap)
+/* With the page's body bound `body_cap` (max_body_bytes). */
+static DomFixture net_fixture_bounded(const char *url, FakeNet *net, size_t engine_cap, size_t body_cap)
 {
     os64_dom_options_t options = os64_dom_default_options();
     options.url = url;
     options.now_ms = storage_now;
+    options.max_body_bytes = body_cap;
     DomFixture f = fixture_base(0, 0, engine_cap);
     if (f.runtime != NULL && f.state != NULL) {
         os64_js_outcome_t outcome;
@@ -129,6 +131,11 @@ static DomFixture net_fixture_engine(const char *url, FakeNet *net, size_t engin
         os64_dom_set_network(f.binding, &network);
     }
     return f;
+}
+
+static DomFixture net_fixture_engine(const char *url, FakeNet *net, size_t engine_cap)
+{
+    return net_fixture_bounded(url, net, engine_cap, os64_dom_default_options().max_body_bytes);
 }
 
 static DomFixture net_fixture(const char *url, FakeNet *net)
@@ -1528,23 +1535,100 @@ static void dom_fetch_stream_sweep_cases(void)
         }
 }
 
-/* A speed test's downloads (fast.com's shape): `n` XMLHttpRequests whose
- * bodies of `mib` MiB stream in 1 MiB pieces, side by side, in a page's
- * 64 MiB runtime, with a Content-Length or chunked (`declared`). An
- * XMLHttpRequest keeps every byte it receives (XHR § "received bytes"),
- * in the runtime's memory, and no more than them: a body that fits is
- * never a block grown to hold it, which would hold the old and the new at
- * once. `fits` says whether they all do; past that is the runtime's
- * memory limit. */
-static void dom_xhr_downloads_case(int n, int mib, bool declared, bool fits)
+/* Each response type read from a body outside the engine (XHR_BYTES.md),
+ * streamed in two pieces with a Content-Length or chunked (`declared`):
+ * text and JSON decoded, an ArrayBuffer the page may write (it owns the
+ * body then), a Blob and a slice of it that outlive the XHR, and response
+ * ArrayBuffers detached by a structured clone's transfer and moved by
+ * transfer() at their length and at another, each of which gives the body
+ * back once (a second unref would be a use after free, ASan's to see);
+ * and the bytes counted back to zero once the page lets all of them go. */
+static void dom_xhr_body_types_case(bool declared)
 {
     FakeNet net = {0};
-    DomFixture f = net_fixture_engine("http://example.test/", &net, 64 * 1024 * 1024);
+    DomFixture f = net_fixture("http://example.test/", &net);
     if (!fixture_ready(&f)) return;
-    char script[512];
+    dom_script(&f,
+        "globalThis.got={};globalThis.xs=[];globalThis.kept=[];"
+        "['','text','json','arraybuffer','blob','arraybuffer','arraybuffer','arraybuffer'].forEach((t,i)=>{"
+        "const x=new XMLHttpRequest();x.open('GET','/'+i);x.responseType=t;xs.push(x);x.onload=()=>{"
+        "if(t==='json')got[i]=x.response.v;"
+        "else if(t==='blob'){globalThis.part=x.response.slice(6,9,'text/x');got[i]=x.response.size+':'+part.size;}"
+        "else if(i===3){const a=new Uint8Array(x.response);a[0]=65;"
+        "got[i]=new Uint8Array(x.response)[0]+':'+x.response.byteLength;}"
+        "else if(i===5){const c=structuredClone(x.response,{transfer:[x.response]});"
+        "got[i]=c.byteLength+':'+x.response.byteLength;kept.push(c);}"
+        "else if(i===6){const m=x.response.transfer();got[i]=m.byteLength+':'+x.response.byteLength;kept.push(m);}"
+        "else if(i===7){const m=x.response.transfer(4);got[i]=m.byteLength+':'+x.response.byteLength;kept.push(m);}"
+        "else got[i]=x.responseText};x.send()});",
+        "bodies: each response type");
+    const char *body1 = "{\"v\":", *body2 = "\"abc\"}";
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/", declared ? "Content-Length: 11\r\n" : "", "");
+    for (size_t i = 0; i < 8; i++) {
+        net_head(&f, &net, i, &head);
+        net_piece(&f, &net, i, body1);
+        net_piece(&f, &net, i, body2);
+        net_end(&f, &net, i, true);
+    }
+    size_t held = 0;
+    os64_dom_body_stats(f.binding, &held, NULL);
+    check(held != 0, "bodies: held outside the engine while the page holds them");
+    dom_script(&f, FETCH_ASSERT
+        "assert(got[0]==='{\"v\":\"abc\"}'&&got[1]===got[0]&&got[2]==='abc',JSON.stringify(got));"
+        "assert(got[3]==='65:11'&&got[4]==='11:3',JSON.stringify(got));"
+        "assert(got[5]==='11:0'&&got[6]==='11:0'&&got[7]==='4:0',JSON.stringify(got));"
+        "assert(xs[3].response===xs[3].response&&xs[4].response===xs[4].response,'the same object each read');"
+        "part.text().then(t=>{got.part=t+':'+part.type});xs=null;",
+        "bodies: what each type made of them");
+    dom_script(&f, FETCH_ASSERT "assert(got.part==='abc:text/x',got.part);part=null;got=null;kept=null;",
+               "bodies: a slice outlives its XHR");
+    os64_js_outcome_t gc;
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &gc)));
+    os64_dom_body_stats(f.binding, &held, NULL);
+    if (held != 0) fprintf(stderr, "bodies: %zu bytes still held\n", held);
+    check(held == 0, "bodies: every byte let go once the page lets them all go");
+    fixture_free(&f);
+}
+
+/* A body bound of zero is a literal cap: an empty response passes it, and
+ * a byte does not. */
+static void dom_xhr_zero_bound_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 0, 0);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.said=[];for(const p of ['/empty','/one']){const x=new XMLHttpRequest();x.open('GET',p);"
+        "x.onload=()=>said.push(p+':load:'+x.responseText.length);x.onerror=()=>said.push(p+':error');x.send()}",
+        "zero bound: two requests");
+    os64_dom_response_t empty = net_answer_of(200, "http://example.test/empty", "", "");
+    os64_dom_response_t one = net_answer_of(200, "http://example.test/one", "", "x");
+    net_answer(&f, &net, 0, &empty);
+    net_answer(&f, &net, 1, &one);
+    dom_script(&f, FETCH_ASSERT "assert(said.join()==='/empty:load:0,/one:error',said.join());",
+               "zero bound: an empty body passes it, a byte does not");
+    fixture_free(&f);
+}
+
+/* A speed test's downloads (a speed test's shape): `n` XMLHttpRequests
+ * whose bodies of `mib` MiB stream in 1 MiB pieces, side by side, with a
+ * Content-Length or chunked (`declared`), in a page whose runtime holds
+ * 64 MiB and whose body bound is `bound_mib` MiB. The bytes are the body
+ * bound's, not the runtime's (XHR_BYTES.md): the first `loaded` complete,
+ * each a Blob of every byte it received, and the rest fail as network
+ * errors, and the page runs on either way. */
+static void dom_xhr_downloads_case(int n, int mib, bool declared, int bound_mib, int loaded)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture_bounded("http://example.test/", &net, 64 * 1024 * 1024,
+                                       (size_t)bound_mib * 1024 * 1024);
+    if (!fixture_ready(&f)) return;
+    char script[640];
     snprintf(script, sizeof(script),
-             "globalThis.seen=0;for(let i=0;i<%d;i++){const x=new XMLHttpRequest();x.open('GET','/r'+i);"
-             "x.responseType='blob';x.onprogress=e=>{seen=e.loaded};x.send()}", n);
+             "globalThis.seen=0;globalThis.loads=[];globalThis.errors=0;for(let i=0;i<%d;i++){"
+             "const x=new XMLHttpRequest();x.open('GET','/r'+i);x.responseType='blob';"
+             "x.onprogress=e=>{seen=Math.max(seen,e.loaded)};x.onload=()=>loads.push(x.response.size);"
+             "x.onerror=()=>errors++;x.send()}", n);
     dom_script(&f, script, "downloads: a speed test's requests");
     char length[64];
     snprintf(length, sizeof(length), "Content-Length: %d\r\n", mib * 1024 * 1024);
@@ -1562,21 +1646,22 @@ static void dom_xhr_downloads_case(int n, int mib, bool declared, bool fits)
     for (int i = 0; i < n && status == OS64_JS_OK; i++)
         status = os64_dom_fetch_end(f.binding, net.seen[i].token, true, &outcome);
     free(bytes);
-    char what[128];
-    if (fits) {
-        snprintf(what, sizeof(what), "downloads: %d of %d MiB%s stream whole in a 64 MiB page", n, mib,
-                 declared ? "" : ", chunked,");
-        if (status != OS64_JS_OK) fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
-        check(status == OS64_JS_OK, what);
-        char counted[512];
-        snprintf(counted, sizeof(counted), FETCH_ASSERT "assert(seen===%d,seen);", mib * 1024 * 1024);
-        dom_script(&f, counted, "downloads: the page still runs, and counted every byte");
-    } else {
-        snprintf(what, sizeof(what), "downloads: %d of %d MiB are the page's memory limit", n, mib);
-        if (status != OS64_JS_LIMIT || outcome.limit != OS64_JS_LIMIT_MEMORY)
-            fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
-        check(status == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_MEMORY, what);
-    }
+    char what[160];
+    snprintf(what, sizeof(what), "downloads: %d of %d MiB%s in a 64 MiB page with a %d MiB body bound", n, mib,
+             declared ? "" : ", chunked,", bound_mib);
+    if (status != OS64_JS_OK) fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
+    check(status == OS64_JS_OK, what);
+    char counted[512];
+    snprintf(counted, sizeof(counted),
+             FETCH_ASSERT "assert(loads.length===%d&&errors===%d,loads.length+' loads, '+errors+' errors');"
+             "assert(loads.every(s=>s===%d),String(loads));assert(seen===%d,seen);",
+             loaded, n - loaded, mib * 1024 * 1024, mib * 1024 * 1024);
+    dom_script(&f, counted, "downloads: the page runs on, its loads whole and the rest network errors");
+    size_t held = 0;
+    uint64_t refused = 0;
+    os64_dom_body_stats(f.binding, &held, &refused);
+    check(refused == (uint64_t)(n - loaded) && held >= (size_t)loaded * mib * 1024 * 1024,
+          "downloads: the binding counts what it holds and what it refused");
     fixture_free(&f);
 }
 
@@ -1775,9 +1860,21 @@ static void dom_fetch_cases(void)
     dom_xhr_sync_stall_case();
     dom_fetch_stream_cases();
     dom_codec_stream_cases();
-    dom_xhr_downloads_case(2, 25, true, true);
-    dom_xhr_downloads_case(1, 40, false, true);
-    dom_xhr_downloads_case(3, 25, true, false);
+    dom_xhr_body_types_case(true);
+    dom_xhr_body_types_case(false);
+    dom_xhr_zero_bound_case();
+    /* Past the 64 MiB runtime, within the bound: three and eight. Past
+     * the bound: the request whose bytes would pass it fails, its bytes
+     * go, and the others finish in the room it left. A declared body is
+     * one block from the start; a chunked one is joined at its end, and
+     * the join's peak (pieces and block at once) counts, so of three
+     * chunked 25 MiB bodies under 64 MiB, one joins. */
+    dom_xhr_downloads_case(2, 25, true, 256, 2);
+    dom_xhr_downloads_case(1, 40, false, 256, 1);
+    dom_xhr_downloads_case(3, 25, true, 256, 3);
+    dom_xhr_downloads_case(8, 25, false, 256, 8);
+    dom_xhr_downloads_case(3, 25, true, 64, 2);
+    dom_xhr_downloads_case(3, 25, false, 64, 1);
     dom_fetch_abort_read_case();
     dom_fetch_bound_cases();
     dom_fetch_memory_cases();

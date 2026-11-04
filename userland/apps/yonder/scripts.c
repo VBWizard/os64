@@ -84,6 +84,8 @@ struct yonder_scripts {
     void *user_agent_opaque;
     os64_dom_cookies_t cookies;
     os64_dom_geometry_stats_t last_geometry_stats;
+    // How many refused responses the record has a line for (judged).
+    uint64_t refused_said;
     // When the view's events were last asked for (yonder_scripts_view_step),
     // on the now_ms clock: what yonder_scripts_view_due measures against.
     uint64_t view_asked_ms;
@@ -217,6 +219,16 @@ static void judged(yonder_scripts_t *s, const os64_js_outcome_t *out)
 {
     s->tasks++;
     os64_dom_storage_settle(s->dom);
+    // A response whose bytes could not be kept (XHR_BYTES.md) failed as a
+    // network error, which the page heard; the record says so in one
+    // FAILED line counted once a response, so a page that met its body
+    // bound is never a clean one.
+    uint64_t refused = 0;
+    os64_dom_body_stats(s->dom, NULL, &refused);
+    for (; s->refused_said < refused; s->refused_said++)
+        yonder_diag_failed(s->options.diag, "response",
+                           "its bytes could not be kept (past the page's body bound, or no memory): "
+                           "it failed as a network error");
     if (sticky(out->status))
         retire(s);
 }
@@ -2079,6 +2091,11 @@ bool yonder_scripts_intersections_due(const yonder_scripts_t *s)
 size_t yonder_scripts_resizes_observed(const yonder_scripts_t *s)
 {
     return s != NULL && !s->dead ? os64_dom_resizes_observed(s->dom) : 0;
+}
+
+void yonder_scripts_body_stats(const yonder_scripts_t *s, size_t *held, uint64_t *refused)
+{
+    os64_dom_body_stats(s != NULL ? s->dom : NULL, held, refused);
 }
 
 bool yonder_scripts_resizes_owed(const yonder_scripts_t *s)
