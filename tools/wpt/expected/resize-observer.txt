@@ -1,0 +1,80 @@
+# WPT's resize-observer in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh resize-observer --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+fragments.html	Removing 2nd fragment
+fragments.html	Single fragment
+idlharness.window.html	Element includes ChildNode: member names are unique
+idlharness.window.html	Element includes NonDocumentTypeChildNode: member names are unique
+idlharness.window.html	Element includes ParentNode: member names are unique
+idlharness.window.html	Element includes Slottable: member names are unique
+idlharness.window.html	ResizeObserver interface object length
+idlharness.window.html	ResizeObserver interface object name
+idlharness.window.html	ResizeObserver interface: calling observe(Element, optional ResizeObserverOptions) on observer with too few arguments must throw TypeError
+idlharness.window.html	ResizeObserver interface: calling unobserve(Element) on observer with too few arguments must throw TypeError
+idlharness.window.html	ResizeObserver interface: existence and properties of interface object
+idlharness.window.html	ResizeObserver interface: existence and properties of interface prototype object
+idlharness.window.html	ResizeObserver interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	ResizeObserver interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	ResizeObserver interface: observer must inherit property "disconnect()" with the proper type
+idlharness.window.html	ResizeObserver interface: observer must inherit property "observe(Element, optional ResizeObserverOptions)" with the proper type
+idlharness.window.html	ResizeObserver interface: observer must inherit property "unobserve(Element)" with the proper type
+idlharness.window.html	ResizeObserver must be primary interface of observer
+idlharness.window.html	ResizeObserverEntry creator
+idlharness.window.html	ResizeObserverEntry interface object length
+idlharness.window.html	ResizeObserverEntry interface object name
+idlharness.window.html	ResizeObserverEntry interface: entry must inherit property "borderBoxSize" with the proper type
+idlharness.window.html	ResizeObserverEntry interface: entry must inherit property "contentBoxSize" with the proper type
+idlharness.window.html	ResizeObserverEntry interface: entry must inherit property "contentRect" with the proper type
+idlharness.window.html	ResizeObserverEntry interface: entry must inherit property "devicePixelContentBoxSize" with the proper type
+idlharness.window.html	ResizeObserverEntry interface: entry must inherit property "target" with the proper type
+idlharness.window.html	ResizeObserverEntry interface: existence and properties of interface object
+idlharness.window.html	ResizeObserverEntry interface: existence and properties of interface prototype object
+idlharness.window.html	ResizeObserverEntry interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	ResizeObserverEntry interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	ResizeObserverEntry must be primary interface of entry
+idlharness.window.html	ResizeObserverSize interface object length
+idlharness.window.html	ResizeObserverSize interface object name
+idlharness.window.html	ResizeObserverSize interface: existence and properties of interface object
+idlharness.window.html	ResizeObserverSize interface: existence and properties of interface prototype object
+idlharness.window.html	ResizeObserverSize interface: existence and properties of interface prototype object's "constructor" property
+idlharness.window.html	ResizeObserverSize interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.window.html	Stringification of entry
+idlharness.window.html	Stringification of observer
+idlharness.window.html	idl_test setup
+idlharness.window.html	idl_test validation
+notify.html	ResizeObserver implemented
+notify.html	guard
+notify.html	test0: notification ordering
+notify.html	test10: element notifies when parent removed
+notify.html	test11: display:none element should be notified
+notify.html	test12: element sized 0x0 should be notified
+notify.html	test1: display:none triggers notification
+notify.html	test2: remove/appendChild trigger notification
+notify.html	test4: transform do not cause notifications
+notify.html	test5: moving an element does not trigger notifications
+notify.html	test6: inline element notifies once with 0x0.
+notify.html	test7: unobserve inside notify callback
+notify.html	test8: observe inside notify callback
+notify.html	test9: disconnect inside notify callback
+observe-001.html	simple observation
+observe-002.html	multiple observation on same element trigger only one
+observe-003.html	throw exception when observing non-element
+observe-004.html	disconnect stops all notifications
+observe-005.html	unobserve target stops notifications, unobserve non-observed does nothing
+observe-008.html	callback.this
+observe-009.html	simple content-box observation
+observe-010.html	simple content-box observation but keep border-box size unchanged
+observe-011.html	simple border-box observation
+observe-015.html	observe the same target but using a different box should override the previous one
+observe-016.html	an observation is fired with box dimensions 0 when element's display property is set to inline
+observe-017.html	observations fire once with 0x0 size for non-replaced inline elements
+observe-018.html	Box sizing and Resize Observer notifications
+observe-019.html	an observation is fired when device-pixel-content-box is being observed
+ordering.html	ResizeObserver and IntersectionObserver ordering
+scrollbars-2.html	ResizeObserver content-box size and scrollbars
+svg-with-css-box-001.html	ResizeObserver implemented
+svg-with-css-box-001.html	guard

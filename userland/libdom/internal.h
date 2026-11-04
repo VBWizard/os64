@@ -624,6 +624,11 @@ struct os64_dom {
     size_t intersections_held;
     os64_dom_intersections_provider_t intersections_provider;
     void *intersections_opaque;
+    /* ResizeObserver (resize.c), the same three. */
+    struct DResizes *resizes;
+    size_t resizes_held;
+    os64_dom_resizes_provider_t resizes_provider;
+    void *resizes_opaque;
 };
 #define D_NO_SCRIPT UINT32_MAX
 /* d_callback_script's answer when the runtime must stop: the exception is
@@ -793,6 +798,12 @@ void d_event_target_finalize(JSRuntime *rt, DValue *entry);
 int d_event_handler_named(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type);
 int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target,
                           os64_js_outcome_t *outcome);
+/* `event` dispatched at window from inside a host task the binding opened
+ * itself (os64_js_task_begin): each listener a budgeted call and a
+ * checkpoint, the outcome folded into `outcome`, as d_dispatch_plain_task
+ * runs them. d_dispatch at window assumes a script's call is already
+ * running, which a task the binding opened has not. */
+int d_dispatch_window_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, os64_js_outcome_t *outcome);
 /* 0f's P1b row (event.c): EventTarget, its constructor, and Window. */
 int d_targets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A host task's bookkeeping (event.c): an entry's outcome folded into the
@@ -1642,6 +1653,10 @@ void d_observers_free(os64_dom_t *dom);
 int d_intersections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_intersections_drain(os64_dom_t *dom);
 void d_intersections_free(os64_dom_t *dom);
+/* ResizeObserver (resize.c), the same three. */
+int d_resizes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_resizes_drain(os64_dom_t *dom);
+void d_resizes_free(os64_dom_t *dom);
 /* DOMRectReadOnly and DOMRect (rect.c): the row's installer, and a new
  * rect of either for the binding's own answers (the switch on). */
 int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

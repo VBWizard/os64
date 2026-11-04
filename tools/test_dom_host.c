@@ -245,6 +245,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_message.inc"
 #include "test_dom_animation.inc"
 #include "test_dom_intersection.inc"
+#include "test_dom_resize.inc"
 #include "test_dom_pointer.inc"
 #include "test_dom_importmap.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
@@ -569,6 +570,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -597,6 +599,7 @@ int main(int argc, char **argv)
     dom_p2b_cases();
     dom_animation_cases();
     dom_intersection_cases();
+    dom_resize_cases();
     dom_import_map_cases();
     dom_geometry_cases();
     dom_element_scroll_cases();

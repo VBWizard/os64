@@ -1121,6 +1121,9 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out);
 static bool script_intersections(void *opaque, os64_dom_intersection_t *items, size_t count,
                                  os64_dom_geometry_stats_t *cost);
+static bool script_resizes(void *opaque, os64_dom_resize_t *items, size_t count, os64_dom_geometry_stats_t *cost);
+static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_env_t *env,
+                                         uint64_t *layouts, uint64_t *elapsed_us);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static void page_timeline(Page *p);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
@@ -1879,6 +1882,13 @@ static struct {
     // in addition to the DOM frame deadline. Missed frames do not accumulate.
     bool raf_painting, script_painting;
     uint64_t raf_resume_at;
+    // Resize steps run one a frame: after one, the frame it ran in ends
+    // first (resize_paced), then the same gap script frames keep, and a
+    // requested animation frame's callbacks come before it (resizes_due). A
+    // callback that resizes its own target every time costs one step a
+    // frame, as in other browsers, never a spin.
+    bool resize_paced;
+    uint64_t resize_resume_at;
     // Widgets have stable addresses and node keys; rebuilding replaces the
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
@@ -3632,6 +3642,8 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.raf_painting = false;
     g.script_painting = false;
     g.raf_resume_at = 0;
+    g.resize_paced = false;
+    g.resize_resume_at = 0;
     g.motion_pause[0] = '\0';
     pictures_start(&g.page);
     css_pictures(&g.page);
@@ -7415,8 +7427,9 @@ static uint64_t animation_next(void)
 // Hands the ticker the earliest of its deadlines: the next frame among the
 // pictures on screen, the moment a slow page's layout goes stale
 // (pictures_settle), the next layout for an animation (motion_next) and
-// its next tick (tick_next), and script frames (animation_next) — none for
-// a covered window — the
+// its next tick (tick_next), script frames (animation_next), an observer's
+// delay running out and a resize step owed to the next frame
+// (resizes_next) — none for a covered window — the
 // moment a page waiting for its
 // sheets is shown whatever is still coming, the moment a script the stream
 // is stopped at stops waiting for its sheets, the next timer and the
@@ -7440,6 +7453,8 @@ typedef struct {
 // Two deadlines at one moment are common — the clock steps by the tick —
 // and the moment is the bell's if either is.
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
+static uint64_t resizes_next(void);
+static uint64_t resizes_due(void);
 
 // The shown page has nothing more coming of its own accord: it has
 // streamed and arrived, its pictures and fonts are in — kept at the size
@@ -7512,6 +7527,8 @@ static void pictures_schedule(void)
     // delay runs out, whether or not anything moves (intersections_turn).
     if (!g.covered)
         deadline_offer(&d, yonder_scripts_intersections_next(g.page.scripts), PAST_FRAMES);
+    // A resize step owed to the next frame (resizes_turn).
+    deadline_offer(&d, resizes_next(), PAST_FRAMES);
     if (g.coming.active)
         deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
     if (g.stream.active && g.stream.sheets_due != 0)
@@ -7729,6 +7746,11 @@ static void motion_painted(void)
         g.raf_painting = false;
         uint64_t now = yonder_now_ms();
         g.raf_resume_at = now < UINT64_MAX - 10 ? now + 10 : UINT64_MAX - 1;
+    }
+    if (g.resize_paced) {
+        g.resize_paced = false;
+        uint64_t now = yonder_now_ms();
+        g.resize_resume_at = now < UINT64_MAX - 10 ? now + 10 : UINT64_MAX - 1;
     }
     if (g.motion_painting) {
         g.motion_painting = false;
@@ -9163,7 +9185,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
-        .intersections = script_intersections, .opaque = doc,
+        .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
@@ -10402,6 +10424,96 @@ static bool intersections_turn(void)
     if (s_intersections_answered)
         s_observed = now;
     return due;
+}
+
+// ── Resize observations (INTERSECTION_OBSERVER.md § 11) ─────────────────
+
+// The batch's provider, whose opaque is its page's document: the page on
+// screen's layout made current first — its rebuild, an owed relayout — as
+// a script's geometry read makes it (script_geometry), since a second
+// round must measure what the first round's callbacks changed. The work is
+// the step's task's.
+static bool script_resizes(void *opaque, os64_dom_resize_t *items, size_t count, os64_dom_geometry_stats_t *cost)
+{
+    const os64_html_document_t *doc = opaque;
+    if (doc == NULL || doc != page_doc(&g.page))
+        return false;
+    flow_env_t env;
+    if (layout_current(doc, &env, &cost->layouts, &cost->elapsed_us) == NULL)
+        return false;
+    return yonder_resizes(doc, g.page.tree, items, count, g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom);
+}
+
+// What a resize observation reads, as it stood after the last step: the
+// layout and the view it was made at.
+static Observed s_resized;
+
+// THE RESIZE STEP (§ 11): the rendering step's, after the animation frame
+// callbacks and their layout (script_turn) and a CSS animation's
+// (motion_tick), and before the intersection step and the paint, when the
+// page was laid out or the view changed since the last step, or a report
+// is owed (resizes_wanted). One step a frame: the next waits for the frame
+// this one ran in to end, and the gap script frames keep after it
+// (resizes_next), because a callback's own change is laid out and would
+// otherwise want another step on the very next turn. Not while the window
+// is covered. Its callbacks run inside it, round after round, each laid
+// out before the next is measured (script_resizes). True when it ran a
+// task.
+static bool resizes_wanted(yonder_scripts_t *s)
+{
+    if (!g.scripts_on || s == NULL || g.covered || yonder_scripts_resizes_observed(s) == 0)
+        return false;
+    Observed now = observed_now(), was = s_resized;
+    return now.trees != was.trees || now.w != was.w || now.h != was.h || now.zoom != was.zoom ||
+           yonder_scripts_resizes_owed(s);
+}
+
+static bool resizes_turn(void)
+{
+    yonder_scripts_t *s = g.page.scripts;
+    if (!resizes_wanted(s) || g.resize_paced || yonder_now_ms() < resizes_due())
+        return false;
+    os64_js_outcome_t out;
+    const os64_html_document_t *doc = page_doc(&g.page);
+    int64_t began = task_begin(s);
+    bool ran = yonder_scripts_resizes_step(s, &out);
+    if (ran) {
+        task_said(s, true, "resize-observer", &out, began);
+        // A task's tail, as script_turn's: the callbacks' changes built,
+        // then what they asked for (a navigation, a focus, a submit), which
+        // would otherwise wait for some later task.
+        if (script_rebuild()) {
+            asks_perform(g.page.scripts, doc, true);
+            if (page_doc(&g.page) == doc)
+                (void)pointer_turn();
+        }
+    }
+    // The step laid the page out as its callbacks changed it: what it
+    // measured last is what stands now. Whatever it still owes (one it
+    // passed over, one a callback began observing, or what it left undone:
+    // a refused gather, entries that could not be made) the binding owes
+    // the next frame (os64_dom_resizes_owed).
+    s_resized = observed_now();
+    g.resize_paced = true;
+    return ran;
+}
+
+// When a resize step may run: the next frame's moment, once the frame the
+// last one ran in has ended (motion_painted), and, while the page waits
+// for an animation frame, not before that frame's callbacks: the two are
+// one rendering step, the callbacks first (animation_next is NEVER once
+// they have run this turn).
+static uint64_t resizes_due(void)
+{
+    uint64_t due = g.resize_resume_at, frame = animation_next();
+    return frame != YONDER_NEVER && frame > due ? frame : due;
+}
+
+static uint64_t resizes_next(void)
+{
+    if (g.resize_paced || !resizes_wanted(g.page.scripts))
+        return YONDER_NEVER;
+    return resizes_due();
 }
 
 // ── The session's entries (MODERN_WEB.md § Slice 1b) ───────────────────
@@ -16426,8 +16538,9 @@ int main(int argc, char **argv)
         downloads_turn();
         pictures_settle();
         title_follow();
+        bool observed = resizes_turn();
         before_paint();
-        bool observed = intersections_turn();
+        observed = intersections_turn() || observed;
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
         motion_painted();

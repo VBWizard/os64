@@ -10,7 +10,8 @@
 static bool io_turns(void) {
     for(int i=0;i<64;i++) {
         bool ran=script_turn();
-        bool queued=intersections_turn();
+        bool resized=resizes_turn();
+        bool queued=intersections_turn() || resized;
         motion_painted();
         if(!ran && !queued) return true;
     }
@@ -218,7 +219,95 @@ static void io_element_scroll(void) {
     loop_drop();
 }
 
+/* RESIZE OBSERVATIONS ON REAL LAYOUT (INTERSECTION_OBSERVER.md § 11): the
+ * first report, a script's resize, a callback that grows a deeper element
+ * (reported in the same step, measured on the layout the callback asked
+ * for), and one that grows its own target (the loop error, at window). */
+static void ro_real_layout(void) {
+    loop_page("<style>body{margin:0}#a{width:200px;padding:5px;border:2px solid}#b{width:50px;height:10px}"
+        "</style>" IO_OUT IO_LOG
+        "<div id=a><div id=b></div></div><script>"
+        "var a=document.getElementById('a'),b=document.getElementById('b');"
+        "new ResizeObserver(function(es){var e=es[0];said('a:'+e.contentRect.width+'x'+e.contentRect.height+"
+        "'@'+e.contentRect.x+'/'+e.borderBoxSize[0].inlineSize)}).observe(a);"
+        "setTimeout(function(){a.style.width='150px'},10);</script>");
+    check(loop_settle() && io_turns() && probe_text_is("out","a:200x10@5/214"),
+          "ro: the first report, on the real boxes");
+    now_ms+=20;
+    check(io_turns() && probe_text_is("out","a:200x10@5/214,a:150x10@5/164"),"ro: a script's resize is reported");
+    loop_drop();
+    /* An inline-block's sizes are its container's, not its atom's. */
+    loop_page("<style>body{margin:0}#ib{display:inline-block;width:100px;height:40px;padding:5px;"
+        "border:2px solid}</style>" IO_OUT IO_LOG "<span id=ib></span><script>"
+        "new ResizeObserver(function(es){var e=es[0];said(e.contentRect.width+'x'+e.contentRect.height+'@'+"
+        "e.contentRect.x+'/'+e.borderBoxSize[0].inlineSize+'x'+e.borderBoxSize[0].blockSize)})"
+        ".observe(document.getElementById('ib'));</script>");
+    bool atom=loop_settle() && io_turns() && probe_text_is("out","100x40@5/114x54");
+    if(!atom) fprintf(stderr,"inline-block said: %s\n",probe_text_of("out"));
+    check(atom,"ro: an inline-block reports its container's sizes");
+    loop_drop();
+    /* A step waits for an animation frame the page asked for: they are one
+     * rendering update, the frame's callbacks first. The frame is due 20 ms
+     * after the ask, the step's own gap 10 ms after its frame. */
+    loop_page("<style>body{margin:0}#a{width:10px;height:10px}</style>" IO_OUT IO_LOG "<div id=a></div><script>"
+        "var a=document.getElementById('a'),n=0;new ResizeObserver(function(){said('ro');if(++n==1){"
+        "requestAnimationFrame(function(){said('raf')});setTimeout(function(){a.style.width='20px'},0)}}).observe(a);"
+        "</script>");
+    bool first=loop_settle() && io_turns();
+    for(int i=0;i<3;i++){now_ms+=10;first=io_turns() && first;}
+    if(!probe_text_is("out","ro,raf,ro")) fprintf(stderr,"frame order said: %s\n",probe_text_of("out"));
+    check(first && probe_text_is("out","ro,raf,ro"),"ro: the step after a requested frame comes after its callbacks");
+    loop_drop();
+    /* A box sized by the view: the window's resize is the page's. */
+    loop_page("<style>body{margin:0}#a{width:50%;height:10px}</style>" IO_OUT IO_LOG "<div id=a></div><script>"
+        "new ResizeObserver(function(es){said(''+es[0].contentRect.width)}).observe(document.getElementById('a'));"
+        "</script>");
+    check(loop_settle() && io_turns(),"ro: a page sized by the view arrives");
+    char sized[64];
+    snprintf(sized,sizeof(sized),"%d",(int)g.view.bounds.w/2);
+    check(probe_text_is("out",sized),"ro: the first report is half the view");
+    g.view.bounds.w=600;
+    now_ms+=10;
+    snprintf(sized+strlen(sized),sizeof(sized)-strlen(sized),",300");
+    bool window=io_turns() && probe_text_is("out",sized);
+    if(!window) fprintf(stderr,"window resize said: %s\n",probe_text_of("out"));
+    check(window,"ro: the window's resize is reported");
+    loop_drop();
+    loop_page("<style>body{margin:0}#a{width:200px}#b{width:10px;height:10px}</style>" IO_OUT IO_LOG
+        "<div id=a><div id=b></div></div><script>"
+        "var a=document.getElementById('a'),b=document.getElementById('b'),grown=false;"
+        "new ResizeObserver(function(){said('a');if(!grown){grown=true;b.style.width='30px'}}).observe(a);"
+        "new ResizeObserver(function(es){said('b:'+es[0].contentRect.width)}).observe(b);</script>");
+    check(loop_settle() && io_turns() && probe_text_is("out","a,b:10,b:30"),
+          "ro: a deeper element grown by a callback is measured again in the same step");
+    loop_drop();
+    loop_page("<style>body{margin:0}#a{width:10px;height:10px}</style>" IO_OUT IO_LOG "<div id=a></div><script>"
+        "var a=document.getElementById('a'),n=0;"
+        "window.onerror=function(m){if(a.getBoundingClientRect().height===10)said('error');return true};"
+        "new ResizeObserver(function(){said('a');if(++n<3)a.style.width=(10+n)+'px'}).observe(a);</script>");
+    bool settled=loop_settle() && io_turns();
+    if(!probe_text_is("out","a,error")) fprintf(stderr,"loop error said: %s\n",probe_text_of("out"));
+    check(settled && probe_text_is("out","a,error"),
+          "ro: a callback that resizes its own target is the loop error, whose listener may read geometry");
+    check(io_turns() && probe_text_is("out","a,error"),"ro: and what it passed over waits for the next frame");
+    now_ms+=10;
+    check(io_turns() && probe_text_is("out","a,error,a,error"),"ro: the next frame's step reports it");
+    now_ms+=10;
+    check(io_turns() && probe_text_is("out","a,error,a,error,a"),"ro: one step a frame until it settles");
+    loop_drop();
+    /* What a callback asks for is done after its step, as after any task:
+     * nothing else runs on this page to carry it. */
+    loop_page("<style>body{margin:0}</style>" IO_OUT IO_LOG "<input id=i><script>"
+        "var i=document.getElementById('i');new ResizeObserver(function(){said('ro');i.focus()}).observe(i);"
+        "</script>");
+    bool asked=loop_settle() && io_turns() && probe_text_is("out","ro");
+    const FormWidget *field=probe_field("i");
+    check(asked && field!=NULL && g.ui.focus==field->w,"ro: a focus a callback asks for is given after its step");
+    loop_drop();
+}
+
 static void io_cases(void) {
+    ro_real_layout();
     io_element_scroll();
     io_scroll_into_view();
     io_container_root();
