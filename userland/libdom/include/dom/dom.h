@@ -11,6 +11,10 @@
 typedef struct os64_dom os64_dom_t;
 
 #define OS64_DOM_DEFAULT_MAX_BYTES ((size_t)8 * 1024 * 1024)
+/* Four times libjs's default script heap (os64_js_default_limits, 64 MiB):
+ * eight 25 MiB downloads at once, with room to keep what they made
+ * (XHR_BYTES.md § 4). */
+#define OS64_DOM_DEFAULT_MAX_BODY_BYTES ((size_t)256 * 1024 * 1024)
 /* The longest address a navigation ask carries: os64_url_absolute's. */
 #define OS64_DOM_URL_MAX OS64_URL_REF_MAX
 /* Live timers per page; one more throws QuotaExceededError. */
@@ -88,6 +92,14 @@ typedef struct {
      * staged allocations. Engine, document and control-state budgets remain
      * separately enforced by their owning libraries. Zero is a literal cap. */
     size_t max_bytes;
+    /* The bytes of the responses the page holds (XHR_BYTES.md): an
+     * XMLHttpRequest's body, and the Blobs and ArrayBuffers made over it,
+     * which live in the process's memory, outside the engine's heap. A
+     * response whose bytes would pass it fails as a network error and the
+     * page goes on; a responseText read while LOADING, which joins what
+     * has come so far, throws QuotaExceededError instead and the response
+     * goes on arriving. Zero is a literal cap (an empty body passes it). */
+    size_t max_body_bytes;
     bool scripting;
     /* The Modern Web arc's surface (MODERN_WEB.md § The rules that keep the
      * other 99% safe): set, every row of modern.c's table installs its
@@ -194,7 +206,8 @@ typedef struct {
 static inline os64_dom_options_t os64_dom_default_options(void)
 {
     const os64_dom_options_t options = {
-        .max_bytes = OS64_DOM_DEFAULT_MAX_BYTES, .scripting = true, .modern = true,
+        .max_bytes = OS64_DOM_DEFAULT_MAX_BYTES, .max_body_bytes = OS64_DOM_DEFAULT_MAX_BODY_BYTES,
+        .scripting = true, .modern = true,
         .screen = {1024, 768, 1024, 768, 24}, .last_modified = OS64_DOM_NO_DATE
     };
     return options;
@@ -676,6 +689,11 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
+/* The responses' bytes the page holds now, against max_body_bytes, and how
+ * many responses failed since the binding was made because their bytes
+ * could not be kept: past that bound, or the process had no memory. NULL
+ * answers zero. */
+void os64_dom_body_stats(const os64_dom_t *dom, size_t *held, uint64_t *refused);
 
 /* EVENTS. The host dispatches at a node, or at window when node is NULL
  * (`load`, whose target reads as the document). One TASK: libdom opens it,

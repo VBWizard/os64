@@ -5,14 +5,20 @@
 /* Blob and File (the File API, § 3 and § 4) and FormData (XHR § 4): the
  * bytes a request body carries and the forms a page builds. Their bytes are
  * ENGINE memory (js_malloc), counted against the runtime's memory limit as
- * anything else a script makes is, and freed with the object; nothing here
- * is a container a page can reach: a FormData's entries are a C array, read
- * by index and looked up again after anything that can run page code. */
+ * anything else a script makes is, and freed with the object — except a
+ * Blob over a response's body (d_blob_new_received) and its slices, which
+ * refer to the body's bytes in process memory (received.c) and hold it.
+ * Nothing here is a container a page can reach: a FormData's entries are a
+ * C array, read by index and looked up again after anything that can run
+ * page code. */
 
 static JSClassID blob_slot, form_slot, form_iterator_slot;
 
 typedef struct {
+    /* Owned engine memory, or, with `body`, the body's bytes, borrowed for
+     * as long as the reference is held. */
     uint8_t *bytes;
+    DReceived *body;
     size_t length;
     char *type;                 /* "" for none; lowercase printable ASCII */
     bool file;
@@ -246,7 +252,8 @@ static void blob_finalizer(JSRuntime *rt, JSValue value)
 {
     DBlob *b = JS_GetOpaque(value, os64_js_class_id(&blob_slot));
     if (b == NULL) return;
-    js_free_rt(rt, b->bytes);
+    if (b->body != NULL) d_received_unref(b->body);
+    else js_free_rt(rt, b->bytes);
     js_free_rt(rt, b->type);
     js_free_rt(rt, b->name);
     js_free_rt(rt, b);
@@ -322,6 +329,24 @@ JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes)
     bytes->type = NULL;
     bytes->length = 0;
     return blob;
+}
+
+/* A Blob over `length` of `body`'s bytes from `bytes`, with `prototype`:
+ * a reference to the body taken for it, `type` taken. */
+static JSValue blob_over(JSContext *ctx, JSValueConst prototype, DReceived *body, const uint8_t *bytes, size_t length,
+                         char *type)
+{
+    JSValue made = blob_make(ctx, prototype, NULL, length, type, false, NULL, 0);
+    if (JS_IsException(made)) return made;
+    DBlob *b = blob_state(made);
+    b->bytes = (uint8_t *)bytes;
+    b->body = d_received_ref(body);
+    return made;
+}
+
+JSValue d_blob_new_received(JSContext *ctx, DReceived *body, char *type)
+{
+    return blob_over(ctx, JS_UNDEFINED, body, d_received_bytes(body), d_received_length(body), type);
 }
 
 bool d_blob_file(JSValueConst value, const char **name, int64_t *last_modified)
@@ -635,14 +660,16 @@ static JSValue blob_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         b = blob_state(self);
         size_t from = relative(start, b->length), to = relative(end, b->length);
         size_t span = to > from ? to - from : 0;
-        uint8_t *bytes = js_malloc(ctx, span + 1);
-        if (bytes == NULL) {
-            js_free(ctx, type);
-            return JS_EXCEPTION;
+        JSValue prototype = JS_GetClassProto(ctx, os64_js_class_id(&blob_slot)), made;
+        if (b->body != NULL) {
+            /* A slice of a response's body refers to the same body. */
+            made = blob_over(ctx, prototype, b->body, b->bytes + from, span, type);
+        } else {
+            uint8_t *bytes = js_malloc(ctx, span + 1);
+            if (bytes != NULL && span != 0) os64_memcpy(bytes, b->bytes + from, span);
+            if (bytes == NULL) js_free(ctx, type);
+            made = bytes != NULL ? blob_make(ctx, prototype, bytes, span, type, false, NULL, 0) : JS_EXCEPTION;
         }
-        if (span != 0) os64_memcpy(bytes, b->bytes + from, span);
-        JSValue prototype = JS_GetClassProto(ctx, os64_js_class_id(&blob_slot));
-        JSValue made = blob_make(ctx, prototype, bytes, span, type, false, NULL, 0);
         JS_FreeValue(ctx, prototype);
         return made;
     }

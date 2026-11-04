@@ -629,6 +629,12 @@ struct os64_dom {
     size_t resizes_held;
     os64_dom_resizes_provider_t resizes_provider;
     void *resizes_opaque;
+    /* Responses' bytes (received.c): every body, what they hold against
+     * options.max_body_bytes, and how many responses failed because their
+     * bytes could not be kept. */
+    struct DReceived *received;
+    size_t body_bytes;
+    uint64_t bodies_refused;
 };
 #define D_NO_SCRIPT UINT32_MAX
 /* d_callback_script's answer when the runtime must stop: the exception is
@@ -1223,8 +1229,32 @@ typedef struct {
 void d_bytes_free(JSContext *ctx, DBytes *b);
 /* A Blob's (or File's) bytes and type, borrowed; false for anything else. */
 bool d_blob_get(JSValueConst value, const uint8_t **bytes, size_t *length, const char **type);
-/* A new Blob of `bytes` (taken) and `type` (copied). */
+/* A new Blob of `bytes` and their type, both taken. */
 JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes);
+/* A RESPONSE'S BYTES OUTSIDE THE ENGINE (received.c; XHR_BYTES.md): process
+ * memory charged to the page's body bound, refcounted. d_received_new answers
+ * NULL, and append and join false, when the bound or the process refuses.
+ * `declared`, when not 0, is the length a response announced: one block
+ * from the start when the bound has room. A body's bytes are read only once
+ * it is joined (d_received_join; a body that only ever filled its block is
+ * joined already). An ArrayBuffer made over a joined body takes a
+ * reference and writes the body's bytes, so its maker reads them no more;
+ * a Blob over one (d_blob_new_received) takes a reference and only reads. */
+typedef struct DReceived DReceived;
+DReceived *d_received_new(os64_dom_t *dom, size_t declared);
+bool d_received_append(DReceived *body, const uint8_t *bytes, size_t length);
+bool d_received_join(DReceived *body);
+const uint8_t *d_received_bytes(const DReceived *body);
+size_t d_received_length(const DReceived *body);
+DReceived *d_received_ref(DReceived *body);
+void d_received_unref(DReceived *body);
+JSValue d_received_array_buffer(JSContext *ctx, DReceived *body);
+/* Every body still held, freed: os64_dom_free's, after the engine, for the
+ * holders whose finalizers a reclaiming teardown never ran. */
+void d_received_free_all(os64_dom_t *dom);
+/* A new Blob over a joined `body`'s bytes (a reference taken, not the
+ * caller's) with `type` (taken). */
+JSValue d_blob_new_received(JSContext *ctx, DReceived *body, char *type);
 bool d_form_data_is(JSValueConst value);
 /* A FormData as multipart/form-data (HTML § 4.10.21.8), its type naming
  * the boundary. -1 with an exception pending. */

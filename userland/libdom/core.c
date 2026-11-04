@@ -510,6 +510,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_observers_free(dom);
     d_intersections_free(dom);
     d_resizes_free(dom);
+    d_received_free_all(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);

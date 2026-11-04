@@ -2894,6 +2894,16 @@ static void diag_observe(Page *p, const char *when)
     }
     os64_snprintf(v, sizeof(v), "%d, %d ready", (int)p->nsheets, (int)p->sheets_ready);
     yonder_diag_fact(d, "sheets", v);
+    // Responses' bytes held outside the script heap (XHR_BYTES.md): a line
+    // once there are some, or the bound refused one.
+    size_t held = 0;
+    uint64_t refused = 0;
+    yonder_scripts_body_stats(p->scripts, &held, &refused);
+    if (held != 0 || refused != 0) {
+        os64_snprintf(v, sizeof(v), "%lu KiB held, %lu responses refused", (unsigned long)(held >> 10),
+                      (unsigned long)refused);
+        yonder_diag_fact(d, "response bodies", v);
+    }
     diag_fonts(p);
     if (p == &g.page)
         diag_paint(p);
