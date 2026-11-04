@@ -9073,6 +9073,8 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
 
 static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
+static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y,
+                                os64_dom_geometry_stats_t *cost);
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
@@ -9139,7 +9141,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
         .intersections = script_intersections, .opaque = doc,
-        .view = {view_read, view_scroll, doc}, .computed = script_computed,
+        .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
@@ -11079,6 +11081,39 @@ static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stat
         return false;
     double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
     scroll_to(device_px(x * z), device_px(y * z));
+    return true;
+}
+
+// An element's own scroll (the view provider's scroll_element): the page
+// on screen's layout made current, the scroll container the element makes
+// moved, held to its range, and kept for the layouts after it, as a
+// wheel's move is (wheel_box). A page not yet shown has no box to move,
+// and an element that makes no container scrolls nothing; both answer
+// true, as the standard's steps end there quietly.
+static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y,
+                                os64_dom_geometry_stats_t *cost)
+{
+    Page *p = page_of_doc(opaque);
+    if (p == NULL)
+        return false;
+    if (p != &g.page)
+        return true;
+    flow_env_t env;
+    if (layout_current(opaque, &env, &cost->layouts, &cost->elapsed_us) == NULL)
+        return false;
+    int32_t i = flow_scroller_for(g.page.tree, element);
+    if (i < 0)
+        return true;
+    double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
+    flow_point_t was = flow_scroll_at(g.page.tree, i);
+    flow_point_t now = flow_scroll_set(g.page.tree, i, (flow_point_t){device_px(x * z), device_px(y * z)});
+    if (now.x != was.x || now.y != was.y) {
+        page_keep_box_scroll(&g.page, element, now);
+        mark_whole(WHOLE_SCROLL, false);
+        forms_place();
+        pictures_schedule();
+        hover(g.pointer_x, g.pointer_y);
+    }
     return true;
 }
 

@@ -150,7 +150,7 @@ static void dom_view_scroll_cases(void)
         "view: without a provider");
     ViewFake v = {.view = {.width = 800, .height = 600, .outer_width = 820, .outer_height = 700,
                            .scroll_x = 3, .scroll_y = 40.5}};
-    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v, NULL};
     os64_dom_set_view(f.binding, &provider);
     dom_script(&f, VIEW_ASSERT
         "assert(scrollX===3&&pageXOffset===3&&scrollY===40.5&&pageYOffset===40.5,'the scroll');"
@@ -266,7 +266,7 @@ static void dom_view_event_cases(void)
     os64_js_outcome_t outcome;
     check(!os64_dom_view_step(f.binding, &outcome), "view step: nothing owed without a view");
     ViewFake v = {.view = {.width = 800, .height = 600}};
-    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v, NULL};
     os64_dom_set_view(f.binding, &provider);
     check(!view_step(&f, "view step: unmoved"), "view step: a view that has not moved owes nothing");
     v.view.scroll_y = 10;
@@ -607,7 +607,7 @@ static void dom_view_off_cases(void)
     DomFixture f = view_fixture(false, "http://view.test/page.html");
     if (!fixture_ready(&f)) return;
     ViewFake v = {.view = {.width = 800, .height = 600}};
-    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v, NULL};
     os64_dom_set_view(f.binding, &provider);
     HistoryFake h = {.length = 3};
     os64_dom_history_t host = {fake_history_update, fake_history_fragment, fake_history_length, &h};
@@ -780,7 +780,7 @@ static DomFixture host_op_fixture(int op, ViewFake *v, os64_dom_view_provider_t 
     DomFixture f = view_fixture(true, "http://view.test/page.html");
     if (!fixture_ready(&f)) return f;
     *v = (ViewFake){.view = {.width = 400, .height = 300}};
-    *provider = (os64_dom_view_provider_t){fake_view_read, fake_view_scroll, v};
+    *provider = (os64_dom_view_provider_t){fake_view_read, fake_view_scroll, v, NULL};
     os64_dom_set_view(f.binding, provider);
     dom_script(&f, "globalThis.heard=[];"
         "addEventListener('popstate',e=>heard.push('pop:'+JSON.stringify(e.state)));"
@@ -888,7 +888,7 @@ static void dom_view_edge_cases(void)
     DomFixture f = view_fixture(true, "http://view.test/page.html");
     if (!fixture_ready(&f)) return;
     ViewFake v = {.view = {.width = 800, .height = 600}};
-    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v, NULL};
     os64_dom_set_view(f.binding, &provider);
     ComputedFake c = {.document = f.document};
     os64_dom_set_computed(f.binding, fake_computed, &c);

@@ -282,6 +282,10 @@ typedef struct {
     const os64_html_node_t *offset_parent;
     uint64_t layouts, elapsed_us;
     int32_t scroll_left, scroll_top;
+    /* scrollWidth and scrollHeight (CSSOM View § 7): the element's scrolling
+     * area, for the viewport's element (the root, or the body in quirks)
+     * the viewport's; 0 for an element with no box. */
+    int32_t scroll_width, scroll_height;
 } os64_dom_geometry_t;
 
 typedef bool (*os64_dom_geometry_provider_t)(void *opaque,
@@ -506,6 +510,15 @@ typedef struct {
      * be made: the script sees InvalidStateError. */
     bool (*scroll)(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
     void *opaque;
+    /* An element's own scroll (CSSOM View § 7, "scroll an element"): the
+     * page's layout made current, then the scroll container `element`
+     * makes scrolled to (x, y) CSS pixels, clamped to what it can scroll;
+     * an element that makes none is left alone and answers true. False
+     * when no current layout could be made. NULL: elements scroll nothing.
+     * The binding has answered the root and the quirks body (the view's)
+     * before asking. */
+    bool (*scroll_element)(void *opaque, const os64_html_node_t *element, double x, double y,
+                           os64_dom_geometry_stats_t *cost);
 } os64_dom_view_provider_t;
 /* Copied; NULL removes it, after which the view reads as zeros and a
  * scroll moves nothing. Both callbacks are owner-thread and must not enter

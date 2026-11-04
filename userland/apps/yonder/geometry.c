@@ -113,6 +113,40 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
                 break;
             }
     }
+    // scrollWidth and scrollHeight: the viewport's element answers the
+    // page's scrolling area, never less than the viewport; a scroll
+    // container its padding box and as far as it can scroll; any other box
+    // its padding box, or as far as its children's overflow reaches from
+    // its padding edge where that is further: what libflow's scroll range
+    // is fed (scroll_reach), so a box answers the same whether its
+    // overflow scrolls or not (CSSOM View § 7, "scrolling area"). Its own
+    // border is no part of it.
+    if ((is_root && document->quirks != OS64_HTML_QUIRKS) || (is_body && document->quirks == OS64_HTML_QUIRKS)) {
+        int32_t w = flow_width(tree), h = flow_height(tree);
+        out->scroll_width = css_integer(w > width ? w : width, zoom);
+        out->scroll_height = css_integer(h > height ? h : height, zoom);
+    } else if (principal != NULL && principal->kind != FLOW_BOX_SPAN) {
+        int64_t pad_w = (int64_t)principal->rect.w - border(principal, FLOW_LEFT) - border(principal, FLOW_RIGHT);
+        int64_t pad_h = (int64_t)principal->rect.h - border(principal, FLOW_TOP) - border(principal, FLOW_BOTTOM);
+        int32_t s = flow_scroller_for(tree, node);
+        int64_t w = pad_w, h = pad_h;
+        if (s >= 0) {
+            flow_point_t range = flow_scroll_range(tree, s);
+            w += range.x;
+            h += range.y;
+        } else {
+            int64_t left = (int64_t)principal->rect.x + border(principal, FLOW_LEFT);
+            int64_t top = (int64_t)principal->rect.y + border(principal, FLOW_TOP);
+            for (const flow_box_t *c = principal->first; c != NULL; c = c->next) {
+                int64_t right = (int64_t)c->overflow.x + c->overflow.w - left;
+                int64_t bottom = (int64_t)c->overflow.y + c->overflow.h - top;
+                if (right > w) w = right;
+                if (bottom > h) h = bottom;
+            }
+        }
+        out->scroll_width = css_integer(w > 0 ? w : 0, zoom);
+        out->scroll_height = css_integer(h > 0 ? h : 0, zoom);
+    }
     if (first == NULL) return true;
     if (!visual.present) include(&visual, first_visual);
     double scale = 1000.0 / zoom;

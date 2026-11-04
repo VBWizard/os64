@@ -145,7 +145,31 @@ static void io_covered(void) {
     loop_drop();
 }
 
+/* CSSOM View § 7 on real layout: a script scrolls a box and the page, the
+ * box's scroll reads back held to its range with its scrolling area, the
+ * page's is the view's, and an observer of the box's item sees it come in
+ * (what WPT's observers do to move their roots). */
+static void io_element_scroll(void) {
+    loop_page("<style>body{margin:0}#box{height:200px;width:300px;overflow:auto}#gap{height:500px}"
+        "#item{height:50px}</style>" IO_OUT IO_LOG
+        "<div id=box><div id=gap></div><div id=item></div></div><div style='height:5000px'></div><script>"
+        "var box=document.getElementById('box');"
+        "new IntersectionObserver(function(es){said('io:'+es[0].isIntersecting)},{root:box})"
+        ".observe(document.getElementById('item'));"
+        "setTimeout(function(){box.scrollTop=1e6;document.documentElement.scrollTop=1000;"
+        "said([box.scrollTop,box.scrollHeight,box.clientHeight,scrollY,document.documentElement.scrollHeight>5000].join(' '))},10);"
+        "</script>");
+    check(loop_settle() && io_turns() && probe_text_is("out","io:false"),"scroll: the item starts out of its box");
+    now_ms+=20;
+    check(io_turns() && probe_text_is("out","io:false,350 550 200 1000 true,io:true"),
+          "scroll: a script's scrollTop scrolls the box to its range, the root's scrolls the page, "
+          "and the observer sees the item come in");
+    check(g.sy==1000,"scroll: the page moved");
+    loop_drop();
+}
+
 static void io_cases(void) {
+    io_element_scroll();
     io_scroll_into_view();
     io_container_root();
     io_containing_blocks();

@@ -36,6 +36,28 @@ static bool budget(os64_dom_t *dom, JSContext *ctx)
     return false;
 }
 
+bool d_geometry_read(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, os64_dom_geometry_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    // Foreign elements share the Element prototype but their geometry is
+    // outside the HTML provider contract: the empty snapshot.
+    if (element->ns != OS64_HTML_NS_HTML) return budget(dom, ctx);
+    if (dom->geometry == NULL) {
+        d_error(ctx, "InvalidStateError", "No layout provider is installed");
+        return false;
+    }
+    if (!budget(dom, ctx)) return false;
+    bool ready = dom->geometry(dom->geometry_opaque, element, out);
+    dom->geometry_stats.layouts = add_count(dom->geometry_stats.layouts, out->layouts);
+    dom->geometry_stats.elapsed_us = add_count(dom->geometry_stats.elapsed_us, out->elapsed_us);
+    if (!budget(dom, ctx)) return false;
+    if (!ready) {
+        d_error(ctx, "InvalidStateError", "A current layout could not be produced");
+        return false;
+    }
+    return true;
+}
+
 static JSValue geometry(JSContext *ctx, JSValueConst self, int argc,
                          JSValueConst *argv, int magic, JSValue *data)
 {
@@ -48,19 +70,7 @@ static JSValue geometry(JSContext *ctx, JSValueConst self, int argc,
     if (node->kind != OS64_HTML_ELEMENT)
         return JS_ThrowTypeError(ctx, "Geometry requires an element");
     os64_dom_geometry_t snapshot = {0};
-    // Foreign elements share the Element prototype but their geometry is
-    // outside the HTML provider contract: return the empty snapshot.
-    if (node->ns == OS64_HTML_NS_HTML) {
-        if (dom->geometry == NULL)
-            return d_error(ctx, "InvalidStateError", "No layout provider is installed");
-        if (!budget(dom, ctx)) return JS_EXCEPTION;
-        bool ready = dom->geometry(dom->geometry_opaque, node, &snapshot);
-        dom->geometry_stats.layouts = add_count(dom->geometry_stats.layouts, snapshot.layouts);
-        dom->geometry_stats.elapsed_us = add_count(dom->geometry_stats.elapsed_us, snapshot.elapsed_us);
-        if (!budget(dom, ctx)) return JS_EXCEPTION;
-        if (!ready)
-            return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
-    } else if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (!d_geometry_read(dom, ctx, node, &snapshot)) return JS_EXCEPTION;
     switch (magic) {
     case G_OFFSET_LEFT: return JS_NewInt32(ctx, snapshot.offset_left);
     case G_OFFSET_TOP: return JS_NewInt32(ctx, snapshot.offset_top);

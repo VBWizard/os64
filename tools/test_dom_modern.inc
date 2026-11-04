@@ -78,6 +78,7 @@ static char *modern_chain_shape(DomFixture *f)
         "|onmessage|onmessageerror|onunhandledrejection|onrejectionhandled)$"
         "|^on(pointerdown|pointerup|pointermove|pointerover|pointerout|pointerenter|pointerleave|pointercancel|gotpointercapture|lostpointercapture|mouseenter|mouseleave|auxclick)$"
         "|^(setPointerCapture|releasePointerCapture|hasPointerCapture)$"
+        "|^(scrollWidth|scrollHeight|scroll|scrollTo|scrollBy)$"
         "|^onerror$|^getRootNode$|^normalize$|^isSameNode$|^isEqualNode$|^compareDocumentPosition$"
         "|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
         "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"

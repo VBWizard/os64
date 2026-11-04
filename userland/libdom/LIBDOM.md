@@ -776,7 +776,7 @@ interfaces. Host acceptance and remaining J5/P5 work are in the design record.
 
 Three owner-thread providers, each installed outside callbacks; dom.h
 holds their contracts, `view.c` and `window.c` the binding's half. All of
-it is the Modern Web arc's surface, in four rows of `modern.c`'s table (the
+it is the Modern Web arc's surface, in rows of `modern.c`'s table (the
 view's members with `onscroll`, `onresize` and window's `focus` and `blur`,
 which do nothing, the window being the person's to raise; `matchMedia`,
 `MediaQueryList` and `MediaQueryListEvent`; `getComputedStyle` and the
@@ -793,9 +793,16 @@ location, [LegacyUnforgeable], with its own `valueOf` and
 over a prototype level of its own, empty without the switch, so its chain
 has the same levels either way, and each member checks that it is called
 on its object, with the switch or without).
+An element's own scroll is a fifth row (CSSOM View § 7, `view.c`'s
+`d_element_scroll_install`): setters beside the classic `scrollLeft` and
+`scrollTop` getters, `scrollWidth` and `scrollHeight`, and `scroll`,
+`scrollTo` and `scrollBy`. The root, and the body in quirks mode when it
+is not potentially scrollable, scroll the view; any other element asks the
+view provider's `scroll_element`, which moves the scroll container it
+makes.
 With the switch off none of those names exists, nor
 `document.scrollingElement`, `document.defaultView` or an element's
-`onscroll`; the arc's handler types' content attributes are not handlers
+`onscroll`, and `scrollLeft` and `scrollTop` are getters alone; the arc's handler types' content attributes are not handlers
 (§ Events); `history.length` reads 1, a fragment navigation is an ask, the
 hash setter asks whatever it is given, and history deltas do not add up
 (§ Asks): what the binding did before the arc.
