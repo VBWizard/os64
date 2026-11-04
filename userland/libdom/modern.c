@@ -153,6 +153,8 @@ static const DModernRow kModern[] = {
      * CSSStyleSheet, document.styleSheets, and a link's and a style's
      * `sheet` (sheets.c), after the interfaces row's HTMLStyleElement. */
     {(const char *const[]){"StyleSheetList", "StyleSheet", "CSSStyleSheet", NULL}, d_sheets_install},
+    /* The CSS namespace: CSS.escape and CSS.supports (css.c). */
+    {(const char *const[]){"CSS", NULL}, d_css_install},
     /* Import maps: HTMLScriptElement.supports, a member of the interfaces
      * row's HTMLScriptElement and none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_import_map_install},

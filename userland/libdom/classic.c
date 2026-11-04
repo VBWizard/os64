@@ -394,6 +394,15 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         return d_classic_collection(dom,ctx,node,D_QUERY_CONTROLS);
     }
     if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx,"Expected an element");
+    if (magic == C_STYLE && set) {
+        /* [PutForwards=cssText] (CSSOM § 6.7.1): assigning `style` sets
+         * its declaration block's text. */
+        JSValue style = d_style(dom,ctx,self);
+        if (JS_IsException(style)) return style;
+        int put = JS_SetPropertyStr(ctx,style,"cssText",JS_DupValue(ctx,argc > 0 ? argv[0] : JS_UNDEFINED));
+        JS_FreeValue(ctx,style);
+        return put < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    }
     if (magic == C_STYLE) return d_style(dom,ctx,self);
     if ((magic == C_SRC || magic == C_WIDTH || magic == C_HEIGHT) &&
         (node->ns != OS64_HTML_NS_HTML || node->tag != OS64_HTML_TAG_IMG))
@@ -754,7 +763,9 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (d_accessor(dom,ctx,doc,"images",classic,C_IMAGES,false) < 0 ||
         d_accessor(dom,ctx,doc,"forms",classic,C_FORMS,false) < 0 ||
         d_accessor(dom,ctx,form,"elements",classic,C_ELEMENTS,false) < 0 ||
-        d_accessor(dom,ctx,el,"style",classic,C_STYLE,false) < 0 ||
+        /* `style`'s setter forwards to cssText with the Modern Web switch
+         * on; off, it is the getter alone it always was. */
+        d_accessor(dom,ctx,el,"style",classic,C_STYLE,dom->options.modern) < 0 ||
         d_accessor(dom,ctx,dom->prototypes[D_PROTO_HTML_ELEMENT]->value,"title",classic,C_TITLE,true) < 0 ||
         d_accessor(dom,ctx,doc,"cookie",classic,C_COOKIE,true) < 0 ||
         d_accessor(dom,ctx,image,"src",classic,C_SRC,true) < 0 ||

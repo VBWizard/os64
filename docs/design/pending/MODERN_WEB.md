@@ -1358,8 +1358,10 @@ style writes run the runner's script clock out. It passed nothing before.
 Most `-valid` tests that still fail fail on serialization. The style
 object returns a value as it was written, not CSSOM's canonical form (`0`
 for `0px`, `16/9` for `16 / 9`). It also cannot read back a shorthand's
-longhands, and there is no `CSS.supports`. That is a libdom slice of its
-own (DEBTS.md § Classic browser scripting).
+longhands, and there was no `CSS.supports` then (built since, with
+`CSS.escape`; its `-computed` pages run now, css-logical's failing still,
+earlier, on getComputedStyle's table). The serialization is a
+libdom slice of its own (DEBTS.md § Classic browser scripting).
 
 **The census** (the P5's 1,601 page records): 985 name at least one of the
 slice's properties as missing. By records: `cursor` 919, `outline` 865,

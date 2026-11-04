@@ -88,24 +88,9 @@ user-select-valid.html	e.style['user-select'] = "auto" should set the property v
 user-select-valid.html	e.style['user-select'] = "none" should set the property value
 user-select-valid.html	e.style['user-select'] = "text" should set the property value
 [excluded]
-# Pages whose tests ask CSS.supports first (css/support/computed-
-# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
-# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
-# scripting books CSS.supports.
-box-sizing-computed.html	needs CSS.supports
-canonical-order-outline-sub-properties-001.html	needs CSS.supports
-caret-color-computed.html	needs CSS.supports
-cursor-computed.html	needs CSS.supports
-field-sizing-computed.html	needs CSS.supports
-interactivity-computed.html	needs CSS.supports
-outline-color-computed.html	needs CSS.supports
-outline-offset-computed.html	needs CSS.supports
-outline-style-computed.html	needs CSS.supports
-outline-width-computed.html	needs CSS.supports
-resize-computed.html	needs CSS.supports
-user-select-computed-contain.html	needs CSS.supports
-user-select-computed.html	needs CSS.supports
 [passing]
+box-sizing-computed.html	Property box-sizing value 'border-box'
+box-sizing-computed.html	Property box-sizing value 'content-box'
 box-sizing-invalid.html	e.style['box-sizing'] = "auto" should not set the property value
 box-sizing-invalid.html	e.style['box-sizing'] = "content-box border-box" should not set the property value
 box-sizing-invalid.html	e.style['box-sizing'] = "fill-box" should not set the property value
@@ -131,6 +116,42 @@ caret-color-invalid.html	e.style['caret-color'] = "red /" should not set the pro
 caret-color-invalid.html	e.style['caret-color'] = "red green blue yellow" should not set the property value
 caret-color-invalid.html	e.style['caret-color'] = "red green blue" should not set the property value
 caret-color-invalid.html	e.style['caret-color'] = "red, green" should not set the property value
+cursor-computed.html	Property cursor value 'alias'
+cursor-computed.html	Property cursor value 'all-scroll'
+cursor-computed.html	Property cursor value 'auto'
+cursor-computed.html	Property cursor value 'cell'
+cursor-computed.html	Property cursor value 'col-resize'
+cursor-computed.html	Property cursor value 'context-menu'
+cursor-computed.html	Property cursor value 'copy'
+cursor-computed.html	Property cursor value 'crosshair'
+cursor-computed.html	Property cursor value 'default'
+cursor-computed.html	Property cursor value 'e-resize'
+cursor-computed.html	Property cursor value 'ew-resize'
+cursor-computed.html	Property cursor value 'grab'
+cursor-computed.html	Property cursor value 'grabbing'
+cursor-computed.html	Property cursor value 'help'
+cursor-computed.html	Property cursor value 'move'
+cursor-computed.html	Property cursor value 'n-resize'
+cursor-computed.html	Property cursor value 'ne-resize'
+cursor-computed.html	Property cursor value 'nesw-resize'
+cursor-computed.html	Property cursor value 'no-drop'
+cursor-computed.html	Property cursor value 'none'
+cursor-computed.html	Property cursor value 'not-allowed'
+cursor-computed.html	Property cursor value 'ns-resize'
+cursor-computed.html	Property cursor value 'nw-resize'
+cursor-computed.html	Property cursor value 'nwse-resize'
+cursor-computed.html	Property cursor value 'pointer'
+cursor-computed.html	Property cursor value 'progress'
+cursor-computed.html	Property cursor value 'row-resize'
+cursor-computed.html	Property cursor value 's-resize'
+cursor-computed.html	Property cursor value 'se-resize'
+cursor-computed.html	Property cursor value 'sw-resize'
+cursor-computed.html	Property cursor value 'text'
+cursor-computed.html	Property cursor value 'vertical-text'
+cursor-computed.html	Property cursor value 'w-resize'
+cursor-computed.html	Property cursor value 'wait'
+cursor-computed.html	Property cursor value 'zoom-in'
+cursor-computed.html	Property cursor value 'zoom-out'
 cursor-invalid.html	e.style['cursor'] = "1 2 url(\\"https://example.com/\\"), copy" should not set the property value
 cursor-invalid.html	e.style['cursor'] = "en-resize" should not set the property value
 cursor-invalid.html	e.style['cursor'] = "light-dark(linear-gradient(red), none), pointer" should not set the property value
@@ -190,6 +211,8 @@ field-sizing-invalid.html	e.style['field-sizing'] = "normal" should not set the 
 interactivity.html	e.style['interactivity'] = "auto inert" should not set the property value
 interactivity.html	e.style['interactivity'] = "none" should not set the property value
 interactivity.html	e.style['interactivity'] = "normal" should not set the property value
+outline-color-computed.html	Property outline-color value 'currentColor'
+outline-color-computed.html	Property outline-color value 'red'
 outline-color-invalid.html	e.style['outline-color'] = "50%" should not set the property value
 outline-color-invalid.html	e.style['outline-color'] = "invert" should not set the property value
 outline-color-invalid.html	e.style['outline-color'] = "none" should not set the property value
@@ -199,6 +222,11 @@ outline-invalid.html	e.style['outline'] = "double invert groove" should not set 
 outline-invalid.html	e.style['outline'] = "invert solid rgba(10, 20, 30, 0.4)" should not set the property value
 outline-invalid.html	e.style['outline'] = "invert solid" should not set the property value
 outline-invalid.html	e.style['outline'] = "thin outset thick" should not set the property value
+outline-offset-computed.html	Property outline-offset value '0.5em'
+outline-offset-computed.html	Property outline-offset value '10px'
+outline-offset-computed.html	Property outline-offset value '2.5px'
+outline-offset-computed.html	Property outline-offset value 'calc(10px + 0.5em)'
+outline-offset-computed.html	Property outline-offset value 'calc(10px - 0.5em)'
 outline-offset-invalid.html	e.style['outline-offset'] = "1%" should not set the property value
 outline-offset-invalid.html	e.style['outline-offset'] = "2px 3px" should not set the property value
 outline-offset-invalid.html	e.style['outline-offset'] = "3px inset" should not set the property value
@@ -207,6 +235,17 @@ outline-offset-invalid.html	e.style['outline-offset'] = "inset 3px" should not s
 outline-offset-valid.html	e.style['outline-offset'] = "1px" should set the property value
 outline-offset-valid.html	e.style['outline-offset'] = "2em" should set the property value
 outline-offset-valid.html	e.style['outline-offset'] = "calc(3rem + 4vw)" should set the property value
+outline-shorthand.html	e.style['outline'] = "3px ridge blue" should not set unrelated longhands
+outline-style-computed.html	Property outline-style value 'auto'
+outline-style-computed.html	Property outline-style value 'dashed'
+outline-style-computed.html	Property outline-style value 'dotted'
+outline-style-computed.html	Property outline-style value 'double'
+outline-style-computed.html	Property outline-style value 'groove'
+outline-style-computed.html	Property outline-style value 'inset'
+outline-style-computed.html	Property outline-style value 'none'
+outline-style-computed.html	Property outline-style value 'outset'
+outline-style-computed.html	Property outline-style value 'ridge'
+outline-style-computed.html	Property outline-style value 'solid'
 outline-style-invalid.html	e.style['outline-style'] = "dotted dashed" should not set the property value
 outline-style-invalid.html	e.style['outline-style'] = "hidden" should not set the property value
 outline-style-invalid.html	e.style['outline-style'] = "solid double groove ridge" should not set the property value
@@ -237,6 +276,10 @@ outline-valid.html	e.style['outline'] = "ridge" should set the property value
 outline-valid.html	e.style['outline'] = "solid" should set the property value
 outline-valid.html	e.style['outline'] = "thick" should set the property value
 outline-valid.html	e.style['outline'] = "thin" should set the property value
+outline-width-computed.html	Property outline-width value '0.5em'
+outline-width-computed.html	Property outline-width value '10px'
+outline-width-computed.html	Property outline-width value 'calc(10px + 0.5em)'
+outline-width-computed.html	Property outline-width value 'calc(10px - 0.5em)'
 outline-width-invalid.html	e.style['outline-width'] = "1%" should not set the property value
 outline-width-invalid.html	e.style['outline-width'] = "auto" should not set the property value
 outline-width-invalid.html	e.style['outline-width'] = "thin medium thick medium thin" should not set the property value
@@ -250,6 +293,11 @@ resize-invalid.html	e.style['resize'] = "-internal-textarea-auto" should not set
 resize-invalid.html	e.style['resize'] = "auto" should not set the property value
 resize-invalid.html	e.style['resize'] = "both 0" should not set the property value
 resize-invalid.html	e.style['resize'] = "horizontal vertical" should not set the property value
+user-select-computed-contain.html	Property user-select value 'contain'
+user-select-computed.html	Property user-select value 'all'
+user-select-computed.html	Property user-select value 'auto'
+user-select-computed.html	Property user-select value 'none'
+user-select-computed.html	Property user-select value 'text'
 user-select-invalid.html	e.style['user-select'] = "text contain" should not set the property value
 user-select-invalid.html	e.style['user-select'] = "visible" should not set the property value
 user-select-valid-contain.html	e.style['user-select'] = "contain" should set the property value

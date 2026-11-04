@@ -4,15 +4,31 @@
 # rewrites [passing].
 [required]
 [excluded]
-isolation-computed.html	needs CSS.supports
-mix-blend-mode-computed.html	needs CSS.supports
 [passing]
 background-blend-mode-invalid.html	e.style['background-blend-mode'] = "auto" should not set the property value
 background-blend-mode-invalid.html	e.style['background-blend-mode'] = "normal luminosity" should not set the property value
+isolation-computed.html	Property isolation value 'auto'
+isolation-computed.html	Property isolation value 'isolate'
 isolation-invalid.html	e.style['isolation'] = "auto isolate" should not set the property value
 isolation-invalid.html	e.style['isolation'] = "none" should not set the property value
 isolation-valid.html	e.style['isolation'] = "auto" should set the property value
 isolation-valid.html	e.style['isolation'] = "isolate" should set the property value
+mix-blend-mode-computed.html	Property mix-blend-mode value 'color'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'color-burn'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'color-dodge'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'darken'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'difference'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'exclusion'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'hard-light'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'hue'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'lighten'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'luminosity'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'multiply'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'normal'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'overlay'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'saturation'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'screen'
+mix-blend-mode-computed.html	Property mix-blend-mode value 'soft-light'
 mix-blend-mode-invalid.html	e.style['mix-blend-mode'] = "auto" should not set the property value
 mix-blend-mode-invalid.html	e.style['mix-blend-mode'] = "normal luminosity" should not set the property value
 mix-blend-mode-invalid.html	e.style['mix-blend-mode'] = "normal, luminosity" should not set the property value

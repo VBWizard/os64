@@ -52,6 +52,7 @@ python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --sweep tools/garb_corpus/sweep.css
 "$work/garb_driver" --deep
 "$work/garb_driver" --numbers
+"$work/garb_driver" --supports
 "$work/garb_driver" --cost 4194304
 "$work/garb_driver" --full
 "$work/garb_driver" --cascades 16

@@ -1447,6 +1447,9 @@ JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* document.styleSheets, StyleSheet, CSSStyleSheet and LinkStyle's `sheet`
  * (sheets.c): one row of the Modern Web table. */
 int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The CSS namespace (css.c): CSS.escape and CSS.supports; one row of the
+ * Modern Web table. */
+int d_css_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A form's constraint validation (HTML § 4.10.20.2, validity.c): every
  * invalid control it owns gets an `invalid` event, and when `report` the
  * first whose event nobody cancelled is reported to the person. 1 valid,

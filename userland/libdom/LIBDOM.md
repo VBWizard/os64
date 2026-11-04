@@ -759,6 +759,16 @@ The host runs the step when its layout moved or a report is owed
 passed over, or what a step left undone: a refused gather, a callback
 whose entries could not be made). An observer is held while it observes.
 
+## The CSS namespace
+
+`CSS` (`css.c`) is a WebIDL namespace object with `escape` and `supports`.
+`escape` is CSSOM's "serialize an identifier", done over the string's
+UTF-8 form (a lone surrogate passes through as QuickJS writes and reads
+it). `supports` is libgarb's own `@supports` judgment
+(`garb_supports`, `garb_supports_property`), so a page's feature test and
+a sheet's `@supports` rule answer alike, except that `supports` reads as a
+no-quirks document does in any page, as other browsers' does.
+
 ## The global-miss census
 
 `os64_dom_set_global_miss` tells an owner-thread hook each name a lookup on
