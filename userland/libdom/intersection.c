@@ -360,8 +360,16 @@ static bool observe_one(os64_dom_t *dom, DIObserver *o, DTarget *t, const os64_d
      * issue 432 (WPT's initial-observation-with-threshold and
      * isIntersecting-threshold); the rectangle and the ratio still say
      * what meets. */
-    int32_t index = 0;
-    while (meets && (size_t)index < o->nthresholds && o->thresholds[index] <= ratio) index++;
+    /* The thresholds are sorted (the constructor's): the count of those
+     * the ratio reached is an upper-bound search, not a walk of them all
+     * for every target every step. */
+    size_t lo = 0, hi = meets ? o->nthresholds : 0;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (o->thresholds[mid] <= ratio) lo = mid + 1;
+        else hi = mid;
+    }
+    int32_t index = (int32_t)lo;
     bool intersecting = index > 0;
     bool queued = false;
     if (index != t->previous_index || intersecting != t->previous_intersecting) {
