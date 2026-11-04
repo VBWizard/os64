@@ -514,12 +514,16 @@ typedef struct {
     void *opaque;
     /* An element's own scroll (CSSOM View § 7, "scroll an element"): the
      * page's layout made current, then the scroll container `element`
-     * makes scrolled to (x, y) CSS pixels, clamped to what it can scroll,
-     * an axis given as NaN left where it is; an element that makes none is
-     * left alone and answers true. False when no current layout could be
-     * made. NULL: elements scroll nothing. The binding has answered the
+     * makes scrolled to (x, y) CSS pixels or, when `by`, by (x, y) from
+     * where it stands, clamped to what it can scroll, an axis given as NaN
+     * left where it is; an element that makes none is left alone and
+     * answers true. `by` is the host's sum because the geometry's
+     * scrollLeft and scrollTop are whole CSS pixels and the host's position
+     * need not be: a sum made from them would move a box at a fractional
+     * zoom when asked to move it by 0. False when no current layout could
+     * be made. NULL: elements scroll nothing. The binding has answered the
      * elements whose scroll is the view's before asking. */
-    bool (*scroll_element)(void *opaque, const os64_html_node_t *element, double x, double y,
+    bool (*scroll_element)(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
                            os64_dom_geometry_stats_t *cost);
 } os64_dom_view_provider_t;
 /* Copied; NULL removes it, after which the view reads as zeros and a

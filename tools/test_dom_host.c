@@ -382,7 +382,7 @@ static bool fake_scroll_geometry(void *opaque, const os64_html_node_t *node, os6
  * its fake here. */
 static ScrollFake *scroll_fake;
 
-static bool fake_scroll_box(void *opaque, const os64_html_node_t *element, double x, double y,
+static bool fake_scroll_box(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
                             os64_dom_geometry_stats_t *cost)
 {
     (void)opaque; (void)cost;
@@ -391,6 +391,10 @@ static bool fake_scroll_box(void *opaque, const os64_html_node_t *element, doubl
     if (s->refuse) return false;
     if (!scroll_is_box(element)) return true;
     s->untouched += isnan(x) + isnan(y);
+    if (by) {
+        x += s->left;
+        y += s->top;
+    }
     if (!isnan(x)) s->left = x < 0 ? 0 : x > 300 ? 300 : x;
     if (!isnan(y)) s->top = y < 0 ? 0 : y > 600 ? 600 : y;
     return true;
@@ -439,6 +443,13 @@ static void dom_element_scroll_cases(void)
         "assert(b.scrollLeft===9&&b.scrollTop===5);",
         "element scroll: one axis");
     check(s.untouched == untouched + 3, "element scroll: the axis a call leaves alone is sent as NaN, not read back");
+    /* The fake's place is fractional where its getter reads whole pixels:
+     * scrollBy is the host's sum, so moving by 0 moves nothing. */
+    dom_script(&f, GEOMETRY_ASSERT
+        "var b=document.getElementById('box');b.scrollTop=0.5;assert(b.scrollTop===0);b.scrollBy(0,0);"
+        "b.scrollBy({left:0.25});",
+        "element scroll: by");
+    check(s.top == 0.5 && s.left == 9.25, "element scroll: scrollBy adds to where the box is, not to its getter");
     s.refuse = true;
     dom_script(&f, GEOMETRY_ASSERT
         "throws('InvalidStateError',()=>{document.getElementById('box').scrollTop=3});",

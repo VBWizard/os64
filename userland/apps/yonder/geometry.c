@@ -128,27 +128,35 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     // added: the standard adds it past the children's MARGIN boxes, which a
     // public box does not carry, and adding it past their border boxes
     // miscounts every negative margin. Positioned descendants deeper down
-    // are not counted either (DEBTS). Its own border is no part of it.
+    // are not counted either (DEBTS). Its own border is no part of it. The
+    // root in quirks mode scrolls nothing but still has an area: its box's.
+    // An inline-block's or inline-flex's atom holds the element's own
+    // container, borders and all, so the area is that container's: counted
+    // as the atom's child, its border would read as overflow.
+    const flow_box_t *area = principal;
+    if (area != NULL && area->kind == FLOW_BOX_ATOMIC && area->first != NULL && area->first->node == node &&
+        area->first->pseudo == 0)
+        area = area->first;
     if (views) {
         int32_t w = flow_width(tree), h = flow_height(tree);
         out->scroll_width = css_integer(w > width ? w : width, zoom);
         out->scroll_height = css_integer(h > height ? h : height, zoom);
-    } else if (principal != NULL && principal->kind != FLOW_BOX_SPAN && !(is_root && quirks)) {
-        int64_t pad_w = (int64_t)principal->rect.w - border(principal, FLOW_LEFT) - border(principal, FLOW_RIGHT);
-        int64_t pad_h = (int64_t)principal->rect.h - border(principal, FLOW_TOP) - border(principal, FLOW_BOTTOM);
+    } else if (area != NULL && area->kind != FLOW_BOX_SPAN) {
+        int64_t pad_w = (int64_t)area->rect.w - border(area, FLOW_LEFT) - border(area, FLOW_RIGHT);
+        int64_t pad_h = (int64_t)area->rect.h - border(area, FLOW_TOP) - border(area, FLOW_BOTTOM);
         int64_t w = pad_w, h = pad_h;
         if (own >= 0) {
             flow_point_t range = flow_scroll_range(tree, own);
             w += range.x;
             h += range.y;
         } else {
-            int64_t left = (int64_t)principal->rect.x + border(principal, FLOW_LEFT);
-            int64_t top = (int64_t)principal->rect.y + border(principal, FLOW_TOP);
-            for (const flow_box_t *c = principal->first; c != NULL; c = c->next) {
+            int64_t left = (int64_t)area->rect.x + border(area, FLOW_LEFT);
+            int64_t top = (int64_t)area->rect.y + border(area, FLOW_TOP);
+            for (const flow_box_t *c = area->first; c != NULL; c = c->next) {
                 const flow_style_t *cs = c->style;
                 bool out_of_flow = cs != NULL && c->node != NULL && c->node != node &&
                                    (cs->position == FLOW_POSITION_ABSOLUTE || cs->position == FLOW_POSITION_FIXED);
-                if (out_of_flow && (flow_clip_parent(tree, c->node) != node || c->fixed != principal->fixed))
+                if (out_of_flow && (flow_clip_parent(tree, c->node) != node || c->fixed != area->fixed))
                     continue;
                 int64_t right = (int64_t)c->overflow.x + c->overflow.w - left;
                 int64_t bottom = (int64_t)c->overflow.y + c->overflow.h - top;

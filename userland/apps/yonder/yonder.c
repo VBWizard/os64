@@ -9096,7 +9096,7 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
 
 static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
-static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y,
+static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
                                 os64_dom_geometry_stats_t *cost);
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
@@ -11109,11 +11109,12 @@ static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stat
 
 // An element's own scroll (the view provider's scroll_element): the page
 // on screen's layout made current, the scroll container the element makes
-// moved, held to its range, and kept for the layouts after it, as a
-// wheel's move is (wheel_box). A page not yet shown has no box to move,
-// and an element that makes no container scrolls nothing; both answer
-// true, as the standard's steps end there quietly.
-static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y,
+// moved to a place or, `by`, from where it stands in device pixels, held
+// to its range, and kept for the layouts after it, as a wheel's move is
+// (wheel_box). A page not yet shown has no box to move, and an element
+// that makes no container scrolls nothing; both answer true, as the
+// standard's steps end there quietly.
+static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
                                 os64_dom_geometry_stats_t *cost)
 {
     Page *p = page_of_doc(opaque);
@@ -11130,7 +11131,8 @@ static bool view_scroll_element(void *opaque, const os64_html_node_t *element, d
     double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
     flow_point_t was = flow_scroll_at(g.page.tree, i);
     // An axis asked as NaN stays where it is (dom.h).
-    flow_point_t to = {isnan(x) ? was.x : device_px(x * z), isnan(y) ? was.y : device_px(y * z)};
+    double from_x = by ? was.x : 0, from_y = by ? was.y : 0;
+    flow_point_t to = {isnan(x) ? was.x : device_px(from_x + x * z), isnan(y) ? was.y : device_px(from_y + y * z)};
     flow_point_t now = flow_scroll_set(g.page.tree, i, to);
     // Kept whether or not it moved: the tree holds a position clamped to
     // what the box can scroll now, while the kept one is what was asked,

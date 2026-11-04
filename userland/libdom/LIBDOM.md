@@ -796,10 +796,12 @@ on its object, with the switch or without).
 An element's own scroll is a row of its own (CSSOM View § 7, `view.c`'s
 `d_element_scroll_install`): setters beside the classic `scrollLeft` and
 `scrollTop` getters, `scrollWidth` and `scrollHeight`, and `scroll`,
-`scrollTo` and `scrollBy`. The root, and the body in quirks mode when it
-is not potentially scrollable, scroll the view; any other element asks the
-view provider's `scroll_element`, which moves the scroll container it
-makes.
+`scrollTo` and `scrollBy`. The root in no-quirks mode, and the body in
+quirks mode when it is not potentially scrollable, scroll the view; the
+root in quirks mode scrolls nothing; any other element asks the view
+provider's `scroll_element`, which moves the scroll container it makes to
+a place or, for `scrollBy`, by a delta the host adds to where it holds the
+box (the getters' whole pixels are never added to).
 With the switch off none of those names exists, nor
 `document.scrollingElement`, `document.defaultView` or an element's
 `onscroll`, and `scrollLeft` and `scrollTop` are getters alone; the arc's handler types' content attributes are not handlers

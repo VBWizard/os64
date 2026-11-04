@@ -641,38 +641,21 @@ static int scroll_owner(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
     return SCROLLS_OWN;
 }
 
-// `element` scrolled to (x, y): the view, or its own container through the
-// provider, which clamps it. Answers JS_UNDEFINED or JS_EXCEPTION.
+// `element` scrolled to (x, y), or by it when `by`: the view, or its own
+// container through the provider, which clamps it. The view's scroll is
+// always given as a place. Answers JS_UNDEFINED or JS_EXCEPTION.
 static JSValue element_scroll_to(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, int owner,
-                                 double x, double y)
+                                 double x, double y, bool by)
 {
     if (owner == SCROLLS_VIEW) return view_scroll_to(dom, ctx, x, y);
     if (owner != SCROLLS_OWN || dom->view.scroll_element == NULL) return JS_UNDEFINED;
     if (!budget(dom, ctx)) return JS_EXCEPTION;
     os64_dom_geometry_stats_t cost = {0};
-    bool ready = dom->view.scroll_element(dom->view.opaque, element, x, y, &cost);
+    bool ready = dom->view.scroll_element(dom->view.opaque, element, x, y, by, &cost);
     charge(dom, cost.layouts, cost.elapsed_us);
     if (!budget(dom, ctx)) return JS_EXCEPTION;
     if (!ready) return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
     return JS_UNDEFINED;
-}
-
-// Where `element`'s scroll stands now: the view's, or its own as its
-// geometry reads it. False with an exception pending.
-static bool element_scroll_now(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, int owner,
-                               double *x, double *y)
-{
-    if (owner == SCROLLS_VIEW) {
-        os64_dom_view_t now = view_now(dom);
-        *x = now.scroll_x;
-        *y = now.scroll_y;
-        return true;
-    }
-    os64_dom_geometry_t g;
-    if (!d_geometry_read(dom, ctx, element, &g)) return false;
-    *x = g.scroll_left;
-    *y = g.scroll_top;
-    return true;
 }
 
 enum { E_LEFT, E_TOP, E_WIDTH, E_HEIGHT, E_SCROLL, E_SCROLL_BY };
@@ -710,21 +693,21 @@ static JSValue element_scroll_member(JSContext *ctx, JSValueConst self, int argc
     int owner = scroll_owner(dom, ctx, element);
     if (owner < 0) return JS_EXCEPTION;
     if (owner == SCROLLS_NOTHING) return JS_UNDEFINED;
-    // An axis the call leaves alone goes to an element's door as NaN, kept
-    // where it is: read back through the integer getter and written again
-    // it could move by a rounding. The view's door takes both numbers.
-    bool own = owner == SCROLLS_OWN;
-    double now_x = 0, now_y = 0;
-    if ((!own || (magic == E_SCROLL_BY && (has_x || has_y))) &&
-        !element_scroll_now(dom, ctx, element, owner, &now_x, &now_y))
-        return JS_EXCEPTION;
-    if (magic == E_SCROLL_BY) {
-        if (has_x) x += now_x;
-        if (has_y) y += now_y;
+    // An element's door is never handed a place read back through the
+    // integer getter, which could move it by a rounding: an axis the call
+    // leaves alone goes as NaN, kept where it is, and scrollBy goes as the
+    // delta for the host to add. The view's door takes both numbers, made
+    // from the view's own place.
+    bool by = magic == E_SCROLL_BY;
+    if (owner == SCROLLS_OWN) {
+        if (!has_x) x = NAN;
+        if (!has_y) y = NAN;
+        return element_scroll_to(dom, ctx, element, owner, x, y, by);
     }
-    if (!has_x) x = own ? NAN : now_x;
-    if (!has_y) y = own ? NAN : now_y;
-    return element_scroll_to(dom, ctx, element, owner, x, y);
+    os64_dom_view_t now = view_now(dom);
+    x = !has_x ? now.scroll_x : by ? x + now.scroll_x : x;
+    y = !has_y ? now.scroll_y : by ? y + now.scroll_y : y;
+    return element_scroll_to(dom, ctx, element, owner, x, y, false);
 }
 
 /* The element scroll row (modern.c): scrollLeft and scrollTop given their

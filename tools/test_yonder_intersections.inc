@@ -181,6 +181,27 @@ static void io_element_scroll(void) {
     if(!shell) fprintf(stderr,"app shell said: %s\n",probe_text_of("out"));
     check(shell,"scroll: a scrolling body and an inline-block read back what was set, and scrollBy adds");
     loop_drop();
+    /* An inline-block's and an inline-flex's own border is not overflow,
+     * and the root in quirks mode, which scrolls nothing, has an area. */
+    loop_page("<style>body{margin:0}.a{width:100px;height:50px;border:10px solid;padding:0}</style>" IO_OUT IO_LOG
+        "<span id=ib class=a style='display:inline-block'></span><span id=if class=a style='display:inline-flex'>"
+        "</span><div style='height:3000px'></div><script>setTimeout(function(){var ib=document.getElementById('ib'),"
+        "f=document.getElementById('if');said([ib.scrollWidth,ib.scrollHeight,f.scrollWidth,f.scrollHeight].join(' '))"
+        "},10)</script>");
+    check(loop_settle() && io_turns(),"scroll: bordered atoms arrive");
+    now_ms+=20;
+    bool atoms=io_turns() && probe_text_is("out","100 50 100 50");
+    if(!atoms) fprintf(stderr,"atoms said: %s\n",probe_text_of("out"));
+    check(atoms,"scroll: an inline-block's and an inline-flex's border is not their overflow");
+    os64_html_document_t *doc=g.page.way.doc;
+    os64_html_quirks_t mode=doc->quirks;
+    doc->quirks=OS64_HTML_QUIRKS;
+    os64_dom_geometry_t root;
+    bool measured=yonder_geometry_snapshot(doc,g.page.tree,doc->html,800,600,1000,(flow_point_t){0,0},&root);
+    doc->quirks=mode;
+    check(measured && root.scroll_height>=3000 && root.scroll_top==0,
+          "scroll: the root in quirks mode scrolls nothing and has its box's area");
+    loop_drop();
     /* A script's scroll replaces an older one a later layout would bring
      * back: scrolled down, emptied (the layout holds it at 0), set to 0,
      * refilled: it stays at the top. */
