@@ -327,9 +327,10 @@ build departs from §§ 4–7, or says what they left open:
   body's end, and the signal's algorithm stays the request's: an abort
   stops the host and errors the stream. At the end the body becomes an
   answered fetch's (S1's rule: an abort errors it until it is read).
-  A body an abort errored answers its reason to every body method at
-  once, however often it is asked, as S1's body aborted before its stream
-  existed does; a stream always exists for a streamed body, and reading
+  A body an abort errored before anything read from it answers its reason
+  to every body method at once, however often it is asked, as S1's body
+  aborted before its stream existed does (one read from already is
+  unusable, and answers a TypeError); a stream always exists for a streamed body, and reading
   the errored stream settled a tick late and answered a second call with
   a TypeError, which lost seven passes in WPT `fetch/api/abort` until it
   did. A stream the page's own reader holds is still unusable.
@@ -342,7 +343,12 @@ build departs from §§ 4–7, or says what they left open:
 - **XHR follows "process response body" for a streamed answer**: each
   piece fires LOADING, readystatechange and progress at most once in
   50 ms, and the end fires its progress as a whole answer's does. A whole
-  answer keeps S1's single progress event.
+  answer keeps S1's single progress event. The bytes are kept as the
+  pieces they came in and joined only when the page reads the response:
+  one block grown to hold them would hold the old block and the new at
+  once, and a body that fits the page's memory would not fit while it
+  grew. They are the runtime's memory still, which a speed test's
+  downloads outgrow (DEBTS: other browsers keep them outside the page).
 - **TextDecoderStream and TextEncoderStream** are the Streams standard's
   "set up" of a TransformStream over the realm's own TextDecoder and
   TextEncoder, captured at its start. A decoder's label and options are

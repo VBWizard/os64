@@ -960,9 +960,11 @@ typedef struct {
  * deadline, and libjs's cancel), so a synchronous request ends when the
  * task that made it would, as one mechanism.
  * more: the binding wants the next bytes of the id's body (a streamed
- * answer's, below): a reader waits on it. The host delivers them through
- * os64_dom_fetch_body when it has them, now or later, once per ask; NULL
- * leaves the host to deliver as it pleases.
+ * answer's, below): a reader waits on it. It is called from inside a
+ * task, so the host answers later, never inside the call: a piece through
+ * os64_dom_fetch_body once it has one, and the binding asks again when it
+ * wants another. Pieces nobody asked for are the host's to send too (the
+ * streamed answer below). NULL leaves the host to deliver as it pleases.
  * With no network, every request is a network error. Copied; NULL removes
  * it. Install before the first script. */
 typedef struct {

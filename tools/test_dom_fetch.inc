@@ -1451,7 +1451,7 @@ static void dom_fetch_stream_cases(void)
     dom_script(&f, "globalThis.xa=new XMLHttpRequest();xa.open('GET','/y');xa.send();", "stream: another XHR");
     net_head(&f, &xnet, 1, &xh);
     net_piece(&f, &xnet, 1, "ab");
-    dom_script(&f, FETCH_ASSERT "xa.abort();assert(xa.readyState===0||xa.readyState===4);", "stream: abort() part way");
+    dom_script(&f, FETCH_ASSERT "xa.abort();assert(xa.readyState===0,xa.readyState);", "stream: abort() part way");
     check(xnet.seen[1].cancelled && os64_dom_fetches_pending(f.binding) == 0, "stream: abort() stops the host");
     fixture_free(&f);
 
@@ -1528,12 +1528,15 @@ static void dom_fetch_stream_sweep_cases(void)
         }
 }
 
-/* A speed test's downloads (fast.com's shape): XMLHttpRequests whose
- * 25 MiB bodies stream in 1 MiB pieces, side by side, in a page's 64 MiB
- * runtime. An XMLHttpRequest keeps every byte it receives (XHR §
- * "received bytes"), in the runtime's memory: `fits` of them do, and one
- * more is the runtime's memory limit. */
-static void dom_xhr_downloads_case(int n, bool fits)
+/* A speed test's downloads (fast.com's shape): `n` XMLHttpRequests whose
+ * bodies of `mib` MiB stream in 1 MiB pieces, side by side, in a page's
+ * 64 MiB runtime, with a Content-Length or chunked (`declared`). An
+ * XMLHttpRequest keeps every byte it receives (XHR § "received bytes"),
+ * in the runtime's memory, and no more than them: a body that fits is
+ * never a block grown to hold it, which would hold the old and the new at
+ * once. `fits` says whether they all do; past that is the runtime's
+ * memory limit. */
+static void dom_xhr_downloads_case(int n, int mib, bool declared, bool fits)
 {
     FakeNet net = {0};
     DomFixture f = net_fixture_engine("http://example.test/", &net, 64 * 1024 * 1024);
@@ -1543,7 +1546,9 @@ static void dom_xhr_downloads_case(int n, bool fits)
              "globalThis.seen=0;for(let i=0;i<%d;i++){const x=new XMLHttpRequest();x.open('GET','/r'+i);"
              "x.responseType='blob';x.onprogress=e=>{seen=e.loaded};x.send()}", n);
     dom_script(&f, script, "downloads: a speed test's requests");
-    os64_dom_response_t head = net_answer_of(200, "http://example.test/r", "Content-Length: 26214400\r\n", "");
+    char length[64];
+    snprintf(length, sizeof(length), "Content-Length: %d\r\n", mib * 1024 * 1024);
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/r", declared ? length : "", "");
     for (int i = 0; i < n; i++) net_head(&f, &net, (size_t)i, &head);
     size_t piece = 1024 * 1024;
     uint8_t *bytes = malloc(piece);
@@ -1551,20 +1556,49 @@ static void dom_xhr_downloads_case(int n, bool fits)
     memset(bytes, 'x', piece);
     os64_js_status_t status = OS64_JS_OK;
     os64_js_outcome_t outcome = {0};
-    for (int k = 0; k < 25 && status == OS64_JS_OK; k++)
+    for (int k = 0; k < mib && status == OS64_JS_OK; k++)
         for (int i = 0; i < n && status == OS64_JS_OK; i++)
             status = os64_dom_fetch_body(f.binding, net.seen[i].token, bytes, piece, &outcome);
+    for (int i = 0; i < n && status == OS64_JS_OK; i++)
+        status = os64_dom_fetch_end(f.binding, net.seen[i].token, true, &outcome);
     free(bytes);
     char what[128];
     if (fits) {
-        snprintf(what, sizeof(what), "downloads: %d of 25 MiB stream whole in a 64 MiB page", n);
+        snprintf(what, sizeof(what), "downloads: %d of %d MiB%s stream whole in a 64 MiB page", n, mib,
+                 declared ? "" : ", chunked,");
+        if (status != OS64_JS_OK) fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
         check(status == OS64_JS_OK, what);
+        char counted[512];
+        snprintf(counted, sizeof(counted), FETCH_ASSERT "assert(seen===%d,seen);", mib * 1024 * 1024);
+        dom_script(&f, counted, "downloads: the page still runs, and counted every byte");
     } else {
-        snprintf(what, sizeof(what), "downloads: %d of 25 MiB are the page's memory limit", n);
+        snprintf(what, sizeof(what), "downloads: %d of %d MiB are the page's memory limit", n, mib);
         if (status != OS64_JS_LIMIT || outcome.limit != OS64_JS_LIMIT_MEMORY)
             fprintf(stderr, "downloads: status %d limit %d\n", status, outcome.limit);
         check(status == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_MEMORY, what);
     }
+    fixture_free(&f);
+}
+
+/* An abort part way through a streamed body the page has already read
+ * from: the body is disturbed, so a body method answers a TypeError (Fetch
+ * § "consume body": unusable), not the abort's reason. */
+static void dom_fetch_abort_read_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f,
+        "globalThis.log=[];globalThis.cd=new AbortController();"
+        "fetch('/d',{signal:cd.signal}).then(async r=>{const rd=r.body.getReader();await rd.read();rd.releaseLock();"
+        "cd.abort();r.text().catch(e=>log.push(e.name))});",
+        "stream: a body read from, then aborted");
+    os64_dom_response_t head = net_answer_of(200, "http://example.test/d", "", "");
+    net_head(&f, &net, 0, &head);
+    net_piece(&f, &net, 0, "ab");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='TypeError',log.join());",
+               "stream: a body read from is unusable after an abort");
+    check(net.seen[0].cancelled, "stream: the abort stopped the host");
     fixture_free(&f);
 }
 
@@ -1741,8 +1775,10 @@ static void dom_fetch_cases(void)
     dom_xhr_sync_stall_case();
     dom_fetch_stream_cases();
     dom_codec_stream_cases();
-    dom_xhr_downloads_case(2, true);
-    dom_xhr_downloads_case(3, false);
+    dom_xhr_downloads_case(2, 25, true, true);
+    dom_xhr_downloads_case(1, 40, false, true);
+    dom_xhr_downloads_case(3, 25, true, false);
+    dom_fetch_abort_read_case();
     dom_fetch_bound_cases();
     dom_fetch_memory_cases();
     dom_fetch_modern_off_cases();

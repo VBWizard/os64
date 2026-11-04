@@ -57,11 +57,23 @@ typedef struct {
     int32_t status;
     char *status_text, *response_url, *response_headers;
     size_t response_headers_length;
+    /* The bytes received: `body_length` of them, the first `body_joined`
+     * in `body`, the rest in `pieces` as a streamed answer brought them.
+     * A piece is kept as it came, never copied onto the rest, so the body
+     * costs its own bytes and no more while it arrives (growing one block
+     * would hold the old and the new at once); body_whole joins them when
+     * the page reads the response. */
     uint8_t *body;
-    size_t body_length;
-    size_t body_cap;            /* what `body` was allocated to hold */
+    size_t body_length, body_joined;
+    struct XPiece *pieces, *last;
     JSValue response_object;
 } DXhr;
+
+typedef struct XPiece {
+    struct XPiece *next;
+    size_t length;
+    uint8_t bytes[];
+} XPiece;
 
 typedef struct {
     DValue target;
@@ -98,9 +110,14 @@ static void response_reset(JSRuntime *rt, DXhr *x)
     js_free_rt(rt, x->response_url);
     js_free_rt(rt, x->response_headers);
     js_free_rt(rt, x->body);
+    for (XPiece *p = x->pieces, *next; p != NULL; p = next) {
+        next = p->next;
+        js_free_rt(rt, p);
+    }
+    x->pieces = x->last = NULL;
     x->status_text = x->response_url = x->response_headers = NULL;
     x->body = NULL;
-    x->response_headers_length = x->body_length = x->body_cap = 0;
+    x->response_headers_length = x->body_length = x->body_joined = 0;
     JS_FreeValueRT(rt, x->response_object);
     x->response_object = JS_UNDEFINED;
 }
@@ -258,8 +275,7 @@ static int response_take(JSContext *ctx, DXhr *x, const os64_dom_response_t *in)
     x->status = in->status;
     x->response_headers_length = in->headers != NULL ? in->headers_length : 0;
     x->has_body = in->has_body;
-    x->body_length = in->has_body ? in->body_length : 0;
-    x->body_cap = in->has_body ? x->body_length + 1 : 0;
+    x->body_length = x->body_joined = in->has_body ? in->body_length : 0;
     return 0;
 }
 
@@ -376,13 +392,39 @@ static bool final_charset(JSContext *ctx, const DXhr *x, char *charset, size_t c
     return true;
 }
 
+/* Every byte received, in one block (`body`): a streamed answer's pieces
+ * joined onto what was joined before, once, when the page reads them.
+ * NULL with the exception pending when there was no memory to join them,
+ * and for no bytes at all. */
+static const uint8_t *body_whole(JSContext *ctx, DXhr *x)
+{
+    if (x->pieces == NULL) return x->body;
+    uint8_t *whole = js_malloc(ctx, x->body_length + 1);
+    if (whole == NULL) return NULL;
+    if (x->body_joined != 0) os64_memcpy(whole, x->body, x->body_joined);
+    size_t at = x->body_joined;
+    for (XPiece *p = x->pieces, *next; p != NULL; p = next) {
+        next = p->next;
+        os64_memcpy(whole + at, p->bytes, p->length);
+        at += p->length;
+        js_free(ctx, p);
+    }
+    js_free(ctx, x->body);
+    x->pieces = x->last = NULL;
+    x->body = whole;
+    x->body_joined = x->body_length;
+    return whole;
+}
+
 /* The body as text, in the final encoding (UTF-8 without one). */
-static JSValue response_text(JSContext *ctx, const DXhr *x)
+static JSValue response_text(JSContext *ctx, DXhr *x)
 {
     if (x->error || !x->has_body || x->body_length == 0) return JS_NewString(ctx, "");
     char charset[WAY_MIME_CHARSET_MAX];
     if (!final_charset(ctx, x, charset, sizeof(charset))) return JS_EXCEPTION;   /* js_malloc threw */
-    return d_text_decode(ctx, charset[0] != '\0' ? charset : "utf-8", x->body, x->body_length);
+    const uint8_t *bytes = body_whole(ctx, x);
+    if (bytes == NULL) return JS_EXCEPTION;
+    return d_text_decode(ctx, charset[0] != '\0' ? charset : "utf-8", bytes, x->body_length);
 }
 
 /* XHR § "handle response end-of-body", from the progress at its head. */
@@ -438,27 +480,21 @@ static void xhr_part(os64_dom_t *dom, JSContext *ctx, DRequest *request, const u
         JS_FreeValue(ctx, self);
         return;
     }
-    /* The bytes kept grow by half again, never past a Content-Length that
-     * holds them all, so a body is copied a handful of times as it arrives
-     * and not once a piece. */
-    size_t need = x->body_length + length + 1;
-    if (need > x->body_cap) {
-        size_t cap = x->body_cap + x->body_cap / 2;
-        if (cap < need) cap = need;
-        double declared = response_length(x);
-        if (declared + 1 >= (double)need && declared + 1 < (double)cap) cap = (size_t)declared + 1;
-        uint8_t *grown = js_realloc(ctx, x->body, cap);
-        if (grown == NULL) {
-            /* No room for the body: the runtime's memory limit, met as any
-             * allocation a script makes meets it. */
-            terminate(dom, x);
-            JS_FreeValue(ctx, self);
-            return;
-        }
-        x->body = grown;
-        x->body_cap = cap;
+    /* The piece kept as it came (DXhr's body). */
+    XPiece *piece = js_malloc(ctx, sizeof(*piece) + length);
+    if (piece == NULL) {
+        /* No room for the body: the runtime's memory limit, met as any
+         * allocation a script makes meets it. */
+        terminate(dom, x);
+        JS_FreeValue(ctx, self);
+        return;
     }
-    os64_memcpy(x->body + x->body_length, bytes, length);
+    piece->next = NULL;
+    piece->length = length;
+    os64_memcpy(piece->bytes, bytes, length);
+    if (x->last != NULL) x->last->next = piece;
+    else x->pieces = piece;
+    x->last = piece;
     x->body_length += length;
     uint64_t now = now_ms(dom);
     int failed = 0;
@@ -1003,7 +1039,9 @@ static JSValue response_object(os64_dom_t *dom, JSContext *ctx, JSValueConst sel
     DXhr *x = xhr_state(self);
     if (x->state != DONE || x->error || x->response_failed) return JS_NULL;
     if (!JS_IsUndefined(x->response_object)) return JS_DupValue(ctx, x->response_object);
-    const uint8_t *bytes = x->body != NULL ? x->body : (const uint8_t *)"";
+    const uint8_t *bytes = body_whole(ctx, x);
+    if (bytes == NULL && x->body_length != 0) return JS_EXCEPTION;
+    if (bytes == NULL) bytes = (const uint8_t *)"";
     JSValue made = JS_NULL;
     switch (x->response_type) {
     case RT_ARRAYBUFFER: made = JS_NewArrayBufferCopy(ctx, bytes, x->body_length); break;

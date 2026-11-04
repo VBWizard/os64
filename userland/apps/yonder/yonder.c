@@ -8971,12 +8971,15 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
 //
 // A page's fetch() or asynchronous XMLHttpRequest goes out with a pipe,
 // whose reading side is an entry here from its submit until its answer is
-// done with: the body's end handed to the page, or the request
-// cancelled. Once its job is reaped, whatever the pipe still holds is
-// handed over unasked, a piece a turn, so it leaves the pipe within a few
-// turns of the job (the pipe's backpressure is what lets the job end
-// first), while the window paints between them. A module's request
-// answers whole: its map compiles it without a task.
+// done with: the body's end handed to the page, the request cancelled, a
+// whole answer reaped (no head went down the pipe), the page gone, or the
+// workers stopped before its job was reaped. Once its job is reaped,
+// whatever the pipe still holds is handed over unasked, a piece a turn,
+// so it leaves the pipe within a few turns of the job (the pipe's
+// backpressure is what lets the job end first), while the window paints
+// between them. The workers stopping leaves a page's requests still out
+// with no end, as it leaves a whole answer's. A module's request answers
+// whole: its map compiles it without a task.
 
 typedef struct Streamed {
     struct Streamed *next;
@@ -8989,8 +8992,9 @@ typedef struct Streamed {
     // Its job was reaped: what the pipe still holds is handed over unasked,
     // a piece a turn, then the end.
     bool reaped;
-    // A step is running a task for it, which can cancel it: the cancel
-    // marks it `cancelled`, and the step lets it go once it returns.
+    // A step is running a task for it, or performing what the task asked,
+    // either of which can cancel it: the cancel marks it `cancelled`, and
+    // the step's caller lets it go once the step returns.
     bool busy, cancelled;
     uint64_t turn;              // the last bodies_turn that handed it a step
 } Streamed;
@@ -9099,7 +9103,9 @@ static bool body_step(Streamed *e, int step, const uint8_t *bytes, size_t length
     } else {
         ran = yonder_scripts_end(host, e->token, ok, &out);
     }
-    e->busy = false;
+    // Busy until the asks are performed too: a navigation the task asked
+    // for can drop the page whose request this is, and its drain cancels
+    // the request here.
     if (ran) {
         task_said(host, true, "request", &out, began);
         const os64_html_document_t *doc = scripts_doc(host);
@@ -9108,6 +9114,7 @@ static bool body_step(Streamed *e, int step, const uint8_t *bytes, size_t length
         else if (script_rebuild())
             asks_perform(host, doc, true);
     }
+    e->busy = false;
     return ran && !e->cancelled;
 }
 

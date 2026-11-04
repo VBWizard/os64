@@ -2309,7 +2309,9 @@ static void settle(os64_dom_t *dom, JSValueConst function, JSValue value, os64_j
 /* A streamed body's request ended before its end came (the page cancelled
  * the stream, or there was no memory for a piece): the host stops, and the
  * signal's algorithm goes, with the Response's hold on the signal. The
- * stream is cancelled or errored: nothing is left for an abort to reach. */
+ * stream is cancelled or errored, so nothing is left for an abort to
+ * reach; one whose erroring failed because the runtime is stopping is
+ * left as it was, and its reads wait with the runtime. */
 static void body_stopped(os64_dom_t *dom, JSContext *ctx, DRequest *request)
 {
     uint32_t token = request->token;
@@ -2537,12 +2539,15 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
     JSValue target = JS_UNDEFINED;
     if (r != NULL && r->body.has && body_streamed(&r->body)) {
         target = JS_DupValue(ctx, JS_IsUndefined(r->source) ? r->body.stream : r->source);
-        /* A body whose stream this abort errors answers its reason to
-         * every body method from here on (body_consume), as one aborted
-         * before its stream was made does. */
+        /* A body whose stream this abort errors, and that nothing has read
+         * from, answers its reason to every body method from here on
+         * (body_consume), as one aborted before its stream was made does.
+         * One read from already is unusable, and a body method says so. */
         int readable = d_stream_readable(dom, ctx, target);
-        if (readable < 0) drop_catchable(ctx);
-        if (readable > 0 && JS_IsUndefined(r->body.aborted)) r->body.aborted = JS_DupValue(ctx, reason);
+        int disturbed = readable > 0 ? d_stream_disturbed(dom, ctx, r->body.stream) : 0;
+        if (readable < 0 || disturbed < 0) drop_catchable(ctx);
+        if (readable > 0 && disturbed == 0 && JS_IsUndefined(r->body.aborted))
+            r->body.aborted = JS_DupValue(ctx, reason);
     } else if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);
     }
