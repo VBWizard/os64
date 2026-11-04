@@ -94,6 +94,8 @@ WPT_DIRS=(
     interfaces
     uievents
     custom-elements
+    intersection-observer
+    css/geometry
 )
 
 top=$(git rev-parse --show-toplevel)
