@@ -617,6 +617,13 @@ struct os64_dom {
      * registrations hold. */
     struct DObservers *observers;
     size_t observers_held;
+    /* IntersectionObserver (intersection.c): its observers, targets and
+     * entries, NULL with the switch off; how many observer objects it
+     * holds; and the host's geometry for its step. */
+    struct DIntersections *intersections;
+    size_t intersections_held;
+    os64_dom_intersections_provider_t intersections_provider;
+    void *intersections_opaque;
 };
 #define D_NO_SCRIPT UINT32_MAX
 /* d_callback_script's answer when the runtime must stop: the exception is
@@ -1623,6 +1630,26 @@ bool d_observers_owed(const os64_dom_t *dom);
 int d_observers_notify_owed(os64_dom_t *dom, JSContext *ctx);
 void d_observers_drain(os64_dom_t *dom);
 void d_observers_free(os64_dom_t *dom);
+/* ── IntersectionObserver (intersection.c; INTERSECTION_OBSERVER.md) ──
+ * The row's installer, the drain that lets go of the objects observations
+ * hold, and the teardown of the rest after the engine. */
+int d_intersections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_intersections_drain(os64_dom_t *dom);
+void d_intersections_free(os64_dom_t *dom);
+/* DOMRectReadOnly and DOMRect (rect.c): the row's installer, and a new
+ * rect of either for the binding's own answers (the switch on). */
+int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+JSValue d_rect_new(os64_dom_t *dom, JSContext *ctx, bool readonly, double x, double y, double width,
+                   double height);
+/* WebIDL's iteration of an iterable (§ 3.2.20, "create a sequence from an
+ * iterable"): `each` handed every value in turn, borrowed for the call, 0
+ * to go on and -1, with an exception pending, to stop. `method` is the
+ * iterator method a union's conversion already took from the value, or
+ * JS_UNDEFINED to take it here: WebIDL reads @@iterator once. A value that
+ * is no object, or has no iterator, is a TypeError. -1 with the exception
+ * pending. */
+int d_sequence_each(os64_dom_t *dom, JSContext *ctx, JSValueConst value, JSValueConst method,
+                    int (*each)(void *opaque, JSContext *ctx, JSValueConst item), void *opaque);
 size_t d_reactions_rows(void);
 bool d_reactions_row_name(size_t i, char *out, size_t cap);
 const char *d_reactions_row_state(const os64_dom_t *dom, size_t i);

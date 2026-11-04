@@ -243,6 +243,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_document.inc"
 #include "test_dom_message.inc"
 #include "test_dom_animation.inc"
+#include "test_dom_intersection.inc"
 #include "test_dom_pointer.inc"
 #include "test_dom_importmap.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
@@ -280,12 +281,14 @@ static void dom_geometry_cases(void)
         "for(const name of ['offsetLeft','offsetTop','offsetWidth','offsetHeight',"
         "'clientLeft','clientTop','clientWidth','clientHeight'])assert(foreign[name]===0);"
         "assert(foreign.offsetParent===null);"
-        "for(const value of Object.values(foreign.getBoundingClientRect()))assert(value===0);}",
+        "const r=foreign.getBoundingClientRect();assert(r instanceof DOMRect);"
+        "for(const k of ['x','y','width','height','top','right','bottom','left'])assert(r[k]===0,k);}",
         "foreign-geometry-without-provider");
     GeometryFixture provider={.fixture=&f};
     os64_dom_set_geometry(f.binding,fake_geometry,&provider);
     dom_script(&f,GEOMETRY_ASSERT
         "var node=document.getElementById('one');var rect=node.getBoundingClientRect();"
+        "assert(rect instanceof DOMRect,'a DOMRect');"
         "assert(rect.x===1.25&&rect.y===-3.5&&rect.width===20.5&&rect.height===30.25);"
         "assert(rect.left===rect.x&&rect.top===rect.y&&rect.right===21.75&&rect.bottom===26.75);"
         "assert(node.offsetLeft===2&&node.offsetTop===3&&node.offsetWidth===21&&node.offsetHeight===30);"
@@ -332,6 +335,19 @@ static void dom_geometry_cases(void)
           outcome.limit==OS64_JS_LIMIT_EXECUTION&&provider.calls==1,
           "caught native geometry overrun remains sticky and stops later provider work");
     dom_clock=10000000;
+    fixture_free(&f);
+    /* With the Modern Web's switch off there is no DOMRect: the same eight
+     * numbers, as a plain object's own. */
+    os64_dom_options_t classic=os64_dom_default_options();classic.modern=false;
+    f=fixture_new(&classic);
+    if(!fixture_ready(&f)) return;
+    provider=(GeometryFixture){.fixture=&f};
+    os64_dom_set_geometry(f.binding,fake_geometry,&provider);
+    dom_script(&f,GEOMETRY_ASSERT
+        "var r=document.getElementById('one').getBoundingClientRect();"
+        "assert(typeof DOMRect==='undefined'&&Object.getPrototypeOf(r)===Object.prototype);"
+        "assert(Object.keys(r).join()==='x,y,width,height,left,top,right,bottom'&&r.right===21.75);",
+        "geometry-classic-rect");
     fixture_free(&f);
 }
 
@@ -433,6 +449,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -460,6 +477,7 @@ int main(int argc, char **argv)
     dom_document_cases();
     dom_p2b_cases();
     dom_animation_cases();
+    dom_intersection_cases();
     dom_import_map_cases();
     dom_geometry_cases();
     dom_global_miss_cases();

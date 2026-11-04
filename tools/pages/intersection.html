@@ -1,0 +1,76 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>IntersectionObserver</title>
+<style>body{font:20px sans-serif;margin:20px;background:#f4f1ea}h1{font-size:28px}
+p{margin:4px 0}.pass{color:#16733a}.fail{color:#b3261e;font-weight:bold}
+#out{height:340px;overflow:hidden}
+.spacer{height:1500px}.tile{display:inline-block;width:150px;height:110px;margin:6px;background:#ccc;color:#fff;
+font:bold 28px sans-serif;text-align:center;line-height:110px}.tile.loaded{background:#2a7}
+#target{height:80px;background:#36c}#moved{position:absolute;left:0;top:9000px;width:40px;height:40px;background:#c63}
+#box{height:160px;width:420px;overflow:auto;border:3px solid #333;background:#fff}#box .gap{height:400px}
+#boxitem{height:40px;background:#c3c}#boxsays{font-weight:bold}.row{height:120px;border-bottom:1px solid #999;padding:8px}</style></head>
+<body><h1>IntersectionObserver, in yonder</h1><div id="out"></div>
+<p>By hand: scroll the box below with the wheel. The line under it turns green when its purple item shows.</p>
+<div id="box"><div class="gap"></div><div id="boxitem"></div></div><p id="boxsays">the item is hidden</p>
+<div class="spacer"></div><div id="target"></div><div class="spacer"></div>
+<h2>Pictures that load as they scroll in</h2><div id="gallery"></div>
+<h2>A list that grows at its end</h2><div id="list"></div><div id="end" style="height:1px"></div>
+<div id="moved"></div>
+<script>
+// The results' box has a height of its own: a line written into it must
+// not move the targets below it, or an observer rightly reports the move.
+const out = document.getElementById('out');
+function say(ok, what) { const p = document.createElement('p'); p.className = ok ? 'pass' : 'fail'; p.textContent = (ok ? 'PASS  ' : 'FAIL  ') + what; out.appendChild(p); }
+async function run(name, f) { try { const r = await f(); say(r === true, name + (r === true ? '' : ' (got ' + r + ')')); } catch (e) { say(false, name + ' threw ' + e); } }
+// The next entries an observer of `el` reports, or 'timeout' after 3 s.
+function watch(el, options) {
+  let waiting = null; const queue = [];
+  const o = new IntersectionObserver(es => { queue.push(...es); if (waiting) { const w = waiting; waiting = null; w(queue.splice(0)); } }, options);
+  o.observe(el);
+  return { o, next() { if (queue.length) return Promise.resolve(queue.splice(0)); return new Promise(res => { waiting = res; setTimeout(() => { if (waiting === res) { waiting = null; res('timeout'); } }, 3000); }); } };
+}
+const frame = () => new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+// The box the person scrolls, observed against itself.
+new IntersectionObserver(es => { const e = es[es.length - 1]; const s = document.getElementById('boxsays');
+  s.textContent = e.isIntersecting ? 'the item shows: ' + Math.round(e.intersectionRatio * 100) + '%' : 'the item is hidden';
+  s.className = e.isIntersecting ? 'pass' : ''; }, {root: document.getElementById('box'), threshold: [0, 0.5, 1]})
+  .observe(document.getElementById('boxitem'));
+// Twenty tiles, each "loaded" when it scrolls in, then no longer watched.
+const gallery = document.getElementById('gallery'); let loaded = 0;
+const lazy = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { e.target.classList.add('loaded'); e.target.textContent = e.target.dataset.n; loaded++; lazy.unobserve(e.target); } }, {rootMargin: '0px 0px 100px 0px'});
+for (let i = 1; i <= 20; i++) { const t = document.createElement('div'); t.className = 'tile'; t.dataset.n = i; gallery.appendChild(t); lazy.observe(t); }
+// A list that grows by ten rows when its end shows.
+const list = document.getElementById('list'); let rows = 0;
+function more() { for (let k = 0; k < 10; k++) { const r = document.createElement('div'); r.className = 'row'; r.textContent = 'row ' + (++rows); list.appendChild(r); } }
+more(); new IntersectionObserver(es => { if (es[es.length - 1].isIntersecting) more(); }).observe(document.getElementById('end'));
+(async () => {
+  say(typeof IntersectionObserver === 'function' && typeof IntersectionObserverEntry === 'function' && typeof DOMRect === 'function', 'the globals exist');
+  const target = document.getElementById('target');
+  const t = watch(target, {threshold: [0, 0.5, 1]});
+  await run('the first observation: below the fold, not intersecting', async () => {
+    const es = await t.next(); return es !== 'timeout' && es.length === 1 && es[0].isIntersecting === false && es[0].target === target && es[0].boundingClientRect instanceof DOMRectReadOnly || JSON.stringify(es); });
+  await run('scrolled to, it is wholly in view', async () => {
+    scrollTo(0, target.offsetTop - innerHeight / 2); const es = await t.next(); const e = es[es.length - 1];
+    return es !== 'timeout' && e.isIntersecting && e.intersectionRatio === 1 || JSON.stringify(e); });
+  await run('half off the bottom, the 0.5 threshold is crossed', async () => {
+    scrollTo(0, target.offsetTop + 40 - innerHeight); const es = await t.next(); const e = es[es.length - 1];
+    return es !== 'timeout' && Math.abs(e.intersectionRatio - 0.5) < 0.05 || (es === 'timeout' ? es : e.intersectionRatio); });
+  await run('nothing moves, nothing is said', async () => { await frame(); await frame(); return t.next().then(es => es === 'timeout' || es.length); });
+  await run('display: none is not intersecting', async () => {
+    target.style.display = 'none'; const es = await t.next(); target.style.display = ''; const e = es[es.length - 1];
+    return es !== 'timeout' && !e.isIntersecting && e.boundingClientRect.width === 0 || JSON.stringify(e); });
+  t.o.disconnect();
+  await run('an animation frame moves a box into view, and the step sees that frame', async () => {
+    const moved = document.getElementById('moved'); const m = watch(moved); const first = await m.next();
+    requestAnimationFrame(() => { moved.style.top = (scrollY + 10) + 'px'; }); const es = await m.next(); m.o.disconnect();
+    return first !== 'timeout' && !first[0].isIntersecting && es !== 'timeout' && es[es.length - 1].isIntersecting || (first + ' / ' + es); });
+  await run('the pictures load as the view reaches them', async () => {
+    const before = loaded; scrollTo(0, gallery.offsetTop); await frame(); await frame(); await new Promise(r => setTimeout(r, 200));
+    return before < loaded || ('before ' + before + ' after ' + loaded); });
+  await run('the list grows at its end, and again', async () => {
+    const start = rows; scrollTo(0, document.getElementById('end').offsetTop); await frame(); await new Promise(r => setTimeout(r, 300));
+    const once = rows; scrollTo(0, document.getElementById('end').offsetTop); await frame(); await new Promise(r => setTimeout(r, 300));
+    return (once > start && rows > once) || (start + ' / ' + once + ' / ' + rows); });
+  scrollTo(0, 0);
+  const done = document.createElement('p'); done.textContent = 'done'; out.appendChild(done);
+})();
+</script></body></html>

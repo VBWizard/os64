@@ -281,6 +281,46 @@ static void scroll_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // What clips what (flow_clip_parent): an element in the flow, its
+    // parent; an absolute one, the nearest positioned or transformed
+    // element; a fixed one, the nearest transformed one, else the
+    // viewport. And which boxes cut their content (flow_box_clips): one
+    // axis, both, and never an inline's piece of a line.
+    // overflow-x clip beside a visible y stays one axis: a value that
+    // scrolls would make the visible one auto (CSS Overflow 3 § 3.1).
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}#c{overflow-x:clip;height:50px}"
+                     "#rel{position:relative}#tr{transform:translateX(1px)}.a{position:absolute}"
+                     ".f{position:fixed}#sp{overflow:hidden}</style>"
+                     "<div id=c><p id=in><span id=sp>x</span></p><div id=a1 class=a>a</div>"
+                     "<div id=rel><div id=a2 class=a>b</div><div id=f1 class=f>c</div></div>"
+                     "<div id=tr><div id=f2 class=f>d</div></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    root = q.doc->document;
+    const flow_box_t *c = box_with_id(t, root, "c"), *inflow = box_with_id(t, root, "in");
+    const flow_box_t *a1 = box_with_id(t, root, "a1"), *a2 = box_with_id(t, root, "a2");
+    const flow_box_t *f1 = box_with_id(t, root, "f1"), *f2 = box_with_id(t, root, "f2");
+    const flow_box_t *rel = box_with_id(t, root, "rel"), *tr = box_with_id(t, root, "tr");
+    const flow_box_t *sp = box_with_id(t, root, "sp");
+    expect("clip parent: in the flow, the parent element",
+           c != NULL && inflow != NULL && flow_clip_parent(t, inflow->node) == c->node, NULL);
+    expect("clip parent: an absolute box past a static parent reaches the viewport",
+           a1 != NULL && flow_clip_parent(t, a1->node) == NULL, NULL);
+    expect("clip parent: an absolute box's is its positioned ancestor",
+           a2 != NULL && rel != NULL && flow_clip_parent(t, a2->node) == rel->node, NULL);
+    expect("clip parent: a fixed box passes a positioned ancestor, and stops at a transformed one",
+           f1 != NULL && f2 != NULL && tr != NULL && flow_clip_parent(t, f1->node) == NULL &&
+               flow_clip_parent(t, f2->node) == tr->node, NULL);
+    expect("clip parent: a document's root and a text have none",
+           flow_clip_parent(t, q.doc->html) == NULL && flow_clip_parent(t, root) == NULL, NULL);
+    expect("clips: a box cuts its content on the axes its overflow says",
+           c != NULL && flow_box_clips(c, true) && !flow_box_clips(c, false) && rel != NULL &&
+               !flow_box_clips(rel, true), NULL);
+    expect("clips: an inline's piece of a line cuts nothing",
+           sp != NULL && sp->kind == FLOW_BOX_SPAN && !flow_box_clips(sp, true) && !flow_box_clips(NULL, true), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
     // The viewport's own overflow: html scrolls, or the body does while
     // html is visible. Neither is a scroll container, and the page is as
     // tall as its content.
@@ -293,6 +333,10 @@ static void scroll_cases(void)
     for (size_t k = 0; k < sizeof(viewport) / sizeof(viewport[0]); k++) {
         sheeted_open(&q, viewport[k], 400, 600);
         t = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *html = flow_root(t), *body = html != NULL ? html->first : NULL;
+        expect("scroll: the root's and the body's overflow is the viewport's, and their boxes clip nothing",
+               html != NULL && body != NULL && !flow_box_clips(html, false) && !flow_box_clips(body, false) &&
+                   !flow_box_clips(body, true), NULL);
         expect("scroll: the viewport's overflow makes no scroll container, and cuts nothing",
                t != NULL && flow_nscrollers(t) == 0 && flow_height(t) == 900, NULL);
         flow_free(t);

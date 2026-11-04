@@ -1417,6 +1417,10 @@ flow_point_t flow_box_layout_offset(const flow_box_t *box, flow_point_t scroll);
 // offset, and inside a drawn-through box the bounds of its four corners
 // taken out through every matrix (CSSOM View's rect of a transformed box).
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
+// The same for any rect `local` in the box's own coordinates (its rect's):
+// its padding box, say, taken out through the same offset and matrices, so
+// an inset is the painted one and not the layout's.
+os64_gui_rect_t flow_box_doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll);
 // The document point (x, y) in `box`'s own coordinates — its rect's — taken
 // in through every drawn-through box it is in: false where a matrix cannot
 // be undone (a scale of 0).
@@ -1743,6 +1747,21 @@ const flow_box_t *flow_positioned(const flow_tree_t *tree, int32_t i);
 // node with none (hidden, display none, or past where an incomplete layout
 // stopped).
 const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *node);
+// The element whose box clips `node`'s box (POSITION.md: clips follow
+// containing blocks): in the flow, its parent element; an absolute box's
+// containing block, the nearest element that can contain one (a position
+// other than static, a transform, a filter); a fixed box's, the nearest
+// transformed or filtered one. NULL for the viewport, and for an element
+// the layout styled nothing for. Walked to the top it is the chain
+// Intersection Observer calls the containing block chain; a parent that
+// is inline, or makes no box, is on it and clips nothing.
+const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_html_node_t *node);
+// Whether `box` cuts its content to its padding box on the x axis (else
+// the y): an element's box whose `overflow` there is not visible, and not
+// the viewport's — the root's, or the body's when the root's is visible
+// (CSS Overflow 3 § 3.3). Never an inline's piece of a line, a text, or a
+// box its ::before or ::after made.
+bool flow_box_clips(const flow_box_t *box, bool x_axis);
 
 // The pictures and the controls that have a box, in tree order, each once:
 // PLACEMENT — where a picture that arrived is drawn (its box, or its alt

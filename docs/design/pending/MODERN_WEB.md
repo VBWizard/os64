@@ -424,6 +424,14 @@ Chris promotes it by name.
   S2 (byte streams) and S3 (bodies that stream, TextDecoderStream and
   TextEncoderStream). What it booked is DEBTS.md's row. Oracle: WPT
   `streams/`. Opus.
+- **IntersectionObserver.** Lazy pictures, infinite feeds, and the
+  entry module of a code-hosting site's app, which died on the constructor;
+  116 of the corpus's 415 records met it. INTERSECTION_OBSERVER.md is the
+  design. IO1 is built: libdom's arithmetic over one batch of geometry from
+  yonder's layout a rendering step, run after the animation frames, with
+  `DOMRect` beside it. ResizeObserver is the next small slice on the same
+  step; what IO1 booked is DEBTS.md's. Oracle: WPT
+  `intersection-observer/`. Opus.
 
 ## How the slices run side by side (2026-10-21)
 

@@ -714,7 +714,9 @@ the binding options. The provider supplies fresh layout at the current view
 size and zoom, copies CSS-pixel values into `os64_dom_geometry_t`, and retains
 no engine values. Missing or refused HTML geometry throws InvalidStateError.
 Element exposes offset and client dimensions/positions, offsetParent,
-and getBoundingClientRect. Rectangles are ordinary detached numeric snapshots;
+and getBoundingClientRect. A rectangle is a detached numeric snapshot: a new
+`DOMRect` (`rect.c`) with the Modern Web's switch on, a plain object carrying
+the same eight numbers with it off.
 Non-HTML elements return numeric zeros, a null offsetParent and a zero rect
 without asking the HTML provider. SVG layout and getClientRects are outside
 this slice. Layout counts and
@@ -722,6 +724,24 @@ elapsed microseconds are available through `os64_dom_geometry_stats`, including
 failed attempts. Callback budget checks bracket native work and preserve the
 turn's sticky limit classification. See [D10](../../../docs/design/pending/DOM_D10.md)
 for provider semantics, stack measurements and the browser integration boundary.
+
+## Intersection observations
+
+`IntersectionObserver` (`intersection.c`; INTERSECTION_OBSERVER.md) does not
+ask the geometry provider element by element. The host installs a BATCH
+provider (`os64_dom_set_intersections`), and at its rendering step, after
+the animation frames and the layout they asked for, calls
+`os64_dom_intersections_update`. That hands the provider every observed
+(target, root) pair in one call; the host answers each from the layout it
+is about to paint, never one made for it: the target's bounding box, the
+clips of its containing-block chain up to the root, and the root's
+rectangle. The binding does the standard's arithmetic over the answers and
+queues entries as C records; nothing enters the engine there. The
+delivery task (`os64_dom_intersections_fire`) makes them
+`IntersectionObserverEntry` objects and calls each observer, in the order
+the page made them, with a checkpoint after each. An observer is held
+while it has targets or entries waiting, as a MutationObserver is while it
+observes.
 
 ## The global-miss census
 

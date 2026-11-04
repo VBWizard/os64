@@ -812,21 +812,23 @@ int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *cop
 
 enum { M_DEFINE, M_GET, M_GET_NAME, M_WHEN_DEFINED, M_UPGRADE };
 
-/* WebIDL's sequence<DOMString> from an iterable (internal.h): each string
- * copied, the array and the strings d_alloc'd. -1 with an exception
- * pending. */
-int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char ***out, size_t *count)
+/* WebIDL's iteration of an iterable (internal.h). */
+int d_sequence_each(os64_dom_t *dom, JSContext *ctx, JSValueConst value, JSValueConst given,
+                    int (*each)(void *opaque, JSContext *ctx, JSValueConst item), void *opaque)
 {
-    *out = NULL;
-    *count = 0;
     if (!JS_IsObject(value)) {
         JS_ThrowTypeError(ctx, "Expected a sequence");
         return -1;
     }
-    JSAtom symbol = JS_ValueToAtom(ctx, dom->iterator_symbol->value);
-    if (symbol == JS_ATOM_NULL) return -1;
-    JSValue method = JS_GetProperty(ctx, value, symbol);
-    JS_FreeAtom(ctx, symbol);
+    JSValue method;
+    if (JS_IsUndefined(given)) {
+        JSAtom symbol = JS_ValueToAtom(ctx, dom->iterator_symbol->value);
+        if (symbol == JS_ATOM_NULL) return -1;
+        method = JS_GetProperty(ctx, value, symbol);
+        JS_FreeAtom(ctx, symbol);
+    } else {
+        method = JS_DupValue(ctx, given);
+    }
     if (JS_IsException(method)) return -1;
     if (!JS_IsFunction(ctx, method)) {
         JS_FreeValue(ctx, method);
@@ -838,7 +840,6 @@ int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char 
     if (JS_IsException(iterator)) return -1;
     JSValue next = JS_GetPropertyStr(ctx, iterator, "next");
     int status = JS_IsException(next) ? -1 : 0;
-    size_t cap = 0;
     while (status == 0) {
         JSValue step = JS_Call(ctx, next, iterator, 0, NULL);
         if (JS_IsException(step) || !JS_IsObject(step)) {
@@ -857,31 +858,51 @@ int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char 
         }
         JSValue item = JS_GetPropertyStr(ctx, step, "value");
         JS_FreeValue(ctx, step);
-        DString text = {0};
-        bool ok = !JS_IsException(item) && d_string(dom, ctx, item, &text);
+        status = JS_IsException(item) ? -1 : each(opaque, ctx, item);
         JS_FreeValue(ctx, item);
-        if (!ok) {
-            status = -1;
-            break;
-        }
-        if (*count == cap) {
-            size_t grown = cap != 0 ? cap * 2 : 8;
-            char **array = d_alloc(dom, grown * sizeof(*array));
-            if (array == NULL) {
-                d_string_free(dom, &text);
-                d_error(ctx, "QuotaExceededError", "Custom element definition quota exceeded");
-                status = -1;
-                break;
-            }
-            if (*count != 0) os64_memcpy(array, *out, *count * sizeof(*array));
-            d_free(dom, *out);
-            *out = array;
-            cap = grown;
-        }
-        (*out)[(*count)++] = text.data;
     }
     JS_FreeValue(ctx, next);
     JS_FreeValue(ctx, iterator);
+    return status;
+}
+
+typedef struct {
+    os64_dom_t *dom;
+    char ***out;
+    size_t *count, cap;
+} DStrings;
+
+static int string_each(void *opaque, JSContext *ctx, JSValueConst item)
+{
+    DStrings *s = opaque;
+    DString text = {0};
+    if (!d_string(s->dom, ctx, item, &text)) return -1;
+    if (*s->count == s->cap) {
+        size_t grown = s->cap != 0 ? s->cap * 2 : 8;
+        char **array = d_alloc(s->dom, grown * sizeof(*array));
+        if (array == NULL) {
+            d_string_free(s->dom, &text);
+            d_error(ctx, "QuotaExceededError", "Custom element definition quota exceeded");
+            return -1;
+        }
+        if (*s->count != 0) os64_memcpy(array, *s->out, *s->count * sizeof(*array));
+        d_free(s->dom, *s->out);
+        *s->out = array;
+        s->cap = grown;
+    }
+    (*s->out)[(*s->count)++] = text.data;
+    return 0;
+}
+
+/* WebIDL's sequence<DOMString> from an iterable (internal.h): each string
+ * copied, the array and the strings d_alloc'd. -1 with an exception
+ * pending. */
+int d_string_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char ***out, size_t *count)
+{
+    *out = NULL;
+    *count = 0;
+    DStrings s = {dom, out, count, 0};
+    int status = d_sequence_each(dom, ctx, value, JS_UNDEFINED, string_each, &s);
     if (status < 0) {
         for (size_t i = 0; i < *count; i++) d_free(dom, (*out)[i]);
         d_free(dom, *out);

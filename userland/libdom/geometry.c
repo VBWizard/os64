@@ -75,6 +75,10 @@ static JSValue geometry(JSContext *ctx, JSValueConst self, int argc,
     case G_SCROLL_TOP: return JS_NewInt32(ctx, snapshot.scroll_top);
     default: break;
     }
+    /* A DOMRect where the Modern Web's row made one (rect.c); without it,
+     * the same eight numbers on a plain object. */
+    if (dom->options.modern)
+        return d_rect_new(dom, ctx, false, snapshot.x, snapshot.y, snapshot.width, snapshot.height);
     JSValue rect = JS_NewObject(ctx);
     if (JS_IsException(rect)) return rect;
     const char *const names[] = {"x", "y", "width", "height", "left", "top", "right", "bottom"};

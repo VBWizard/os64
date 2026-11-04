@@ -793,6 +793,76 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 uint64_t os64_dom_animation_next(const os64_dom_t *dom);
 bool os64_dom_animation_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
+/* INTERSECTION OBSERVATIONS (Intersection Observer § 3.2.8, run from HTML's
+ * "update the rendering"; INTERSECTION_OBSERVER.md). The binding keeps the
+ * observers and does the standard's arithmetic; the host answers the
+ * geometry, every observed pair in ONE call, from the layout it is about to
+ * paint. Every rectangle is left, top, right, bottom in CSS pixels in the
+ * viewport's coordinates: getBoundingClientRect's space. */
+typedef struct {
+    /* In: an element of the binding's document, and the observer's root:
+     * NULL for the viewport (the implicit root, or the document as root),
+     * else an element. */
+    const os64_html_node_t *target, *root;
+    /* Out. `boxed`: the target is in the document and has a box; when
+     * false, nothing below is read. */
+    bool boxed;
+    /* The root is NULL, or the root element is on the target's
+     * containing-block chain (the standard's "descendant of the
+     * intersection root in the containing block chain"). */
+    bool contained;
+    /* The target's bounding box: the union of its boxes, as
+     * getBoundingClientRect's. */
+    double rect[4];
+    /* What clips the target from the boxes on its containing-block chain
+     * up to the root, the root's own clip left out (to the viewport for a
+     * NULL root): the meet of each one's padding box that clips its
+     * content, on the axes it clips. An axis nothing clips reaches
+     * OS64_DOM_UNCLIPPED either way. */
+    double clip[4];
+    /* The root element's: whether it has a box, and its intersection
+     * rectangle, its padding box when it clips its content and its
+     * bounding box when it does not. Unread for a NULL root, whose
+     * rectangle is the viewport the view provider reads. */
+    bool root_boxed;
+    double root_rect[4];
+} os64_dom_intersection_t;
+#define OS64_DOM_UNCLIPPED 1e18
+/* Fills in each item's answers; false when it could not (no current
+ * layout, no memory), and the binding's step then observes nothing and
+ * is owed again. Owner thread; must not enter JS or pump events; `cost`
+ * as the geometry provider's. */
+typedef bool (*os64_dom_intersections_provider_t)(void *opaque, os64_dom_intersection_t *items, size_t count,
+                                                 os64_dom_geometry_stats_t *cost);
+/* Install/replace outside callbacks; NULL removes it, and the binding then
+ * runs no step. */
+void os64_dom_set_intersections(os64_dom_t *dom, os64_dom_intersections_provider_t provider, void *opaque);
+/* How many targets the page's observers observe: 0, and the host need not
+ * watch for movement at all. */
+size_t os64_dom_intersections_observed(const os64_dom_t *dom);
+/* Whether a step is owed whether or not anything moved: a target waits for
+ * its first observation, or the last step passed one over for its
+ * observer's `delay` and that delay has run (options.now_ms's clock). And
+ * when that delay runs out, for the host to wake at; UINT64_MAX for none. */
+bool os64_dom_intersections_owed(const os64_dom_t *dom);
+uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
+/* THE UPDATE INTERSECTION OBSERVATIONS STEPS: the host calls it in its
+ * rendering step, after the animation frame callbacks and the layout they
+ * asked for, when something an observation reads may have moved (a
+ * layout, a scroll, a resize) or one is owed. It asks the provider once
+ * and queues an entry for each target whose threshold index or
+ * intersecting state changed; it runs no script. True when the delivery
+ * task is due after it; false when nothing is, and when the provider
+ * refused the batch (the step observed nothing, and is owed again as it
+ * was). */
+bool os64_dom_intersections_update(os64_dom_t *dom);
+/* "NOTIFY INTERSECTION OBSERVERS": whether its task is queued, and the
+ * task: each observer with entries, in the order the page made them,
+ * handed them; true when it ran, its outcome filled. Owner thread, between
+ * tasks. */
+bool os64_dom_intersections_due(const os64_dom_t *dom);
+bool os64_dom_intersections_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
+
 /* IDLE CALLBACKS (W3C requestIdleCallback; MODERN_WEB.md § P2b): the host
  * says when its loop is idle, and the binding runs the page's idle
  * callbacks then. next answers when one may run on the host's clock: 0

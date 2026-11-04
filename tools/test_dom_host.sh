@@ -11,7 +11,7 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle animation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
-    sheets point svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation; do
+    sheets point rect intersection svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 # THE ONE DOOR (attr.c): libdom sets and removes attributes through d_set_attr
@@ -63,7 +63,7 @@ for name in core node collection content event timer window geometry classic sty
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto report document frames clone message idle animation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
-    sheets point svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation; do
+    sheets point rect intersection svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \
