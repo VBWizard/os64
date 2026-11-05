@@ -573,11 +573,12 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--intersection")){dom_intersection_cases();printf("DOM intersection probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--resize")){dom_resize_cases();printf("DOM resize probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--performance")){dom_performance_cases();dom_performance_observer_cases();printf("DOM performance probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_performance_observer_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--storage-quota")){dom_storage_quota_cases();printf("DOM storage quota: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--pointer")){dom_pointer_cases();printf("DOM pointer: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
@@ -592,6 +593,7 @@ int main(int argc, char **argv)
     dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();
     dom_screen_cases();
     dom_performance_cases();
+    dom_performance_observer_cases();
     dom_url_cases();
     dom_storage_engine_cases();
     dom_fetch_cases();

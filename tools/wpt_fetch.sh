@@ -39,6 +39,7 @@ WPT_DIRS=(
     encoding
     hr-time
     user-timing
+    performance-timeline
     css/cssom-view
     html/browsers/history
     css/cssom

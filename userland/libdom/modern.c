@@ -65,6 +65,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"performance", "Performance", "PerformanceEntry", "PerformanceMark",
                            "PerformanceMeasure", "PerformanceTiming", "PerformanceNavigation", NULL},
      d_performance_install},
+    /* After the performance row, whose entries it is told of. */
+    {(const char *const[]){"PerformanceObserver", "PerformanceObserverEntryList", NULL},
+     d_performance_observers_install},
     {(const char *const[]){"URL", "URLSearchParams", NULL}, d_url_install},
     {(const char *const[]){"TextEncoder", "TextDecoder", NULL}, d_encoding_install},
     {(const char *const[]){"screen", "devicePixelRatio", "Screen", "ScreenOrientation", NULL}, d_screen_install},

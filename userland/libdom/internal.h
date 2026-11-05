@@ -501,6 +501,13 @@ struct os64_dom {
     DValue *entry_prototypes[5];
     uint64_t time_origin_us;
     int64_t time_origin_epoch_us;
+    /* PerformanceObserver (performance.c): the registered observers, each
+     * held, in the order registered (d_alloc'd); whether the task that
+     * delivers to them is queued; and supportedEntryTypes, made once. */
+    JSValue *performance_observers;
+    uint32_t performance_observer_count, performance_observer_cap;
+    bool performance_task_queued;
+    DValue *supported_entry_types;
     /* screen and screen.orientation (screen.c), each made once. */
     DValue *screen, *orientation;
     /* window.status's string as a script last set it, a classic member
@@ -991,6 +998,11 @@ int d_window_objects_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
 void d_view_free(os64_dom_t *dom);
 int d_storage_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* PerformanceObserver (performance.c): the row, after performance's, and
+ * the teardown halves of the registered list. */
+int d_performance_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_performance_drain(os64_dom_t *dom);
+void d_performance_free(os64_dom_t *dom);
 int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_encoding_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

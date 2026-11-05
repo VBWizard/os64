@@ -1,0 +1,123 @@
+# WPT's performance-timeline in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh performance-timeline --update
+# rewrites [passing].
+[required]
+# Slice E (GITHUB_WALLS.md): PerformanceObserver, told of marks, measures and
+# the navigation entry. Each fails with the switch off.
+buffered-does-not-sync-invoke.html	Buffered PerformanceObservers should not invoke callbacks synchronously.
+buffered-flag-after-timeout.any.html	PerformanceObserver with buffered flag sees entry after timeout
+buffered-flag-observer.any.html	PerformanceObserver with buffered flag should see past and future entries.
+case-sensitivity.any.html	observe() and case sensitivity for types/entryTypes and buffered.
+multiple-buffered-flag-observers.any.html	Multiple PerformanceObservers with buffered flag see all entries
+observer-buffered-false.any.html	PerformanceObserver without buffered flag set to false cannot see past entries.
+po-callback-mutate.any.html	PerformanceObserver modifications inside callback should update filtering and not clear buffer
+po-disconnect-removes-observed-types.any.html	Types observed are forgotten when disconnect() is called.
+po-disconnect.any.html	An observer disconnected after a mark must not have its callback invoked
+po-disconnect.any.html	Entries queued before disconnect() are not delivered after re-observing
+po-disconnect.any.html	disconnected callbacks must not be invoked
+po-disconnect.any.html	disconnecting an unconnected observer is a no-op
+po-disconnect.any.html	takeRecords() returns no entries after disconnect()
+po-entries-sort.any.html	getEntries, getEntriesByType, getEntriesByName sort order
+po-getentries.any.html	getEntries, getEntriesByType and getEntriesByName work
+po-mark-measure.any.html	entries are observable
+po-mark-measure.any.html	mark entries are observable
+po-mark-measure.any.html	measure entries are observable
+po-observe-repeated-type.any.html	Two calls of observe() with the same 'type' cause override.
+po-observe-type.any.html	Calling observe() with entryTypes and then type should throw an InvalidModificationError
+po-observe-type.any.html	Calling observe() with type and entryTypes should throw a TypeError
+po-observe-type.any.html	Calling observe() with type and then entryTypes should throw an InvalidModificationError
+po-observe-type.any.html	Calling observe() without 'type' or 'entryTypes' throws a TypeError
+po-observe-type.any.html	Passing in unknown values to type does throw an exception.
+po-observe-type.any.html	observe() with different type values stacks.
+po-observe.any.html	Check observer callback parameter and this values
+po-observe.any.html	Empty sequence entryTypes does not throw an exception.
+po-observe.any.html	Filter unsupported entryType entryType names within the entryTypes sequence
+po-observe.any.html	Unknown entryTypes do not throw an exception.
+po-observe.any.html	entryTypes must be a sequence or throw a TypeError
+po-observe.any.html	replace observer if already present
+po-takeRecords.any.html	Test PerformanceObserver's takeRecords()
+supportedEntryTypes.any.html	supportedEntryTypes caches result
+supportedEntryTypes.any.html	supportedEntryTypes exists and returns entries in alphabetical order
+[excluded]
+[passing]
+buffered-does-not-sync-invoke.html	Buffered PerformanceObservers should not invoke callbacks synchronously.
+buffered-flag-after-timeout.any.html	PerformanceObserver with buffered flag sees entry after timeout
+buffered-flag-observer.any.html	PerformanceObserver with buffered flag should see past and future entries.
+case-sensitivity.any.html	observe() and case sensitivity for types/entryTypes and buffered.
+idlharness.any.html	Partial interface Performance: member names are unique
+idlharness.any.html	Partial interface Performance: original interface defined
+idlharness.any.html	Performance interface: calling getEntriesByName(DOMString, optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling getEntriesByType(DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: performance must inherit property "getEntries()" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "getEntriesByName(DOMString, optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "getEntriesByType(DOMString)" with the proper type
+idlharness.any.html	PerformanceEntry interface object length
+idlharness.any.html	PerformanceEntry interface object name
+idlharness.any.html	PerformanceEntry interface: existence and properties of interface object
+idlharness.any.html	PerformanceEntry interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceEntry interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceEntry interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceObserver interface object length
+idlharness.any.html	PerformanceObserver interface object name
+idlharness.any.html	PerformanceObserver interface: attribute supportedEntryTypes
+idlharness.any.html	PerformanceObserver interface: calling observe(optional PerformanceObserverInit) on observer with too few arguments must throw TypeError
+idlharness.any.html	PerformanceObserver interface: existence and properties of interface object
+idlharness.any.html	PerformanceObserver interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceObserver interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceObserver interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceObserver interface: observer must inherit property "disconnect()" with the proper type
+idlharness.any.html	PerformanceObserver interface: observer must inherit property "observe(optional PerformanceObserverInit)" with the proper type
+idlharness.any.html	PerformanceObserver interface: observer must inherit property "supportedEntryTypes" with the proper type
+idlharness.any.html	PerformanceObserver interface: observer must inherit property "takeRecords()" with the proper type
+idlharness.any.html	PerformanceObserver must be primary interface of observer
+idlharness.any.html	PerformanceObserverEntryList interface object length
+idlharness.any.html	PerformanceObserverEntryList interface object name
+idlharness.any.html	PerformanceObserverEntryList interface: calling getEntriesByName(DOMString, optional DOMString) on entryList with too few arguments must throw TypeError
+idlharness.any.html	PerformanceObserverEntryList interface: calling getEntriesByType(DOMString) on entryList with too few arguments must throw TypeError
+idlharness.any.html	PerformanceObserverEntryList interface: entryList must inherit property "getEntries()" with the proper type
+idlharness.any.html	PerformanceObserverEntryList interface: entryList must inherit property "getEntriesByName(DOMString, optional DOMString)" with the proper type
+idlharness.any.html	PerformanceObserverEntryList interface: entryList must inherit property "getEntriesByType(DOMString)" with the proper type
+idlharness.any.html	PerformanceObserverEntryList interface: existence and properties of interface object
+idlharness.any.html	PerformanceObserverEntryList interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceObserverEntryList interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceObserverEntryList interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceObserverEntryList must be primary interface of entryList
+idlharness.any.html	Stringification of entryList
+idlharness.any.html	Stringification of observer
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
+multiple-buffered-flag-observers.any.html	Multiple PerformanceObservers with buffered flag see all entries
+observer-buffered-false.any.html	PerformanceObserver without buffered flag set to false cannot see past entries.
+performanceentry-tojson.any.html	Test toJSON() in PerformanceEntry
+po-callback-mutate.any.html	PerformanceObserver modifications inside callback should update filtering and not clear buffer
+po-disconnect-removes-observed-types.any.html	Types observed are forgotten when disconnect() is called.
+po-disconnect.any.html	An observer disconnected after a mark must not have its callback invoked
+po-disconnect.any.html	Entries queued before disconnect() are not delivered after re-observing
+po-disconnect.any.html	disconnected callbacks must not be invoked
+po-disconnect.any.html	disconnecting an unconnected observer is a no-op
+po-disconnect.any.html	takeRecords() returns no entries after disconnect()
+po-entries-sort.any.html	getEntries, getEntriesByType, getEntriesByName sort order
+po-getentries.any.html	getEntries, getEntriesByType and getEntriesByName work
+po-mark-measure.any.html	entries are observable
+po-mark-measure.any.html	mark entries are observable
+po-mark-measure.any.html	measure entries are observable
+po-observe-repeated-type.any.html	Two calls of observe() with the same 'type' cause override.
+po-observe-type.any.html	Calling observe() with entryTypes and then type should throw an InvalidModificationError
+po-observe-type.any.html	Calling observe() with type and entryTypes should throw a TypeError
+po-observe-type.any.html	Calling observe() with type and then entryTypes should throw an InvalidModificationError
+po-observe-type.any.html	Calling observe() without 'type' or 'entryTypes' throws a TypeError
+po-observe-type.any.html	Passing in unknown values to type does throw an exception.
+po-observe-type.any.html	observe() with different type values stacks.
+po-observe.any.html	Check observer callback parameter and this values
+po-observe.any.html	Empty sequence entryTypes does not throw an exception.
+po-observe.any.html	Filter unsupported entryType entryType names within the entryTypes sequence
+po-observe.any.html	Unknown entryTypes do not throw an exception.
+po-observe.any.html	entryTypes must be a sequence or throw a TypeError
+po-observe.any.html	replace observer if already present
+po-takeRecords.any.html	Test PerformanceObserver's takeRecords()
+supportedEntryTypes-cross-realm-access.html	Cross-realm access of supportedEntryTypes returns Array of another realm
+supportedEntryTypes.any.html	supportedEntryTypes caches result
+supportedEntryTypes.any.html	supportedEntryTypes exists and returns entries in alphabetical order
+webtiming-resolution.any.html	Verifies the resolution of entry.startTime is at least 5 microseconds.
+webtiming-resolution.any.html	Verifies the resolution of performance.now() is at least 5 microseconds.
