@@ -55,7 +55,7 @@ for (const c of %s) {
     if (c.parts) r.parts = c.parts.map(([v]) => [v, attempt(() => f.formatToParts(numberValue(v)))]);
     if (c.range) r.range = c.range.map(([x, y]) => [x, y, attempt(() => f.formatRange(numberValue(x), numberValue(y)))]);
     if (c.rangeParts) r.rangeParts = c.rangeParts.map(([x, y]) => [x, y, attempt(() => f.formatRangeToParts(numberValue(x), numberValue(y)))]);
-    if (c.select) r.select = c.select.map(([v]) => [v, f.select(numberValue(v))]);
+    if (c.select) r.select = c.select.map(([v]) => [v, attempt(() => f.select(numberValue(v)))]);
     if (c.selectRange) r.selectRange = c.selectRange.map(([x, y]) => [x, y, attempt(() => f.selectRange(numberValue(x), numberValue(y)))]);
     if (c.relative) r.relative = c.relative.map(([v, u]) => [v, u, attempt(() => f.format(numberValue(v), u)), attempt(() => f.formatToParts(numberValue(v), u))]);
     if (c.lists) r.lists = c.lists.map(([l]) => [l, f.format(l), f.formatToParts(l)]);

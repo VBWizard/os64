@@ -100,17 +100,20 @@ const numberValues = ['n:0', 'n:-0', 'n:1', 'n:-1', 'n:2', 'n:1.5', 'n:0.5', 'n:
     'n:123', 'n:999', 'n:999.5', 'n:1000', 'n:1234', 'n:1234.5678', 'n:9999.9', 'n:12345', 'n:123456', 'n:999999',
     'n:1234567.891', 'n:1000000000', 'n:1500000000000', 'n:1e15', 'n:1e21', 'n:1e-7', 'n:-1234.5', 'n:-0.004', 'n:NaN',
     'n:Infinity', 'n:-Infinity', 'b:12345678901234567890', 'b:-5', 's:1.005', 's:-0', 's:12345678901234567890.123456789',
-    's:0x1F', 's: 42 ', 's:1e3', 's:abc', 'n:2.5', 'n:-2.5', 'n:0.125', 'n:1.45', 'n:329606050212053000'];
+    's:0x1F', 's: 42 ', 's:1e3', 's:abc', 'n:2.5', 'n:-2.5', 'n:0.125', 'n:1.45', 'n:329606050212053000',
+    's:1e400', 's:-1e400', 's:1.234e-400', 'n:-9.99', 'n:-999.99', 'n:-999999.9'];
 const numberRanges = [['n:3', 'n:5'], ['n:-3', 'n:5'], ['n:-5', 'n:-3'], ['n:3', 'n:3'], ['n:-3', 'n:-3'], ['n:0', 'n:1'],
     ['n:1', 'n:1.5'], ['n:3000', 'n:5000'], ['n:3000', 'n:3001'], ['n:3000', 'n:5000000'], ['n:-0', 'n:0'], ['s:-0', 'n:0'],
-    ['n:5', 'n:3'], ['n:1', 'n:Infinity'], ['n:1.999', 'n:2.001'], ['n:-0.0001', 'n:0']];
+    ['n:5', 'n:3'], ['n:1', 'n:Infinity'], ['n:1.999', 'n:2.001'], ['n:-0.0001', 'n:0'], ['n:Infinity', 'n:Infinity'],
+    ['n:-Infinity', 'n:-Infinity']];
 const numberStyles = [{}, {style: 'percent'}, {style: 'currency', currency: 'USD'}, {style: 'currency', currency: 'EUR'},
     {style: 'currency', currency: 'JPY'}, {style: 'currency', currency: 'USD', currencyDisplay: 'code'},
     {style: 'currency', currency: 'USD', currencyDisplay: 'name'}, {style: 'currency', currency: 'CAD', currencyDisplay: 'narrowSymbol'},
     {style: 'currency', currency: 'GBP', currencySign: 'accounting'}, {style: 'currency', currency: 'XYZ'},
     {style: 'unit', unit: 'kilometer'}, {style: 'unit', unit: 'kilometer', unitDisplay: 'long'},
     {style: 'unit', unit: 'kilometer-per-hour', unitDisplay: 'narrow'}, {style: 'unit', unit: 'liter-per-kilometer', unitDisplay: 'long'},
-    {style: 'unit', unit: 'percent'}, {style: 'unit', unit: 'percent', unitDisplay: 'long'}, {style: 'unit', unit: 'byte', unitDisplay: 'narrow'}];
+    {style: 'unit', unit: 'percent'}, {style: 'unit', unit: 'percent', unitDisplay: 'long'}, {style: 'unit', unit: 'byte', unitDisplay: 'narrow'},
+    {style: 'unit', unit: 'percent-per-second'}];
 const numberModifiers = [{}, {notation: 'compact'}, {notation: 'compact', compactDisplay: 'long'}, {notation: 'scientific'},
     {notation: 'engineering'}, {signDisplay: 'always'}, {signDisplay: 'exceptZero'}, {signDisplay: 'never'}, {signDisplay: 'negative'},
     {maximumFractionDigits: 0}, {minimumFractionDigits: 2}, {maximumSignificantDigits: 3}, {minimumIntegerDigits: 4},
@@ -119,7 +122,8 @@ const numberModifiers = [{}, {notation: 'compact'}, {notation: 'compact', compac
     {roundingPriority: 'morePrecision', maximumSignificantDigits: 2, maximumFractionDigits: 2},
     {roundingPriority: 'lessPrecision', maximumSignificantDigits: 2, maximumFractionDigits: 2},
     {trailingZeroDisplay: 'stripIfInteger', minimumFractionDigits: 2},
-    {trailingZeroDisplay: 'stripIfInteger', roundingPriority: 'lessPrecision'}, {notation: 'compact', useGrouping: 'auto'}];
+    {trailingZeroDisplay: 'stripIfInteger', roundingPriority: 'lessPrecision'}, {notation: 'compact', useGrouping: 'auto'},
+    {notation: 'scientific', maximumSignificantDigits: 2, roundingMode: 'floor'}, {notation: 'compact', roundingMode: 'floor'}];
 const numberBags = [];
 for (const s of numberStyles) for (const m of numberModifiers) numberBags.push(Object.assign({}, s, m));
 let seed = 12345;
@@ -164,7 +168,7 @@ for (const options of pluralBags) {
     const c = {kind: 'PluralRules', options};
     if (typeof pr === 'string') { c.construct = pr; capture.numberCases.push(c); continue; }
     c.resolved = pr.resolvedOptions();
-    c.select = pluralValues.map(v => [v, pr.select(numberValue(v))]);
+    c.select = pluralValues.map(v => [v, attempt(() => pr.select(numberValue(v)))]);
     c.selectRange = numberRanges.map(([x, y]) => [x, y, attempt(() => pr.selectRange(numberValue(x), numberValue(y)))]);
     capture.numberCases.push(c);
 }

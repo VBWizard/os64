@@ -81,7 +81,7 @@ function loadNumberData() {
     loadData();
     if (NUM !== undefined) return;
     const N = apply(NUMBER_DATA, undefined, []);
-    NUM = N.numbers; UNITS = N.units; PLURALS = N.plurals; RELATIVE = N.relative;
+    UNITS = N.units; PLURALS = N.plurals; RELATIVE = N.relative; NUM = N.numbers;      // NUM last: it says the tables are here
 }
 // The default locale is the host's, and ECMA-402 requires it to be one the
 // data holds: a host that names another is refused (the install fails),
@@ -95,6 +95,7 @@ const lower = s => apply(s_toLowerCase, s, []);
 const upper = s => apply(s_toUpperCase, s, []);
 const codeAt = (s, i) => apply(s_charCodeAt, s, [i]);
 const pad = (s, n) => apply(s_padStart, s, [n, '0']);
+const zeros = n => n > 0 ? pad('', n) : '';      // n zeros, written natively (n may be large)
 const join = (a, sep) => apply(a_join, a, [sep]);
 const sortStrings = a => apply(a_sort, a, [(x, y) => x < y ? -1 : x > y ? 1 : 0]);
 const exec = (re, s) => apply(r_exec, re, [s]);
@@ -2162,7 +2163,8 @@ method(DateTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
 // ── Numbers: exact decimals (ECMA-402 § 16.5) ───────────────────────────
 // A mathematical value as Intl reads it: a Number by its shortest round-
 // tripping decimal (ICU's double-conversion, Number.prototype.toString's
-// digits), a BigInt or a numeric string exactly. {neg, digits, exp}: the
+// digits), a BigInt exactly, a numeric string exactly unless it is past
+// the Numbers' range (then infinity). {neg, digits, exp}: the
 // value digits × 10^exp, digits without leading or trailing zeros ("0"
 // for zero); or {neg, nan} / {neg, inf}.
 function decimal(neg, digits, exp) {
@@ -2222,6 +2224,11 @@ function decimalOfString(text) {
     if (c0 === 43 || c0 === 45) { neg = c0 === 45; s = slice(s, 1, s.length); }
     if (s === 'Infinity') return {__proto__: null, neg: neg, inf: true};
     if (exec(/^(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/, s) === null) return {__proto__: null, neg: false, nan: true};
+    // RoundMVResult's large half: a value past the Numbers is infinity. Its
+    // small half, a nonzero value that rounds to a Number's zero, V8 keeps
+    // exact ("1e-400" with three significant digits writes 404 characters),
+    // and so does this (INTL.md § 9.6).
+    if (!isFinite_(+s)) return {__proto__: null, neg: neg, inf: true};
     return decimalOfLiteral(neg, s);
 }
 // ECMA-262 ToPrimitive(value, number), on intrinsics captured at load.
@@ -2288,6 +2295,11 @@ function roundsUp(urm, half, odd) {
 function roundDecimal(d, pos, increment, urm) {
     if (isZeroDecimal(d) || (increment === 1 && d.exp >= pos)) return d;
     if (increment !== 1) {
+        // A value under a tenth of the step is below half of it, whatever
+        // the increment: it rounds to 0 or to one step, without the power
+        // of ten its exponent would ask for.
+        if (magnitudeOf(d) < pos - 1)
+            return roundsUp(urm, -1, false) ? decimal(false, String_(increment), pos) : decimal(false, '0', 0);
         const shift = d.exp - pos;
         let n = BigInt_(d.digits), den = BigInt_(increment);
         if (shift >= 0) n *= 10n ** BigInt_(shift); else den *= 10n ** BigInt_(-shift);
@@ -2313,9 +2325,7 @@ function roundDecimal(d, pos, increment, urm) {
 // The digits of |d| × 10^-pos as an integer string (d a multiple of 10^pos).
 function integerDigitsAt(d, pos) {
     if (isZeroDecimal(d)) return '0';
-    let s = d.digits;
-    for (let z = d.exp - pos; z > 0; z--) s += '0';
-    return s;
+    return d.digits + zeros(d.exp - pos);
 }
 // ToRawPrecision: {string, rounded, intDigits, magnitude}.
 function toRawPrecision(x, minP, maxP, urm) {
@@ -2329,9 +2339,9 @@ function toRawPrecision(x, minP, maxP, urm) {
         n = integerDigitsAt(r, e - p + 1);
     }
     let m, intDigits;
-    if (e >= p - 1) { m = n; for (let z = e - p + 1; z > 0; z--) m += '0'; intDigits = e + 1; }
+    if (e >= p - 1) { m = n + zeros(e - p + 1); intDigits = e + 1; }
     else if (e >= 0) { m = slice(n, 0, e + 1) + '.' + slice(n, e + 1, n.length); intDigits = e + 1; }
-    else { m = '0.'; for (let z = -(e + 1); z > 0; z--) m += '0'; m += n; intDigits = 1; }
+    else { m = '0.' + zeros(-(e + 1)) + n; intDigits = 1; }
     if (indexOf(m, '.', 0) >= 0 && maxP > minP) m = cutZeros(m, maxP - minP);
     return {__proto__: null, string: m, rounded: decimalOfLiteral(false, m), intDigits: intDigits, magnitude: e - p + 1};
 }
@@ -2476,18 +2486,30 @@ function trimSpaces(s) {
     while (b > a && codeAt(s, b - 1) === 32) b--;
     return slice(s, a, b);
 }
-// The plural operands of a formatted number's digits ("1.50": n 1.5, i 1,
-// v 2, w 1, f 50, t 5), as ICU reads them: n is the value as a double, i
-// the integer's last 18 digits, and a modulus is taken of those doubles,
-// so a value past a double's precision is read as its double is (V8
-// calls 329606050212053000 "two" in ordinals: its double ends in 2992).
-function pluralOperands(s) {
-    const dot = indexOf(s, '.', 0);
-    const intPart = dot >= 0 ? slice(s, 0, dot) : s, frac = dot >= 0 ? slice(s, dot + 1, s.length) : '';
+// The plural operands of a formatted number's digits with the point moved
+// k places right, the value a plural is chosen by when an exponent was
+// taken out (UTS 35 § 5.1: "1.2K" is n = 1200), counted without writing
+// the moved digits out ("1E-999999" has six digits of exponent, not a
+// million zeros). ICU reads n as the value's double and i as the integer's
+// last 18 digits, and takes a modulus of those doubles, so a value past a
+// double's precision is read as its double is (V8 calls 329606050212053000
+// "two" in ordinals: its double ends in 2992). "1.50": n 1.5, i 1, v 2,
+// w 1, f 50, t 5.
+function pluralOperands(text, k) {
+    const dot = indexOf(text, '.', 0);
+    const ints = dot >= 0 ? slice(text, 0, dot) : text;
+    const digits = ints + (dot >= 0 ? slice(text, dot + 1, text.length) : '');
+    const point = ints.length + k;
+    let intPart, frac, lead = 0;            // the fraction is `lead` zeros, then `frac`
+    if (point >= digits.length) { intPart = digits + zeros(point - digits.length); frac = ''; }
+    else if (point <= 0) { intPart = '0'; lead = -point; frac = digits; }
+    else { intPart = slice(digits, 0, point); frac = slice(digits, point, digits.length); }
     let end = frac.length;
     while (end > 0 && codeAt(frac, end - 1) === 48) end--;
-    return {__proto__: null, n: +s, i: +slice(intPart, intPart.length > 18 ? intPart.length - 18 : 0, intPart.length),
-            v: frac.length, w: end, f: frac === '' ? 0 : +frac, t: end === 0 ? 0 : +slice(frac, 0, end), c: 0, e: 0};
+    return {__proto__: null, n: +(digits + 'e' + String_(point - digits.length)),
+            i: +slice(intPart, intPart.length > 18 ? intPart.length - 18 : 0, intPart.length),
+            v: frac === '' ? 0 : lead + frac.length, w: end === 0 ? 0 : lead + end,
+            f: frac === '' ? 0 : +frac, t: end === 0 ? 0 : +slice(frac, 0, end), c: 0, e: 0};
 }
 function operandValue(ops, name, mod) {
     const value = own(ops, name);
@@ -2513,7 +2535,9 @@ function pluralRuleHolds(rule, ops) {
 let pluralTables = null;
 function pluralTable(type) {
     if (pluralTables === null) {
-        pluralTables = {__proto__: null};
+        // Published only when whole: a build cut short (a stack overflow in
+        // a caller's recursion) leaves nothing half made for later calls.
+        const tables = {__proto__: null};
         const kinds = ['cardinal', 'ordinal'];
         for (let k = 0; k < 2; k++) {
             const rules = own(PLURALS, kinds[k]), list = [];
@@ -2522,14 +2546,16 @@ function pluralTable(type) {
                 push(list, {__proto__: null, category: slice(key, indexOf(key, '-count-', 0) + 7, key.length),
                             rule: parsePluralRule(own(rules, key))});
             }
-            pluralTables[kinds[k]] = list;
+            tables[kinds[k]] = list;
         }
+        pluralTables = tables;
     }
     return own(pluralTables, type);
 }
-// The category of a formatted number's digits.
-function pluralCategory(type, digits) {
-    const table = pluralTable(type), ops = pluralOperands(digits);
+// The category of a formatted number's digits, with the point moved
+// `shift` places right (an exponent taken out; none when absent).
+function pluralCategory(type, digits, shift) {
+    const table = pluralTable(type), ops = pluralOperands(digits, shift === undefined ? 0 : shift);
     for (let i = 0; i < table.length; i++)
         if (table[i].category !== 'other' && pluralRuleHolds(table[i].rule, ops)) return table[i].category;
     return 'other';
@@ -2582,7 +2608,7 @@ function resolvePlural(s, n) {
     const x = decimalOfNumber(n);
     const exponent = computeExponent(s, x).exponent;
     const r = formatNumericToString(s, decimal(x.neg, x.digits, x.exp - exponent));
-    return pluralCategory(s.type, shiftPoint(r.string, exponent));
+    return pluralCategory(s.type, r.string, exponent);
 }
 method(PluralRules, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
 defineProperty(PluralRulesPrototype, toStringTag, {__proto__: null, value: 'Intl.PluralRules', writable: false, enumerable: false, configurable: true});
@@ -2725,7 +2751,7 @@ function UnwrapNumberFormat(o, name) {
 let compactTables = null;
 function compactTable(s) {
     if (compactTables === null) {
-        compactTables = {__proto__: null};
+        const tables = {__proto__: null};          // published only when whole, as pluralTables
         const sources = {__proto__: null, short: own(own(NUM.decimal, 'short'), 'decimalFormat'),
                          long: own(own(NUM.decimal, 'long'), 'decimalFormat'), currency: own(own(NUM.currency, 'short'), 'standard')};
         for (const name in sources) {
@@ -2737,8 +2763,9 @@ function compactTable(s) {
                 if (own(table, power) === undefined) table[power] = {__proto__: null};
                 table[power][category] = own(src, key);
             }
-            compactTables[name] = table;
+            tables[name] = table;
         }
+        compactTables = tables;
     }
     return own(compactTables, s.style === 'currency' && s.currencyDisplay !== 'name' ? 'currency' : s.compactDisplay);
 }
@@ -2764,26 +2791,17 @@ function exponentForMagnitude(s, magnitude) {
 }
 // ComputeExponent, against the digits as rounded: {exponent, magnitude},
 // the magnitude the exponent was chosen for (which names the compact
-// pattern).
+// pattern). The trial rounding keeps x's sign, as V8 rounds, so a
+// directional mode that carries a negative value up to a power of ten
+// takes the next exponent ("-1E1", never "-10E0"; ECMA-402 rounds the
+// magnitude; INTL.md § 9.6).
 function computeExponent(s, x) {
     if (isZeroDecimal(x)) return {__proto__: null, exponent: 0, magnitude: 0};
     const magnitude = magnitudeOf(x);
     const exponent = exponentForMagnitude(s, magnitude);
-    const r = formatNumericToString(s, decimal(false, x.digits, x.exp - exponent)).rounded;
+    const r = formatNumericToString(s, decimal(x.neg, x.digits, x.exp - exponent)).rounded;
     if (isZeroDecimal(r) || magnitudeOf(r) === magnitude - exponent) return {__proto__: null, exponent: exponent, magnitude: magnitude};
     return {__proto__: null, exponent: exponentForMagnitude(s, magnitude + 1), magnitude: magnitude + 1};
-}
-// A plain decimal string with its point moved k places right ("1.2", 3 →
-// "1200"), the value a plural is chosen by when an exponent was taken out
-// (UTS 35 § 5.1: "1.2K" is n = 1200).
-function shiftPoint(text, k) {
-    if (k === 0) return text;
-    const dot = indexOf(text, '.', 0);
-    const ints = dot >= 0 ? slice(text, 0, dot) : text, digits = ints + (dot >= 0 ? slice(text, dot + 1, text.length) : '');
-    let point = ints.length + k, out = digits;
-    if (point >= out.length) { while (out.length < point) out += '0'; return out; }
-    if (point <= 0) { let z = ''; while (point < 0) { z += '0'; point++; } return '0.' + z + out; }
-    return slice(out, 0, point) + '.' + slice(out, point, out.length);
 }
 // The integer digits grouped as #,##0 groups them (threes), when the
 // strategy calls for it at that length; "auto" in a compact format is
@@ -2898,7 +2916,10 @@ function formatLayers(s, x, forced) {
     if (!v.nan && !v.inf && s.style === 'percent') v = decimal(v.neg, v.digits, v.exp + 2);
     let zero = true;
     if (v.nan) push(res.digits, part('nan', NUM.symbols.nan));
-    else if (v.inf) { push(res.digits, part('infinity', NUM.symbols.infinity)); zero = false; }
+    else if (v.inf) {
+        push(res.digits, part('infinity', NUM.symbols.infinity)); zero = false;
+        res.value = {__proto__: null, neg: v.neg, digits: 'Infinity', exp: 0};    // one infinity is another, in a range
+    }
     else {
         const e = computeExponent(s, v);
         exponent = e.exponent;
@@ -2917,7 +2938,7 @@ function formatLayers(s, x, forced) {
             if (exponent < 0) push(res.inner.suffix, part('exponentMinusSign', NUM.symbols.minusSign));
             push(res.inner.suffix, part('exponentInteger', String_(abs(exponent))));
         }
-        res.category = pluralCategory('cardinal', shiftPoint(r.string, exponent));
+        res.category = pluralCategory('cardinal', r.string, exponent);
     }
     const category = forced !== undefined ? forced : res.category;
     // The middle layer: the sign, then the pattern's affixes. A currency
@@ -3026,8 +3047,9 @@ function sameRangeValue(s, first, second, x, y) {
 // A range (ICU's NumberRangeFormatter, collapse "auto"): two values the
 // same as rounded, with the same middle, are one value approximately;
 // otherwise a layer both sides share is written once around the range —
-// the outer whenever there is one (within one format it is always the same
-// pattern), the middle when its affixes and sign match and it is more than
+// the outer whenever there is one (within one format it is one unit or
+// currency, its words chosen by the range's plural category), the middle
+// when its affixes and sign match and it is more than
 // one code point, the inner never — and a range that repeats any layer
 // gets spaces round its dash.
 //

@@ -427,4 +427,9 @@ made:
    finds its words ("today", "tomorrow") for a value that rounds to a
    whole -2..2 at hundredths, so 0.004 days is "today" (ECMA-402 matches
    the exact value); and ListFormat's `formatToParts` writes no part for an
-   empty element, joining the text around it into one literal.
+   empty element, joining the text around it into one literal. One
+   departure is deliberate: V8 writes a percent per a unit in the short and
+   narrow widths as the percent alone ("2%" for `percent-per-second`) yet
+   keeps the denominator in its compact and range forms ("12K%/s",
+   "1–5%/s"), which is ICU contradicting itself; libjs composes it as CLDR
+   does everywhere ("2%/s").

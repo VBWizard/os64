@@ -897,11 +897,11 @@ library gains one export, `os64_js_install_intl`, and imports
 The runtime suite's Intl case formats a currency, a compact range and an
 ordinal through them, and two sweeps join the first construction's: a
 realm's first NumberFormat (the data and the number tables in one call:
-426 allocations on the target core, 245 refused at the sweep's stride),
+474 allocations on the target core, 269 refused at the sweep's stride),
 and a first PluralRules in a realm that has formatted a date (the number
-tables alone, a deferred part of the data: 118 allocations, every one
-refused). Each refusal is the runtime's sticky failure and frees
-everything. The suite passes: 5,174 checks on the target core, 22,001
+tables, a deferred part of the data, then the plural rules parsed and a
+select: 95 allocations, every one refused). Each refusal is the runtime's sticky failure and frees
+everything. The suite passes: 5,298 checks on the target core, 22,005
 sanitized.
 
 `tools/test262_host.sh` adds `intl402/NumberFormat` and
