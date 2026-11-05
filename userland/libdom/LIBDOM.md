@@ -740,9 +740,13 @@ no engine values. Missing or refused HTML geometry throws InvalidStateError.
 Element exposes offset and client dimensions/positions, offsetParent,
 and getBoundingClientRect. A rectangle is a detached numeric snapshot: a new
 `DOMRect` (`rect.c`) with the Modern Web's switch on, a plain object carrying
-the same eight numbers with it off.
-Non-HTML elements return numeric zeros, a null offsetParent and a zero rect
-without asking the HTML provider. SVG layout and getClientRects are outside
+the same eight numbers with it off. With the switch on, getClientRects answers a
+`DOMRectList` holding the border box when the provider says the element has a
+layout box (`os64_dom_geometry_t.boxed`), and an empty list when it has none:
+one rect for the whole element, where a browser answers one per fragment
+(DEBTS.md).
+Non-HTML elements return numeric zeros, a null offsetParent, a zero rect and an
+empty list of rects without asking the HTML provider; SVG layout is outside
 this slice. Layout counts and
 elapsed microseconds are available through `os64_dom_geometry_stats`, including
 failed attempts. Callback budget checks bracket native work and preserve the
@@ -935,7 +939,13 @@ last). Every read asks the provider for the whole element into one snapshot
 buffer, so a held declaration is live and keeps no copy of its own; a
 snapshot past the binding's budget is refused whole (QuotaExceededError).
 An element outside the document and a pseudo-element answer an empty
-declaration without asking. `document.defaultView` is window.
+declaration without asking. Every other name an element's style answers to
+(a shorthand, an alias, a flow-relative name) is a read-only member too,
+read from the longhands libgarb says it stands for (learned once, by reading
+`<name>:initial`): a position a layer at a time, grid lines `auto` when all
+are, one value when every longhand agrees, a box's one-to-four value form, a
+pair's two values; `""` for the rest (DEBTS.md names them), never the inline
+style's member. `document.defaultView` is window.
 
 **History** (`os64_dom_set_history`) is the host's session: `pushState`
 and `replaceState` give it the entry's address (one the document may

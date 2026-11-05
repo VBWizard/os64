@@ -48,6 +48,8 @@ typedef struct {
     /* The body's overflow-y apart from its overflow-x, and its four
      * margins, when set (a shorthand's serialization's cases). */
     const char *body_overflow_y, *body_margin[4];
+    /* Any longhand's value on the body, when set (garb_prop_t's index). */
+    const char *body_value[GARB_NPROPS];
     const os64_html_node_t *last;
     const os64_html_document_t *document;
 } ComputedFake;
@@ -65,7 +67,8 @@ static bool fake_computed(void *opaque, const os64_html_node_t *element, os64_do
     bool body = element->tag == OS64_HTML_TAG_BODY, root = element->tag == OS64_HTML_TAG_HTML;
     for (int32_t i = 0; i < GARB_NPROPS; i++) {
         char text[64];
-        if (i == GARB_WIDTH) snprintf(text, sizeof(text), "%upx", f->calls);
+        if (body && f->body_value[i]) snprintf(text, sizeof(text), "%s", f->body_value[i]);
+        else if (i == GARB_WIDTH) snprintf(text, sizeof(text), "%upx", f->calls);
         else if (i == GARB_COLOR) snprintf(text, sizeof(text), "rgb(1, 2, 3)");
         else if (i == GARB_DISPLAY)
             snprintf(text, sizeof(text), "%s", body && f->body_display ? f->body_display
@@ -469,6 +472,35 @@ static void dom_view_computed_cases(void)
     c.body_margin[0] = c.body_margin[1] = c.body_margin[2] = c.body_margin[3] = "4px";
     dom_script(&f, VIEW_ASSERT "assert(getComputedStyle(document.body).margin==='4px');", "computed: a box's one value");
     for (int i = 0; i < 4; i++) c.body_margin[i] = NULL;
+    /* A side's value with a space in it (a colour) still makes a box; a
+     * corner's pair does not. */
+    const char *colours[4] = {"rgb(255, 0, 0)", "rgb(0, 128, 0)", "rgb(0, 0, 255)", "rgb(0, 0, 0)"};
+    for (int i = 0; i < 4; i++) c.body_value[GARB_BORDER_TOP_COLOR + i] = colours[i];
+    c.body_value[GARB_BORDER_TOP_LEFT_RADIUS] = "10px 5px";
+    c.body_value[GARB_ROW_GAP] = "8px";
+    c.body_value[GARB_COLUMN_GAP] = "16px";
+    c.body_value[GARB_BACKGROUND_POSITION_X] = "0%";
+    c.body_value[GARB_BACKGROUND_POSITION_Y] = "0%";
+    c.body_value[GARB_GRID_ROW_START] = c.body_value[GARB_GRID_ROW_END] = "span 2";
+    dom_script(&f, VIEW_ASSERT "var cs=getComputedStyle(document.body);"
+        "assert(cs.borderColor==='rgb(255, 0, 0) rgb(0, 128, 0) rgb(0, 0, 255) rgb(0, 0, 0)','colours: '+cs.borderColor);"
+        "assert(cs.borderRadius==='','an elliptical corner: '+cs.borderRadius);"
+        "assert(cs.gap==='8px 16px'&&cs.gridGap==='8px 16px'&&cs.getPropertyValue('grid-gap')==='8px 16px',"
+        "'grid-gap is gap: '+cs.gridGap);"
+        "assert(cs.backgroundPosition==='0% 0%','a position is never one value: '+cs.backgroundPosition);"
+        "assert(cs.gridRow==='','grid lines that are not all auto answer empty, not one of them: '+cs.gridRow);",
+        "computed: colours, corners, grid-gap, a position and grid lines");
+    c.body_value[GARB_BACKGROUND_POSITION_X] = "0%, 50%";
+    c.body_value[GARB_BACKGROUND_POSITION_Y] = "0%, 100%";
+    c.body_value[GARB_GRID_ROW_START] = c.body_value[GARB_GRID_ROW_END] = "auto";
+    dom_script(&f, VIEW_ASSERT "var cs=getComputedStyle(document.body);"
+        "assert(cs.backgroundPosition==='0% 0%, 50% 100%','a layer at a time: '+cs.backgroundPosition);"
+        "assert(cs.gridRow==='auto',cs.gridRow);",
+        "computed: a position's layers, and grid lines all auto");
+    c.body_value[GARB_BACKGROUND_POSITION_Y] = "0%";
+    dom_script(&f, VIEW_ASSERT "assert(getComputedStyle(document.body).backgroundPosition==='','layers that do not pair');",
+               "computed: a position's layers that do not pair");
+    memset(c.body_value, 0, sizeof(c.body_value));
     check(c.last != NULL && c.last->kind == OS64_HTML_ELEMENT, "computed: the provider is asked for the element");
     os64_dom_geometry_stats(f.binding, true);
     unsigned calls = c.calls;

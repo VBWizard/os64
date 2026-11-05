@@ -377,7 +377,15 @@ static int shorts_learn(os64_dom_t *dom)
         int length = os64_snprintf(text, sizeof(text), "%s:initial", name);
         if (length <= 0 || (size_t)length >= sizeof(text)) continue;
         garb_parsed_t parsed = {0};
-        if (garb_parse_one_declaration(text, (size_t)length, &parsed) == GARB_OK && !parsed.incomplete) {
+        garb_status_t status = garb_parse_one_declaration(text, (size_t)length, &parsed);
+        /* No memory now is not "no longhands": refused, so a later
+         * binding learns the table whole rather than inherit the gap. */
+        if (status == GARB_NO_MEMORY || parsed.incomplete) {
+            garb_free(&parsed);
+            d_free(dom, sets);
+            return -1;
+        }
+        if (status == GARB_OK) {
             garb_reading_t how = {0};
             int32_t n = garb_read_declaration(&parsed, &parsed.decl, how, sets);
             if (n > 0 && n <= SHORT_PROPS) {
@@ -428,6 +436,31 @@ static bool short_is_box(const DShort *s)
     return true;
 }
 
+static bool ends_with(const char *text, const char *suffix)
+{
+    size_t n = os64_strlen(text), m = os64_strlen(suffix);
+    return n >= m && os64_memcmp(text + n - m, suffix, m) == 0;
+}
+
+// Whether every longhand of `s` is a grid line (`grid-row-start`...).
+static bool short_is_grid_lines(const DShort *s)
+{
+    for (int32_t i = 0; i < s->n; i++) {
+        const char *name = garb_prop_name(s->props[i]);
+        if (os64_memcmp(name, "grid-", 5) != 0 || !(ends_with(name, "-start") || ends_with(name, "-end")))
+            return false;
+    }
+    return true;
+}
+
+// Whether `s` is a position's x and y (`background-position`), whose
+// values are lists, one item a layer.
+static bool short_is_position(const DShort *s)
+{
+    return s->n == 2 && ends_with(garb_prop_name(s->props[0]), "-position-x") &&
+           ends_with(garb_prop_name(s->props[1]), "-position-y");
+}
+
 enum {
     C_TEXT = GARB_NPROPS, C_LENGTH, C_ITEM, C_GET, C_PRIORITY, C_SET, C_REMOVE, C_PARENT_RULE,
     /* A non-longhand's member: C_SHORT plus its kShort index. */
@@ -467,15 +500,51 @@ static bool same_text(const char *a, size_t al, const char *b, size_t bl)
     return al == bl && os64_memcmp(a, b, al) == 0;
 }
 
-/* A non-longhand, from its longhands' computed values, as CSSOM serializes
- * a shorthand where it can: one value when every longhand agrees
- * (`overflow: visible`, `margin: 0px`); a box's sides or corners in the
- * one-to-four value form, when no one of them is two values (an
- * elliptical corner's pair takes a slashed form); a pair's two values in
- * its order (`overflow: hidden auto`, `gap: 8px 16px`); and "" for the
- * rest, which CSSOM lets a shorthand answer when it cannot be written as
- * one value (`font`, `background`, `border`, a grid line pair's slashed
- * form, those elliptical corners). */
+/* A position's x and y lists, joined a layer at a time ("x y", a comma
+ * between layers); "" when the lists hold different numbers of layers. A
+ * layer's value holds no comma (a length, a percentage, a keyword, a
+ * calc() of them). */
+static JSValue position_value(os64_dom_t *dom, JSContext *ctx, const char *const *text, const size_t *length)
+{
+    /* Each layer adds a space and each comma gains one: at most twice
+     * the two lists, and room for an empty pair's lone space. */
+    char *joined = d_alloc(dom, 2 * (length[0] + length[1]) + 2);
+    if (joined == NULL) return d_error(ctx, "QuotaExceededError", "No room for a computed style");
+    size_t at = 0, x = 0, y = 0;
+    bool ok = true;
+    for (;;) {
+        size_t xs = x, ys = y;
+        while (x < length[0] && text[0][x] != ',') x++;
+        while (y < length[1] && text[1][y] != ',') y++;
+        os64_memcpy(joined + at, text[0] + xs, x - xs);
+        at += x - xs;
+        joined[at++] = ' ';
+        os64_memcpy(joined + at, text[1] + ys, y - ys);
+        at += y - ys;
+        bool x_more = x < length[0], y_more = y < length[1];
+        if (x_more != y_more) { ok = false; break; }
+        if (!x_more) break;
+        joined[at++] = ',';
+        joined[at++] = ' ';
+        for (x++; x < length[0] && text[0][x] == ' '; x++) {}
+        for (y++; y < length[1] && text[1][y] == ' '; y++) {}
+    }
+    JSValue value = ok ? JS_NewStringLen(ctx, joined, at) : JS_NewString(ctx, "");
+    d_free(dom, joined);
+    return value;
+}
+
+/* A non-longhand, from its longhands' computed values, as a browser
+ * serializes the shorthands this knows how to: a position's x and y paired
+ * a layer at a time (`background-position: 0% 0%, 50% 100%`); grid lines
+ * `auto` when every one is; otherwise one value when every longhand
+ * agrees (`overflow: visible`, `margin: 0px`); a box's sides in the
+ * one-to-four value form, and its corners too when no corner is two values
+ * (an elliptical corner's pair takes a slashed form); a pair's two values
+ * in its order (`overflow: hidden auto`, `gap: 8px 16px`). The rest answer
+ * "", which CSSOM allows of a shorthand and which no page can mistake for
+ * a value, where a browser writes most of them out (DEBTS.md: `font`,
+ * `flex`, `border`, `background`, grid lines, the elliptical corners). */
 static JSValue short_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, const DShort *s)
 {
     if (s->n == 0 || computed_empty(dom, ctx, c)) return JS_NewString(ctx, "");
@@ -494,14 +563,18 @@ static JSValue short_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, 
         same = same && same_text(text[i], length[i], text[0], length[0]);
         spaced = spaced || os64_memchr(text[i], ' ', length[i]) != NULL;
     }
+    if (short_is_position(s)) return position_value(dom, ctx, text, length);
+    if (short_is_grid_lines(s))
+        return JS_NewString(ctx, same && same_text(text[0], length[0], "auto", 4) ? "auto" : "");
     if (same) return JS_NewStringLen(ctx, text[0], length[0]);
     int32_t used;
-    if (short_is_box(s) && !spaced) {
+    bool corners = contains(garb_prop_name(s->props[0]), "radius");
+    if (short_is_box(s) && !(corners && spaced)) {
         // top right bottom left: left goes when it is right, bottom when it
         // is top, right when it is top (all four the same answered above).
         used = !same_text(text[1], length[1], text[3], length[3]) ? 4
              : !same_text(text[0], length[0], text[2], length[2]) ? 3 : 2;
-    } else if (s->n == 2 && !contains(garb_prop_name_at(s->name_at), "grid-")) {
+    } else if (s->n == 2) {
         used = 2;
     } else {
         return JS_NewString(ctx, "");

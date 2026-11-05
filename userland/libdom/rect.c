@@ -148,15 +148,14 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     return out;
 }
 
-/* The DOMRect row (modern.c): DOMRectReadOnly, and DOMRect inheriting it,
- * whose four numbers are writable. */
 /* DOMRECTLIST AND getClientRects (CSSOM View § 6.1): a list made for one
  * read, its rects its own read-only indexed properties and its length
  * kept on its opaque (one more than the count, so an empty list is not a
  * NULL one). An element with a layout box answers its border box, one
  * rect for the whole element (DEBTS.md: a box split across lines answers
  * one rect, where a browser answers one per fragment); an element with
- * none (display: none, detached) answers an empty list. */
+ * none (display: none, detached) answers an empty list, and so does an
+ * SVG element, which the layout provider does not measure (DEBTS.md). */
 static JSClassID list_slot;
 enum { L_LENGTH, L_ITEM };
 
@@ -218,6 +217,8 @@ static int list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     return d_method(dom, ctx, dom->prototypes[D_PROTO_ELEMENT]->value, "getClientRects", client_rects, 0, 0);
 }
 
+/* The DOMRect row (modern.c): DOMRectReadOnly, DOMRect inheriting it,
+ * whose four numbers are writable, then DOMRectList and getClientRects. */
 int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue parent = JS_UNDEFINED, parent_proto = JS_UNDEFINED;
