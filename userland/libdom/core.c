@@ -478,6 +478,7 @@ void os64_dom_drain(os64_dom_t *dom)
     d_observers_drain(dom);
     d_intersections_drain(dom);
     d_resizes_drain(dom);
+    d_walkers_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -510,6 +511,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_observers_free(dom);
     d_intersections_free(dom);
     d_resizes_free(dom);
+    d_walkers_free(dom);
     d_kept_free_all(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;

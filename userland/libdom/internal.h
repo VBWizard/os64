@@ -627,6 +627,8 @@ struct os64_dom {
     size_t intersections_held;
     os64_dom_intersections_provider_t intersections_provider;
     void *intersections_opaque;
+    /* The traversal row's walkers and iterators (walker.c). */
+    struct DWalks *walks;
     /* ResizeObserver (resize.c), the same three. */
     struct DResizes *resizes;
     size_t resizes_held;
@@ -1730,6 +1732,10 @@ void d_intersections_free(os64_dom_t *dom);
 int d_resizes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_resizes_drain(os64_dom_t *dom);
 void d_resizes_free(os64_dom_t *dom);
+/* DOM § 6's traversal (walker.c): its row, and the teardown halves. */
+int d_walkers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_walkers_drain(os64_dom_t *dom);
+void d_walkers_free(os64_dom_t *dom);
 /* DOMRectReadOnly and DOMRect (rect.c): the row's installer, and a new
  * rect of either for the binding's own answers (the switch on). */
 int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

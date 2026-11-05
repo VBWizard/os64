@@ -125,6 +125,9 @@ static const DModernRow kModern[] = {
      * entries carry. */
     {(const char *const[]){"IntersectionObserver", "IntersectionObserverEntry", NULL}, d_intersections_install},
     {(const char *const[]){"ResizeObserver", "ResizeObserverEntry", "ResizeObserverSize", NULL}, d_resizes_install},
+    /* DOM § 6: TreeWalker, NodeIterator and NodeFilter, and Document's two
+     * factories. */
+    {(const char *const[]){"TreeWalker", "NodeIterator", "NodeFilter", NULL}, d_walkers_install},
     /* 0f's node row: members of Node's, Attr's, Text's and a template's
      * prototypes, none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},
