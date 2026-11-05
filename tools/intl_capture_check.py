@@ -7,8 +7,8 @@ Usage (tools/test_intl_capture_host.sh builds the runner and calls this):
 The capture is what tools/pages/intl-capture.html recorded in a browser:
 every case's options, and per case the construction's outcome, the
 resolved options, and the strings and parts of its formats and ranges
-(DateTimeFormat's, NumberFormat's) or its plural categories
-(PluralRules').
+(DateTimeFormat's, NumberFormat's, RelativeTimeFormat's, ListFormat's) or
+its plural categories (PluralRules').
 Each case is run again through libjs (the runner's --script mode), and
 every field that differs is reported with both answers; U+202F and U+2009
 are shown by name, since they are what a folded comparison would hide.
@@ -46,7 +46,7 @@ function numberValue(text) {
 }
 const numberOut = [];
 for (const c of %s) {
-    const C = c.kind === 'PluralRules' ? Intl.PluralRules : Intl.NumberFormat;
+    const C = Intl[c.kind];
     const f = attempt(() => new C('en-US', c.options));
     const r = {};
     if (typeof f === 'string') { r.construct = f; numberOut.push(r); continue; }
@@ -57,6 +57,8 @@ for (const c of %s) {
     if (c.rangeParts) r.rangeParts = c.rangeParts.map(([x, y]) => [x, y, attempt(() => f.formatRangeToParts(numberValue(x), numberValue(y)))]);
     if (c.select) r.select = c.select.map(([v]) => [v, f.select(numberValue(v))]);
     if (c.selectRange) r.selectRange = c.selectRange.map(([x, y]) => [x, y, attempt(() => f.selectRange(numberValue(x), numberValue(y)))]);
+    if (c.relative) r.relative = c.relative.map(([v, u]) => [v, u, attempt(() => f.format(numberValue(v), u)), attempt(() => f.formatToParts(numberValue(v), u))]);
+    if (c.lists) r.lists = c.lists.map(([l]) => [l, f.format(l), f.formatToParts(l)]);
     numberOut.push(r);
 }
 const zoneOf = z => attempt(() => new Intl.DateTimeFormat('en-US', {timeZone: z}).resolvedOptions().timeZone);
@@ -111,7 +113,8 @@ def main():
             if theirs.get(field) != mine.get(field):
                 differences.append((theirs['options'], field, theirs.get(field), mine.get(field)))
     for theirs, mine in zip(number_cases, ours['numberCases']):
-        for field in ('construct', 'resolved', 'format', 'parts', 'range', 'rangeParts', 'select', 'selectRange'):
+        for field in ('construct', 'resolved', 'format', 'parts', 'range', 'rangeParts', 'select', 'selectRange',
+                      'relative', 'lists'):
             if field not in theirs and field not in mine:
                 continue
             compared += 1

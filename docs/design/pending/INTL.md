@@ -281,6 +281,13 @@ The hard part, because pages pass zone names and read them back:
   cost of the frames a failure inside Intl reports), and a separate
   compiled script for the number tables would save the deferred
   function's 87 KiB in a dates-only realm.
+- **Measured (A2's RelativeTimeFormat and ListFormat, 2026-11-05, the same
+  way):** the script 174 KiB of source and 119 KiB of bytecode, the data
+  187 KiB and 137 KiB. The install costs 0.52 ms and 318 KiB a realm.
+  RelativeTimeFormat's fields are in the deferred number tables, which its
+  first construction builds too (1.9 ms and 735 KiB as a realm's first);
+  the list patterns are small and in the data proper, so a realm's first
+  ListFormat costs what its first DateTimeFormat does (1.3 ms, 569 KiB).
 - **The page's bytecode cache.** A kept blob is keyed by the engine's
   build identity, a hash over upstream and the libjs patch series
   (BYTECODE_CACHE.md). Intl's script is not among those sources, and a
@@ -337,9 +344,10 @@ The hard part, because pages pass zone names and read them back:
   finding 5.) The capture page asks NumberFormat's and PluralRules'
   cases too (a matrix of styles by modifiers, a seeded random sample of
   option sets, values that are Numbers, BigInts and strings, ranges,
-  parts and plural categories); the Chrome 156 capture in the tree
-  predates them, so they are held by the next one, and until then by
-  test262 and by § 9.6's rule.
+  parts and plural categories), and RelativeTimeFormat's and ListFormat's
+  (every style, units and values about now, lists of every length); the
+  Chrome 156 capture in the tree predates them, so they are held by the
+  next one, and until then by test262 and by § 9.6's rule.
 - **The glass:** `tools/pages/intl.html` shows the strings in yonder,
   checked against Chrome's, on QEMU and the P5. Since Intl writes only
   ASCII spaces, yonder's boxes for U+2000-block spaces (DEBTS) are not on
@@ -413,6 +421,10 @@ made:
    `"standard"`; a `roundingPriority` with trailing zeros stripped reports
    `"auto"`; PluralRules resolves `en-US` to `en`; a plural range CLDR
    does not list is `other`; a range's approximately sign is never written
-   into an accounting negative; and `formatRangeToParts` reports the
+   into an accounting negative; `formatRangeToParts` reports the
    parts beside a collapsed currency code's spacing as ICU's spans place
-   them, one character early.
+   them, one character early; RelativeTimeFormat's `numeric: "auto"`
+   finds its words ("today", "tomorrow") for a value that rounds to a
+   whole -2..2 at hundredths, so 0.004 days is "today" (ECMA-402 matches
+   the exact value); and ListFormat's `formatToParts` writes no part for an
+   empty element, joining the text around it into one literal.

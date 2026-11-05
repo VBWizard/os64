@@ -4,8 +4,8 @@
 Usage: tools/intl_cldr.py <cldr dir> [zoneinfo dir] > userland/libjs/intl/intl_data.js
   <cldr dir> holds the cldr-json packages of one version, unpacked:
   cldr-core/, cldr-dates-full/, cldr-numbers-full/, cldr-bcp47/,
-  cldr-localenames-full/ and cldr-units-full/ (npm's tarballs; the last
-  two only their main/en).
+  cldr-localenames-full/, cldr-units-full/ and cldr-misc-full/ (npm's
+  tarballs; the last three only their main/en).
 
 INTL.md § 4.2: every table the formatters read is CLDR's, taken whole for
 `en` and copied, never typed, its version written into the file's head.
@@ -25,8 +25,9 @@ What is taken:
   hourCycles     the US's preferred and allowed hour cycles (timeData)
   likely         likely subtags for the English tags and every `und` row
                  (INTL.md § 7: other tags maximize to themselves)
-  numbers        deferred (a function returning the three below, which
-                 the first NumberFormat or PluralRules calls):
+  numbers        deferred (a function returning the four below, which
+                 the first NumberFormat, PluralRules or RelativeTimeFormat
+                 calls):
     numbers      the latn symbols, the decimal, percent, scientific and
                  currency patterns (standard, accounting, the
                  alphaNextToNumber forms, compact short and long, currency
@@ -38,6 +39,11 @@ What is taken:
                  sanctioned per-units it has (km/h), and the compound
                  "per" patterns
     plurals      en's cardinal and ordinal rules and its plural ranges
+    relative     the relative-time fields of RelativeTimeFormat's eight
+                 units in each width: the words for -1, 0 and 1 ("yesterday")
+                 and the future and past patterns by plural category
+  lists          the list patterns of the three types in each width
+                 (conjunction is CLDR's "standard", disjunction its "or")
   aliases        language, script, territory and variant aliases (the
                  canonical form of every locale argument, UTS 35)
   uAliases       each -u- key's value aliases, from the bcp47 data: a
@@ -166,6 +172,7 @@ def main():
     currency_names = load(root, 'cldr-numbers-full', 'main', 'en', 'currencies.json')['main']['en']['numbers']['currencies']
     fractions = load(root, 'cldr-core', 'supplemental', 'currencyData.json')['supplemental']['currencyData']['fractions']
     units_en = load(root, 'cldr-units-full', 'main', 'en', 'units.json')['main']['en']['units']
+    fields_all = load(root, 'cldr-dates-full', 'main', 'en', 'dateFields.json')['main']['en']['dates']['fields']
     plural_rules = load(root, 'cldr-core', 'supplemental', 'plurals.json')['supplemental']['plurals-type-cardinal']['en']
     ordinal_rules = load(root, 'cldr-core', 'supplemental', 'ordinals.json')['supplemental']['plurals-type-ordinal']['en']
     plural_ranges = load(root, 'cldr-core', 'supplemental', 'pluralRanges.json')['supplemental']['plurals']['en']
@@ -219,6 +226,15 @@ def main():
                            if code != 'DEFAULT' and f['_digits'] != fractions['DEFAULT']['_digits']},
     }
 
+    # RelativeTimeFormat's units, each in its three widths.
+    relative = {}
+    for unit in ('second', 'minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'):
+        for width in ('', '-short', '-narrow'):
+            entry = fields_all[unit + width]
+            relative[unit + width] = {k: v for k, v in entry.items()
+                                      if k.startswith('relative-type-') or k.startswith('relativeTime-type-')}
+    lists = load(root, 'cldr-misc-full', 'main', 'en', 'listPatterns.json')['main']['en']['listPatterns']
+
     dtf = greg['dateTimeFormats']
     # The fields' names, which an append item's {2} writes (ICU's
     # getAppendName: the wide display name, quoted).
@@ -250,13 +266,16 @@ def main():
             'countries': countries,
         },
         'dayPeriods': periods,
-        # NumberFormat's and PluralRules' tables, built by the first of them
-        # a realm constructs, so a realm that formats only dates never does.
+        # NumberFormat's, PluralRules' and RelativeTimeFormat's tables, built
+        # by the first of them a realm constructs, so a realm that formats
+        # only dates never does.
         'numbers': Deferred({
             'numbers': number_data,
             'units': units,
             'plurals': {'cardinal': plural_rules, 'ordinal': ordinal_rules, 'ranges': plural_ranges},
+            'relative': relative,
         }),
+        'lists': lists,
         'hourCycles': {'US': time_data['US'], '001': time_data['001']},
         'likely': {k: v for k, v in likely.items()
                    if k in ('und', 'en') or k.startswith('en-') or k.startswith('und-')},

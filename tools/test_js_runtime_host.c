@@ -1094,7 +1094,11 @@ static void intl_cases(void)
         "    throw new Error('NumberFormat');\n"
         "if (new Intl.NumberFormat('en', {notation: 'compact'}).formatRange(3000, 5000) !== '3K \u2013 5K')\n"
         "    throw new Error('formatRange');\n"
-        "if (new Intl.PluralRules('en-US', {type: 'ordinal'}).select(22) !== 'two') throw new Error('PluralRules');\n"),
+        "if (new Intl.PluralRules('en-US', {type: 'ordinal'}).select(22) !== 'two') throw new Error('PluralRules');\n"
+        "if (new Intl.RelativeTimeFormat('en-US', {numeric: 'auto'}).format(-1, 'days') !== 'yesterday')\n"
+        "    throw new Error('RelativeTimeFormat');\n"
+        "if (new Intl.ListFormat('en-US', {type: 'disjunction'}).format(['a', 'b', 'c']) !== 'a, b, or c')\n"
+        "    throw new Error('ListFormat');\n"),
         "Intl formats in the host's zone, published as a global property");
     check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
           "Intl installs once and only before evaluation");
@@ -1172,9 +1176,10 @@ static void intl_cases(void)
            inventory, swept);
 
     /* The CLDR data is evaluated by a realm's first construction, not by
-     * the install, and the number tables by its first NumberFormat or
-     * PluralRules: each allocation of such a construction refused in turn
-     * is the runtime's sticky failure, with nothing left behind. */
+     * the install, and the number tables by its first NumberFormat,
+     * PluralRules or RelativeTimeFormat: each allocation of such a
+     * construction refused in turn is the runtime's sticky failure, with
+     * nothing left behind. */
     intl_first_sweep(&config, "", "function first() { new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).format(0) }",
                      "a first construction");
     intl_first_sweep(&config, "", "function first() { new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(1) }",
@@ -1182,6 +1187,10 @@ static void intl_cases(void)
     intl_first_sweep(&config, "new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).format(0);",
                      "function first() { new Intl.PluralRules('en-US').select(1) }",
                      "a first PluralRules after a date format");
+    intl_first_sweep(&config, "", "function first() { new Intl.RelativeTimeFormat('en-US').format(3, 'days') }",
+                     "a first RelativeTimeFormat");
+    intl_first_sweep(&config, "", "function first() { new Intl.ListFormat('en-US').format(['a', 'b', 'c']) }",
+                     "a first ListFormat");
 }
 
 /* Host tasks (CONTRACT.md § Host tasks): a function value called under one

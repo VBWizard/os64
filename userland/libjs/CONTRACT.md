@@ -145,7 +145,7 @@ leaves no `Intl`. Its script captures the built-ins it calls as it loads,
 which is why it must run before any page script. Its CLDR data is evaluated
 by the realm's first construction (a constructor or `supportedLocalesOf`),
 not by the install, and the number tables within it by the realm's first
-`NumberFormat` or `PluralRules`, each inside whatever call made it and under
+`NumberFormat`, `PluralRules` or `RelativeTimeFormat`, each inside whatever call made it and under
 that call's budget: a refused allocation there is the runtime's sticky
 failure, as in any script. The compiled script and data are kept for the process and read
 by every later runtime; that bytecode never leaves the process. The
