@@ -1,0 +1,2 @@
+# test262 built-ins/Date/prototype/toLocaleTimeString, held by tools/test262/run.py (its docstring says how).
+[excluded]

@@ -10,7 +10,9 @@
  * made in `ctx`, or JS_EXCEPTION with the context's exception pending (a
  * locale the data does not hold among its causes). It must run before any
  * page script in the realm: intl.js captures the built-ins it calls as it
- * loads. Nothing is defined on the global. */
+ * loads. Nothing is defined on the global; as its last step the script
+ * redefines the built-ins ECMA-402 redefines (toLocaleString and its kin,
+ * localeCompare) on the realm's prototypes. */
 JSValue js_intl_build(JSContext *ctx, const char *locale);
 
 #endif

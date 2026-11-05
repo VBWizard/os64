@@ -75,6 +75,10 @@ so.</p>
       ['a numeric sort, base letters', () => ['item 10', 'Item 9', 'item 1', '\u00e9clair', 'Eclair', 'Zoe', 'zo\u00eb', '_x', 'apple']
          .sort(new Intl.Collator('en-US', {numeric: true, sensitivity: 'base'}).compare).join(', '),
        '_x, apple, \u00e9clair, Eclair, item 1, Item 9, item 10, Zoe, zo\u00eb'],
+      ['toLocaleDateString', () => new Date(at).toLocaleDateString('en-US', {...ny, weekday: 'long', month: 'long', day: 'numeric'}),
+       'Saturday, July 4'],
+      ['an array toLocaleString', () => [1234.5, 'x', null].toLocaleString(), '1,234.5,x,'],
+      ['localeCompare', () => ['b', 'A', 'a', 'B'].sort((x, y) => x.localeCompare(y)).join(' '), 'a A b B'],
     ];
     let good = 0;
     for (const [what, f, expected] of cases) {

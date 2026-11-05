@@ -1,0 +1,4 @@
+# test262 built-ins/String/prototype/localeCompare, held by tools/test262/run.py (its docstring says how).
+[excluded]
+built-ins/String/prototype/localeCompare/15.5.4.9_CE.js	canonical equivalence with two or more marks reordered: the collator does not normalize (DEBTS § Intl)
+built-ins/String/prototype/localeCompare/15.5.4.9_CE.js (strict)	canonical equivalence with two or more marks reordered: the collator does not normalize (DEBTS § Intl)

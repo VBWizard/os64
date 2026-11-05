@@ -11,6 +11,7 @@
  *   I.zoneOffset     (canonical name, epoch ms) → minutes east of UTC
  *   I.zoneHost       () → the machine's zone: a canonical name, or an
  *                    offset zone ("+05:30")
+ *   I.zoneList       () → every canonical zone name the table holds
  *
  * Because it runs before any page script, every built-in it touches is
  * the realm's own: the ones it calls while formatting are captured here,
@@ -56,7 +57,11 @@ const DateNow = Date_.now;
 const getPrototypeOf = Object_.getPrototypeOf, setPrototypeOf = Object_.setPrototypeOf;
 const ObjectPrototype = Object_.prototype;
 const RegExpProto = RegExp.prototype, r_exec = RegExpProto.exec;
-const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.zoneHost;
+const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.zoneHost, zoneList = I.zoneList;
+// The methods that read a built-in's own value (thisTimeValue and its kin),
+// which refuse a receiver without the slot as the engine's own do.
+const dateGetTime = Date_.prototype.getTime, numberValueOf = Number_.prototype.valueOf;
+const bigintValueOf = BigInt_.prototype.valueOf;
 
 // THE DATA, loaded by the first construction in a realm (INTL.md § 6, the
 // § 9.3 ruling): the constructors and prototypes are installed whole and
@@ -77,7 +82,7 @@ function loadData() {
 // writes as a function, so a realm that formats only dates never builds
 // them: NumberFormat, PluralRules and RelativeTimeFormat build them at
 // their first construction.
-let NUM, UNITS, PLURALS, RELATIVE;
+let NUM, UNITS, PLURALS, RELATIVE, CURRENT_CURRENCIES;
 // Collator's elements are a deferred part of the data too, built by the
 // first Collator.
 // The table is read into a dense array by slot (collationSlot), so a
@@ -109,7 +114,8 @@ function loadNumberData() {
     loadData();
     if (NUM !== undefined) return;
     const N = apply(NUMBER_DATA, undefined, []);
-    UNITS = N.units; PLURALS = N.plurals; RELATIVE = N.relative; NUM = N.numbers;      // NUM last: it says the tables are here
+    UNITS = N.units; PLURALS = N.plurals; RELATIVE = N.relative; CURRENT_CURRENCIES = N.currentCurrencies;
+    NUM = N.numbers;      // last: it says the tables are here
 }
 // The default locale is the host's, and ECMA-402 requires it to be one the
 // data holds: a host that names another is refused (the install fails),
@@ -3670,14 +3676,131 @@ method(CollatorPrototype, 'resolvedOptions', methodOf(function () {
     return o;
 }), 0);
 
+// ── Intl's functions (ECMA-402 § 8.3) ──────────────────────────────────
+// A fresh array of a list's elements, as CreateArrayFromList makes one.
+function arrayOf(list) { const out = []; for (let i = 0; i < list.length; i++) push(out, list[i]); return out; }
+function getCanonicalLocales(locales) { loadData(); return arrayOf(CanonicalizeLocaleList(locales)); }
+// supportedValuesOf: what the data truly holds, sorted. The zones are
+// every canonical zone, "UTC" and "Etc/GMT+5" among them, as test262 holds
+// (V8 lists the location zones alone: INTL.md § 9.6); the currencies are
+// those some region uses as tender today (CLDR's), where V8 lists ICU's
+// ISO table, which keeps a few just retired; the one collation is the
+// root's, which has no name to list.
+function supportedValuesOf(key) {
+    key = ToString(key);
+    let list;
+    if (key === 'calendar') list = ['gregory'];
+    else if (key === 'collation') list = [];
+    else if (key === 'currency') { loadNumberData(); list = arrayOf(CURRENT_CURRENCIES); }
+    else if (key === 'numberingSystem') list = ['latn'];
+    else if (key === 'timeZone') list = arrayOf(zoneList());
+    else if (key === 'unit') list = arrayOf(SANCTIONED_UNITS);
+    else throw new RangeError_('Invalid key : ' + key);
+    sortStrings(list);
+    return list;
+}
+
+// ── The built-ins ECMA-402 redefines (§ 19, § 20) ───────────────────────
+// Each formats through Intl's own constructors; with neither locales nor
+// options, through one made once a realm (V8 keeps the same), since a page
+// may call them in a loop.
+const DEFAULT_FORMATS = {__proto__: null};
+function defaultSlots(key, make) {
+    let s = own(DEFAULT_FORMATS, key);
+    if (s === undefined) { s = make(); DEFAULT_FORMATS[key] = s; }
+    return s;
+}
+function dateTimeSlots(locales, options, required, defaults) {
+    const make = () => { const key = {__proto__: null}; CreateDateTimeFormat(key, locales, options, required, defaults); return slots(DTFS, key); };
+    return locales === undefined && options === undefined ? defaultSlots('date ' + required + ' ' + defaults, make) : make();
+}
+// Date.prototype.toLocaleString and its date and time halves (§ 20.4).
+function dateToLocale(date, locales, options, required, defaults) {
+    const x = apply(dateGetTime, date, []);
+    if (x !== x) return 'Invalid Date';
+    const s = dateTimeSlots(locales, options, required, defaults);
+    return asciiSpaces(partsToString(formatParts(s, s.pattern, x)));
+}
+function numberSlots(locales, options) {
+    const make = () => slots(NUMBER_FORMATS, new NumberFormat(locales, options));
+    return locales === undefined && options === undefined ? defaultSlots('number', make) : make();
+}
+function collatorSlots(locales, options) {
+    const make = () => slots(COLLATORS, new Collator(locales, options));
+    return locales === undefined && options === undefined ? defaultSlots('collator', make) : make();
+}
+// Array.prototype.toLocaleString (§ 19.5.1): each element's own
+// toLocaleString, given the locales and options. An array already being
+// written (one that holds itself, at any depth) writes as nothing, as V8's
+// and SpiderMonkey's do ([1, a] is "1,"), where recursing would overflow
+// the stack.
+const LOCALE_JOINS = [];
+let localeJoinDepth = 0;
+function arrayToLocaleString(locales, options) {
+    const array = ToObject(this);
+    for (let i = 0; i < localeJoinDepth; i++) if (LOCALE_JOINS[i] === array) return '';
+    put(LOCALE_JOINS, localeJoinDepth++, array);
+    try {
+        const len = ToLength(array.length), out = [];
+        for (let k = 0; k < len; k++) {
+            const element = array[k];
+            if (element === undefined || element === null) { push(out, ''); continue; }
+            const f = element.toLocaleString;
+            if (typeof f !== 'function') throw new TypeError_('toLocaleString is not a function');
+            push(out, ToString(apply(f, element, [locales, options])));
+        }
+        return join(out, ',');
+    } finally {
+        put(LOCALE_JOINS, --localeJoinDepth, undefined);
+    }
+}
+
 // ── The Intl object ─────────────────────────────────────────────────────
 const Intl = {};     // script-visible: its properties are defined, below
 defineProperty(Intl, toStringTag, {__proto__: null, value: 'Intl', writable: false, enumerable: false, configurable: true});
 // The constructors in Chrome's order, so a page listing Intl's names reads
 // these in the order it would there.
+method(Intl, 'getCanonicalLocales', methodOf(getCanonicalLocales), 1);
+method(Intl, 'supportedValuesOf', methodOf(supportedValuesOf), 1);
 const CONSTRUCTORS = [['DateTimeFormat', DateTimeFormat], ['NumberFormat', NumberFormat], ['Collator', Collator], ['PluralRules', PluralRules],
                       ['RelativeTimeFormat', RelativeTimeFormat], ['ListFormat', ListFormat], ['Locale', Locale]];
 for (let i = 0; i < CONSTRUCTORS.length; i++)
     defineProperty(Intl, CONSTRUCTORS[i][0], {__proto__: null, value: CONSTRUCTORS[i][1], writable: true, enumerable: false, configurable: true});
+// The redefined built-ins, last: once they are defined the realm's
+// toLocale* and localeCompare are Intl's.
+const DateProto = Date_.prototype;
+method(DateProto, 'toLocaleString', methodOf(function (locales, options) { return dateToLocale(this, locales, options, 'any', 'all'); }), 0);
+method(DateProto, 'toLocaleDateString', methodOf(function (locales, options) { return dateToLocale(this, locales, options, 'date', 'date'); }), 0);
+method(DateProto, 'toLocaleTimeString', methodOf(function (locales, options) { return dateToLocale(this, locales, options, 'time', 'time'); }), 0);
+method(Number_.prototype, 'toLocaleString', methodOf(function (locales, options) {
+    const x = apply(numberValueOf, this, []);
+    return partsToString(numberParts(numberSlots(locales, options), decimalOfNumber(x)));
+}), 0);
+method(BigInt_.prototype, 'toLocaleString', methodOf(function (locales, options) {
+    const x = apply(bigintValueOf, this, []);
+    return partsToString(numberParts(numberSlots(locales, options), ToIntlMathematicalValue(x)));
+}), 0);
+method(StringProto, 'localeCompare', methodOf(function (that, locales, options) {
+    if (this === undefined || this === null) throw new TypeError_('String.prototype.localeCompare called on null or undefined');
+    const s = ToString(this), t = ToString(that);
+    return compareStrings(collatorSlots(locales, options), s, t);
+}), 1);
+method(Array_.prototype, 'toLocaleString', methodOf(arrayToLocaleString), 0);
+// toLocaleUpperCase and toLocaleLowerCase (§ 19.1.2-3): the locales are
+// validated, and every locale the data holds cases as the engine's
+// locale-free mapping does (Turkish, Azeri and Lithuanian, which case
+// otherwise, are not held: INTL.md § 7).
+method(StringProto, 'toLocaleUpperCase', methodOf(function (locales) {
+    if (this === undefined || this === null) throw new TypeError_('String.prototype.toLocaleUpperCase called on null or undefined');
+    const s = ToString(this);
+    loadData(); CanonicalizeLocaleList(locales);
+    return apply(s_toUpperCase, s, []);
+}), 0);
+method(StringProto, 'toLocaleLowerCase', methodOf(function (locales) {
+    if (this === undefined || this === null) throw new TypeError_('String.prototype.toLocaleLowerCase called on null or undefined');
+    const s = ToString(this);
+    loadData(); CanonicalizeLocaleList(locales);
+    return lower(s);
+}), 0);
 return Intl;
 })

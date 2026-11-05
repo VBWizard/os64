@@ -230,6 +230,14 @@ capture.probes['Locale en maximize'] = attempt(() => new Intl.Locale('en').maxim
 capture.probes['Locale cel-gaulish'] = attempt(() => new Intl.Locale('cel-gaulish').toString());
 capture.probes['Date toLocaleString 0'] = new Date(0).toLocaleString('en-US', {timeZone: 'UTC'});
 capture.probes['Date toString 0'] = new Date(0).toString();
+capture.probes['toLocaleString 1234.5'] = (1234.5).toLocaleString();
+capture.probes['toLocaleString BigInt'] = (12345678901234567890n).toLocaleString('en', {style: 'currency', currency: 'EUR'});
+capture.probes['Array toLocaleString'] = [1234.5, new Date(0), null, 'x'].toLocaleString('en-US', {timeZone: 'UTC'});
+capture.probes['localeCompare a B'] = 'a'.localeCompare('B');
+capture.probes['Date toLocaleDateString long'] = new Date(1.5e12).toLocaleDateString('en-US', {month: 'long', day: 'numeric', timeZone: 'UTC'});
+capture.probes['getCanonicalLocales'] = attempt(() => Intl.getCanonicalLocales(['EN-us', 'en-latn-US', 'hy-SU']));
+for (const k of ['calendar', 'collation', 'currency', 'numberingSystem', 'timeZone', 'unit'])
+    capture.probes['supportedValuesOf ' + k] = attempt(() => Intl.supportedValuesOf(k));
 // The surface: Intl's own names and each constructor's prototype's.
 capture.surface.Intl = Object.getOwnPropertyNames(Intl).sort();
 for (const name of capture.surface.Intl) {

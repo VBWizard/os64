@@ -186,6 +186,27 @@ static JSValue zone_host(JSContext *ctx, JSValueConst this_value, int argc, JSVa
     return offset_zone(ctx, now.tz_offset_minutes);
 }
 
+/* zoneList(): every canonical zone name the table holds, in its order (a
+ * name whose canonical entry is itself). */
+static JSValue zone_list(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv)
+{
+    (void)this_value; (void)argc; (void)argv;
+    JSValue list = JS_NewArray(ctx);
+    if (JS_IsException(list)) return list;
+    uint32_t n = 0;
+    for (size_t i = 0; i < ZONE_NAMES; i++) {
+        if ((size_t)kZoneNames[i].canonical != i) continue;
+        /* A refused string is no value to define: the define would store
+         * the exception's tag and succeed. */
+        JSValue name = JS_NewString(ctx, kZoneNames[i].name);
+        if (JS_IsException(name) || JS_DefinePropertyValueUint32(ctx, list, n++, name, JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, list);
+            return JS_EXCEPTION;
+        }
+    }
+    return list;
+}
+
 /* ── The compiled scripts, kept for the process ────────────────────────── */
 /* As streams.c keeps streams.js (STREAMS.md § 8): the first realm compiles
  * each script and keeps its bytecode here, and every later one reads it,
@@ -267,6 +288,7 @@ static const JSCFunctionListEntry kDoor[] = {
     JS_CFUNC_DEF("zoneCanonical", 1, zone_canonical),
     JS_CFUNC_DEF("zoneOffset", 2, zone_offset),
     JS_CFUNC_DEF("zoneHost", 0, zone_host),
+    JS_CFUNC_DEF("zoneList", 0, zone_list),
 };
 
 JSValue js_intl_build(JSContext *ctx, const char *locale)

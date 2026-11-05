@@ -141,8 +141,15 @@ exception: ECMA-402 requires the default to be an available locale. It follows t
 evaluation, once, under the setup budget and the runtime's memory. The object
 is published as one global property (writable, configurable, not enumerable)
 only once all of it is made, so a refused allocation or a failed definition
-leaves no `Intl`. Its script captures the built-ins it calls as it loads,
-which is why it must run before any page script. Its CLDR data is evaluated
+leaves no `Intl`. As the script's last step it redefines the built-ins
+ECMA-402 redefines (`Date.prototype.toLocaleString` and its date and time
+halves, `Number`'s and `BigInt`'s `toLocaleString`,
+`Array.prototype.toLocaleString`, `String.prototype.localeCompare`,
+`toLocaleUpperCase` and `toLocaleLowerCase`); every refusal that can come
+before that step (a default locale the data does not hold among them)
+leaves them as they were, and any after it (an allocation refused, the
+setup deadline, a cancel) is the runtime's sticky failure. Its script captures the built-ins it calls
+as it loads, which is why it must run before any page script. Its CLDR data is evaluated
 by the realm's first construction (a constructor or `supportedLocalesOf`),
 not by the install, the number tables within it by the realm's first
 `NumberFormat`, `PluralRules` or `RelativeTimeFormat`, and the collation by

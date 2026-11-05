@@ -40,8 +40,6 @@ intl402/NumberFormat/prototype/format/unit-ko-KR.js	a locale other than en (de, 
 intl402/NumberFormat/prototype/format/unit-ko-KR.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
 intl402/NumberFormat/prototype/format/unit-zh-TW.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
 intl402/NumberFormat/prototype/format/unit-zh-TW.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
-intl402/NumberFormat/prototype/format/units.js	Number.prototype.toLocaleString through Intl ships in A3 (INTL.md § 9.5)
-intl402/NumberFormat/prototype/format/units.js (strict)	Number.prototype.toLocaleString through Intl ships in A3 (INTL.md § 9.5)
 intl402/NumberFormat/prototype/format/useGrouping-de-DE.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
 intl402/NumberFormat/prototype/format/useGrouping-de-DE.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
 intl402/NumberFormat/prototype/format/useGrouping-en-IN.js	en-IN's lakh grouping (1,00,000): the data is en-US's (INTL.md § 7)

@@ -71,6 +71,14 @@ probes['de-DE resolved locale'] = new Intl.DateTimeFormat('de-DE').resolvedOptio
 probes['Locale und-Thai maximize'] = attempt(() => new Intl.Locale('und-Thai').maximize().toString());
 probes['Locale en maximize'] = attempt(() => new Intl.Locale('en').maximize().toString());
 probes['Locale cel-gaulish'] = attempt(() => new Intl.Locale('cel-gaulish').toString());
+probes['toLocaleString 1234.5'] = (1234.5).toLocaleString();
+probes['toLocaleString BigInt'] = (12345678901234567890n).toLocaleString('en', {style: 'currency', currency: 'EUR'});
+probes['Array toLocaleString'] = [1234.5, new Date(0), null, 'x'].toLocaleString('en-US', {timeZone: 'UTC'});
+probes['localeCompare a B'] = 'a'.localeCompare('B');
+probes['Date toLocaleDateString long'] = new Date(1.5e12).toLocaleDateString('en-US', {month: 'long', day: 'numeric', timeZone: 'UTC'});
+probes['getCanonicalLocales'] = attempt(() => Intl.getCanonicalLocales(['EN-us', 'en-latn-US', 'hy-SU']));
+for (const k of ['calendar', 'collation', 'currency', 'numberingSystem', 'timeZone', 'unit'])
+    probes['supportedValuesOf ' + k] = attempt(() => Intl.supportedValuesOf(k));
 const surface = {Intl: Object.getOwnPropertyNames(Intl).sort()};
 for (const name of surface.Intl) {
     const value = Intl[name];

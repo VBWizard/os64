@@ -306,6 +306,13 @@ The hard part, because pages pass zone names and read them back:
   176 ms natively, 1.3 µs a compare (a plain JavaScript comparator, 8 ms;
   Chrome's ICU, under 10 ms in Node), and two 100,000-character strings
   that differ at the front compare at once.
+- **Measured (A3's redefined built-ins, 2026-11-05, the same way):** the
+  script 197 KiB of source and 132 KiB of bytecode; the install 0.54 ms
+  and 339 KiB a realm. `toLocaleString` and its kin with neither locales
+  nor options format through one formatter made once a realm, as V8
+  keeps one: a realm's first `(1234.5).toLocaleString()` costs 1.3 ms,
+  its first `new Date().toLocaleString()` 5 ms (the field patterns' table
+  A1 builds at its first field bag), and later calls the format alone.
 - **The page's bytecode cache.** A kept blob is keyed by the engine's
   build identity, a hash over upstream and the libjs patch series
   (BYTECODE_CACHE.md). Intl's script is not among those sources, and a
@@ -340,8 +347,8 @@ The hard part, because pages pass zone names and read them back:
   directory (`tools/test262/expected/`) that lists only what is excluded,
   each with its reason; an excluded test that passes fails the run, so
   the list cannot go stale. A1 runs `intl402/` for what it ships; each
-  later cut adds its directories (A3 the redefined built-ins under
-  `built-ins/`). The gate: every test in a shipped constructor's
+  later cut adds its directories (A3 the redefined built-ins' under
+  `intl402/` and their methods' under `built-ins/`). The gate: every test in a shipped constructor's
   directory passes, except those that need what the data or the engine
   does not hold (a locale, calendar, numbering system, historical zone,
   Temporal), a later cut's surface, or a host hook, each listed with its
@@ -461,4 +468,12 @@ made:
    does everywhere ("2%/s").
    Where test262 speaks against V8, libjs follows test262 as the rule
    says: a Collator whose `caseFirst` option overrides a `-u-kf` in the
-   locale resolves without it ("en", where V8 keeps "en-u-kf-upper").
+   locale resolves without it ("en", where V8 keeps "en-u-kf-upper"), and
+   `supportedValuesOf("timeZone")` lists every canonical zone, "UTC" and
+   the "Etc/GMT+5" family among them (V8 lists the 418 location zones
+   alone). Its currencies are CLDR's, those some region uses as tender
+   today (153), where V8 lists ICU's own ISO table (162: the same and nine
+   more, ANG, BGN, CUC, HRK, SLL, SVC and ZWL, some just retired, and the
+   funds XDR and XSU); its calendars, numbering
+   systems and collations are what the data holds (`gregory`, `latn`, and
+   none named), not ICU's.
