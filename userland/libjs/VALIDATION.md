@@ -937,3 +937,21 @@ still agrees in all 5,635 fields; the capture page now asks both
 constructors' cases for the next capture (INTL.md § 8, § 9.6). The `js`
 runner's suites (199 and 40 checks) and the acceptance suite pass. The
 library's exports and imports are unchanged.
+
+## Intl (ECMA-402, slice A2: Collator) validation, 2026-11-05
+
+`Intl.Collator` joins the install, over CLDR root's collation elements for
+Latin, the combining marks and general punctuation (INTL.md § 4.1). The
+runtime suite's Intl case sorts with it, and a sweep refuses each
+allocation of a realm's first Collator, which builds the collation, a
+deferred part of the data (309 allocations on the target core, every one
+refused): each refusal is the runtime's sticky failure and frees
+everything. The suite passes: 9,233 checks on the target core, 27,450
+sanitized.
+
+`tools/test262_host.sh` adds `intl402/Collator`: 120 of 130 run as written
+and strict, the rest German and Thai (locales the data does not hold),
+canonical equivalence with stacked marks reordered (the collator does not
+normalize; DEBTS) and `$262`'s second realm. Four tests elsewhere that had
+waited on a Collator now pass and left their exclusion lists. The capture
+page asks the sign of Collator comparisons for the next capture.

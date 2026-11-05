@@ -71,6 +71,10 @@ so.</p>
       ['relative time', () => new Intl.RelativeTimeFormat('en-US', {style: 'short'}).format(-3, 'months'), '3 mo. ago'],
       ['a list', () => new Intl.ListFormat('en-US').format(['Motorcycle', 'Bus', 'Car']), 'Motorcycle, Bus, and Car'],
       ['a list of units', () => new Intl.ListFormat('en-US', {type: 'unit', style: 'narrow'}).format(['5 lb', '12 oz']), '5 lb 12 oz'],
+      ['a sort', () => ['b', 'A', 'a', 'B', '\u00e1', '_', '1', '\u0100'].sort(new Intl.Collator('en-US').compare).join(' '), '_ 1 a A \u00e1 \u0100 b B'],
+      ['a numeric sort, base letters', () => ['item 10', 'Item 9', 'item 1', '\u00e9clair', 'Eclair', 'Zoe', 'zo\u00eb', '_x', 'apple']
+         .sort(new Intl.Collator('en-US', {numeric: true, sensitivity: 'base'}).compare).join(', '),
+       '_x, apple, \u00e9clair, Eclair, item 1, Item 9, item 10, Zoe, zo\u00eb'],
     ];
     let good = 0;
     for (const [what, f, expected] of cases) {

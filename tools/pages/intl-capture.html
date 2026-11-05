@@ -11,7 +11,8 @@
 the strings libjs is held to byte for byte (INTL.md § 8). It formats fixed
 matrices of DateTimeFormat cases (option bags, zones, instants, ranges,
 parts), of NumberFormat and PluralRules cases (option bags, values, ranges,
-parts, plural categories) and of RelativeTimeFormat and ListFormat cases,
+parts, plural categories), of RelativeTimeFormat and ListFormat cases and
+of Collator's comparisons,
 asks the questions other browsers answer differently (an alias zone's
 name), and lists the browser's Intl surface.</p>
 <p>Open it from <code>tools/intl_capture_server.py</code>, which serves this
@@ -194,6 +195,24 @@ for (const type of ['conjunction', 'disjunction', 'unit']) for (const style of [
     capture.numberCases.push({kind: 'ListFormat', options, resolved: lf.resolvedOptions(),
                               lists: listInputs.map(l => [l, lf.format(l), lf.formatToParts(l)])});
 }
+// Collator: the sign of compare over fixed pairs and a seeded sample of
+// short strings (Latin, its marks, punctuation, a few characters beyond),
+// under every sensitivity, numeric, caseFirst and ignorePunctuation.
+const collatorPairs = [['a', 'A'], ['a', '\u00e1'], ['\u00df', 'ss'], ['\u00e6', 'ae'], ['1', 'a'], ['_', '1'], ['a-b', 'ab'],
+    ['a$b', 'ab'], ['e\u0301', '\u00e9'], ['item 10', 'item 9'], ['a01', 'a1'], ['l\u00b7l', 'll'], ['\u0101', 'b'],
+    ['\u0142', 'm'], ['co-op', 'coop'], ['\u201cq\u201d', 'q'], ['\u03b1', 'z'], ['\u4e00', '\u0430']];
+const collatorAlphabet = 'aAbBeEzZ019 -_.,\'\u00e9\u00c9\u00df\u00e6\u00c6\u00f8\u00d8\u0101\u0142\u0301\u2013\u201c$';
+for (let i = 0; i < 200; i++) {
+    const word = () => { let s = ''; for (let n = 1 + rand(4); n > 0; n--) s += collatorAlphabet[rand(collatorAlphabet.length)]; return s; };
+    collatorPairs.push([word(), word()]);
+}
+for (const sensitivity of ['base', 'accent', 'case', 'variant']) for (const numeric of [false, true])
+    for (const caseFirst of ['false', 'upper']) for (const ignorePunctuation of [false, true]) {
+        const options = {sensitivity, numeric, caseFirst, ignorePunctuation};
+        const coll = new Intl.Collator('en-US', options);
+        capture.numberCases.push({kind: 'Collator', options, resolved: coll.resolvedOptions(),
+                                  compare: collatorPairs.map(([x, y]) => [x, y, Math.sign(coll.compare(x, y))])});
+    }
 // The questions other browsers answer differently from test262 or from
 // one another: each is what the browser said.
 const zoneOf = z => attempt(() => new Intl.DateTimeFormat('en-US', {timeZone: z}).resolvedOptions().timeZone);

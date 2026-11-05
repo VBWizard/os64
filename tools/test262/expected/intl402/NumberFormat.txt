@@ -90,5 +90,3 @@ intl402/NumberFormat/prototype/formatToParts/unit-zh-TW.js	a locale other than e
 intl402/NumberFormat/prototype/formatToParts/unit-zh-TW.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
 intl402/NumberFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js	a numbering system other than latn: data not held (INTL.md § 7)
 intl402/NumberFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js (strict)	a numbering system other than latn: data not held (INTL.md § 7)
-intl402/NumberFormat/this-value-ignored.js	needs Intl.Collator (A2)
-intl402/NumberFormat/this-value-ignored.js (strict)	needs Intl.Collator (A2)

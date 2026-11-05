@@ -254,7 +254,8 @@ static JSValue completion(JSContext *ctx, Compiled *c)
 /* data(): the CLDR tables, evaluated in this realm. intl.js asks once, at
  * the first construction (INTL.md § 6: a realm that never constructs one
  * never pays for them); the number tables in it are a function the first
- * NumberFormat, PluralRules or RelativeTimeFormat calls. */
+ * NumberFormat, PluralRules or RelativeTimeFormat calls, and the collation
+ * one the first Collator calls. */
 static JSValue data(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv)
 {
     (void)this_value; (void)argc; (void)argv;

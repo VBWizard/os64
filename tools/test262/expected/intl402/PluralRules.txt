@@ -6,5 +6,3 @@ intl402/PluralRules/prototype/resolvedOptions/plural-categories-order.js	a local
 intl402/PluralRules/prototype/resolvedOptions/plural-categories-order.js (strict)	a locale other than en (ar, fr, ...): data not held (INTL.md § 7)
 intl402/PluralRules/prototype/select/notation.js	a locale other than en (ar, fr, ...): data not held (INTL.md § 7)
 intl402/PluralRules/prototype/select/notation.js (strict)	a locale other than en (ar, fr, ...): data not held (INTL.md § 7)
-intl402/PluralRules/undefined-newtarget-throws.js	needs Intl.Collator (A2)
-intl402/PluralRules/undefined-newtarget-throws.js (strict)	needs Intl.Collator (A2)

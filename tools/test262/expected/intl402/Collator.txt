@@ -1,0 +1,12 @@
+# test262 intl402/Collator, held by tools/test262/run.py (its docstring says how).
+[excluded]
+intl402/Collator/proto-from-ctor-realm.js	needs test262's $262 host hooks (a second realm), which the runner does not provide
+intl402/Collator/proto-from-ctor-realm.js (strict)	needs test262's $262 host hooks (a second realm), which the runner does not provide
+intl402/Collator/prototype/compare/canonically-equivalent-strings.js	canonical equivalence with two or more marks reordered: the collator does not normalize (DEBTS § Intl)
+intl402/Collator/prototype/compare/canonically-equivalent-strings.js (strict)	canonical equivalence with two or more marks reordered: the collator does not normalize (DEBTS § Intl)
+intl402/Collator/prototype/resolvedOptions/ignorePunctuation-default.js	a locale other than en (de, th, ...): data not held (INTL.md § 7)
+intl402/Collator/prototype/resolvedOptions/ignorePunctuation-default.js (strict)	a locale other than en (de, th, ...): data not held (INTL.md § 7)
+intl402/Collator/prototype/resolvedOptions/resolved-collation-unicode-extensions-and-options.js	a locale other than en (de, th, ...): data not held (INTL.md § 7)
+intl402/Collator/prototype/resolvedOptions/resolved-collation-unicode-extensions-and-options.js (strict)	a locale other than en (de, th, ...): data not held (INTL.md § 7)
+intl402/Collator/usage-de.js	a locale other than en (de, th, ...): data not held (INTL.md § 7)
+intl402/Collator/usage-de.js (strict)	a locale other than en (de, th, ...): data not held (INTL.md § 7)

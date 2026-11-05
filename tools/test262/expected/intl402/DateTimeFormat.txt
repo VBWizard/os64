@@ -176,8 +176,6 @@ intl402/DateTimeFormat/prototype/resolvedOptions/resolved-calendar-unicode-exten
 intl402/DateTimeFormat/prototype/resolvedOptions/resolved-calendar-unicode-extensions-and-options.js (strict)	a calendar other than gregory: data not held (INTL.md § 7)
 intl402/DateTimeFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js	a numbering system other than latn: data not held (INTL.md § 7)
 intl402/DateTimeFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js (strict)	a numbering system other than latn: data not held (INTL.md § 7)
-intl402/DateTimeFormat/this-value-ignored.js	needs Intl.Collator (A2)
-intl402/DateTimeFormat/this-value-ignored.js (strict)	needs Intl.Collator (A2)
 intl402/DateTimeFormat/timezone-case-insensitive.js	Intl.supportedValuesOf ships in A3 (INTL.md § 9.5)
 intl402/DateTimeFormat/timezone-case-insensitive.js (strict)	Intl.supportedValuesOf ships in A3 (INTL.md § 9.5)
 intl402/DateTimeFormat/timezone-not-canonicalized.js	Chrome answers a zone by CLDR's canonical name (its capture: Asia/Kolkata is Asia/Calcutta), as libjs does; ECMA-402 now keeps the name given
