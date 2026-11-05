@@ -3730,17 +3730,29 @@ function collatorSlots(locales, options) {
     return locales === undefined && options === undefined ? defaultSlots('collator', make) : make();
 }
 // Array.prototype.toLocaleString (§ 19.5.1): each element's own
-// toLocaleString, given the locales and options.
+// toLocaleString, given the locales and options. An array already being
+// written (one that holds itself, at any depth) writes as nothing, as V8's
+// and SpiderMonkey's do ([1, a] is "1,"), where recursing would overflow
+// the stack.
+const LOCALE_JOINS = [];
+let localeJoinDepth = 0;
 function arrayToLocaleString(locales, options) {
-    const array = ToObject(this), len = ToLength(array.length), out = [];
-    for (let k = 0; k < len; k++) {
-        const element = array[k];
-        if (element === undefined || element === null) { push(out, ''); continue; }
-        const f = element.toLocaleString;
-        if (typeof f !== 'function') throw new TypeError_('toLocaleString is not a function');
-        push(out, ToString(apply(f, element, [locales, options])));
+    const array = ToObject(this);
+    for (let i = 0; i < localeJoinDepth; i++) if (LOCALE_JOINS[i] === array) return '';
+    put(LOCALE_JOINS, localeJoinDepth++, array);
+    try {
+        const len = ToLength(array.length), out = [];
+        for (let k = 0; k < len; k++) {
+            const element = array[k];
+            if (element === undefined || element === null) { push(out, ''); continue; }
+            const f = element.toLocaleString;
+            if (typeof f !== 'function') throw new TypeError_('toLocaleString is not a function');
+            push(out, ToString(apply(f, element, [locales, options])));
+        }
+        return join(out, ',');
+    } finally {
+        put(LOCALE_JOINS, --localeJoinDepth, undefined);
     }
-    return join(out, ',');
 }
 
 // ── The Intl object ─────────────────────────────────────────────────────

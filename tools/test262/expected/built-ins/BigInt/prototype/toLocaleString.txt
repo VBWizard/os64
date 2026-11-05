@@ -1,0 +1,2 @@
+# test262 built-ins/BigInt/prototype/toLocaleString, held by tools/test262/run.py (its docstring says how).
+[excluded]

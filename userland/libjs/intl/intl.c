@@ -196,7 +196,10 @@ static JSValue zone_list(JSContext *ctx, JSValueConst this_value, int argc, JSVa
     uint32_t n = 0;
     for (size_t i = 0; i < ZONE_NAMES; i++) {
         if ((size_t)kZoneNames[i].canonical != i) continue;
-        if (JS_DefinePropertyValueUint32(ctx, list, n++, JS_NewString(ctx, kZoneNames[i].name), JS_PROP_C_W_E) < 0) {
+        /* A refused string is no value to define: the define would store
+         * the exception's tag and succeed. */
+        JSValue name = JS_NewString(ctx, kZoneNames[i].name);
+        if (JS_IsException(name) || JS_DefinePropertyValueUint32(ctx, list, n++, name, JS_PROP_C_W_E) < 0) {
             JS_FreeValue(ctx, list);
             return JS_EXCEPTION;
         }

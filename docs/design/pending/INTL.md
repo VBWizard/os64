@@ -347,8 +347,8 @@ The hard part, because pages pass zone names and read them back:
   directory (`tools/test262/expected/`) that lists only what is excluded,
   each with its reason; an excluded test that passes fails the run, so
   the list cannot go stale. A1 runs `intl402/` for what it ships; each
-  later cut adds its directories (A3 the redefined built-ins under
-  `built-ins/`). The gate: every test in a shipped constructor's
+  later cut adds its directories (A3 the redefined built-ins' under
+  `intl402/` and their methods' under `built-ins/`). The gate: every test in a shipped constructor's
   directory passes, except those that need what the data or the engine
   does not hold (a locale, calendar, numbering system, historical zone,
   Temporal), a later cut's surface, or a host hook, each listed with its
@@ -472,7 +472,8 @@ made:
    `supportedValuesOf("timeZone")` lists every canonical zone, "UTC" and
    the "Etc/GMT+5" family among them (V8 lists the 418 location zones
    alone). Its currencies are CLDR's, those some region uses as tender
-   today (153), where V8 lists ICU's own ISO table (162: the same and a few
-   just retired, ANG, BGN, HRK, and two funds); its calendars, numbering
+   today (153), where V8 lists ICU's own ISO table (162: the same and nine
+   more, ANG, BGN, CUC, HRK, SLL, SVC and ZWL, some just retired, and the
+   funds XDR and XSU); its calendars, numbering
    systems and collations are what the data holds (`gregory`, `latn`, and
    none named), not ICU's.

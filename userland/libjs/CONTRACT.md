@@ -147,8 +147,8 @@ halves, `Number`'s and `BigInt`'s `toLocaleString`,
 `Array.prototype.toLocaleString`, `String.prototype.localeCompare`,
 `toLocaleUpperCase` and `toLocaleLowerCase`); every refusal that can come
 before that step (a default locale the data does not hold among them)
-leaves them as they were, and one after it is an allocation refused, which
-is the runtime's sticky failure. Its script captures the built-ins it calls
+leaves them as they were, and any after it (an allocation refused, the
+setup deadline, a cancel) is the runtime's sticky failure. Its script captures the built-ins it calls
 as it loads, which is why it must run before any page script. Its CLDR data is evaluated
 by the realm's first construction (a constructor or `supportedLocalesOf`),
 not by the install, the number tables within it by the realm's first

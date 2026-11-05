@@ -972,7 +972,13 @@ was. The install's allocation sweep covers the redefinitions.
 and `Array`: 24 of 24, 14 of 14, 20 of 22, 26 of 38 and 4 of 4, the rest
 German, Turkish, Azeri and Lithuanian (locales the data does not hold).
 `intl402/Intl` now passes 116 of 132 (it was 6): the rest the calendars,
-numbering systems and DisplayNames not held, and four `-u-` values not
-canonicalized (DEBTS). Tests elsewhere that waited on A3 now pass and left
+numbering systems and DisplayNames not held, three `-u-` values not
+canonicalized and one region alias resolved by a language's likely region
+(DEBTS). Tests elsewhere that waited on A3 now pass and left
 their lists (DateTimeFormat 312 of 490, Locale 218 of 380, NumberFormat
-414 of 502).
+414 of 502). The methods' own `built-ins/` directories join too (Array,
+BigInt, Date's three, Number, String's localeCompare and both cases):
+every test passes but localeCompare's canonical-equivalence one (DEBTS).
+The runtime suite passes (9,885 checks on the target core, 27,514
+sanitized), and so do the DOM host (211,049) and yonder's scripted pages
+(16,569).

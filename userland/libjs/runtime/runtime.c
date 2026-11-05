@@ -1789,8 +1789,9 @@ JS_PUBLIC os64_js_status_t os64_js_install_args(os64_js_runtime_t *runtime,
 /* ECMA-402 (INTL.md): the Intl object, made by intl.c and published as a
  * global property is (writable, configurable, not enumerable). Nothing is
  * defined unless the whole object was made; the built-ins ECMA-402
- * redefines are the script's last step (CONTRACT.md), so a refusal after
- * them is an allocation refused, the runtime's sticky failure. */
+ * redefines are the script's last step (CONTRACT.md), and any refusal
+ * after them (an allocation, the deadline, a cancel) is the runtime's
+ * sticky failure. */
 JS_PUBLIC os64_js_status_t os64_js_install_intl(os64_js_runtime_t *runtime, const char *locale,
                                               os64_js_outcome_t *outcome)
 {

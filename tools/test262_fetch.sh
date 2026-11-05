@@ -36,6 +36,15 @@ TEST262_DIRS=(
     test/intl402/BigInt
     test/intl402/String
     test/intl402/Array
+    test/built-ins/String/prototype/localeCompare
+    test/built-ins/String/prototype/toLocaleUpperCase
+    test/built-ins/String/prototype/toLocaleLowerCase
+    test/built-ins/Date/prototype/toLocaleString
+    test/built-ins/Date/prototype/toLocaleDateString
+    test/built-ins/Date/prototype/toLocaleTimeString
+    test/built-ins/Number/prototype/toLocaleString
+    test/built-ins/BigInt/prototype/toLocaleString
+    test/built-ins/Array/prototype/toLocaleString
 )
 
 top=$(git rev-parse --show-toplevel)
