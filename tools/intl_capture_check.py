@@ -6,7 +6,9 @@ Usage (tools/test_intl_capture_host.sh builds the runner and calls this):
 
 The capture is what tools/pages/intl-capture.html recorded in a browser:
 every case's options, and per case the construction's outcome, the
-resolved options, and the strings and parts of its formats and ranges.
+resolved options, and the strings and parts of its formats and ranges
+(DateTimeFormat's, NumberFormat's) or its plural categories
+(PluralRules').
 Each case is run again through libjs (the runner's --script mode), and
 every field that differs is reported with both answers; U+202F and U+2009
 are shown by name, since they are what a folded comparison would hide.
@@ -37,6 +39,26 @@ for (const c of C) {
     if (c.rangeParts) r.rangeParts = c.rangeParts.map(([x, y]) => [x, y, dtf.formatRangeToParts(x, y)]);
     out.push(r);
 }
+// The number cases, each value written as the page writes it.
+function numberValue(text) {
+    const kind = text.slice(0, 2), body = text.slice(2);
+    return kind === 'b:' ? BigInt(body) : kind === 's:' ? body : body === '-0' ? -0 : Number(body);
+}
+const numberOut = [];
+for (const c of %s) {
+    const C = c.kind === 'PluralRules' ? Intl.PluralRules : Intl.NumberFormat;
+    const f = attempt(() => new C('en-US', c.options));
+    const r = {};
+    if (typeof f === 'string') { r.construct = f; numberOut.push(r); continue; }
+    r.resolved = f.resolvedOptions();
+    if (c.format) r.format = c.format.map(([v]) => [v, attempt(() => f.format(numberValue(v)))]);
+    if (c.parts) r.parts = c.parts.map(([v]) => [v, attempt(() => f.formatToParts(numberValue(v)))]);
+    if (c.range) r.range = c.range.map(([x, y]) => [x, y, attempt(() => f.formatRange(numberValue(x), numberValue(y)))]);
+    if (c.rangeParts) r.rangeParts = c.rangeParts.map(([x, y]) => [x, y, attempt(() => f.formatRangeToParts(numberValue(x), numberValue(y)))]);
+    if (c.select) r.select = c.select.map(([v]) => [v, f.select(numberValue(v))]);
+    if (c.selectRange) r.selectRange = c.selectRange.map(([x, y]) => [x, y, attempt(() => f.selectRange(numberValue(x), numberValue(y)))]);
+    numberOut.push(r);
+}
 const zoneOf = z => attempt(() => new Intl.DateTimeFormat('en-US', {timeZone: z}).resolvedOptions().timeZone);
 const probes = {};
 for (const name of %s) if (name.startsWith('timeZone ')) probes[name] = zoneOf(name.slice(9));
@@ -50,7 +72,7 @@ for (const name of surface.Intl) {
     const value = Intl[name];
     if (typeof value === 'function' && value.prototype) surface[name] = Object.getOwnPropertyNames(value.prototype).sort();
 }
-print(JSON.stringify({cases: out, probes, surface}));
+print(JSON.stringify({cases: out, numberCases: numberOut, probes, surface}));
 '''
 
 
@@ -69,10 +91,11 @@ def main():
     with opener(args.capture, 'rt', encoding='utf-8') as f:
         capture = json.load(f)
     cases = capture['cases']
+    number_cases = capture.get('numberCases', [])     # absent from a capture older than NumberFormat
     with tempfile.TemporaryDirectory(prefix='os64-intl-capture.') as work:
         script = os.path.join(work, 'check.js')
         with open(script, 'w', encoding='utf-8') as f:
-            f.write(OURS % (json.dumps(cases), json.dumps(sorted(capture['probes']))))
+            f.write(OURS % (json.dumps(cases), json.dumps(number_cases), json.dumps(sorted(capture['probes']))))
         run = subprocess.run([args.runner, '--script', script], capture_output=True, text=True,
                              env=dict(os.environ, TZ='EST5EDT'))
     if run.returncode != 0:
@@ -87,8 +110,15 @@ def main():
             compared += 1
             if theirs.get(field) != mine.get(field):
                 differences.append((theirs['options'], field, theirs.get(field), mine.get(field)))
+    for theirs, mine in zip(number_cases, ours['numberCases']):
+        for field in ('construct', 'resolved', 'format', 'parts', 'range', 'rangeParts', 'select', 'selectRange'):
+            if field not in theirs and field not in mine:
+                continue
+            compared += 1
+            if theirs.get(field) != mine.get(field):
+                differences.append(({theirs['kind']: theirs['options']}, field, theirs.get(field), mine.get(field)))
     print('intl capture (%s): %d of %d fields agree across %d option sets'
-          % (capture.get('userAgent', '?')[:60], compared - len(differences), compared, len(cases)))
+          % (capture.get('userAgent', '?')[:60], compared - len(differences), compared, len(cases) + len(number_cases)))
     for options, field, theirs, mine in differences[:args.show]:
         print('  %s %s\n    browser %s\n    libjs   %s' % (shown(options), field, shown(theirs), shown(mine)))
     if len(differences) > args.show:

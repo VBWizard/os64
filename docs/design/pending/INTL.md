@@ -134,7 +134,7 @@ it); a present one that misbehaves is rule 1's worse case.
 |---|---|
 | `Intl.DateTimeFormat` — `format`, `formatToParts`, `formatRange`, `formatRangeToParts`, `resolvedOptions`, `supportedLocalesOf`; every option, `dateStyle`/`timeStyle` and the field bags, `timeZone`, `hour12`/`hourCycle`, `timeZoneName` (all six values), `era`, `dayPeriod`, `fractionalSecondDigits` | 57 hosts, the GitHub wall |
 | `Intl.NumberFormat` — `format`, `formatToParts`, `formatRange`, `formatRangeToParts`, `resolvedOptions`; decimal, percent, currency (ISO 4217's codes and their symbols in en-US), unit (the sanctioned simple units), compact notation, scientific and engineering, every digit and rounding option, `signDisplay`, `useGrouping` | 43 hosts |
-| `Intl.PluralRules` — cardinal and ordinal, the digit options, `select`, `selectRange`, `resolvedOptions` | 18 hosts; NumberFormat's compact and RelativeTimeFormat need its rules anyway |
+| `Intl.PluralRules` — cardinal and ordinal, `notation`, the digit options, `select`, `selectRange`, `resolvedOptions` | 18 hosts; NumberFormat's compact and RelativeTimeFormat need its rules anyway |
 | `Intl.RelativeTimeFormat` — `format`, `formatToParts`, `numeric`, `style` | 18 hosts, GitHub's relative dates |
 | `Intl.ListFormat` — the three types and three styles | 21 hosts |
 | `Intl.Collator` and `String.prototype.localeCompare` through it — `usage`, `sensitivity`, `ignorePunctuation`, `numeric`, `caseFirst`, over the collation § 4.1 names | 72 hosts call `localeCompare` with arguments; GitHub's checks module constructs one at module scope |
@@ -265,6 +265,22 @@ The hard part, because pages pass zone names and read them back:
   runtime's sticky failure like any other, swept in libjs's suite. The
   first compile in a process costs about 6 ms for the script and 5 ms for
   the data.
+- **Measured (A2's NumberFormat and PluralRules, 2026-11-05, the same
+  way):** the script is 163 KiB of source and 111 KiB of kept bytecode,
+  the data 177 KiB and 133 KiB, each under the 512 KiB the process keeps.
+  The install now costs 0.44 ms and 302 KiB a realm (A1's was 0.32 ms and
+  201 KiB, measured beside it): reading the script's bytecode is most of
+  it, and it grows with the script. The number tables (307 currencies, the
+  units, the plural rules) are a deferred part of the data, written as a
+  function the first NumberFormat or PluralRules calls, so a realm that
+  formats only dates builds none of them: its first construction costs
+  1.2 ms and 563 KiB (A1's 476 KiB; the deferred function's own bytecode
+  is the difference), and a realm whose first construction is a
+  NumberFormat 1.6 ms and 709 KiB. Two levers are measured and not pulled:
+  stripping the script's line numbers saves 64 KiB of the install (at the
+  cost of the frames a failure inside Intl reports), and a separate
+  compiled script for the number tables would save the deferred
+  function's 87 KiB in a dates-only realm.
 - **The page's bytecode cache.** A kept blob is keyed by the engine's
   build identity, a hash over upstream and the libjs patch series
   (BYTECODE_CACHE.md). Intl's script is not among those sources, and a
@@ -318,7 +334,12 @@ The hard part, because pages pass zone names and read them back:
   them in parts and ranges, which is why a capture and not a V8 build is
   the oracle). `tools/test_intl_capture_host.sh` holds libjs to that
   capture's 5,635 fields, unfolded, so a wrong space fails. (Fable's
-  finding 5.)
+  finding 5.) The capture page asks NumberFormat's and PluralRules'
+  cases too (a matrix of styles by modifiers, a seeded random sample of
+  option sets, values that are Numbers, BigInts and strings, ranges,
+  parts and plural categories); the Chrome 156 capture in the tree
+  predates them, so they are held by the next one, and until then by
+  test262 and by § 9.6's rule.
 - **The glass:** `tools/pages/intl.html` shows the strings in yonder,
   checked against Chrome's, on QEMU and the P5. Since Intl writes only
   ASCII spaces, yonder's boxes for U+2000-block spaces (DEBTS) are not on
@@ -368,8 +389,30 @@ made:
      (the gate exists before the first formatter merges).
    - **A2:** NumberFormat, PluralRules, RelativeTimeFormat, ListFormat,
      Collator. They share A1's machinery, and together they are what a
-     page constructs. **GitHub's pages draw after A2.**
+     page constructs. **GitHub's pages draw after A2.** Built as three
+     stacked PRs (Chris, 2026-11-05: "stacking PRs if necessary"):
+     NumberFormat and PluralRules, then RelativeTimeFormat and ListFormat
+     (built on them), then Collator.
    - **A3:** the redefined built-ins (`toLocale*`, `localeCompare`),
      `getCanonicalLocales`, `supportedValuesOf`.
 
    Each constructor ships whole or not at all, at every step.
+6. **Where V8 and ECMA-402 differ (A2).** Chrome formats numbers
+   through ICU, and in places it answers otherwise than ECMA-402 or
+   test262 does. Chrome's capture is the oracle (ruling 1), and the one in
+   the tree predates NumberFormat, so until the next one the rule is:
+   test262 where it tests the behaviour, V8's answer (Node 22's, the V8
+   at hand) where it is silent; a Chrome capture overrules both. Node 22's
+   V8 is older than test262's pin in three places, and libjs follows
+   test262 in each: PluralRules' `notation` option (ECMA-402 2025); a
+   `roundingIncrement` with no fraction digits given, which ECMA-402 now
+   rounds to whole numbers where Node's V8 throws; and a currency's own
+   digits, the default in standard notation only. Where test262 is
+   silent, libjs answers as V8 does, each written at its code: an
+   accounting `currencySign` with `signDisplay: "never"` reports
+   `"standard"`; a `roundingPriority` with trailing zeros stripped reports
+   `"auto"`; PluralRules resolves `en-US` to `en`; a plural range CLDR
+   does not list is `other`; a range's approximately sign is never written
+   into an accounting negative; and `formatRangeToParts` reports the
+   parts beside a collapsed currency code's spacing as ICU's spans place
+   them, one character early.

@@ -25,18 +25,19 @@
  * "en-US", which ECMA-402 permits (an implementation's available locales
  * are its own), and the Gregorian calendar and Latin digits are the only
  * ones. What it formats it formats as Chrome does for en-US, held by
- * captured strings (INTL.md § 8). */
+ * captured strings (INTL.md § 8); numbers, until Chrome's capture holds
+ * them, by test262 and by V8 where test262 is silent (§ 9.6). */
 (function (I) {
 'use strict';
 
 // ── The captures ────────────────────────────────────────────────────────
 const Object_ = Object, Array_ = Array, String_ = String, Number_ = Number, Math_ = Math;
-const TypeError_ = TypeError, RangeError_ = RangeError, Symbol_ = Symbol, Date_ = Date;
+const TypeError_ = TypeError, RangeError_ = RangeError, Symbol_ = Symbol, Date_ = Date, BigInt_ = BigInt;
 const apply = Reflect.apply;
 const defineProperty = Object_.defineProperty;
 const getOwnPropertyDescriptor = Object_.getOwnPropertyDescriptor;
 const objectCreate = Object_.create;
-const toStringTag = Symbol_.toStringTag;
+const toStringTag = Symbol_.toStringTag, SymbolToPrimitive = Symbol_.toPrimitive;
 // OrdinaryHasInstance, which the legacy constructor behaviour asks: never
 // `instanceof`, which a page's Symbol.hasInstance would answer.
 const ordinaryHasInstance = Function.prototype[Symbol_.hasInstance];
@@ -61,14 +62,26 @@ const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.z
 // eagerly, and a realm that never constructs one never evaluates CLDR's
 // tables. Every door into them calls loadData first: the constructors and
 // supportedLocalesOf; a method has an instance, so its realm has loaded.
-let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES;
+let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES, NUMBER_DATA;
 let dataLoaded = false;
 function loadData() {
     if (dataLoaded) return;
     const D = I.data();
     ALIASES = D.aliases; U_VALUE_ALIASES = D.uAliases; LIKELY = D.likely; G = D.gregorian; Z = D.zones;
     IV = G.intervalFormats; IV_FALLBACK = own(IV, 'intervalFormatFallback'); DAY_PERIOD_RULES = D.dayPeriods;
+    NUMBER_DATA = D.numbers;
     dataLoaded = true;
+}
+// The number tables are a deferred part of the data, which the generator
+// writes as a function, so a realm that formats only dates never builds
+// them: NumberFormat and PluralRules build them at their first
+// construction.
+let NUM, UNITS, PLURALS;
+function loadNumberData() {
+    loadData();
+    if (NUM !== undefined) return;
+    const N = apply(NUMBER_DATA, undefined, []);
+    NUM = N.numbers; UNITS = N.units; PLURALS = N.plurals;
 }
 // The default locale is the host's, and ECMA-402 requires it to be one the
 // data holds: a host that names another is refused (the install fails),
@@ -2145,10 +2158,1002 @@ method(DateTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
     return o;
 }), 0);
 
+
+// ── Numbers: exact decimals (ECMA-402 § 16.5) ───────────────────────────
+// A mathematical value as Intl reads it: a Number by its shortest round-
+// tripping decimal (ICU's double-conversion, Number.prototype.toString's
+// digits), a BigInt or a numeric string exactly. {neg, digits, exp}: the
+// value digits × 10^exp, digits without leading or trailing zeros ("0"
+// for zero); or {neg, nan} / {neg, inf}.
+function decimal(neg, digits, exp) {
+    let start = 0;
+    while (start < digits.length - 1 && codeAt(digits, start) === 48) start++;
+    let end = digits.length;
+    while (end > start + 1 && codeAt(digits, end - 1) === 48) { end--; exp++; }
+    digits = slice(digits, start, end);
+    if (digits === '0') exp = 0;
+    return {__proto__: null, neg: neg, digits: digits, exp: exp};
+}
+const isZeroDecimal = d => d.digits === '0';
+// Digits of a plain decimal literal: [int][.frac][e±n], already validated.
+function decimalOfLiteral(neg, text) {
+    let mantissa = text, exp = 0;
+    let at = indexOf(text, 'e', 0);
+    if (at < 0) at = indexOf(text, 'E', 0);
+    if (at >= 0) { mantissa = slice(text, 0, at); exp = +slice(text, at + 1, text.length); }
+    const dot = indexOf(mantissa, '.', 0);
+    let digits = mantissa;
+    if (dot >= 0) {
+        const fraction = slice(mantissa, dot + 1, mantissa.length);
+        digits = slice(mantissa, 0, dot) + fraction;
+        exp -= fraction.length;
+    }
+    if (digits === '') digits = '0';
+    return decimal(neg, digits, exp);
+}
+function decimalOfNumber(x) {
+    if (x !== x) return {__proto__: null, neg: false, nan: true};
+    const neg = x < 0 || (x === 0 && 1 / x < 0);
+    if (x === Infinity || x === -Infinity) return {__proto__: null, neg: neg, inf: true};
+    const d = decimalOfLiteral(neg, String_(abs(x)));
+    if (x === 0) d.numberZero = true;          // a Number's ±0, which a range may unsign
+    return d;
+}
+// StringToNumber's whitespace (ECMA-262 StrWhiteSpaceChar).
+function isStrWhiteSpace(c) {
+    return c === 9 || c === 10 || c === 11 || c === 12 || c === 13 || c === 32 || c === 0xA0 || c === 0x1680 ||
+           (c >= 0x2000 && c <= 0x200A) || c === 0x2028 || c === 0x2029 || c === 0x202F || c === 0x205F ||
+           c === 0x3000 || c === 0xFEFF;
+}
+// A string's exact value (ECMA-402 StringIntlMV): StringNumericLiteral's
+// grammar, "-0" negative zero, NaN for anything else.
+function decimalOfString(text) {
+    let a = 0, b = text.length;
+    while (a < b && isStrWhiteSpace(codeAt(text, a))) a++;
+    while (b > a && isStrWhiteSpace(codeAt(text, b - 1))) b--;
+    let s = slice(text, a, b);
+    if (s === '') return decimal(false, '0', 0);
+    const c0 = codeAt(s, 0), c1 = s.length > 1 ? codeAt(s, 1) | 32 : 0;
+    if (c0 === 48 && (c1 === 120 || c1 === 111 || c1 === 98)) {          // 0x 0o 0b
+        const ok = c1 === 120 ? exec(/^0[xX][0-9a-fA-F]+$/, s) : c1 === 111 ? exec(/^0[oO][0-7]+$/, s) : exec(/^0[bB][01]+$/, s);
+        return ok === null ? {__proto__: null, neg: false, nan: true} : decimal(false, String_(BigInt_(s)), 0);
+    }
+    let neg = false;
+    if (c0 === 43 || c0 === 45) { neg = c0 === 45; s = slice(s, 1, s.length); }
+    if (s === 'Infinity') return {__proto__: null, neg: neg, inf: true};
+    if (exec(/^(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/, s) === null) return {__proto__: null, neg: false, nan: true};
+    return decimalOfLiteral(neg, s);
+}
+// ECMA-262 ToPrimitive(value, number), on intrinsics captured at load.
+function ToPrimitiveNumber(o) {
+    const exotic = o[SymbolToPrimitive];
+    if (exotic !== undefined && exotic !== null) {
+        if (typeof exotic !== 'function') throw new TypeError_('Symbol.toPrimitive is not a function');
+        const r = apply(exotic, o, ['number']);
+        if (isObject(r)) throw new TypeError_('Cannot convert object to primitive value');
+        return r;
+    }
+    const names = ['valueOf', 'toString'];
+    for (let i = 0; i < 2; i++) {
+        const f = o[names[i]];
+        if (typeof f === 'function') {
+            const r = apply(f, o, []);
+            if (!isObject(r)) return r;
+        }
+    }
+    throw new TypeError_('Cannot convert object to primitive value');
+}
+// ECMA-402 ToIntlMathematicalValue.
+function ToIntlMathematicalValue(value) {
+    const prim = isObject(value) ? ToPrimitiveNumber(value) : value;
+    if (typeof prim === 'bigint') return decimal(prim < 0n, String_(prim < 0n ? -prim : prim), 0);
+    if (typeof prim === 'string') return decimalOfString(prim);
+    return decimalOfNumber(ToNumber(prim));
+}
+// The power of ten of a nonzero value's leading digit.
+const magnitudeOf = d => d.digits.length + d.exp - 1;
+// A digit string plus one, carrying.
+function incrementDigits(s) {
+    let out = '', i = s.length - 1, carry = 1;
+    for (; i >= 0 && carry; i--) {
+        const c = codeAt(s, i) - 48 + carry;
+        carry = c === 10 ? 1 : 0;
+        out = fromCharCode(48 + (c % 10)) + out;
+    }
+    return (carry ? '1' : '') + slice(s, 0, i + 1) + out;
+}
+// GetUnsignedRoundingMode: the mode on |x|, which side "up" is.
+function unsignedRoundingMode(mode, negative) {
+    switch (mode) {
+    case 'ceil': return negative ? 'zero' : 'infinity';
+    case 'floor': return negative ? 'infinity' : 'zero';
+    case 'expand': return 'infinity';
+    case 'trunc': return 'zero';
+    case 'halfCeil': return negative ? 'half-zero' : 'half-infinity';
+    case 'halfFloor': return negative ? 'half-infinity' : 'half-zero';
+    case 'halfExpand': return 'half-infinity';
+    case 'halfTrunc': return 'half-zero';
+    }
+    return 'half-even';
+}
+// Whether to round away from zero: `half` is -1, 0 or 1 as the dropped
+// part is below, at or above half a step; `odd` the kept part's parity.
+function roundsUp(urm, half, odd) {
+    if (urm === 'infinity') return true;
+    if (urm === 'zero') return false;
+    if (half !== 0) return half > 0;
+    return urm === 'half-infinity' || (urm === 'half-even' && odd);
+}
+// |d| rounded to a multiple of increment × 10^pos (unsigned).
+function roundDecimal(d, pos, increment, urm) {
+    if (isZeroDecimal(d) || (increment === 1 && d.exp >= pos)) return d;
+    if (increment !== 1) {
+        const shift = d.exp - pos;
+        let n = BigInt_(d.digits), den = BigInt_(increment);
+        if (shift >= 0) n *= 10n ** BigInt_(shift); else den *= 10n ** BigInt_(-shift);
+        let q = n / den;
+        const r = n % den;
+        if (r !== 0n) {
+            const twice = r * 2n;
+            if (roundsUp(urm, twice < den ? -1 : twice > den ? 1 : 0, q % 2n === 1n)) q += 1n;
+        }
+        return decimal(false, String_(q * BigInt_(increment)), pos);
+    }
+    const k = pos - d.exp, n = d.digits.length;
+    const kept = k >= n ? '0' : slice(d.digits, 0, n - k);
+    let half;
+    if (k > n) half = -1;
+    else {
+        const first = codeAt(d.digits, n - k) - 48;
+        half = first < 5 ? -1 : first > 5 ? 1 : (k > 1 ? 1 : 0);    // digits end nonzero: a rest is above
+    }
+    const odd = (codeAt(kept, kept.length - 1) - 48) % 2 === 1;
+    return decimal(false, roundsUp(urm, half, odd) ? incrementDigits(kept) : kept, pos);
+}
+// The digits of |d| × 10^-pos as an integer string (d a multiple of 10^pos).
+function integerDigitsAt(d, pos) {
+    if (isZeroDecimal(d)) return '0';
+    let s = d.digits;
+    for (let z = d.exp - pos; z > 0; z--) s += '0';
+    return s;
+}
+// ToRawPrecision: {string, rounded, intDigits, magnitude}.
+function toRawPrecision(x, minP, maxP, urm) {
+    const p = maxP;
+    let e, n;
+    if (isZeroDecimal(x)) { e = 0; n = ''; for (let i = 0; i < p; i++) n += '0'; }
+    else {
+        e = magnitudeOf(x);
+        let r = roundDecimal(x, e - p + 1, 1, urm);
+        if (magnitudeOf(r) > e) e++;
+        n = integerDigitsAt(r, e - p + 1);
+    }
+    let m, intDigits;
+    if (e >= p - 1) { m = n; for (let z = e - p + 1; z > 0; z--) m += '0'; intDigits = e + 1; }
+    else if (e >= 0) { m = slice(n, 0, e + 1) + '.' + slice(n, e + 1, n.length); intDigits = e + 1; }
+    else { m = '0.'; for (let z = -(e + 1); z > 0; z--) m += '0'; m += n; intDigits = 1; }
+    if (indexOf(m, '.', 0) >= 0 && maxP > minP) m = cutZeros(m, maxP - minP);
+    return {__proto__: null, string: m, rounded: decimalOfLiteral(false, m), intDigits: intDigits, magnitude: e - p + 1};
+}
+// ToRawFixed.
+function toRawFixed(x, minF, maxF, increment, urm) {
+    const f = maxF;
+    const r = roundDecimal(x, -f, increment, urm);
+    let m = integerDigitsAt(r, -f), intDigits;
+    if (f !== 0) {
+        let k = m.length;
+        if (k <= f) { let z = ''; for (let i = 0; i < f + 1 - k; i++) z += '0'; m = z + m; k = f + 1; }
+        intDigits = k - f;
+        m = slice(m, 0, k - f) + '.' + slice(m, k - f, k);
+    } else intDigits = m.length;
+    m = cutZeros(m, maxF - minF);
+    return {__proto__: null, string: m, rounded: decimalOfLiteral(false, m), intDigits: intDigits, magnitude: -f};
+}
+// Up to `cut` trailing fraction zeros removed, then a bare decimal point.
+function cutZeros(m, cut) {
+    if (indexOf(m, '.', 0) < 0) return m;
+    let end = m.length;
+    while (cut > 0 && codeAt(m, end - 1) === 48) { end--; cut--; }
+    if (codeAt(m, end - 1) === 46) end--;
+    return slice(m, 0, end);
+}
+// FormatNumericToString on |x|: {string, rounded, intDigits}.
+function formatNumericToString(o, x) {
+    const urm = unsignedRoundingMode(o.roundingMode, x.neg);
+    let result;
+    if (o.roundingType === 'significantDigits') result = toRawPrecision(x, o.minSig, o.maxSig, urm);
+    else if (o.roundingType === 'fractionDigits') result = toRawFixed(x, o.minFrac, o.maxFrac, o.roundingIncrement, urm);
+    else {
+        const s = toRawPrecision(x, o.minSig, o.maxSig, urm), f = toRawFixed(x, o.minFrac, o.maxFrac, o.roundingIncrement, urm);
+        // morePrecision takes the finer rounding, lessPrecision the coarser;
+        // on a tie the fraction digits are not "more precise", so
+        // morePrecision takes the significant digits and lessPrecision the
+        // fraction digits.
+        const fixedIsMorePrecise = f.magnitude < s.magnitude;
+        if (o.roundingType === 'morePrecision') result = fixedIsMorePrecise ? f : s;
+        else result = fixedIsMorePrecise ? s : f;
+    }
+    let string = result.string, intDigits = result.intDigits;
+    if (o.trailingZeroDisplay === 'stripIfInteger' && result.rounded.exp >= 0) {
+        const dot = indexOf(string, '.', 0);
+        if (dot >= 0) string = slice(string, 0, dot);
+    }
+    for (; intDigits < o.minInt; intDigits++) string = '0' + string;
+    return {__proto__: null, string: string, rounded: result.rounded, intDigits: intDigits};
+}
+
+// ── Digit options (ECMA-402 § 16.1.3 SetNumberFormatDigitOptions) ───────
+const ROUNDING_INCREMENTS = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000];
+const ROUNDING_MODES = ['ceil', 'floor', 'expand', 'trunc', 'halfCeil', 'halfFloor', 'halfExpand', 'halfTrunc', 'halfEven'];
+function SetNumberFormatDigitOptions(o, options, mnfdDefault, mxfdDefault, notation) {
+    const mnid = GetNumberOption(options, 'minimumIntegerDigits', 1, 21, 1);
+    let mnfd = options.minimumFractionDigits, mxfd = options.maximumFractionDigits;
+    let mnsd = options.minimumSignificantDigits, mxsd = options.maximumSignificantDigits;
+    o.minInt = mnid;
+    const increment = GetNumberOption(options, 'roundingIncrement', 1, 5000, 1);
+    if (!contains(ROUNDING_INCREMENTS, increment)) throw new RangeError_('roundingIncrement is not one of the allowed values');
+    const mode = GetOption(options, 'roundingMode', 'string', ROUNDING_MODES, 'halfExpand');
+    const priority = GetOption(options, 'roundingPriority', 'string', ['auto', 'morePrecision', 'lessPrecision'], 'auto');
+    const trailing = GetOption(options, 'trailingZeroDisplay', 'string', ['auto', 'stripIfInteger'], 'auto');
+    if (increment !== 1) mxfdDefault = mnfdDefault;
+    o.roundingIncrement = increment; o.roundingMode = mode; o.trailingZeroDisplay = trailing;
+    const hasSd = mnsd !== undefined || mxsd !== undefined, hasFd = mnfd !== undefined || mxfd !== undefined;
+    let needSd = true, needFd = true;
+    if (priority === 'auto') {
+        needSd = hasSd;
+        if (needSd || (!hasFd && notation === 'compact')) needFd = false;
+    }
+    if (needSd) {
+        if (hasSd) {
+            mnsd = DefaultNumberOption(mnsd, 1, 21, 1);
+            mxsd = DefaultNumberOption(mxsd, mnsd, 21, 21);
+            o.minSig = mnsd; o.maxSig = mxsd;
+        } else { o.minSig = 1; o.maxSig = 21; }
+    }
+    if (needFd) {
+        if (hasFd) {
+            mnfd = DefaultNumberOption(mnfd, 0, 100, undefined);
+            mxfd = DefaultNumberOption(mxfd, 0, 100, undefined);
+            if (mnfd === undefined) mnfd = mnfdDefault < mxfd ? mnfdDefault : mxfd;
+            else if (mxfd === undefined) mxfd = mxfdDefault > mnfd ? mxfdDefault : mnfd;
+            else if (mnfd > mxfd) throw new RangeError_('maximumFractionDigits value is out of range');
+            o.minFrac = mnfd; o.maxFrac = mxfd;
+        } else { o.minFrac = mnfdDefault; o.maxFrac = mxfdDefault; }
+    }
+    if (!needSd && !needFd) {
+        o.minFrac = 0; o.maxFrac = 0; o.minSig = 1; o.maxSig = 2;
+        o.roundingType = 'morePrecision'; o.roundingPriority = 'morePrecision';
+    } else if (priority === 'auto') {
+        o.roundingType = hasSd ? 'significantDigits' : 'fractionDigits'; o.roundingPriority = 'auto';
+    } else { o.roundingType = priority; o.roundingPriority = priority; }
+    if (increment !== 1) {
+        if (o.roundingType !== 'fractionDigits') throw new TypeError_('roundingIncrement requires fraction digits');
+        if (o.maxFrac !== o.minFrac) throw new RangeError_('roundingIncrement requires equal minimum and maximum fraction digits');
+    }
+}
+// The rounding priority V8 reports: it reads the options back from ICU's
+// skeleton, which loses the priority when trailing zeros are stripped, so
+// V8 reports "auto" (the rounding itself is unchanged; INTL.md § 9.6).
+function reportedRoundingPriority(o) { return o.trailingZeroDisplay === 'stripIfInteger' ? 'auto' : o.roundingPriority; }
+// The digit options in resolvedOptions' order, those the object has.
+function putDigitOptions(out, o) {
+    put(out, 'minimumIntegerDigits', o.minInt);
+    if (o.minFrac !== undefined) { put(out, 'minimumFractionDigits', o.minFrac); put(out, 'maximumFractionDigits', o.maxFrac); }
+    if (o.minSig !== undefined) { put(out, 'minimumSignificantDigits', o.minSig); put(out, 'maximumSignificantDigits', o.maxSig); }
+}
+
+// ── Plural rules (UTS 35 § 5.1, CLDR's en rules) ────────────────────────
+// A rule's condition parsed once: [[relation...]...], or-ed lists of
+// and-ed relations {operand, mod, negate, ranges: [[lo, hi]...]}.
+function parsePluralRule(text) {
+    const at = indexOf(text, '@', 0);
+    const body = at >= 0 ? slice(text, 0, at) : text;
+    const ors = [], orParts = split(body, ' or ');
+    for (let i = 0; i < orParts.length; i++) {
+        const ands = [], andParts = split(orParts[i], ' and ');
+        for (let j = 0; j < andParts.length; j++) {
+            const rel = trimSpaces(andParts[j]);
+            if (rel === '') continue;
+            const ne = indexOf(rel, '!=', 0), eq = indexOf(rel, '=', 0);
+            const negate = ne >= 0, cut = negate ? ne : eq;
+            const left = trimSpaces(slice(rel, 0, cut)), right = trimSpaces(slice(rel, cut + (negate ? 2 : 1), rel.length));
+            const pct = indexOf(left, '%', 0);
+            const ranges = [], items = split(right, ',');
+            for (let k = 0; k < items.length; k++) {
+                const item = trimSpaces(items[k]), dots = indexOf(item, '..', 0);
+                push(ranges, dots >= 0 ? [+slice(item, 0, dots), +slice(item, dots + 2, item.length)] : [+item, +item]);
+            }
+            push(ands, {__proto__: null, operand: trimSpaces(pct >= 0 ? slice(left, 0, pct) : left),
+                        mod: pct >= 0 ? +slice(left, pct + 1, left.length) : 0, negate: negate, ranges: ranges});
+        }
+        if (ands.length > 0) push(ors, ands);
+    }
+    return ors;
+}
+function trimSpaces(s) {
+    let a = 0, b = s.length;
+    while (a < b && codeAt(s, a) === 32) a++;
+    while (b > a && codeAt(s, b - 1) === 32) b--;
+    return slice(s, a, b);
+}
+// The plural operands of a formatted number's digits ("1.50": n 1.5, i 1,
+// v 2, w 1, f 50, t 5), as ICU reads them: n is the value as a double, i
+// the integer's last 18 digits, and a modulus is taken of those doubles,
+// so a value past a double's precision is read as its double is (V8
+// calls 329606050212053000 "two" in ordinals: its double ends in 2992).
+function pluralOperands(s) {
+    const dot = indexOf(s, '.', 0);
+    const intPart = dot >= 0 ? slice(s, 0, dot) : s, frac = dot >= 0 ? slice(s, dot + 1, s.length) : '';
+    let end = frac.length;
+    while (end > 0 && codeAt(frac, end - 1) === 48) end--;
+    return {__proto__: null, n: +s, i: +slice(intPart, intPart.length > 18 ? intPart.length - 18 : 0, intPart.length),
+            v: frac.length, w: end, f: frac === '' ? 0 : +frac, t: end === 0 ? 0 : +slice(frac, 0, end), c: 0, e: 0};
+}
+function operandValue(ops, name, mod) {
+    const value = own(ops, name);
+    return mod === 0 ? value : value % mod;
+}
+function pluralRuleHolds(rule, ops) {
+    for (let i = 0; i < rule.length; i++) {
+        let all = true;
+        for (let j = 0; j < rule[i].length && all; j++) {
+            const rel = rule[i][j], value = operandValue(ops, rel.operand, rel.mod);
+            let inRange = false;
+            for (let k = 0; k < rel.ranges.length && !inRange; k++) {
+                const lo = rel.ranges[k][0], hi = rel.ranges[k][1];
+                inRange = lo === hi ? value === lo : value >= lo && value <= hi && value === floor(value);
+            }
+            all = rel.negate ? !inRange : inRange;
+        }
+        if (all) return true;
+    }
+    return false;
+}
+// Each type's rules in CLDR's order, parsed at their first use.
+let pluralTables = null;
+function pluralTable(type) {
+    if (pluralTables === null) {
+        pluralTables = {__proto__: null};
+        const kinds = ['cardinal', 'ordinal'];
+        for (let k = 0; k < 2; k++) {
+            const rules = own(PLURALS, kinds[k]), list = [];
+            for (const key in rules) {
+                if (!hasOwn(rules, key)) continue;
+                push(list, {__proto__: null, category: slice(key, indexOf(key, '-count-', 0) + 7, key.length),
+                            rule: parsePluralRule(own(rules, key))});
+            }
+            pluralTables[kinds[k]] = list;
+        }
+    }
+    return own(pluralTables, type);
+}
+// The category of a formatted number's digits.
+function pluralCategory(type, digits) {
+    const table = pluralTable(type), ops = pluralOperands(digits);
+    for (let i = 0; i < table.length; i++)
+        if (table[i].category !== 'other' && pluralRuleHolds(table[i].rule, ops)) return table[i].category;
+    return 'other';
+}
+// The categories other browsers list: alphabetical, "other" last.
+function pluralCategories(type) {
+    const table = pluralTable(type), out = [];
+    for (let i = 0; i < table.length; i++) if (table[i].category !== 'other') push(out, table[i].category);
+    sortStrings(out);
+    push(out, 'other');
+    return out;
+}
+
+// ── Intl.PluralRules (ECMA-402 § 17) ────────────────────────────────────
+const PLURAL_RULES = new WeakMap();
+// The locales plural rules are held for: CLDR's rules are a language's,
+// and V8 resolves against ICU's plural data, so "en-US" resolves to "en"
+// (INTL.md § 9.6).
+const PLURAL_AVAILABLE = ['en'];
+function PluralRules(locales, options) {
+    if (new.target === undefined) throw new TypeError_("Constructor Intl.PluralRules requires 'new'");
+    const pr = constructed(this, PluralRulesPrototype);
+    loadNumberData();
+    const requested = CanonicalizeLocaleList(locales);
+    options = CoerceOptionsToObject(options);
+    const opt = {__proto__: null};
+    opt.localeMatcher = GetOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const s = {__proto__: null};
+    s.type = GetOption(options, 'type', 'string', ['cardinal', 'ordinal'], 'cardinal');
+    s.notation = GetOption(options, 'notation', 'string', ['standard', 'scientific', 'engineering', 'compact'], 'standard');
+    const compactDisplay = GetOption(options, 'compactDisplay', 'string', ['short', 'long'], 'short');
+    if (s.notation === 'compact') s.compactDisplay = compactDisplay;
+    SetNumberFormatDigitOptions(s, options, 0, 3, s.notation);
+    s.locale = ResolveLocale(PLURAL_AVAILABLE, requested, opt, [], () => []).locale;
+    apply(wm_set, PLURAL_RULES, [pr, s]);
+    return pr;
+}
+const PluralRulesPrototype = PluralRules.prototype;
+defineProperty(PluralRules, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(PluralRules, 'length', {__proto__: null, value: 0, configurable: true});
+function thisPluralRules(o, name) {
+    const s = slots(PLURAL_RULES, o);
+    if (s === undefined) throw new TypeError_('Method Intl.PluralRules.prototype.' + name + ' called on incompatible receiver');
+    return s;
+}
+// ResolvePlural: the category of n as the object's notation and digit
+// options show it, chosen by the value shown (a compact "1.5K" is 1500).
+function resolvePlural(s, n) {
+    if (!isFinite_(n)) return 'other';
+    const x = decimalOfNumber(n);
+    const exponent = computeExponent(s, x).exponent;
+    const r = formatNumericToString(s, decimal(x.neg, x.digits, x.exp - exponent));
+    return pluralCategory(s.type, shiftPoint(r.string, exponent));
+}
+method(PluralRules, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
+defineProperty(PluralRulesPrototype, toStringTag, {__proto__: null, value: 'Intl.PluralRules', writable: false, enumerable: false, configurable: true});
+method(PluralRulesPrototype, 'select', methodOf(function (value) {
+    const s = thisPluralRules(this, 'select');
+    return resolvePlural(s, ToNumber(value));
+}), 1);
+method(PluralRulesPrototype, 'selectRange', methodOf(function (start, end) {
+    const s = thisPluralRules(this, 'selectRange');
+    if (start === undefined || end === undefined) throw new TypeError_('start and end are required');
+    const x = ToNumber(start), y = ToNumber(end);
+    if (x !== x || y !== y) throw new RangeError_('Invalid number range');
+    return pluralRange(resolvePlural(s, x), resolvePlural(s, y));
+}), 2);
+// CLDR's plural ranges (a start and an end category's range category);
+// one the data does not list is "other", as ICU resolves it.
+function pluralRange(start, end) {
+    const r = own(PLURALS.ranges, 'pluralRange-start-' + start + '-end-' + end);
+    return r !== undefined ? r : 'other';
+}
+method(PluralRulesPrototype, 'resolvedOptions', methodOf(function () {
+    const s = thisPluralRules(this, 'resolvedOptions');
+    const o = {};
+    put(o, 'locale', s.locale); put(o, 'type', s.type); put(o, 'notation', s.notation);
+    if (s.notation === 'compact') put(o, 'compactDisplay', s.compactDisplay);
+    putDigitOptions(o, s);
+    put(o, 'pluralCategories', pluralCategories(s.type));
+    put(o, 'roundingIncrement', s.roundingIncrement); put(o, 'roundingMode', s.roundingMode);
+    put(o, 'roundingPriority', reportedRoundingPriority(s)); put(o, 'trailingZeroDisplay', s.trailingZeroDisplay);
+    return o;
+}), 0);
+
+// ── Intl.NumberFormat (ECMA-402 § 16) ───────────────────────────────────
+const NUMBER_FORMATS = new WeakMap();
+const SANCTIONED_UNITS = ['acre', 'bit', 'byte', 'celsius', 'centimeter', 'day', 'degree', 'fahrenheit', 'fluid-ounce',
+    'foot', 'gallon', 'gigabit', 'gigabyte', 'gram', 'hectare', 'hour', 'inch', 'kilobit', 'kilobyte', 'kilogram',
+    'kilometer', 'liter', 'megabit', 'megabyte', 'meter', 'microsecond', 'mile', 'mile-scandinavian', 'milliliter',
+    'millimeter', 'millisecond', 'minute', 'month', 'nanosecond', 'ounce', 'percent', 'petabyte', 'pound', 'second',
+    'stone', 'terabit', 'terabyte', 'week', 'yard', 'year'];
+function isWellFormedUnit(unit) {
+    if (contains(SANCTIONED_UNITS, unit)) return true;
+    const at = indexOf(unit, '-per-', 0);
+    if (at < 0) return false;
+    const num = slice(unit, 0, at), den = slice(unit, at + 5, unit.length);
+    return contains(SANCTIONED_UNITS, num) && contains(SANCTIONED_UNITS, den);
+}
+function isWellFormedCurrency(code) {
+    if (code.length !== 3) return false;
+    for (let i = 0; i < 3; i++) if (!isAlpha(codeAt(code, i))) return false;
+    return true;
+}
+function currencyDigits(code) {
+    const d = own(NUM.currencyDigits, code);
+    return d !== undefined ? d : 2;
+}
+// GetBooleanOrStringNumberFormatOption.
+function GetBooleanOrStringOption(options, property, values, fallback) {
+    let value = options[property];
+    if (value === undefined) return fallback;
+    if (value === true) return true;
+    if (!value) return false;
+    value = ToString(value);
+    if (value === 'true' || value === 'false') return fallback;
+    if (!contains(values, value)) throw new RangeError_('Value ' + value + ' out of range for ' + property);
+    return value;
+}
+function NumberFormat(locales, options) {
+    const made = new.target === undefined ? objectCreate(NumberFormatPrototype) : constructed(this, NumberFormatPrototype);
+    loadNumberData();
+    const requested = CanonicalizeLocaleList(locales);
+    options = CoerceOptionsToObject(options);
+    const opt = {__proto__: null};
+    opt.localeMatcher = GetOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const nu = GetOption(options, 'numberingSystem', 'string', undefined, undefined);
+    if (nu !== undefined && !isTypeSequence(lower(nu))) throw new RangeError_('Invalid numberingSystem');
+    opt.nu = nu === undefined ? undefined : lower(nu);
+    const r = ResolveLocale(AVAILABLE, requested, opt, ['nu'], dtfLocaleData);
+    const s = {__proto__: null};
+    s.locale = r.locale; s.numberingSystem = r.nu;
+    // SetNumberFormatUnitOptions.
+    s.style = GetOption(options, 'style', 'string', ['decimal', 'percent', 'currency', 'unit'], 'decimal');
+    const currency = GetOption(options, 'currency', 'string', undefined, undefined);
+    if (currency === undefined) { if (s.style === 'currency') throw new TypeError_('Currency code is required with currency style.'); }
+    else if (!isWellFormedCurrency(currency)) throw new RangeError_('Invalid currency code : ' + currency);
+    const currencyDisplay = GetOption(options, 'currencyDisplay', 'string', ['code', 'symbol', 'narrowSymbol', 'name'], 'symbol');
+    const currencySign = GetOption(options, 'currencySign', 'string', ['standard', 'accounting'], 'standard');
+    const unit = GetOption(options, 'unit', 'string', undefined, undefined);
+    if (unit === undefined) { if (s.style === 'unit') throw new TypeError_('Unit is required with unit style.'); }
+    else if (!isWellFormedUnit(unit)) throw new RangeError_('Invalid unit argument for Intl.NumberFormat(): ' + unit);
+    const unitDisplay = GetOption(options, 'unitDisplay', 'string', ['short', 'narrow', 'long'], 'short');
+    if (s.style === 'currency') { s.currency = upper(currency); s.currencyDisplay = currencyDisplay; s.currencySign = currencySign; }
+    if (s.style === 'unit') { s.unit = unit; s.unitDisplay = unitDisplay; }
+    s.notation = GetOption(options, 'notation', 'string', ['standard', 'scientific', 'engineering', 'compact'], 'standard');
+    // A currency's own digits are the default in standard notation only.
+    let mnfdDefault = 0, mxfdDefault = s.style === 'percent' ? 0 : 3;
+    if (s.style === 'currency' && s.notation === 'standard') mnfdDefault = mxfdDefault = currencyDigits(s.currency);
+    SetNumberFormatDigitOptions(s, options, mnfdDefault, mxfdDefault, s.notation);
+    const compactDisplay = GetOption(options, 'compactDisplay', 'string', ['short', 'long'], 'short');
+    let defaultGrouping = 'auto';
+    if (s.notation === 'compact') { s.compactDisplay = compactDisplay; defaultGrouping = 'min2'; }
+    let grouping = GetBooleanOrStringOption(options, 'useGrouping', ['min2', 'auto', 'always', 'true', 'false'], defaultGrouping);
+    if (grouping === 'true' || grouping === 'false') grouping = defaultGrouping;
+    if (grouping === true) grouping = 'always';
+    s.useGrouping = grouping;
+    s.signDisplay = GetOption(options, 'signDisplay', 'string', ['auto', 'never', 'always', 'exceptZero', 'negative'], 'auto');
+    apply(wm_set, NUMBER_FORMATS, [made, s]);
+    // The legacy constructor mode, as DateTimeFormat's.
+    if (new.target === undefined && isObject(this) && hasInstance(NumberFormat, this)) {
+        defineProperty(this, FALLBACK_SYMBOL, {__proto__: null, value: made, writable: false, enumerable: false, configurable: false});
+        return this;
+    }
+    return made;
+}
+const NumberFormatPrototype = NumberFormat.prototype;
+defineProperty(NumberFormat, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(NumberFormat, 'length', {__proto__: null, value: 0, configurable: true});
+function thisNumberFormat(o, name) {
+    const s = slots(NUMBER_FORMATS, o);
+    if (s === undefined) throw new TypeError_('Method Intl.NumberFormat.prototype.' + name + ' called on incompatible receiver');
+    return s;
+}
+function UnwrapNumberFormat(o, name) {
+    let s = slots(NUMBER_FORMATS, o);
+    if (s === undefined && isObject(o) && hasInstance(NumberFormat, o)) s = slots(NUMBER_FORMATS, o[FALLBACK_SYMBOL]);
+    if (s === undefined) throw new TypeError_('Method Intl.NumberFormat.prototype.' + name + ' called on incompatible receiver');
+    return s;
+}
+
+// ── Formatting a number (ICU's number formatter, over CLDR's en data) ────
+// A formatted number is its digits inside three layers, as ICU builds it
+// and as a range collapses it: `inner` the scientific exponent, `middle`
+// the pattern's affixes (sign, currency, percent, compact), `outer` a
+// unit's or a currency name's pattern; each {prefix: [parts], suffix:
+// [parts]}. Two numbers whose `middleKey`s match have equivalent middles.
+
+// The compact patterns a format uses, {"1000": {one, other}, ...}: a
+// currency symbol's or code's are the short currency ones whatever
+// compactDisplay says, as V8 prints them; a currency name's are the
+// decimal ones.
+let compactTables = null;
+function compactTable(s) {
+    if (compactTables === null) {
+        compactTables = {__proto__: null};
+        const sources = {__proto__: null, short: own(own(NUM.decimal, 'short'), 'decimalFormat'),
+                         long: own(own(NUM.decimal, 'long'), 'decimalFormat'), currency: own(own(NUM.currency, 'short'), 'standard')};
+        for (const name in sources) {
+            const src = own(sources, name), table = {__proto__: null};
+            for (const key in src) {
+                const at = indexOf(key, '-count-', 0);
+                if (indexOf(key, '-alt-', 0) >= 0 || at < 0) continue;
+                const power = slice(key, 0, at), category = slice(key, at + 7, key.length);
+                if (own(table, power) === undefined) table[power] = {__proto__: null};
+                table[power][category] = own(src, key);
+            }
+            compactTables[name] = table;
+        }
+    }
+    return own(compactTables, s.style === 'currency' && s.currencyDisplay !== 'name' ? 'currency' : s.compactDisplay);
+}
+// The compact table's key for the largest magnitude at or below this one,
+// or null below the table.
+function compactKeyFor(s, magnitude) {
+    const table = compactTable(s);
+    let best = null;
+    for (const key in table) if (key.length - 1 <= magnitude && (best === null || key.length > best.length)) best = key;
+    return best;
+}
+// ComputeExponentForMagnitude: the power of ten the digits are divided by.
+function exponentForMagnitude(s, magnitude) {
+    if (s.notation === 'scientific') return magnitude;
+    if (s.notation === 'engineering') return floor(magnitude / 3) * 3;
+    if (s.notation !== 'compact') return 0;
+    const key = compactKeyFor(s, magnitude);
+    if (key === null) return 0;
+    const pattern = own(own(compactTable(s), key), 'other');
+    let zeros = 0;
+    for (let i = 0; i < pattern.length; i++) if (codeAt(pattern, i) === 48) zeros++;
+    return key.length - 1 - (zeros - 1);
+}
+// ComputeExponent, against the digits as rounded: {exponent, magnitude},
+// the magnitude the exponent was chosen for (which names the compact
+// pattern).
+function computeExponent(s, x) {
+    if (isZeroDecimal(x)) return {__proto__: null, exponent: 0, magnitude: 0};
+    const magnitude = magnitudeOf(x);
+    const exponent = exponentForMagnitude(s, magnitude);
+    const r = formatNumericToString(s, decimal(false, x.digits, x.exp - exponent)).rounded;
+    if (isZeroDecimal(r) || magnitudeOf(r) === magnitude - exponent) return {__proto__: null, exponent: exponent, magnitude: magnitude};
+    return {__proto__: null, exponent: exponentForMagnitude(s, magnitude + 1), magnitude: magnitude + 1};
+}
+// A plain decimal string with its point moved k places right ("1.2", 3 →
+// "1200"), the value a plural is chosen by when an exponent was taken out
+// (UTS 35 § 5.1: "1.2K" is n = 1200).
+function shiftPoint(text, k) {
+    if (k === 0) return text;
+    const dot = indexOf(text, '.', 0);
+    const ints = dot >= 0 ? slice(text, 0, dot) : text, digits = ints + (dot >= 0 ? slice(text, dot + 1, text.length) : '');
+    let point = ints.length + k, out = digits;
+    if (point >= out.length) { while (out.length < point) out += '0'; return out; }
+    if (point <= 0) { let z = ''; while (point < 0) { z += '0'; point++; } return '0.' + z + out; }
+    return slice(out, 0, point) + '.' + slice(out, point, out.length);
+}
+// The integer digits grouped as #,##0 groups them (threes), when the
+// strategy calls for it at that length; "auto" in a compact format is
+// "min2", as ICU groups it.
+function integerParts(digits, s, out) {
+    const min2 = s.useGrouping === 'min2' || (s.useGrouping === 'auto' && s.notation === 'compact');
+    const minimum = min2 ? 2 : NUM.minimumGroupingDigits;
+    if (s.useGrouping === false || digits.length < 3 + minimum) { push(out, part('integer', digits)); return; }
+    let first = digits.length % 3;
+    if (first === 0) first = 3;
+    push(out, part('integer', slice(digits, 0, first)));
+    for (let at = first; at < digits.length; at += 3) {
+        push(out, part('group', NUM.symbols.group));
+        push(out, part('integer', slice(digits, at, at + 3)));
+    }
+}
+const part = (type, value) => ({__proto__: null, type: type, value: value});
+// The sign a value shows, '-', '+' or '': `neg` its sign, `zero` whether it
+// rounded to zero (NaN counts as an unsigned zero).
+function signOf(s, neg, zero) {
+    switch (s.signDisplay) {
+    case 'never': return '';
+    case 'always': return neg ? '-' : '+';
+    case 'exceptZero': return zero ? '' : neg ? '-' : '+';
+    case 'negative': return neg && !zero ? '-' : '';
+    }
+    return neg ? '-' : '';
+}
+// The currency's text for its display: symbol, narrow symbol or code (a
+// name is the outer layer's).
+function currencyText(s) {
+    const entry = own(NUM.currencies, s.currency);
+    if (s.currencyDisplay === 'code' || entry === undefined) return s.currency;
+    if (s.currencyDisplay === 'narrowSymbol') {
+        const narrow = own(entry, 'symbol-alt-narrow');
+        if (narrow !== undefined) return narrow;
+    }
+    const symbol = own(entry, 'symbol');
+    return symbol !== undefined ? symbol : s.currency;
+}
+// Whether currency text beside the number ends in a letter or digit, not a
+// symbol or space, so the pattern puts a no-break space between (CLDR's
+// alphaNextToNumber: "USD 1.00", "$1.00").
+const alphaNextToNumber = text => exec(/[\p{S}\p{Z}]$/u, text) === null;
+const NO_BREAK_SPACE_DROPPED = {__proto__: null, '\u00a0': ''};
+// Pattern text as parts: ¤ the currency, % a part of `percentType`, the
+// rest literal (quotes dropped); `kind` 'compact' makes letters compact
+// parts.
+function affixParts(text, currency, kind, percentType, out) {
+    for (let i = 0; i < text.length; i++) {
+        const c = fromCharCode(codeAt(text, i));
+        let type = 'literal', value = c;
+        if (c === '¤') { type = 'currency'; value = currency; }
+        else if (c === '%' && kind !== 'compact') { type = percentType; value = NUM.symbols.percentSign; }
+        else if (c === "'") continue;
+        else if (kind === 'compact' && c !== ' ' && c !== ' ') type = 'compact';
+        const last = out.length > 0 ? out[out.length - 1] : null;
+        if (last !== null && last.type === type && type !== 'currency') last.value += value;
+        else push(out, part(type, value));
+    }
+}
+// A number pattern ("¤#,##0.00", "#,##0%", "(¤#,##0.00)") around its body.
+function patternAffixes(pattern) {
+    let a = 0;
+    while (a < pattern.length && indexOf('#0,.', fromCharCode(codeAt(pattern, a)), 0) < 0) a++;
+    let b = pattern.length;
+    while (b > a && indexOf('#0,.', fromCharCode(codeAt(pattern, b - 1)), 0) < 0) b--;
+    return {__proto__: null, prefix: slice(pattern, 0, a), suffix: slice(pattern, b, pattern.length)};
+}
+// A unit's pattern for a plural category. A unit per a unit CLDR has no
+// pattern for puts the numerator's pattern into the denominator's per
+// pattern ("{0}/h"), or where it has none into the compound "per" pattern
+// with the denominator's name.
+function unitPattern(s, category) {
+    const table = own(UNITS, s.unitDisplay);
+    const whole = own(table, s.unit);
+    if (whole !== undefined) return unitCount(whole, category);
+    const at = indexOf(s.unit, '-per-', 0);
+    const num = unitCount(own(table, slice(s.unit, 0, at)), category), den = own(table, slice(s.unit, at + 5, s.unit.length));
+    const per = own(den, 'perUnitPattern');
+    if (per !== undefined) return simpleFormat(per, [num]);
+    const name = trimSpaces(simpleFormat(unitCount(den, 'one'), ['']));
+    return simpleFormat(own(table, 'per'), [num, name]);
+}
+function unitCount(entry, category) {
+    const p = own(entry, 'unitPattern-count-' + category);
+    return p !== undefined ? p : own(entry, 'unitPattern-count-other');
+}
+// An outer pattern ("{0} km", "{0} US dollars") as {prefix, suffix}: the
+// spaces beside the number literal, the rest one part of `type`.
+function outerParts(pattern, type) {
+    const at = indexOf(pattern, '{0}', 0);
+    const out = {__proto__: null, prefix: [], suffix: []};
+    const before = slice(pattern, 0, at), after = slice(pattern, at + 3, pattern.length);
+    let b = before.length;
+    while (b > 0 && (codeAt(before, b - 1) === 32 || codeAt(before, b - 1) === 0xA0)) b--;
+    if (b > 0) push(out.prefix, part(type, slice(before, 0, b)));
+    if (b < before.length) push(out.prefix, part('literal', slice(before, b, before.length)));
+    let a = 0;
+    while (a < after.length && (codeAt(after, a) === 32 || codeAt(after, a) === 0xA0)) a++;
+    if (a > 0) push(out.suffix, part('literal', slice(after, 0, a)));
+    if (a < after.length) push(out.suffix, part(type, slice(after, a, after.length)));
+    return out;
+}
+// One number in its layers. `forced`, when given, is the plural category
+// the outer layer takes (a collapsed range's).
+function formatLayers(s, x, forced) {
+    const res = {__proto__: null, digits: [], inner: {__proto__: null, prefix: [], suffix: []},
+                 middle: {__proto__: null, prefix: [], suffix: []}, outer: {__proto__: null, prefix: [], suffix: []},
+                 category: 'other', middleKey: '', approximate: true, value: null};
+    let v = x, exponent = 0, compactKey = null;
+    if (!v.nan && !v.inf && s.style === 'percent') v = decimal(v.neg, v.digits, v.exp + 2);
+    let zero = true;
+    if (v.nan) push(res.digits, part('nan', NUM.symbols.nan));
+    else if (v.inf) { push(res.digits, part('infinity', NUM.symbols.infinity)); zero = false; }
+    else {
+        const e = computeExponent(s, v);
+        exponent = e.exponent;
+        if (s.notation === 'compact' && exponent !== 0) compactKey = compactKeyFor(s, e.magnitude);
+        const r = formatNumericToString(s, decimal(v.neg, v.digits, v.exp - exponent));
+        zero = isZeroDecimal(r.rounded);
+        res.value = decimal(v.neg, r.rounded.digits, r.rounded.exp + exponent);
+        const dot = indexOf(r.string, '.', 0);
+        integerParts(dot >= 0 ? slice(r.string, 0, dot) : r.string, s, res.digits);
+        if (dot >= 0) {
+            push(res.digits, part('decimal', NUM.symbols.decimal));
+            push(res.digits, part('fraction', slice(r.string, dot + 1, r.string.length)));
+        }
+        if (s.notation === 'scientific' || s.notation === 'engineering') {
+            push(res.inner.suffix, part('exponentSeparator', NUM.symbols.exponential));
+            if (exponent < 0) push(res.inner.suffix, part('exponentMinusSign', NUM.symbols.minusSign));
+            push(res.inner.suffix, part('exponentInteger', String_(abs(exponent))));
+        }
+        res.category = pluralCategory('cardinal', shiftPoint(r.string, exponent));
+    }
+    const category = forced !== undefined ? forced : res.category;
+    // The middle layer: the sign, then the pattern's affixes. A currency
+    // whose text ends in a letter takes the alphaNextToNumber pattern only
+    // beside digits (ICU's currency spacing matches a digit). A percent is
+    // the percent pattern's, a part typed `unit` in a unit format, except
+    // that a compact one is written after the compact pattern, as the
+    // outer layer, as V8 writes both (the percent unit's long name is an
+    // ordinary unit pattern).
+    const sign = signOf(s, v.neg && !v.nan, zero);
+    const named = s.style === 'currency' && s.currencyDisplay === 'name';
+    const currency = s.style === 'currency' && !named ? currencyText(s) : '';
+    const alpha = currency !== '' && !v.nan && !v.inf && alphaNextToNumber(currency);
+    const accounting = s.style === 'currency' && !named && s.currencySign === 'accounting' && sign === '-' && compactKey === null;
+    const percent = s.style === 'percent' || (s.style === 'unit' && s.unit === 'percent' && s.unitDisplay !== 'long');
+    const percentType = s.style === 'percent' ? 'percentSign' : 'unit';
+    let pattern;
+    if (compactKey !== null) {
+        const forms = own(compactTable(s), compactKey);
+        pattern = own(forms, res.category);
+        if (pattern === undefined) pattern = own(forms, 'other');
+        if (alpha) {
+            const alt = own(own(own(NUM.currency, 'short'), 'standard'), compactKey + '-count-' + res.category + '-alt-alphaNextToNumber');
+            if (alt !== undefined) pattern = alt;
+        }
+    } else if (percent && s.notation !== 'compact') pattern = own(NUM.percent, 'standard');
+    else if (s.style === 'currency' && !named) {
+        pattern = own(NUM.currency, (accounting ? 'accounting' : 'standard') + (alpha ? '-alphaNextToNumber' : ''));
+        if (accounting) pattern = slice(pattern, indexOf(pattern, ';', 0) + 1, pattern.length);
+    } else pattern = own(NUM.decimal, 'standard');
+    if (sign !== '' && !accounting) push(res.middle.prefix, part(sign === '-' ? 'minusSign' : 'plusSign', sign === '-' ? NUM.symbols.minusSign : NUM.symbols.plusSign));
+    if (compactKey !== null) {
+        const zeroAt = indexOf(pattern, '0', 0);
+        let zeroEnd = zeroAt;
+        while (zeroEnd < pattern.length && codeAt(pattern, zeroEnd) === 48) zeroEnd++;
+        affixParts(slice(pattern, 0, zeroAt), currency, 'compact', percentType, res.middle.prefix);
+        affixParts(slice(pattern, zeroEnd, pattern.length), currency, 'compact', percentType, res.middle.suffix);
+    } else {
+        const affixes = patternAffixes(pattern);
+        affixParts(affixes.prefix, currency, 'pattern', percentType, res.middle.prefix);
+        affixParts(affixes.suffix, currency, 'pattern', percentType, res.middle.suffix);
+    }
+    // The key is the sign and the affixes' text, as ICU compares two
+    // modifiers (compact "0T" and "000T" are one), less the currency's
+    // spacing, which ICU inserts into an otherwise identical modifier.
+    const affixText = list => alpha ? swapChars(partsToString(list), NO_BREAK_SPACE_DROPPED) : partsToString(list);
+    res.middleKey = sign + '|' + affixText(res.middle.prefix) + '|' + affixText(res.middle.suffix);
+    // Where a range's approximately sign goes: before the sign, which an
+    // accounting negative writes as parentheses, and so has none.
+    res.approximate = !accounting;
+    // The outer layer: a unit's or a currency name's pattern.
+    if (percent && s.notation === 'compact') push(res.outer.suffix, part('unit', NUM.symbols.percentSign));
+    else if (s.style === 'unit' && !percent) res.outer = outerParts(unitPattern(s, category), 'unit');
+    else if (named) {
+        const entry = own(NUM.currencies, s.currency);
+        let name = own(entry, 'displayName-count-' + category);
+        if (name === undefined) name = own(entry, 'displayName-count-other');
+        if (name === undefined) name = s.currency;
+        let text = own(NUM.currency, 'unitPattern-count-' + category);
+        if (text === undefined) text = own(NUM.currency, 'unitPattern-count-other');
+        res.outer = outerParts(simpleFormat(text, ['{0}', name]), 'currency');
+    }
+    return res;
+}
+// Parts as ICU reports fields: adjacent literals are one literal.
+function addParts(out, list) {
+    for (let i = 0; i < list.length; i++) {
+        const last = out.length > 0 ? out[out.length - 1] : null;
+        if (list[i].type === 'literal' && last !== null && last.type === 'literal') last.value += list[i].value;
+        else push(out, {__proto__: null, type: list[i].type, value: list[i].value, source: 'shared'});
+    }
+}
+function addLayers(out, res, inner, middle, outer) {
+    if (outer) addParts(out, res.outer.prefix);
+    if (middle) addParts(out, res.middle.prefix);
+    if (inner) addParts(out, res.inner.prefix);
+    addParts(out, res.digits);
+    if (inner) addParts(out, res.inner.suffix);
+    if (middle) addParts(out, res.middle.suffix);
+    if (outer) addParts(out, res.outer.suffix);
+}
+function numberParts(s, x) {
+    const out = [];
+    addLayers(out, formatLayers(s, x), true, true, true);
+    return out;
+}
+const codePoints = list => { let n = 0; for (let i = 0; i < list.length; i++) n += countCodePoints(list[i].value); return n; };
+function countCodePoints(text) {
+    let n = 0;
+    for (let i = 0; i < text.length; i++) { const c = codeAt(text, i); if (c < 0xDC00 || c > 0xDFFF) n++; }
+    return n;
+}
+const layerCodePoints = layer => codePoints(layer.prefix) + codePoints(layer.suffix);
+const textLength = parts => { let n = 0; for (let i = 0; i < parts.length; i++) n += parts[i].value.length; return n; };
+// Whether a range's two values are one: the same middle (so the same sign
+// shown) and the same value as rounded. A Number's -0 is zero to a format
+// that shows no sign on zero (signDisplay other than auto and always), as
+// V8 answers; a "-0" string, and a value that rounded to zero, keep their
+// sign.
+function sameRangeValue(s, first, second, x, y) {
+    if (first.value === null || second.value === null || first.middleKey !== second.middleKey) return false;
+    const signed = s.signDisplay === 'auto' || s.signDisplay === 'always';
+    const neg = (res, v) => res.value.neg && (signed || v.numberZero !== true);
+    return neg(first, x) === neg(second, y) && first.value.digits === second.value.digits && first.value.exp === second.value.exp;
+}
+// A range (ICU's NumberRangeFormatter, collapse "auto"): two values the
+// same as rounded, with the same middle, are one value approximately;
+// otherwise a layer both sides share is written once around the range —
+// the outer whenever there is one (within one format it is always the same
+// pattern), the middle when its affixes and sign match and it is more than
+// one code point, the inner never — and a range that repeats any layer
+// gets spaces round its dash.
+//
+// A part's source is ICU's span it lies wholly inside, else "shared"
+// (V8 reads each part against the spans), so a literal that runs from one
+// side into the dash is shared. ICU measures the spans before it inserts a
+// currency's spacing, so where a collapsed middle ends in the
+// alphaNextToNumber no-break space both spans sit one character early and
+// the parts at their ends read as shared or as the other side's; V8
+// reports them so, and so does this (INTL.md § 9.6).
+function numberRangeParts(s, x, y) {
+    const first = formatLayers(s, x), second = formatLayers(s, y), out = [];
+    if (sameRangeValue(s, first, second, x, y)) {
+        if (first.approximate) {
+            addParts(out, first.outer.prefix);
+            push(out, {__proto__: null, type: 'approximatelySign', value: NUM.symbols.approximatelySign, source: 'shared'});
+            addParts(out, first.middle.prefix); addParts(out, first.inner.prefix); addParts(out, first.digits);
+            addParts(out, first.inner.suffix); addParts(out, first.middle.suffix); addParts(out, first.outer.suffix);
+        } else addLayers(out, first, true, true, true);
+        return out;
+    }
+    const collapseMiddle = first.middleKey === second.middleKey && layerCodePoints(first.middle) > 1;
+    let outer = first.outer;
+    if (layerCodePoints(first.outer) > 0) outer = formatLayers(s, y, pluralRange(first.category, second.category)).outer;
+    const spaced = (!collapseMiddle && layerCodePoints(first.middle) > 0) || layerCodePoints(first.inner) > 0;
+    addParts(out, outer.prefix);
+    if (collapseMiddle) addParts(out, first.middle.prefix);
+    const start0 = textLength(out);
+    addLayers(out, first, true, !collapseMiddle, false);
+    const end0 = textLength(out);
+    const range = own(NUM.misc, 'range'), at0 = indexOf(range, '{0}', 0), at1 = indexOf(range, '{1}', 0);
+    let dash = slice(range, at0 + 3, at1);
+    if (spaced) {
+        if (codeAt(dash, 0) !== 32) dash = ' ' + dash;
+        if (codeAt(dash, dash.length - 1) !== 32) dash += ' ';
+    }
+    addParts(out, [part('literal', dash)]);
+    const start1 = textLength(out);
+    addLayers(out, second, true, !collapseMiddle, false);
+    const end1 = textLength(out);
+    if (collapseMiddle) addParts(out, second.middle.suffix);
+    addParts(out, outer.suffix);
+    let early = 0;
+    if (collapseMiddle && first.middle.prefix.length > 0) {
+        const last = first.middle.prefix[first.middle.prefix.length - 1].value;
+        if (codeAt(last, last.length - 1) === 0xA0) early = 1;
+    }
+    for (let i = 0, at = 0; i < out.length; i++) {
+        const from = at, to = at + out[i].value.length;
+        at = to;
+        if (from >= start0 - early && to <= end0 - early) out[i].source = 'startRange';
+        else if (from >= start1 - early && to <= end1 - early) out[i].source = 'endRange';
+    }
+    return out;
+}
+// Parts as the script sees them: {type, value}, and `source` for a range's.
+function numberPartsToArray(parts, withSource) {
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+        const o = {};
+        put(o, 'type', parts[i].type); put(o, 'value', parts[i].value);
+        if (withSource) put(o, 'source', parts[i].source);
+        push(out, o);
+    }
+    return out;
+}
+
+// ── Intl.NumberFormat.prototype ─────────────────────────────────────────
+method(NumberFormat, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
+defineProperty(NumberFormatPrototype, toStringTag, {__proto__: null, value: 'Intl.NumberFormat', writable: false, enumerable: false, configurable: true});
+getter(NumberFormatPrototype, 'format', function () {
+    const s = UnwrapNumberFormat(this, 'format');
+    if (s.bound === undefined) {
+        const bound = (value) => partsToString(numberParts(s, ToIntlMathematicalValue(value)));
+        defineProperty(bound, 'name', {__proto__: null, value: '', configurable: true});
+        s.bound = bound;
+    }
+    return s.bound;
+});
+method(NumberFormatPrototype, 'formatToParts', methodOf(function (value) {
+    const s = thisNumberFormat(this, 'formatToParts');
+    return numberPartsToArray(numberParts(s, ToIntlMathematicalValue(value)), false);
+}), 1);
+function rangeValues(start, end) {
+    if (start === undefined || end === undefined) throw new TypeError_('start and end are required');
+    const x = ToIntlMathematicalValue(start), y = ToIntlMathematicalValue(end);
+    if (x.nan || y.nan) throw new RangeError_('Invalid number range');
+    return [x, y];
+}
+method(NumberFormatPrototype, 'formatRange', methodOf(function (start, end) {
+    const s = thisNumberFormat(this, 'formatRange');
+    const xy = rangeValues(start, end);
+    return partsToString(numberRangeParts(s, xy[0], xy[1]));
+}), 2);
+method(NumberFormatPrototype, 'formatRangeToParts', methodOf(function (start, end) {
+    const s = thisNumberFormat(this, 'formatRangeToParts');
+    const xy = rangeValues(start, end);
+    return numberPartsToArray(numberRangeParts(s, xy[0], xy[1]), true);
+}), 2);
+method(NumberFormatPrototype, 'resolvedOptions', methodOf(function () {
+    const s = UnwrapNumberFormat(this, 'resolvedOptions');
+    const o = {};
+    put(o, 'locale', s.locale); put(o, 'numberingSystem', s.numberingSystem); put(o, 'style', s.style);
+    // V8 reads currencySign back from ICU's skeleton, which spells an
+    // accounting sign that is never shown as plain "never": V8 reports
+    // such a format "standard", and so does this (INTL.md § 9.6).
+    if (s.style === 'currency') {
+        put(o, 'currency', s.currency); put(o, 'currencyDisplay', s.currencyDisplay);
+        put(o, 'currencySign', s.signDisplay === 'never' ? 'standard' : s.currencySign);
+    }
+    if (s.style === 'unit') { put(o, 'unit', s.unit); put(o, 'unitDisplay', s.unitDisplay); }
+    putDigitOptions(o, s);
+    put(o, 'useGrouping', s.useGrouping); put(o, 'notation', s.notation);
+    if (s.notation === 'compact') put(o, 'compactDisplay', s.compactDisplay);
+    put(o, 'signDisplay', s.signDisplay);
+    put(o, 'roundingIncrement', s.roundingIncrement); put(o, 'roundingMode', s.roundingMode);
+    put(o, 'roundingPriority', reportedRoundingPriority(s)); put(o, 'trailingZeroDisplay', s.trailingZeroDisplay);
+    return o;
+}), 0);
+
 // ── The Intl object ─────────────────────────────────────────────────────
 const Intl = {};     // script-visible: its properties are defined, below
 defineProperty(Intl, toStringTag, {__proto__: null, value: 'Intl', writable: false, enumerable: false, configurable: true});
 defineProperty(Intl, 'Locale', {__proto__: null, value: Locale, writable: true, enumerable: false, configurable: true});
 defineProperty(Intl, 'DateTimeFormat', {__proto__: null, value: DateTimeFormat, writable: true, enumerable: false, configurable: true});
+defineProperty(Intl, 'NumberFormat', {__proto__: null, value: NumberFormat, writable: true, enumerable: false, configurable: true});
+defineProperty(Intl, 'PluralRules', {__proto__: null, value: PluralRules, writable: true, enumerable: false, configurable: true});
 return Intl;
 })

@@ -9,9 +9,10 @@
 <h1>Intl capture</h1>
 <p>What this browser's <code>Intl</code> answers for en-US, captured as a file:
 the strings libjs is held to byte for byte (INTL.md § 8). It formats a fixed
-matrix of DateTimeFormat cases (option bags, zones, instants, ranges, parts),
-asks the questions other browsers answer differently (an alias zone's name),
-and lists the browser's Intl surface.</p>
+matrix of DateTimeFormat cases (option bags, zones, instants, ranges, parts)
+and of NumberFormat and PluralRules cases (option bags, values, ranges,
+parts, plural categories), asks the questions other browsers answer
+differently (an alias zone's name), and lists the browser's Intl surface.</p>
 <p>Open it from <code>tools/intl_capture_server.py</code>, which serves this
 directory and saves what the page sends to the file it names; or press
 <b>Save</b> for a download.</p>
@@ -86,6 +87,86 @@ for (const zone of zones) for (const bag of bags) {
     c.rangeParts = [[ranges[3][0], ranges[3][1], dtf.formatRangeToParts(ranges[3][0], ranges[3][1])]];
     capture.cases.push(c);
 }
+// NumberFormat and PluralRules: option sets by style and modifier, then a
+// seeded random sample, each with the same values. A value is written as
+// text ("n:" a Number, "b:" a BigInt, "s:" a string), since JSON holds
+// neither a BigInt nor -0; the checker reads it back with numberValue.
+function numberValue(text) {
+    const kind = text.slice(0, 2), body = text.slice(2);
+    return kind === 'b:' ? BigInt(body) : kind === 's:' ? body : body === '-0' ? -0 : Number(body);
+}
+const numberValues = ['n:0', 'n:-0', 'n:1', 'n:-1', 'n:2', 'n:1.5', 'n:0.5', 'n:0.05', 'n:0.005', 'n:0.0001234', 'n:12',
+    'n:123', 'n:999', 'n:999.5', 'n:1000', 'n:1234', 'n:1234.5678', 'n:9999.9', 'n:12345', 'n:123456', 'n:999999',
+    'n:1234567.891', 'n:1000000000', 'n:1500000000000', 'n:1e15', 'n:1e21', 'n:1e-7', 'n:-1234.5', 'n:-0.004', 'n:NaN',
+    'n:Infinity', 'n:-Infinity', 'b:12345678901234567890', 'b:-5', 's:1.005', 's:-0', 's:12345678901234567890.123456789',
+    's:0x1F', 's: 42 ', 's:1e3', 's:abc', 'n:2.5', 'n:-2.5', 'n:0.125', 'n:1.45', 'n:329606050212053000'];
+const numberRanges = [['n:3', 'n:5'], ['n:-3', 'n:5'], ['n:-5', 'n:-3'], ['n:3', 'n:3'], ['n:-3', 'n:-3'], ['n:0', 'n:1'],
+    ['n:1', 'n:1.5'], ['n:3000', 'n:5000'], ['n:3000', 'n:3001'], ['n:3000', 'n:5000000'], ['n:-0', 'n:0'], ['s:-0', 'n:0'],
+    ['n:5', 'n:3'], ['n:1', 'n:Infinity'], ['n:1.999', 'n:2.001'], ['n:-0.0001', 'n:0']];
+const numberStyles = [{}, {style: 'percent'}, {style: 'currency', currency: 'USD'}, {style: 'currency', currency: 'EUR'},
+    {style: 'currency', currency: 'JPY'}, {style: 'currency', currency: 'USD', currencyDisplay: 'code'},
+    {style: 'currency', currency: 'USD', currencyDisplay: 'name'}, {style: 'currency', currency: 'CAD', currencyDisplay: 'narrowSymbol'},
+    {style: 'currency', currency: 'GBP', currencySign: 'accounting'}, {style: 'currency', currency: 'XYZ'},
+    {style: 'unit', unit: 'kilometer'}, {style: 'unit', unit: 'kilometer', unitDisplay: 'long'},
+    {style: 'unit', unit: 'kilometer-per-hour', unitDisplay: 'narrow'}, {style: 'unit', unit: 'liter-per-kilometer', unitDisplay: 'long'},
+    {style: 'unit', unit: 'percent'}, {style: 'unit', unit: 'percent', unitDisplay: 'long'}, {style: 'unit', unit: 'byte', unitDisplay: 'narrow'}];
+const numberModifiers = [{}, {notation: 'compact'}, {notation: 'compact', compactDisplay: 'long'}, {notation: 'scientific'},
+    {notation: 'engineering'}, {signDisplay: 'always'}, {signDisplay: 'exceptZero'}, {signDisplay: 'never'}, {signDisplay: 'negative'},
+    {maximumFractionDigits: 0}, {minimumFractionDigits: 2}, {maximumSignificantDigits: 3}, {minimumIntegerDigits: 4},
+    {useGrouping: false}, {useGrouping: 'min2'}, {useGrouping: 'always'}, {roundingMode: 'floor'}, {roundingMode: 'halfEven', maximumFractionDigits: 0},
+    {roundingIncrement: 25, maximumFractionDigits: 2, minimumFractionDigits: 2},
+    {roundingPriority: 'morePrecision', maximumSignificantDigits: 2, maximumFractionDigits: 2},
+    {roundingPriority: 'lessPrecision', maximumSignificantDigits: 2, maximumFractionDigits: 2},
+    {trailingZeroDisplay: 'stripIfInteger', minimumFractionDigits: 2},
+    {trailingZeroDisplay: 'stripIfInteger', roundingPriority: 'lessPrecision'}, {notation: 'compact', useGrouping: 'auto'}];
+const numberBags = [];
+for (const s of numberStyles) for (const m of numberModifiers) numberBags.push(Object.assign({}, s, m));
+let seed = 12345;
+const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+const randomKeys = {
+    style: [undefined, 'decimal', 'percent', 'currency', 'unit'], currency: ['USD', 'EUR', 'JPY', 'GBP', 'CHF', 'INR', 'KRW', 'ABC'],
+    currencyDisplay: [undefined, 'symbol', 'narrowSymbol', 'code', 'name'], currencySign: [undefined, 'standard', 'accounting'],
+    unit: ['meter', 'second', 'byte', 'percent', 'mile-per-hour', 'kilogram', 'day', 'gigabyte-per-second'],
+    unitDisplay: [undefined, 'short', 'long', 'narrow'], notation: [undefined, 'standard', 'scientific', 'engineering', 'compact'],
+    compactDisplay: [undefined, 'short', 'long'], signDisplay: [undefined, 'auto', 'always', 'never', 'exceptZero', 'negative'],
+    useGrouping: [undefined, true, false, 'min2', 'auto', 'always'], roundingMode: [undefined, 'ceil', 'floor', 'expand', 'trunc', 'halfCeil', 'halfFloor', 'halfExpand', 'halfTrunc', 'halfEven'],
+    roundingPriority: [undefined, undefined, 'auto', 'morePrecision', 'lessPrecision'], trailingZeroDisplay: [undefined, 'auto', 'stripIfInteger'],
+    minimumIntegerDigits: [undefined, undefined, 1, 2, 5], minimumFractionDigits: [undefined, undefined, 0, 1, 3],
+    maximumFractionDigits: [undefined, undefined, 0, 2, 4, 8], minimumSignificantDigits: [undefined, undefined, undefined, 1, 3],
+    maximumSignificantDigits: [undefined, undefined, undefined, 2, 5, 21], roundingIncrement: [undefined, undefined, undefined, 1, 5, 50],
+};
+for (let n = 0; n < 400; n++) {
+    const o = {};
+    for (const [k, vs] of Object.entries(randomKeys)) { const v = vs[rand(vs.length)]; if (v !== undefined) o[k] = v; }
+    numberBags.push(o);
+}
+capture.numberCases = [];
+for (const options of numberBags) {
+    const nf = attempt(() => new Intl.NumberFormat('en-US', options));
+    const c = {kind: 'NumberFormat', options};
+    if (typeof nf === 'string') { c.construct = nf; capture.numberCases.push(c); continue; }
+    c.resolved = nf.resolvedOptions();
+    c.format = numberValues.map(v => [v, attempt(() => nf.format(numberValue(v)))]);
+    c.parts = ['n:-1234.5', 'n:0.005', 'b:-5', 'n:NaN'].map(v => [v, attempt(() => nf.formatToParts(numberValue(v)))]);
+    c.range = numberRanges.map(([x, y]) => [x, y, attempt(() => nf.formatRange(numberValue(x), numberValue(y)))]);
+    c.rangeParts = [numberRanges[1], numberRanges[3], numberRanges[9]].map(([x, y]) =>
+        [x, y, attempt(() => nf.formatRangeToParts(numberValue(x), numberValue(y)))]);
+    capture.numberCases.push(c);
+}
+const pluralBags = [{}, {type: 'ordinal'}, {minimumFractionDigits: 1}, {maximumSignificantDigits: 1}, {type: 'ordinal', maximumFractionDigits: 0},
+    {roundingIncrement: 5, maximumFractionDigits: 1, minimumFractionDigits: 1}, {notation: 'compact'}, {notation: 'scientific', type: 'ordinal'},
+    {trailingZeroDisplay: 'stripIfInteger', roundingPriority: 'morePrecision'}];
+const pluralValues = ['n:0', 'n:1', 'n:2', 'n:3', 'n:4', 'n:11', 'n:12', 'n:13', 'n:21', 'n:22', 'n:23', 'n:101', 'n:111', 'n:1.5',
+    'n:0.99', 'n:1.04', 'n:1.05', 'n:-1', 'n:-2', 'n:1e21', 'n:NaN', 'n:Infinity', 'n:1499', 'n:329606050212053000'];
+for (const options of pluralBags) {
+    const pr = attempt(() => new Intl.PluralRules('en-US', options));
+    const c = {kind: 'PluralRules', options};
+    if (typeof pr === 'string') { c.construct = pr; capture.numberCases.push(c); continue; }
+    c.resolved = pr.resolvedOptions();
+    c.select = pluralValues.map(v => [v, pr.select(numberValue(v))]);
+    c.selectRange = numberRanges.map(([x, y]) => [x, y, attempt(() => pr.selectRange(numberValue(x), numberValue(y)))]);
+    capture.numberCases.push(c);
+}
 // The questions other browsers answer differently from test262 or from
 // one another: each is what the browser said.
 const zoneOf = z => attempt(() => new Intl.DateTimeFormat('en-US', {timeZone: z}).resolvedOptions().timeZone);
@@ -110,7 +191,8 @@ for (const name of capture.surface.Intl) {
 }
 
 const text = JSON.stringify(capture);
-const summary = `${capture.cases.length} option sets, ${Object.keys(capture.probes).length} probes, ` +
+const summary = `${capture.cases.length} date option sets, ${capture.numberCases.length} number option sets, ` +
+    `${Object.keys(capture.probes).length} probes, ` +
     `${text.length} bytes\n${capture.userAgent}`;
 document.getElementById('summary').textContent = summary;
 const save = document.getElementById('save');
