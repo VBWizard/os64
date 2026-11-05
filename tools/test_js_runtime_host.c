@@ -1031,6 +1031,47 @@ static os64_js_runtime_t *intl_fixture(const os64_js_config_t *config, const cha
     return runtime;
 }
 
+/* Each allocation of `first`'s call refused in turn, in a realm that ran
+ * `setup` beforehand. The construction is compiled first and called as
+ * a host task, so the sweep refuses Intl's allocations and none of the
+ * test's own compile (DEBTS: a compile whose name atom is refused runs
+ * nameless). */
+static void intl_first_sweep(const os64_js_config_t *config, const char *setup, const char *first, const char *what)
+{
+    os64_js_outcome_t outcome;
+    for (size_t i = 0, inventory = 0, swept = 0;; i += i < 64 ? 1 : inventory / 400 + 1) {
+        if (i > 0 && i > inventory) {
+            printf("libjs intl: %s makes %zu allocations, %zu refusals swept\n", what, inventory, swept);
+            break;
+        }
+        os64_js_runtime_t *runtime = intl_fixture(config, NULL);
+        if (runtime == NULL || !intl_eval(runtime, setup) || !intl_eval(runtime, first)) {
+            check(false, "the first construction compiles");
+            return;
+        }
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue global = JS_GetGlobalObject(context);
+        JSValue function = JS_GetPropertyStr(context, global, "first");
+        JS_FreeValue(context, global);
+        check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "intl first", &outcome) == OS64_JS_OK, "the first construction's task opens");
+        size_t before = attempts;
+        if (i > 0) fail_at = attempts + i;
+        os64_js_status_t result = os64_js_call(runtime, OS64_JS_ABI_ID, function, JS_UNDEFINED, 0, NULL, NULL, &outcome);
+        fail_at = 0;
+        if (i == 0) {
+            inventory = attempts - before;
+            check(result == OS64_JS_OK, "a realm's first construction loads the data");
+        } else {
+            check(result == OS64_JS_HOST_FAILURE, "a refused first construction is a sticky failure");
+            swept++;
+        }
+        os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome);
+        JS_FreeValue(context, function);
+        os64_js_destroy(runtime);
+        check(live == 0, "a refused first construction releases what it made");
+    }
+}
+
 static void intl_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -1048,7 +1089,12 @@ static void intl_cases(void)
         "if (z.resolvedOptions().timeZone !== 'America/New_York') throw new Error(z.resolvedOptions().timeZone);\n"
         "if (z.format(Date.UTC(2026, 6, 4, 16)) !== '12:00:00 PM EDT') throw new Error(z.format(Date.UTC(2026, 6, 4, 16)));\n"
         "if (z.resolvedOptions().locale !== 'en-US') throw new Error('locale');\n"
-        "if (new Intl.Locale('EN-latn-us').toString() !== 'en-Latn-US') throw new Error('Locale');\n"),
+        "if (new Intl.Locale('EN-latn-us').toString() !== 'en-Latn-US') throw new Error('Locale');\n"
+        "if (new Intl.NumberFormat('en-US', {style: 'currency', currency: 'EUR'}).format(-1234.5) !== '-\u20ac1,234.50')\n"
+        "    throw new Error('NumberFormat');\n"
+        "if (new Intl.NumberFormat('en', {notation: 'compact'}).formatRange(3000, 5000) !== '3K \u2013 5K')\n"
+        "    throw new Error('formatRange');\n"
+        "if (new Intl.PluralRules('en-US', {type: 'ordinal'}).select(22) !== 'two') throw new Error('PluralRules');\n"),
         "Intl formats in the host's zone, published as a global property");
     check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
           "Intl installs once and only before evaluation");
@@ -1126,40 +1172,16 @@ static void intl_cases(void)
            inventory, swept);
 
     /* The CLDR data is evaluated by a realm's first construction, not by
-     * the install: each allocation of that first construction refused in
-     * turn is the runtime's sticky failure, with nothing left behind. The
-     * construction is compiled beforehand and called as a host task, so the
-     * sweep refuses Intl's allocations and none of the test's own compile
-     * (DEBTS: a compile whose name atom is refused runs nameless). */
-    static const char first[] = "function first() { new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).format(0) }";
-    for (size_t i = 0, inventory = 0, swept = 0;; i += i < 64 ? 1 : inventory / 400 + 1) {
-        if (i > 0 && i > inventory) {
-            printf("libjs intl: a first construction makes %zu allocations, %zu refusals swept\n", inventory, swept);
-            break;
-        }
-        runtime = intl_fixture(&config, NULL);
-        if (runtime == NULL || !intl_eval(runtime, first)) { check(false, "the first construction compiles"); return; }
-        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
-        JSValue global = JS_GetGlobalObject(context);
-        JSValue function = JS_GetPropertyStr(context, global, "first");
-        JS_FreeValue(context, global);
-        check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "intl first", &outcome) == OS64_JS_OK, "the first construction's task opens");
-        size_t before = attempts;
-        if (i > 0) fail_at = attempts + i;
-        os64_js_status_t result = os64_js_call(runtime, OS64_JS_ABI_ID, function, JS_UNDEFINED, 0, NULL, NULL, &outcome);
-        fail_at = 0;
-        if (i == 0) {
-            inventory = attempts - before;
-            check(result == OS64_JS_OK, "a realm's first construction loads the data");
-        } else {
-            check(result == OS64_JS_HOST_FAILURE, "a refused first construction is a sticky failure");
-            swept++;
-        }
-        os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome);
-        JS_FreeValue(context, function);
-        os64_js_destroy(runtime);
-        check(live == 0, "a refused first construction releases what it made");
-    }
+     * the install, and the number tables by its first NumberFormat or
+     * PluralRules: each allocation of such a construction refused in turn
+     * is the runtime's sticky failure, with nothing left behind. */
+    intl_first_sweep(&config, "", "function first() { new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).format(0) }",
+                     "a first construction");
+    intl_first_sweep(&config, "", "function first() { new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(1) }",
+                     "a first NumberFormat");
+    intl_first_sweep(&config, "new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).format(0);",
+                     "function first() { new Intl.PluralRules('en-US').select(1) }",
+                     "a first PluralRules after a date format");
 }
 
 /* Host tasks (CONTRACT.md § Host tasks): a function value called under one

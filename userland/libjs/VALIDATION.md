@@ -890,3 +890,29 @@ capture (`tools/intl_captures/`), byte for byte: 5,635 of 5,635 fields. The `js`
 checks, an Intl case among them), and so does the acceptance suite. The
 library gains one export, `os64_js_install_intl`, and imports
 `os64_getenv`, `os64_tz_parse` and `os64_tz_offset_at`.
+
+## Intl (ECMA-402, slice A2: NumberFormat, PluralRules) validation, 2026-11-05
+
+`Intl.NumberFormat` and `Intl.PluralRules` (INTL.md § 4) join the install.
+The runtime suite's Intl case formats a currency, a compact range and an
+ordinal through them, and two sweeps join the first construction's: a
+realm's first NumberFormat (the data and the number tables in one call:
+474 allocations on the target core, 269 refused at the sweep's stride),
+and a first PluralRules in a realm that has formatted a date (the number
+tables, a deferred part of the data, then the plural rules parsed and a
+select: 95 allocations, every one refused). Each refusal is the runtime's sticky failure and frees
+everything. The suite passes: 5,298 checks on the target core, 22,005
+sanitized.
+
+`tools/test262_host.sh` adds `intl402/NumberFormat` and
+`intl402/PluralRules` (at the same pin): 410 of 502 and 98 of 106 run as
+written and strict, the rest listed with their reasons in
+`tools/test262/expected/` (locales and numbering systems the data does not
+hold, Collator and `Number.prototype.toLocaleString` from later cuts,
+`$262`'s second realm). The earlier directories are unchanged. Chrome 156's
+capture still agrees in all 5,635 fields; it predates NumberFormat, so
+NumberFormat's and PluralRules' strings wait for the next capture
+(`tools/pages/intl-capture.html` now asks them), and until then follow
+test262 where it speaks and V8 where it is silent (INTL.md § 9.6). The `js`
+runner's suites (199 and 40 checks) and the acceptance suite (383 checks)
+pass. The library's exports and imports are unchanged.

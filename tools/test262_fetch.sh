@@ -26,6 +26,8 @@ TEST262_DIRS=(
     test/intl402/Intl
     test/intl402/Locale
     test/intl402/DateTimeFormat
+    test/intl402/NumberFormat
+    test/intl402/PluralRules
 )
 
 top=$(git rev-parse --show-toplevel)
