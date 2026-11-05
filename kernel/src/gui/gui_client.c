@@ -216,6 +216,11 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
         (create_flags & (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) !=
         (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) return GUI_ERR_BAD_ARGS;
     uint16_t parent_handle = (uint16_t)((flags & OS64_GUI_CREATE_OWNER_MASK) >> OS64_GUI_CREATE_OWNER_SHIFT);
+    bool start_maximized = (flags & OS64_GUI_CREATE_MAXIMIZED) != 0;
+    if (start_maximized && (parent_handle || popup_capacity ||
+        (create_flags & GUI_WINDOW_DESKTOP) ||
+        (create_flags & (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) ==
+        (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED))) return GUI_ERR_BAD_ARGS;
     uint32_t parent_id = 0;
     int64_t failure = GUI_ERR_NO_RESOURCES;
     if (parent_handle) {
@@ -395,6 +400,9 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	}
 
 	s_handles[handle - 1] = win;
+	// The task-backed canvas is installed before resize exposes its full
+	// extent. The normal birth frame becomes Restore's rectangle.
+	if (start_maximized) wm_set_maximized(win, true);
 
 	gui_unlock(irqflags);
 	return handle;

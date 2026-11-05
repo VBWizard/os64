@@ -16,8 +16,10 @@ os64_ui_status_code_t os64_ui_window_open(os64_ui_t *ui, os64_draw_ctx_t *ctx,
         return OS64_UI_INVALID;
     os64_window_geometry_t g=os64_window_placement_prepare(&placement);
     *ctx=(os64_draw_ctx_t){0};
-    *window=os64_gui_window_create_content(options->title,g.x,g.y,g.width,g.height,
-        options->flags|OS64_GUI_CREATE_FIT_SCREEN);
+    uint64_t flags=options->flags|OS64_GUI_CREATE_FIT_SCREEN;
+    if (placement.mode==OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED && placement.maximized)
+        flags|=OS64_GUI_CREATE_MAXIMIZED;
+    *window=os64_gui_window_create_content(options->title,g.x,g.y,g.width,g.height,flags);
     if (*window<=0) return OS64_UI_ERROR;
     // Surface acquisition can fail before draw_ctx_init binds the handle.
     // Keep the retained UI/draw storage associated with a refused cleanup.

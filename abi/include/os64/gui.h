@@ -57,6 +57,9 @@
 // menus. Larger menus require a replacement window. Omit this for resizable
 // applications such as a pinned, borderless clock. Create-only, not readback.
 #define OS64_GUI_CREATE_POPUP_CAPACITY (1ull << 34)
+// Start maximized, retaining the requested normal rectangle for Restore.
+// Ordinary unowned windows only; applied before the initial surface is read.
+#define OS64_GUI_CREATE_MAXIMIZED (1ull << 35)
 // An owned popup is born and focused atomically only while this same-task
 // parent remains focused. Zero retains unowned creation behavior. Owner bits
 // are create-only; readback flags do not contain them. START_UNFOCUSED with
