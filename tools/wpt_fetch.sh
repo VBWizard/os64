@@ -33,6 +33,7 @@ WPT_DIRS=(
     common
     tools
     dom/nodes
+    dom/traversal
     webstorage
     url
     encoding

@@ -783,6 +783,37 @@ The host runs the step when its layout moved or a report is owed
 passed over, or what a step left undone: a refused gather, a callback
 whose entries could not be made). An observer is held while it observes.
 
+## Traversal
+
+`document.createTreeWalker` and `createNodeIterator`, with `TreeWalker`,
+`NodeIterator` and `NodeFilter` (`walker.c`; DOM § 6), are a Modern Web
+row. The moves are the standard's steps over libhtml's links, and a walker
+traverses one node tree: a template's contents are no element's children,
+and a shadow root would be no child of its host. A walker's record holds
+its root and its current node (an iterator's reference) with libhtml's
+hold, and a traversal holds the node it stands on, since the filter is
+page code that may take that node out of the tree, whose subtree libhtml
+would otherwise reclaim at once. Removals reach a live NodeIterator as a
+mutation consumer, which runs DOM's pre-removing steps from the record of
+the removal (the parent and the siblings the removed run lay between) on
+its reference and, while a traversal is running, on the traversal's
+position, which the reference becomes when a node is accepted; so a filter
+that removes the node it is filtering returns that node and leaves the
+iterator where the removal put it, as WPT's
+`NodeIterator-removal-during-filtering.html` asks. libhtml tells a move's
+removal once the node is placed, so the steps' walks step around the nodes
+the change moved, which is the only way the tree then differs from the one
+the steps read; and a removal that takes the root out of its tree leaves
+the iterator as it is, as WPT and other browsers have it. An iterator
+walked from its own filter never touches the running traversal: it
+answers null when there is nowhere to go, and InvalidStateError when its
+filter would be asked. A current node set
+outside the root makes `nextNode` end with null where DOM's steps would
+filter the same node for ever. Lifetime is the observers': a finalizer
+marks its record dead, and the dead are swept when the next walker is made
+and at teardown, which releases the holds. An Attr root is a TypeError
+(DEBTS.md).
+
 ## The CSS namespace
 
 `CSS` (`css.c`) is a WebIDL namespace object with `escape` and `supports`.

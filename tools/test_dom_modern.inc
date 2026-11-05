@@ -96,7 +96,7 @@ static char *modern_chain_shape(DomFixture *f)
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
-        "clear|getSelection|createElementNS|importNode|adoptNode|links|scripts)$/;"
+        "clear|getSelection|createElementNS|importNode|adoptNode|links|scripts|createTreeWalker|createNodeIterator)$/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){"
