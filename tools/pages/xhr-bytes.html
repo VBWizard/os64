@@ -7,9 +7,12 @@
   #verdict { font-weight: bold; margin-top: 16px; }
 </style>
 <h1>Responses outside the script heap</h1>
-<p>Twenty requests for a 4 MiB file, each kept as a Blob: about 80 MiB, past the
-64 MiB a page's scripts have. The bytes are the page's body bound's
-(XHR_BYTES.md), so the page's scripts should keep running after.</p>
+<p>Twenty requests for a 4 MiB file, each kept as a Blob: about 80 MiB, past a
+64 MiB script heap. The bytes are the page's body bound's
+(XHR_BYTES.md), so the page's scripts should keep running after. Run it
+with <code>script_memory_mb = 64</code> in yonder.conf: under the default
+heap the bytes would fit in the heap either way, and the page would prove
+nothing.</p>
 <p>Serve this page over http from a directory holding a file of 4 MiB or more
 named <code>xhr-bytes.bin</code> (yonder, like other browsers, refuses a
 request for a file: address): <code>head -c 4194304 /dev/urandom &gt;

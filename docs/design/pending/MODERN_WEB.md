@@ -517,7 +517,7 @@ From 2026-10-07, so they are not re-argued from scratch:
 | Decision | State |
 |---|---|
 | D13 (incremental relayout) before `requestAnimationFrame` | ruled; slice 5 |
-| The runtime's memory limit (D5b's profile) | becomes a per-page policy before Tier 1; the recon's 33 MB bytecode for one bundle says the limit is per PAGE, not per runtime |
+| The runtime's memory limit (D5b's profile) | a per-page setting since 2026-11-05: `yonder.conf`'s `script_memory_mb`, 256 MiB by default, which each page's runtime is made with; the record's `script heap` line says what a page held. The recon's 33 MB bytecode for one bundle said the limit is per PAGE, not per runtime |
 | The 5 s per-task budget | measured after slice 0's instrument; the recon says compile of the largest bundle alone is 4 to 5 s on the P5, so the budget cannot include compile |
 | The script stack | 128 KiB until 2026-10-31; since then 2 MiB of a declared 4 MiB window thread, because real pages overflowed 160 calls (SCRIPT_STACK.md) |
 | Scripts on by default | Chris's, after the gates; the kill switch does not change it |

@@ -226,6 +226,7 @@ the rows that say so are the whole of what a replay fakes.
 | when products arrive | the harness | — | stated: each script or sheet job is answered at the top of the next turn, in the kept order, never between the chunks of the page's own parse |
 | the request | the harness | — | stated: a page that was the reply to a POST is fed back as a GET's |
 | the cookie jar | the harness | — | stated: read-only, and it holds the record's string and nothing more; what the page sets with `document.cookie=`, a `Set-Cookie` from any fetch the page makes after the head (one its first script waits for included), a cookie the page still on screen set, and an expiry are not seen in a replay, so a script that read the jar after any of those where the page was kept reads the head's string here |
+| the script heap | the harness | — | stated: yonder's default (`YONDER_SCRIPT_MEMORY_MB_DEFAULT`); a record does not say which `script_memory_mb` its page ran with (DEBTS.md), so a page kept under another heap replays under the default |
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
 | modules | not fetched | — | stated: a module's fetch, like any request the page makes, is not answered; its kept `module` line is read and not served (§ 4) |

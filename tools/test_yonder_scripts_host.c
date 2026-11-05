@@ -837,6 +837,7 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
     return OS64_FONT_OK;
 }
 static bool probe_modern_off;  /* the next probe_page's window: the modern switch off */
+static size_t probe_script_memory;  /* the next probe_page's script heap, bytes; 0: libjs's own */
 /* The window's agent's preset lines: not NULL, so a job handed none is told
  * from one handed the window's. */
 static const way_identity_t s_window_identity={.hints="sec-ch-ua: \"Window\";v=\"1\"\r\n",.language="en"};
@@ -844,6 +845,7 @@ static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.settle_due=YONDER_NEVER;
     g.modern=g.page.modern=!probe_modern_off;
+    g.script_memory=probe_script_memory;
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
     if(probe_borrow_font)
@@ -1164,6 +1166,29 @@ static void script_lifecycle(void) {
           !yonder_scripts_alive(g.page.scripts) &&
           strstr(g.status_text,"execution stopped after 5 s (this page runs without script)"),
           "an endless Promise chain meets the task's deadline, retires the runtime and drops the queue");
+    probe_drop();
+    /* The page's heap is the host's (yonder.conf's script_memory_mb), and
+     * running out of it is named, with its size. */
+    probe_script_memory=(size_t)16<<20;
+    probe_page("<h1 id=heading>before</h1><script>var keep=[];for(var i=0;i<2;i++)keep.push(new Array(1<<20).fill(1));"
+        "document.getElementById('heading').textContent='held';</script>",true);
+    probe_script_memory=0;
+    check(yonder_scripts_memory_bytes(g.page.scripts)==((size_t)16<<20),"the page's heap is the host's");
+    script_turn();
+    check(probe_text_is("heading","before") && !yonder_scripts_alive(g.page.scripts) &&
+          strstr(g.status_text,"the script heap's 16 MiB ran out (this page runs without script)"),
+          "a page that fills its heap is told by the heap's name and size");
+    check(yonder_scripts_heap_peak(g.page.scripts)>((size_t)8<<20) &&
+          yonder_scripts_heap_peak(g.page.scripts)<=((size_t)16<<20),
+          "the retired runtime's heap peak is kept, within its limit");
+    probe_drop();
+    probe_page("<h1 id=heading>before</h1><script>var keep=[];for(var i=0;i<2;i++)keep.push(new Array(1<<20).fill(1));"
+        "document.getElementById('heading').textContent='held';</script>",true);
+    script_turn();
+    check(probe_text_is("heading","held"),"what passes 16 MiB fits in libjs's own heap");
+    check(yonder_scripts_heap_peak(g.page.scripts)>=((size_t)32<<20) &&
+          yonder_scripts_heap_peak(g.page.scripts)<=os64_js_default_limits().memory_bytes,
+          "a live runtime's heap peak holds what the page made");
     probe_drop();
 }
 static void native_refusals(void) {
@@ -2427,18 +2452,39 @@ static void bounded_resources(void) {
     while(yonder_scripts_step(g.page.scripts,&out)) ran++;
     check(ran==4096,"a page's scripts past the 4096th are not queued");
     probe_drop();
-    size_t big=4*1024*1024+1;
-    const char *head="<script>", *tail="</script><script>document.body.id='after';</script>";
-    char *huge=malloc(strlen(head)+big+strlen(tail)+1);
-    check(huge!=NULL,"script source fixture allocation");
-    strcpy(huge,head); memset(huge+strlen(head),' ',big); strcpy(huge+strlen(head)+big,tail);
-    probe_page(huge,true); free(huge);
-    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_EXCEPTION &&
-        strstr(out.message,"longer than a script may be") && strstr(out.source_name,"#inline-1"),
-        "an inline script past the source limit is reported in its place");
-    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK &&
-        os64_html_attr(g.page.way.doc->body,"id") && os64_streq(os64_html_attr(g.page.way.doc->body,"id")->value,"after"),
+    /* An inline script one past the source limit, built by the page from
+     * two text nodes: a parsed page cannot carry one, since the HTML
+     * parser's own input budget is no larger than the limit, and one
+     * string that long is past libdom's own string quota. */
+    char over[640];
+    snprintf(over,sizeof over,"<script>var s=document.createElement('script');"
+        "s.appendChild(document.createTextNode(' '.repeat(%zu)));"
+        "s.appendChild(document.createTextNode(' '.repeat(%zu)+\"document.body.id='ran'\"));"
+        "document.body.appendChild(s);</script>"
+        "<script>document.body.className='after';</script>",
+        (size_t)SCRIPT_SOURCE_MAX/2,(size_t)SCRIPT_SOURCE_MAX/2);
+    probe_page(over,true);
+    bool refused=false;
+    while(yonder_scripts_step(g.page.scripts,&out))
+        refused|=out.status==OS64_JS_EXCEPTION && strstr(out.message,"longer than a script may be")!=NULL;
+    check(refused,"an inline script past the source limit is reported in its place");
+    check(os64_html_attr(g.page.way.doc->body,"id")==NULL,"an inline script past the source limit does not run");
+    check(os64_html_attr(g.page.way.doc->body,"class") &&
+        os64_streq(os64_html_attr(g.page.way.doc->body,"class")->value,"after"),
         "the scripts after it still run");
+    probe_drop();
+    /* One past libjs's standalone 4 MiB runs: the page's runtime takes
+     * yonder's limit, not the library's default. */
+    size_t past=(size_t)4*1024*1024+1;
+    const char *head="<script>", *body="document.body.id='big';";
+    char *large=malloc(strlen(head)+past+strlen(body)+strlen("</script>")+1);
+    check(large!=NULL,"large script fixture allocation");
+    strcpy(large,head); memset(large+strlen(head),' ',past);
+    strcpy(large+strlen(head)+past,body); strcat(large+strlen(head)+past,"</script>");
+    probe_page(large,true); free(large);
+    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK &&
+        os64_html_attr(g.page.way.doc->body,"id") && os64_streq(os64_html_attr(g.page.way.doc->body,"id")->value,"big"),
+        "a script past libjs's own default source limit runs");
     probe_drop();
 }
 
@@ -2573,7 +2619,7 @@ static void input_javascript_links(void) {
      * short, or not hex, stays as written. */
     check(yonder_scripts_address(host,"JavaScript:note('%FF|%4|%zz|%')",NULL) && script_turn() &&
           probe_text_is("log","\xEF\xBF\xBD|%4|%zz|%"),"javascript link: decoded as the standard decodes it");
-    size_t cap=os64_js_default_limits().source_bytes;
+    size_t cap=SCRIPT_SOURCE_MAX;
     char *long_url=malloc(cap+32);
     if(long_url==NULL) abort();
     memcpy(long_url,"javascript:",11);

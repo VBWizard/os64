@@ -1194,6 +1194,9 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx, RpIndex *
     stream_window();
     pool_submit_hook=rp_submit; pool_cancel_hook=rp_cancel;
     g.scripts_on=load->scripts; g.script_ms=(uint64_t)load->script_seconds*1000;
+    /* The heap yonder runs a page with by default: a record does not say
+     * which a page had (DEBTS.md). */
+    g.script_memory=(size_t)YONDER_SCRIPT_MEMORY_MB_DEFAULT<<20;
     g.modern=load->modern; g.zoom=load->zoom; s_dark=load->dark; s_reduce_motion=load->reduce;
     s_animations=!load->still;
     rp_apply_inputs(load);
@@ -2173,10 +2176,12 @@ static way_head_t rp_head(int status, const char *reason, const char *type, cons
  * said. Both were read in this harness, which answers no picture or font
  * and dispatches no input either way, so here the record matches in its
  * picture and font lines too, which a corpus kept on the glass need not,
- * and neither side holds a line an input made. Let be: a `paint stages`
- * line, by its key, whose times are the processor's counter
+ * and neither side holds a line an input made. Let be, by their keys: a
+ * `paint stages` line, whose times are the processor's counter
  * (YONDER_DIAGNOSTICS.md § What paints cost), which no clock of the
- * harness moves; the `kept:`, `kept lines:` and `claim:` facts, which say
+ * harness moves, and a `script heap` line, whose peak is the engine's
+ * allocations in whatever order the run made them; the `kept:`, `kept
+ * lines:` and `claim:` facts, which say
  * how the record was made and not what the page did; each record's `end`;
  * and the replay's own lines, its state, its budget and what it does not
  * reproduce. */
@@ -2197,7 +2202,8 @@ static bool rp_same(const char *name, const char *a, const char *b) {
         if(*x && rp_let_be(x,xl,false)) { x+=xl+(xe?1:0); continue; }
         if(*y && rp_let_be(y,yl,true)) { y+=yl+(ye?1:0); continue; }
         bool stages=xl>14 && yl>14 && !strncmp(x,"paint stages: ",14) && !strncmp(y,"paint stages: ",14);
-        if(!stages && (xl!=yl || memcmp(x,y,xl))) {
+        bool heap=xl>13 && yl>13 && !strncmp(x,"script heap: ",13) && !strncmp(y,"script heap: ",13);
+        if(!stages && !heap && (xl!=yl || memcmp(x,y,xl))) {
             if(same) printf("  %s: the replay's record differs from the page's own\n",name);
             printf("    kept:   %.*s\n    replay: %.*s\n",(int)xl,x,(int)yl,y);
             same=false;

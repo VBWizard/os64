@@ -31,6 +31,15 @@
 #define YONDER_SCRIPT_SECONDS_MIN 1
 #define YONDER_SCRIPT_SECONDS_MAX 60
 
+// A page's script heap, in MiB (yonder.conf's `script_memory_mb`): the
+// memory limit each page's runtime is made with. A single-page app's code
+// lives in it beside everything the app builds, and the two together pass
+// libjs's standalone 64 MiB on a large app; the record's `script heap`
+// line says what a page held.
+#define YONDER_SCRIPT_MEMORY_MB_DEFAULT 256
+#define YONDER_SCRIPT_MEMORY_MB_MIN 16
+#define YONDER_SCRIPT_MEMORY_MB_MAX 2048
+
 // Opens with the current choices, or focuses the existing dialog.
 // Callbacks receive a validated agent/script policy (the switch and the
 // time limit in seconds), zoom (thousandths, whole percentages from 25
@@ -84,6 +93,9 @@ yonder_cookies_mode_t yonder_settings_saved_cookies(const char **refused);
 // The saved script time limit (`script_seconds = 10`), whole seconds from
 // YONDER_SCRIPT_SECONDS_MIN to _MAX; the default when absent or not one.
 uint32_t yonder_settings_saved_script_seconds(void);
+// The saved script heap (`script_memory_mb = 512`), whole MiB from
+// YONDER_SCRIPT_MEMORY_MB_MIN to _MAX; the default when absent or not one.
+uint32_t yonder_settings_saved_script_memory_mb(void);
 
 // The directory yonder.conf names for page files (`diagnostics =
 // /home/yonder/pages`, YONDER_DIAGNOSTICS.md), into `out`, without a

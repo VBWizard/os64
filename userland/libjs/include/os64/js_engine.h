@@ -61,6 +61,10 @@ bool os64_js_turn_open(const os64_js_runtime_t *runtime);
  * call. Zero or unrepresentable is BAD_ARGUMENT, as creation refuses. */
 os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, uint64_t ms,
                                           os64_js_outcome_t *outcome);
+/* The most the runtime's heap has held since it was made, in bytes: the
+ * engine's charge, which its memory limit is held against. Readable from
+ * a runtime that has failed. 0 for NULL. No engine entry. */
+size_t os64_js_heap_peak(const os64_js_runtime_t *runtime);
 /* A SCRIPT HOST: a host that reports a script's failures itself, as a
  * browser fires `error` and `unhandledrejection` (CONTRACT.md § A script
  * host). Each hook is called inside the wrapper's guard and must run no

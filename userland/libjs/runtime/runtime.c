@@ -1147,6 +1147,11 @@ JS_PUBLIC os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, 
     return refuse(runtime, outcome, OS64_JS_OK, NULL);
 }
 
+JS_PUBLIC size_t os64_js_heap_peak(const os64_js_runtime_t *runtime)
+{
+    return runtime != NULL ? runtime->allocator.peak_bytes : 0;
+}
+
 /* Not through enter(): a host clears itself from a runtime that has failed
  * as readily as from one that has not, before its opaque goes away. */
 JS_PUBLIC os64_js_status_t os64_js_set_script_host(os64_js_runtime_t *runtime, const char *caller_abi,

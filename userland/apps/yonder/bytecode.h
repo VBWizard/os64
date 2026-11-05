@@ -15,8 +15,11 @@
 #include "way/origin.h"
 
 // The longest script source yonder runs, the libjs source limit a page's
-// runtime is created with. A longer one is refused, as a too-big sheet is.
-#define SCRIPT_SOURCE_MAX ((size_t)4 * 1024 * 1024)
+// runtime is created with (ensure_runtime sets it from this, rather than
+// keep libjs's standalone default). A longer one is refused, as a too-big
+// sheet is. 8 MiB holds a large single-page app's entry module, which can
+// run past 5 MiB; DEBTS.md books the bundles longer still.
+#define SCRIPT_SOURCE_MAX ((size_t)8 * 1024 * 1024)
 // The largest compiled form kept for a script, or read back: a script's
 // bytecode measures about three times its source, so four times the
 // largest source holds any script yonder runs, and one past it is not kept.

@@ -33,6 +33,7 @@ void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *)
 typedef struct {
     const char *url;                // the page's address: names, location, a src's base
     uint64_t execution_ms;          // each task's budget (Settings' script time limit)
+    size_t memory_bytes;            // the page's script heap (yonder.conf's script_memory_mb); 0: libjs's own
     uint64_t serial;                // names the page to a script's fetch job
     void (*alert)(void *opaque, const char *utf8, size_t length);
     // A `src` script's fetch: the host submits it and answers its job id, 0
@@ -303,6 +304,11 @@ bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigati
 // A new task budget, from the next task on, and the budget tasks have.
 void yonder_scripts_set_execution_ms(yonder_scripts_t *scripts, uint64_t ms);
 uint64_t yonder_scripts_execution_ms(const yonder_scripts_t *scripts);
+// The script heap a page's runtime is (or will be) made with, in bytes.
+size_t yonder_scripts_memory_bytes(const yonder_scripts_t *scripts);
+// The most that heap has held, in bytes: the live runtime's, or the one
+// retired's as it went; 0 before any script ran.
+size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // The whole address of the `src` script the last task ran, which a task's

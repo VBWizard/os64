@@ -1667,6 +1667,9 @@ static struct {
     // Each script task's budget (Settings' script time limit, yonder.conf's
     // script_seconds), in milliseconds.
     uint64_t script_ms;
+    // Each page's script heap (yonder.conf's script_memory_mb), in bytes,
+    // read once as yonder starts.
+    size_t script_memory;
     // A resize or a zoom is laid out once the events that arrived with it
     // are drained: a drag sends a stream of them, a person zooming presses
     // several times, and a big page takes long enough to lay out that
@@ -2864,6 +2867,15 @@ static void diag_observe(Page *p, const char *when)
                       (unsigned long)stats.raster.entries, (unsigned long)stats.owned_bytes,
                       (unsigned long)stats.raster.evictions, (unsigned long)p->svg_peak);
         yonder_diag_fact(d, "svg raster memory", v);
+    }
+    // The script heap's high-water mark against its limit
+    // (script_memory_mb), what the limit is sized by.
+    size_t heap_peak = yonder_scripts_heap_peak(p->scripts);
+    if (heap_peak != 0) {
+        os64_snprintf(v, sizeof(v), "peak %lu.%lu MiB of %lu MiB", (unsigned long)(heap_peak >> 20),
+                      (unsigned long)((heap_peak & ((1u << 20) - 1)) * 10 >> 20),
+                      (unsigned long)(yonder_scripts_memory_bytes(p->scripts) >> 20));
+        yonder_diag_fact(d, "script heap", v);
     }
     if (p->tree != NULL && flow_incomplete(p->tree))
         yonder_diag_failed_seen(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
@@ -9209,7 +9221,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     int64_t modified;
     stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
-        .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
+        .url = url, .execution_ms = g.script_ms, .memory_bytes = g.script_memory, .serial = serial,
+        .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .kept_module = script_kept_module,
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
@@ -9385,6 +9398,18 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
             os64_snprintf(failure, sizeof(failure), "execution stopped after %lu s "
                           "(this page runs without script)",
                           (unsigned long)(yonder_scripts_execution_ms(host) / 1000));
+        else if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_MEMORY)
+            os64_snprintf(failure, sizeof(failure), "the script heap's %lu MiB ran out "
+                          "(this page runs without script)",
+                          (unsigned long)(yonder_scripts_memory_bytes(host) >> 20));
+        else if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_SOURCE)
+            // Past the fetch's limit by its bytes, a script can still decode
+            // longer (windows-1252, U+FFFD's three bytes) and meet the
+            // runtime's.
+            os64_snprintf(failure, sizeof(failure), "a script longer than %lu MiB once decoded "
+                          "(this page runs without script)", (unsigned long)(SCRIPT_SOURCE_MAX >> 20));
+        else if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_JOBS)
+            os64_snprintf(failure, sizeof(failure), "too many jobs in one turn (this page runs without script)");
         else
             os64_snprintf(failure, sizeof(failure), "%s (this page runs without script)",
                           out->message[0] ? out->message : "the runtime failed");
@@ -16338,6 +16363,7 @@ int main(int argc, char **argv)
     s_animations = yonder_settings_saved_animations();
     s_reduce_motion = yonder_settings_saved_reduce_motion();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
+    g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
     const char *modern_refused;
     g.modern = yonder_settings_saved_modern(&modern_refused);
     const char *diag_refused = diag_dir_open();
