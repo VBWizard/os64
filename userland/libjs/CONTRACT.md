@@ -129,6 +129,18 @@ For console-only setup, an existing own data object is retained and its
 members outside the namespace are untouched. An accessor or non-object console is a setup exception;
 the installer does not invoke a global console getter to discover the object.
 
+`os64_js_install_intl` installs ECMA-402's `Intl` (docs/design/pending/INTL.md)
+with `locale`, a BCP 47 tag, as the realm's default locale; NULL or empty is
+BAD_ARGUMENT. It follows the installers' rules above: idle, before the first
+evaluation, once, under the setup budget and the runtime's memory. The object
+is published as one global property (writable, configurable, not enumerable)
+only once all of it is made, so a refused allocation or a failed definition
+leaves no `Intl`. Its script captures the built-ins it calls as it loads,
+which is why it must run before any page script. The compiled script is kept
+for the process and read by every later runtime; that bytecode never leaves
+the process. The machine's zone is `TZ`'s, by the policy `Date`'s local time
+follows (`os64/date.h`), resolved to a zone name as INTL.md § 5 says.
+
 Custom bindings use QuickJS values and lifetime rules directly. `examples/binding.c`
 shows argument conversion, a thrown callback exception, and ownership on
 property-install failure. Custom setup failure can leave partially installed objects;

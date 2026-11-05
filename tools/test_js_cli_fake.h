@@ -21,22 +21,23 @@ typedef struct {
 
 typedef struct {
     // scripted
-    js_fake_answer_t create, output, run;
+    js_fake_answer_t create, output, intl, run;
     // recorded
-    char calls[256];                 // "create output args run destroy"
+    char calls[256];                 // "create output args intl run destroy"
     os64_js_config_t config;
     bool abi_matched;
     int32_t output_handle;
     uint32_t output_names;
     char args[JS_FAKE_MAX_ARGS][128];
     size_t arg_count;
+    char locale[32];
     char path[256];
     char source[8192];
     size_t source_length;
     bool source_copy_ok;
     char source_name[128];
     // contract state
-    int installed_output, installed_args, evaluated;
+    int installed_output, installed_args, installed_intl, evaluated;
 } js_fake_t;
 
 extern js_fake_t js_fake;

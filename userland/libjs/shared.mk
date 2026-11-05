@@ -1,6 +1,12 @@
 include libjs/core.mk
-LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o
+LIBJS_RUNTIME_OBJS := $(OBJ)/js/runtime/runtime.o $(OBJ)/js/intl/intl.o
 $(OBJ)/js/runtime/%.o: libjs/runtime/%.c $(LIBJS_GENERATED)/.prepared libjs/shared.mk libjs/core.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(LIBJS_FLAGS) -c $< -o $@
+# Intl (INTL.md): the script and its CLDR data are carried in intl.o's
+# rodata (.incbin), so the object depends on both.
+$(OBJ)/js/intl/intl.o: libjs/intl/intl.c libjs/intl/intl.js libjs/intl/intl_data.js libjs/intl/zones.inc \
+    $(LIBJS_GENERATED)/.prepared libjs/shared.mk libjs/core.mk
 	@mkdir -p "$(@D)"
 	$(CC) $(LIBJS_FLAGS) -c $< -o $@
 -include $(LIBJS_RUNTIME_OBJS:.o=.d)

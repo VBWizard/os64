@@ -1,28 +1,32 @@
 /* ECMA-402, SELF-HOSTED (INTL.md). libjs's install door (intl.c) runs this
  * file in a realm before any other script has run there, and calls it with
- * `I`, the host's half, and `D`, the locale data (intl_data.js, CLDR's,
- * generated). It returns the Intl object, which the door defines on the
- * global.
+ * `I`, the host's half. It returns the Intl object, which the door defines
+ * on the global.
  *
  *   I.locale         the default locale (OS64_JS_LOCALE)
+ *   I.data           () → the locale data (intl_data.js, CLDR's, generated),
+ *                    evaluated in this realm; asked once, by loadData
  *   I.zoneCanonical  (name) → the zone's canonical name, or undefined for
  *                    one the zone table does not hold (zones.inc)
  *   I.zoneOffset     (canonical name, epoch ms) → minutes east of UTC
- *   I.zoneHost       () → the machine's zone, canonical
+ *   I.zoneHost       () → the machine's zone: a canonical name, or an
+ *                    offset zone ("+05:30")
  *
  * Because it runs before any page script, every built-in it touches is
  * the realm's own: the ones it calls while formatting are captured here,
  * at load, so a page that replaces Array.prototype.push or
- * Date.prototype.getUTCHours later changes nothing Intl does. Internal
- * lists are arrays the file made, written by index; a page that puts an
- * indexed setter on Array.prototype is not defended against (DEBTS).
+ * Date.prototype.getUTCHours later changes nothing Intl does. Nor can a
+ * page's properties on Object.prototype or Array.prototype reach in: every
+ * record the file makes, and the data's every object, has no prototype,
+ * and arrays and results get their elements by defineProperty (put, push),
+ * never by an assignment a setter could answer.
  *
  * The data is en-US's (INTL.md § 3): every locale resolves to "en" or
  * "en-US", which ECMA-402 permits (an implementation's available locales
  * are its own), and the Gregorian calendar and Latin digits are the only
  * ones. What it formats it formats as Chrome does for en-US, held by
  * captured strings (INTL.md § 8). */
-(function (I, D) {
+(function (I) {
 'use strict';
 
 // ── The captures ────────────────────────────────────────────────────────
@@ -36,6 +40,10 @@ const freeze = Object_.freeze;
 const isArray = Array_.isArray;
 const toStringTag = Symbol_.toStringTag;
 const SymbolToPrimitive = Symbol_.toPrimitive;
+// OrdinaryHasInstance, which the legacy constructor behaviour asks: never
+// `instanceof`, which a page's Symbol.hasInstance would answer.
+const ordinaryHasInstance = Function.prototype[Symbol_.hasInstance];
+const hasInstance = (C, o) => apply(ordinaryHasInstance, C, [o]);
 const floor = Math_.floor, abs = Math_.abs, trunc = Math_.trunc;
 const isNaN_ = Number_.isNaN, isFinite_ = Number_.isFinite;
 const fromCharCode = String_.fromCharCode;
@@ -54,6 +62,21 @@ const d_getUTCSeconds = DateProto.getUTCSeconds, d_getUTCMilliseconds = DateProt
 const DateNow = Date_.now;
 const RegExpProto = RegExp.prototype, r_exec = RegExpProto.exec;
 const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.zoneHost;
+
+// THE DATA, loaded by the first construction in a realm (INTL.md § 6, the
+// § 9.3 ruling): the constructors and prototypes are installed whole and
+// eagerly, and a realm that never constructs one never evaluates CLDR's
+// tables. Every door into them calls loadData first: the constructors and
+// supportedLocalesOf; a method has an instance, so its realm has loaded.
+let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES;
+let dataLoaded = false;
+function loadData() {
+    if (dataLoaded) return;
+    const D = I.data();
+    ALIASES = D.aliases; U_VALUE_ALIASES = D.uAliases; LIKELY = D.likely; G = D.gregorian; Z = D.zones;
+    IV = G.intervalFormats; IV_FALLBACK = own(IV, 'intervalFormatFallback'); DAY_PERIOD_RULES = D.dayPeriods;
+    dataLoaded = true;
+}
 const DEFAULT_LOCALE = I.locale;
 
 const slice = (s, a, b) => apply(s_slice, s, [a, b]);
@@ -68,7 +91,10 @@ const pad = (s, n) => apply(s_padStart, s, [n, '0']);
 const join = (a, sep) => apply(a_join, a, [sep]);
 const sortStrings = a => apply(a_sort, a, [(x, y) => x < y ? -1 : x > y ? 1 : 0]);
 const exec = (re, s) => apply(r_exec, re, [s]);
-function push(a, v) { a[a.length] = v; }
+// CreateDataProperty: a new own data property, never a [[Set]] that a
+// setter a page put on Object.prototype or Array.prototype could answer.
+function put(o, k, v) { defineProperty(o, k, {__proto__: null, value: v, writable: true, enumerable: true, configurable: true}); }
+function push(a, v) { put(a, a.length, v); }
 function contains(a, v) { for (let i = 0; i < a.length; i++) if (a[i] === v) return true; return false; }
 const hasOwn = (o, k) => getOwnPropertyDescriptor(o, k) !== undefined;
 
@@ -78,14 +104,13 @@ function own(o, k) { const d = o !== undefined && o !== null ? getOwnPropertyDes
 // A function defined as a built-in method is: non-enumerable, with its
 // name and length; a class's members are defined the same way below.
 function method(target, name, fn, length) {
-    defineProperty(fn, 'name', {value: name, configurable: true});
-    defineProperty(fn, 'length', {value: length, configurable: true});
-    defineProperty(target, name, {value: fn, writable: true, enumerable: false, configurable: true});
+    defineProperty(fn, 'name', {__proto__: null, value: name, configurable: true});
+    defineProperty(fn, 'length', {__proto__: null, value: length, configurable: true});
+    defineProperty(target, name, {__proto__: null, value: fn, writable: true, enumerable: false, configurable: true});
 }
 function getter(target, name, fn) {
-    defineProperty(fn, 'name', {value: 'get ' + name, configurable: true});
-    defineProperty(fn, 'length', {value: 0, configurable: true});
-    defineProperty(target, name, {get: fn, enumerable: false, configurable: true});
+    const get = getOwnPropertyDescriptor({__proto__: null, get [name]() { return apply(fn, this, []); }}, name).get;
+    defineProperty(target, name, {__proto__: null, get: get, enumerable: false, configurable: true});
 }
 // A method that is not a constructor (a built-in method has no
 // [[Construct]]): an arrow, or a concise method, never a function
@@ -113,7 +138,7 @@ function isObject(v) { return (typeof v === 'object' && v !== null) || typeof v 
 // ── Options (ECMA-402 § 9.2) ────────────────────────────────────────────
 // GetOption: the option read once, converted to `type`, refused when not
 // one of `values`; `fallback` when absent. REQUIRED throws instead.
-const REQUIRED = {};
+const REQUIRED = {__proto__: null};
 function GetOption(options, property, type, values, fallback) {
     let value = options[property];
     if (value === undefined) {
@@ -179,7 +204,7 @@ function parseTag(tag) {
     if (typeof tag !== 'string' || tag.length === 0) return null;
     const parts = split(lower(tag), '-');
     let i = 0;
-    const t = {language: '', script: '', region: '', variants: [], extensions: [], privateuse: ''};
+    const t = {__proto__: null, language: '', script: '', region: '', variants: [], extensions: [], privateuse: ''};
     // unicode_language_id: a language is required, as ECMA-402 requires
     // (no bare script, no "root").
     if (!isLanguage(parts[0])) return null;
@@ -234,7 +259,7 @@ function parseTag(tag) {
             while (i < parts.length && parts[i].length >= 2 && parts[i].length <= 8 && alnum(parts[i])) i++;
         }
         if (i === start) return null;
-        push(t.extensions, {singleton: s, subtags: slicePart(parts, start, i)});
+        push(t.extensions, {__proto__: null, singleton: s, subtags: slicePart(parts, start, i)});
     }
     return t;
 }
@@ -247,7 +272,6 @@ function titleCase(s) { return upper(slice(s, 0, 1)) + slice(s, 1); }
 
 // Alias replacement (UTS 35 Annex C, ECMA-402 CanonicalizeUnicodeLocaleId),
 // over CLDR's language, script, territory and variant aliases.
-const ALIASES = D.aliases;
 function replaceAliases(t) {
     // Language aliases: the longest source that matches (language plus its
     // variants or region, or the language alone), its replacement's own
@@ -310,20 +334,9 @@ function replaceAliases(t) {
     t.variants = variants;
 }
 
-// The canonical values of -u- keys whose CLDR aliases ECMA-402's tests
-// read (UTS 35 § 3.6.4 and the bcp47 data's _alias); a value not listed
-// is its own canonical form.
-const U_VALUE_ALIASES = {
-    ca: {ethiopicaa: 'ethioaa', islamicc: 'islamic-civil', gregorian: 'gregory'},
-    ks: {primary: 'level1', tertiary: 'level3'},
-    ms: {imperial: 'uksystem'},
-    kb: {yes: 'true'}, kc: {yes: 'true'}, kh: {yes: 'true'}, kk: {yes: 'true'}, kn: {yes: 'true'},
-    tz: {aqams: 'nzakl', cnckg: 'cnsha', cnhrb: 'cnsha', cnkhg: 'cnurc', cuba: 'cuhav', egypt: 'egcai',
-         eire: 'iedub', est: 'papty', gmt0: 'gmt', hongkong: 'hkhkg', hst: 'usnsl', iceland: 'isrey',
-         iran: 'irthr', israel: 'jeruslm', jamaica: 'jmkin', japan: 'jptyo', libya: 'lytip', mst: 'usphx',
-         navajo: 'usden', poland: 'plwaw', portugal: 'ptlis', prc: 'cnsha', roc: 'twtpe', rok: 'krsel',
-         turkey: 'trist', uct: 'utc', usnavajo: 'usden', zulu: 'utc'},
-};
+// The canonical value of a -u- keyword (UTS 35 § 3.6.4): CLDR's bcp47
+// aliases (a deprecated value's preferred one, a legacy name's value),
+// generated into the data; a value not listed is its own canonical form.
 function canonicalUValue(key, value) {
     const table = own(U_VALUE_ALIASES, key);
     const a = table !== undefined ? own(table, value) : undefined;
@@ -345,9 +358,9 @@ function uComponents(subtags) {
         while (i < subtags.length && subtags[i].length !== 2) push(value, subtags[i++]);
         let found = false;
         for (let k = 0; k < keywords.length; k++) if (keywords[k].key === key) found = true;
-        if (!found) push(keywords, {key: key, value: join(value, '-')});
+        if (!found) push(keywords, {__proto__: null, key: key, value: join(value, '-')});
     }
-    return {attributes: attributes, keywords: keywords};
+    return {__proto__: null, attributes: attributes, keywords: keywords};
 }
 
 function writeLanguageId(t) {
@@ -406,7 +419,7 @@ function canonicalT(subtags) {
         const key = subtags[i++];
         const value = [];
         while (i < subtags.length && !(subtags[i].length === 2 && isDigit(codeAt(subtags[i], 1)))) push(value, subtags[i++]);
-        push(fields, {key: key, value: join(value, '-')});
+        push(fields, {__proto__: null, key: key, value: join(value, '-')});
     }
     apply(a_sort, fields, [(a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0]);
     for (let f = 0; f < fields.length; f++) {
@@ -478,9 +491,9 @@ function LookupMatcher(available, requested) {
     for (let i = 0; i < requested.length; i++) {
         const noExt = removeUnicodeExtensions(requested[i]);
         const found = BestAvailableLocale(available, noExt);
-        if (found !== undefined) return {locale: found, extension: unicodeExtension(requested[i])};
+        if (found !== undefined) return {__proto__: null, locale: found, extension: unicodeExtension(requested[i])};
     }
-    return {locale: DEFAULT_LOCALE, extension: null};
+    return {__proto__: null, locale: DEFAULT_LOCALE, extension: null};
 }
 
 // ResolveLocale: the found locale, and each relevant key's value from the
@@ -489,7 +502,7 @@ function ResolveLocale(available, requested, options, relevantKeys, localeData) 
     const r = LookupMatcher(available, requested);
     const found = r.locale;
     const keywords = r.extension !== null ? uComponents(r.extension).keywords : [];
-    const result = {};
+    const result = {__proto__: null};
     const supported = [];
     for (let k = 0; k < relevantKeys.length; k++) {
         const key = relevantKeys[k];
@@ -500,9 +513,9 @@ function ResolveLocale(available, requested, options, relevantKeys, localeData) 
             if (keywords[w].key !== key) continue;
             const requestedValue = canonicalUValue(key, keywords[w].value);
             if (requestedValue !== '') {
-                if (contains(keyData, requestedValue)) { value = requestedValue; supportedKeyword = {key: key, value: value}; }
+                if (contains(keyData, requestedValue)) { value = requestedValue; supportedKeyword = {__proto__: null, key: key, value: value}; }
             } else if (contains(keyData, 'true')) {
-                value = 'true'; supportedKeyword = {key: key, value: ''};
+                value = 'true'; supportedKeyword = {__proto__: null, key: key, value: ''};
             }
         }
         let optionsValue = own(options, key);
@@ -540,6 +553,7 @@ function SupportedLocales(available, requested, options) {
     return subset;
 }
 function supportedLocalesOf(locales, options) {
+    loadData();
     const list = SupportedLocales(AVAILABLE, CanonicalizeLocaleList(locales), options);
     const out = [];
     for (let i = 0; i < list.length; i++) push(out, list[i]);
@@ -547,7 +561,6 @@ function supportedLocalesOf(locales, options) {
 }
 
 // ── Intl.Locale (ECMA-402 § 14) ─────────────────────────────────────────
-const LIKELY = D.likely;
 
 const LOCALE_KEYS = ['ca', 'co', 'hc', 'kf', 'kn', 'nu'];
 
@@ -592,18 +605,20 @@ function makeLocaleRecord(tag, opt) {
             attributes = c.attributes; keywords = c.keywords;
         } else push(others, t.extensions[e]);
     }
-    const result = {};
+    const result = {__proto__: null};
     for (let k = 0; k < LOCALE_KEYS.length; k++) {
         const key = LOCALE_KEYS[k];
         let value;
         let entry = null;
         for (let w = 0; w < keywords.length; w++) if (keywords[w].key === key) entry = keywords[w];
-        if (entry !== null) value = entry.value;
+        // A canonical tag writes a "true" value as no value (UTS 35): the
+        // record holds what the canonical tag says.
+        if (entry !== null) value = entry.value === 'true' ? '' : entry.value;
         const override = own(opt, key);
         if (override !== undefined) {
             value = override;
             if (entry !== null) entry.value = value;
-            else push(keywords, {key: key, value: value});
+            else push(keywords, {__proto__: null, key: key, value: value});
         }
         result[key] = value === undefined ? undefined : canonicalUValue(key, value);
     }
@@ -618,7 +633,7 @@ function makeLocaleRecord(tag, opt) {
                 for (let v = 0; v < vs.length; v++) push(sub, vs[v]);
             }
         }
-        push(t.extensions, {singleton: 'u', subtags: sub});
+        push(t.extensions, {__proto__: null, singleton: 'u', subtags: sub});
     }
     result.locale = canonicalize(t);
     return result;
@@ -630,11 +645,16 @@ function thisLocale(o, name) {
     return s;
 }
 
-// Likely subtags (UTS 35 § 4.4), over the English rows the data keeps
-// (INTL.md § 7): a tag no row matches is its own maximum.
+// Likely subtags (UTS 35 § 4.4), over the rows the data keeps, English's
+// and every `und` row (INTL.md § 7): a tag no row matches is its own
+// maximum.
 function addLikely(t) {
     const tries = [];
     const l = t.language, s = t.script, r = t.region;
+    // The data holds English's rows and every `und` row. A language it
+    // does not hold would have stopped at its own row, never reaching
+    // `und`'s, so it is its own maximum.
+    if (l !== 'und' && own(LIKELY, l) === undefined) return null;
     push(tries, l + (s ? '-' + s : '') + (r ? '-' + r : ''));
     if (s) push(tries, l + '-' + s);
     if (r) push(tries, l + '-' + r);
@@ -649,20 +669,24 @@ function addLikely(t) {
         const hit = own(LIKELY, key);
         if (hit !== undefined) {
             const m = parseTag(hit);
-            return {language: l === 'und' ? m.language : l, script: s || m.script, region: r || m.region};
+            return {__proto__: null, language: l === 'und' ? m.language : l, script: s || m.script, region: r || m.region};
         }
     }
     return null;
 }
 
 function Locale(tag, options) {
+    loadData();
     if (new.target === undefined) throw new TypeError_("Constructor Intl.Locale requires 'new'");
     if (typeof tag !== 'string' && !isObject(tag)) throw new TypeError_('First argument to Intl.Locale constructor can\'t be empty or missing');
     const existing = slots(LOCALES, tag);
     tag = existing !== undefined ? existing.locale : ToString(tag);
     options = CoerceOptionsToObject(options);
-    tag = updateLanguageId(tag, options);
-    const opt = {};
+    // Canonicalized before the options apply and again after (aliases
+    // first: "cel-gaulish" is "xtg" before a `language` option replaces it).
+    if (!IsStructurallyValidLanguageTag(tag)) throw new RangeError_('Incorrect locale information provided');
+    tag = updateLanguageId(CanonicalizeUnicodeLocaleId(tag), options);
+    const opt = {__proto__: null};
     const calendar = GetOption(options, 'calendar', 'string', undefined, undefined);
     if (calendar !== undefined && !isTypeSequence(lower(calendar))) throw new RangeError_('Incorrect calendar');
     opt.ca = calendar === undefined ? undefined : lower(calendar);
@@ -683,8 +707,8 @@ function Locale(tag, options) {
     return locale;
 }
 const LocalePrototype = Locale.prototype;
-defineProperty(Locale, 'prototype', {writable: false, enumerable: false, configurable: false});
-defineProperty(Locale, 'length', {value: 1, configurable: true});
+defineProperty(Locale, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(Locale, 'length', {__proto__: null, value: 1, configurable: true});
 
 function localeParts(o, name) { return parseTag(thisLocale(o, name).locale); }
 method(LocalePrototype, 'toString', methodOf(function () { return thisLocale(this, 'toString').locale; }), 0);
@@ -711,9 +735,9 @@ method(LocalePrototype, 'minimize', methodOf(function () {
     const t = parseTag(r.locale);
     const max = addLikely(t);
     if (max !== null) {
-        const trials = [{language: max.language, script: '', region: ''},
-                        {language: max.language, script: '', region: max.region},
-                        {language: max.language, script: max.script, region: ''}];
+        const trials = [{__proto__: null, language: max.language, script: '', region: ''},
+                        {__proto__: null, language: max.language, script: '', region: max.region},
+                        {__proto__: null, language: max.language, script: max.script, region: ''}];
         for (let i = 0; i < trials.length; i++) {
             const m = addLikely(trials[i]);
             if (m !== null && m.language === max.language && m.script === max.script && m.region === max.region) {
@@ -725,7 +749,7 @@ method(LocalePrototype, 'minimize', methodOf(function () {
     }
     return new Locale(canonicalize(t));
 }), 0);
-defineProperty(LocalePrototype, toStringTag, {value: 'Intl.Locale', writable: false, enumerable: false, configurable: true});
+defineProperty(LocalePrototype, toStringTag, {__proto__: null, value: 'Intl.Locale', writable: false, enumerable: false, configurable: true});
 
 // ── Patterns: ICU's DateTimePatternGenerator over CLDR's en data ─────────
 // Other browsers turn a DateTimeFormat's options into a pattern with ICU's
@@ -736,7 +760,6 @@ defineProperty(LocalePrototype, toStringTag, {value: 'Intl.Locale', writable: fa
 // and a time part found apart are joined with the dateTimeFormats glue.
 // This is that algorithm (ICU's dtptngen.cpp), field table and all, so
 // the pattern it finds is the pattern Chrome finds.
-const G = D.gregorian;
 const DT_NUMERIC = 0x100, DT_NARROW = -0x101, DT_SHORTER = -0x102, DT_SHORT = -0x103, DT_LONG = -0x104, DT_DELTA = 0x10;
 const F_ERA = 0, F_YEAR = 1, F_QUARTER = 2, F_MONTH = 3, F_WEEK_OF_YEAR = 4, F_WEEK_OF_MONTH = 5, F_WEEKDAY = 6,
       F_DAY_OF_YEAR = 7, F_DAY_OF_WEEK_IN_MONTH = 8, F_DAY = 9, F_DAYPERIOD = 10, F_HOUR = 11, F_MINUTE = 12,
@@ -812,7 +835,7 @@ function tokenize(pattern) {
         if (isPatternLetter(c)) {
             let j = i + 1;
             while (j < pattern.length && codeAt(pattern, j) === c) j++;
-            push(items, {ch: fromCharCode(c), len: j - i});
+            push(items, {__proto__: null, ch: fromCharCode(c), len: j - i});
             i = j;
         } else if (c === 39) {
             let text = '', j = i + 1;
@@ -829,11 +852,11 @@ function tokenize(pattern) {
                 }
                 i = j;
             }
-            push(items, {lit: text, quoted: true});
+            push(items, {__proto__: null, lit: text, quoted: true});
         } else {
             let j = i + 1;
             while (j < pattern.length && !isPatternLetter(codeAt(pattern, j)) && codeAt(pattern, j) !== 39) j++;
-            push(items, {lit: slice(pattern, i, j)});
+            push(items, {__proto__: null, lit: slice(pattern, i, j)});
             i = j;
         }
     }
@@ -858,8 +881,9 @@ function untokenize(items) {
 // A skeleton (ICU's PtnSkeleton): per field its type, the original field
 // (char and length) and the base one (the row's char at its minimum).
 function makeSkeleton(pattern) {
-    const sk = {type: [], ch: [], len: [], baseCh: [], baseLen: [], addedDayPeriod: false};
-    for (let f = 0; f < FIELD_COUNT; f++) { sk.type[f] = 0; sk.ch[f] = ''; sk.len[f] = 0; sk.baseCh[f] = ''; sk.baseLen[f] = 0; }
+    const sk = {__proto__: null, type: [], ch: [], len: [], baseCh: [], baseLen: [], addedDayPeriod: false};
+    // Every index made by push, so the writes below land on own properties.
+    for (let f = 0; f < FIELD_COUNT; f++) { push(sk.type, 0); push(sk.ch, ''); push(sk.len, 0); push(sk.baseCh, ''); push(sk.baseLen, 0); }
     const items = tokenize(pattern);
     for (let i = 0; i < items.length; i++) {
         const it = items[i];
@@ -904,17 +928,24 @@ function distance(req, other, includeMask) {
         else if (theirs === 0) { result += 0x1000; missing |= 1 << f; }
         else result += abs(mine - theirs);
     }
-    return {distance: result, missing: missing, extra: extra};
+    return {__proto__: null, distance: result, missing: missing, extra: extra};
 }
 
 // The pattern map, built as ICU builds it: the canonical items, the
 // locale's date and time formats (their skeletons derived), then
 // availableFormats (their skeletons given, replacing an entry of the same
 // skeleton); iterated by the first letter of the base skeleton, A-Z then
-// a-z, each bucket in the order its entries arrived.
-const PATTERNS = (function () {
+// a-z, each bucket in the order its entries arrived. Built by the first
+// format that asks, not at install: a realm that never formats a date
+// does not pay for it (INTL.md § 6).
+let patternMap = null;
+function patterns() {
+    if (patternMap === null) patternMap = buildPatterns();
+    return patternMap;
+}
+function buildPatterns() {
     const buckets = [];
-    for (let b = 0; b < 52; b++) buckets[b] = [];
+    for (let b = 0; b < 52; b++) push(buckets, []);
     const bucketOf = s => { const c = codeAt(s, 0); return c >= 65 && c <= 90 ? c - 65 : c - 97 + 26; };
     function add(pattern, skeletonText, override) {
         const sk = makeSkeleton(skeletonText !== null ? skeletonText : pattern);
@@ -933,7 +964,7 @@ const PATTERNS = (function () {
                 return;
             }
         }
-        push(bucket, {sk: sk, pattern: pattern, specified: skeletonText !== null});
+        push(bucket, {__proto__: null, sk: sk, pattern: pattern, specified: skeletonText !== null});
     }
     const canonical = 'GyQMwWEDFdaHmsSv';
     for (let i = 0; i < canonical.length; i++) add(fromCharCode(codeAt(canonical, i)), null, false);
@@ -952,7 +983,7 @@ const PATTERNS = (function () {
     const all = [];
     for (let b = 0; b < 52; b++) for (let i = 0; i < buckets[b].length; i++) push(all, buckets[b][i]);
     return all;
-})();
+}
 function objectKeys(o) {
     const out = [];
     for (const k in o) if (hasOwn(o, k)) push(out, k);
@@ -964,6 +995,7 @@ const HOUR_CHAR = 'h';      // en-US's preferred hour (CLDR timeData US)
 // ICU's getBestRaw: the nearest entry, ties going to the one that leaves
 // more fields missing (ICU's own tie-break), and what it leaves out.
 function bestRaw(req, includeMask) {
+    const PATTERNS = patterns();
     let best = null, bestDistance = 0x7fffffff, bestMissing = -1, info = null;
     for (let i = 0; i < PATTERNS.length; i++) {
         const d = distance(req, PATTERNS[i].sk, includeMask);
@@ -976,7 +1008,7 @@ function bestRaw(req, includeMask) {
     // The pattern ICU answers is the FIRST entry with the best one's skeleton.
     for (let i = 0; i < PATTERNS.length; i++)
         if (PATTERNS[i].sk.original === best.sk.original) { best = PATTERNS[i]; break; }
-    return {entry: best, missing: info.missing, extra: info.extra};
+    return {__proto__: null, entry: best, missing: info.missing, extra: info.extra};
 }
 
 const MATCH_HOUR = 1;
@@ -993,7 +1025,7 @@ function adjustFieldTypes(pattern, specified, req, fixFraction, options, hourCha
         const row = DT_TYPES[r];
         const f = row[1];
         if (fixFraction && f === F_SECOND) {
-            items[i] = {lit: '', parts: [it, {lit: '.'}, {ch: req.ch[F_FRACTION], len: req.len[F_FRACTION]}]};
+            items[i] = {__proto__: null, lit: '', parts: [it, {__proto__: null, lit: '.'}, {__proto__: null, ch: req.ch[F_FRACTION], len: req.len[F_FRACTION]}]};
             continue;
         }
         if (req.type[f] === 0) continue;
@@ -1016,7 +1048,7 @@ function adjustFieldTypes(pattern, specified, req, fixFraction, options, hourCha
             else if (reqCh === 'k' && hourChar === 'H') c = 'H';
             else if (reqCh === 'K' && hourChar === 'h') c = 'h';
         }
-        items[i] = {ch: c, len: adjLen};
+        items[i] = {__proto__: null, ch: c, len: adjLen};
     }
     // Flatten a fraction's expansion.
     const flat = [];
@@ -1120,18 +1152,18 @@ const COMPONENTS = [
     ['timeZoneName', ['short', 'long', 'shortOffset', 'longOffset', 'shortGeneric', 'longGeneric']],
 ];
 // The skeleton letters other browsers ask ICU for, per option and value.
-const SKELETON = {
-    weekday: {narrow: 'EEEEE', short: 'EEE', long: 'EEEE'},
-    era: {narrow: 'GGGGG', short: 'G', long: 'GGGG'},
+const SKELETON = {__proto__: null,
+    weekday: {__proto__: null, narrow: 'EEEEE', short: 'EEE', long: 'EEEE'},
+    era: {__proto__: null, narrow: 'GGGGG', short: 'G', long: 'GGGG'},
     year: {'2-digit': 'yy', numeric: 'y'},
     month: {'2-digit': 'MM', numeric: 'M', narrow: 'MMMMM', short: 'MMM', long: 'MMMM'},
     day: {'2-digit': 'dd', numeric: 'd'},
-    dayPeriod: {narrow: 'BBBBB', short: 'B', long: 'BBBB'},
+    dayPeriod: {__proto__: null, narrow: 'BBBBB', short: 'B', long: 'BBBB'},
     minute: {'2-digit': 'mm', numeric: 'm'},
     second: {'2-digit': 'ss', numeric: 's'},
-    timeZoneName: {short: 'z', long: 'zzzz', shortOffset: 'O', longOffset: 'OOOO', shortGeneric: 'v', longGeneric: 'vvvv'},
+    timeZoneName: {__proto__: null, short: 'z', long: 'zzzz', shortOffset: 'O', longOffset: 'OOOO', shortGeneric: 'v', longGeneric: 'vvvv'},
 };
-const HOUR_SKELETON = {h11: 'K', h12: 'h', h23: 'H', h24: 'k'};
+const HOUR_SKELETON = {__proto__: null, h11: 'K', h12: 'h', h23: 'H', h24: 'k'};
 const CALENDARS = ['gregory'], NUMBERING = ['latn'];
 function dtfLocaleData(locale, key) {
     if (key === 'ca') return CALENDARS;
@@ -1205,16 +1237,17 @@ function parseOffsetZone(s) {
     const m = exec(/^([+-])([01][0-9]|2[0-3])(?::?([0-5][0-9]))?$/, s);
     if (m === null) return null;
     const minutes = (m[1] === '-' ? -1 : 1) * (+m[2] * 60 + (m[3] !== undefined ? +m[3] : 0));
-    return {name: (minutes < 0 ? '-' : '+') + pad(String_(floor(abs(minutes) / 60)), 2) + ':' + pad(String_(abs(minutes) % 60), 2),
+    return {__proto__: null, name: (minutes < 0 ? '-' : '+') + pad(String_(floor(abs(minutes) / 60)), 2) + ':' + pad(String_(abs(minutes) % 60), 2),
             minutes: minutes};
 }
 
 function CreateDateTimeFormat(newTarget, locales, options, required, defaults) {
+    loadData();
     const proto = newTarget !== undefined && isObject(newTarget.prototype) ? newTarget.prototype : DateTimeFormatPrototype;
     const dtf = objectCreate(proto);
     const requested = CanonicalizeLocaleList(locales);
     options = CoerceOptionsToObject(options);
-    const opt = {};
+    const opt = {__proto__: null};
     GetOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
     const calendar = GetOption(options, 'calendar', 'string', undefined, undefined);
     if (calendar !== undefined && !isTypeSequence(calendar)) throw new RangeError_('Invalid calendar : ' + calendar);
@@ -1228,7 +1261,7 @@ function CreateDateTimeFormat(newTarget, locales, options, required, defaults) {
     if (hour12 !== undefined) hourCycle = null;
     opt.hc = hourCycle;
     const r = ResolveLocale(AVAILABLE, requested, opt, ['ca', 'hc', 'nu'], dtfLocaleData);
-    const s = {locale: r.locale, calendar: r.ca, numberingSystem: r.nu};
+    const s = {__proto__: null, locale: r.locale, calendar: r.ca, numberingSystem: r.nu};
     let hc;
     if (hour12 === true) hc = 'h12';
     else if (hour12 === false) hc = 'h23';
@@ -1246,7 +1279,7 @@ function CreateDateTimeFormat(newTarget, locales, options, required, defaults) {
         }
     }
     s.timeZone = timeZone;
-    const fmt = {};
+    const fmt = {__proto__: null};
     let hasExplicit = false;
     for (let i = 0; i < COMPONENTS.length; i++) {
         const prop = COMPONENTS[i][0];
@@ -1299,19 +1332,19 @@ function DateTimeFormat(locales, options) {
     const dtf = CreateDateTimeFormat(newTarget, locales, options, 'any', 'date');
     // The legacy constructor mode (ECMA-402 § 11.1.1 and Annex: the
     // ChainDateTimeFormat other browsers implement).
-    if (new.target === undefined && isObject(this) && this instanceof DateTimeFormat) {
-        defineProperty(this, FALLBACK_SYMBOL, {value: dtf, writable: false, enumerable: false, configurable: false});
+    if (new.target === undefined && isObject(this) && hasInstance(DateTimeFormat, this)) {
+        defineProperty(this, FALLBACK_SYMBOL, {__proto__: null, value: dtf, writable: false, enumerable: false, configurable: false});
         return this;
     }
     return dtf;
 }
 const DateTimeFormatPrototype = DateTimeFormat.prototype;
-defineProperty(DateTimeFormat, 'prototype', {writable: false, enumerable: false, configurable: false});
-defineProperty(DateTimeFormat, 'length', {value: 0, configurable: true});
+defineProperty(DateTimeFormat, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(DateTimeFormat, 'length', {__proto__: null, value: 0, configurable: true});
 
 function UnwrapDateTimeFormat(dtf, name) {
     let s = slots(DTFS, dtf);
-    if (s === undefined && isObject(dtf) && dtf instanceof DateTimeFormat) s = slots(DTFS, dtf[FALLBACK_SYMBOL]);
+    if (s === undefined && isObject(dtf) && hasInstance(DateTimeFormat, dtf)) s = slots(DTFS, dtf[FALLBACK_SYMBOL]);
     if (s === undefined) throw new TypeError_('Method Intl.DateTimeFormat.prototype.' + name + ' called on incompatible receiver');
     return s;
 }
@@ -1330,7 +1363,7 @@ function toInstant(date) {
 function localFields(s, x) {
     const offset = s.offsetMinutes !== undefined ? s.offsetMinutes : zoneOffset(s.timeZone, x);
     const d = new Date_(x + offset * 60000);
-    return {
+    return {__proto__: null,
         year: apply(d_getUTCFullYear, d, []), month: apply(d_getUTCMonth, d, []), day: apply(d_getUTCDate, d, []),
         weekday: apply(d_getUTCDay, d, []), hour: apply(d_getUTCHours, d, []), minute: apply(d_getUTCMinutes, d, []),
         second: apply(d_getUTCSeconds, d, []), ms: apply(d_getUTCMilliseconds, d, []), offset: offset, instant: x,
@@ -1338,7 +1371,6 @@ function localFields(s, x) {
 }
 
 // ── Time zone names (UTS 35 § 7) ────────────────────────────────────────
-const Z = D.zones;
 // A localized GMT offset: "GMT-5" short, "GMT-05:00" long; other browsers
 // write a zero offset "GMT+0", never the bare "GMT".
 function gmtOffset(minutes, long) {
@@ -1390,7 +1422,7 @@ function locationName(zone) {
     let place;
     if (zonesInCountry === 1 || own(Z.primary, country) === zone) place = own(Z.countries, country);
     else {
-        place = own(own(Z.zones, zone) || {}, 'exemplarCity');
+        place = own(own(Z.zones, zone) || {__proto__: null}, 'exemplarCity');
         if (place === undefined) place = replaceAll(slice(zone, lastIndexOf(zone, '/') + 1), /_/g, ' ');
     }
     return place === undefined ? undefined : simpleFormat(own(Z.formats, 'regionFormat'), [place]);
@@ -1419,7 +1451,7 @@ function genericName(s, f, long) {
             if (name === undefined) {
                 const generic = metazoneName(mz, width, 'generic');
                 if (generic !== undefined) {
-                    const golden = own(own(Z.golden, mz) || {}, 'US') || own(own(Z.golden, mz) || {}, '001');
+                    const golden = own(own(Z.golden, mz) || {__proto__: null}, 'US') || own(own(Z.golden, mz) || {__proto__: null}, '001');
                     if (golden !== undefined && golden !== zone &&
                         zoneOffset(golden, f.instant) !== f.offset) name = undefined;
                     else name = generic;
@@ -1443,7 +1475,7 @@ function dayPeriodFlexible(f, width, pattern) {
     const hasMinute = indexOf(pattern, 'm', 0) >= 0, hasSecond = indexOf(pattern, 's', 0) >= 0;
     if (f.hour === 12 && (!hasMinute || f.minute === 0) && (!hasSecond || f.second === 0) && own(periods, 'noon') !== undefined)
         return own(periods, 'noon');
-    const rules = D.dayPeriods;
+    const rules = DAY_PERIOD_RULES;
     const minutes = f.hour * 60 + f.minute;
     for (const name in rules) {
         if (!hasOwn(rules, name)) continue;
@@ -1460,7 +1492,7 @@ function hm(s) { const p = split(s, ':'); return +p[0] * 60 + +p[1]; }
 // A text field's CLDR width by the field's length: 1-3 abbreviated, 4 wide,
 // 5 narrow, 6 short.
 const WIDTH_TEXT = ['', 'abbreviated', 'abbreviated', 'abbreviated', 'wide', 'narrow', 'short'];
-const PART_TYPE = {G: 'era', y: 'year', Y: 'year', u: 'year', M: 'month', L: 'month', d: 'day', E: 'weekday',
+const PART_TYPE = {__proto__: null, G: 'era', y: 'year', Y: 'year', u: 'year', M: 'month', L: 'month', d: 'day', E: 'weekday',
     c: 'weekday', e: 'weekday', a: 'dayPeriod', b: 'dayPeriod', B: 'dayPeriod', h: 'hour', H: 'hour', K: 'hour',
     k: 'hour', m: 'minute', s: 'second', S: 'fractionalSecond', z: 'timeZoneName', O: 'timeZoneName',
     v: 'timeZoneName', V: 'timeZoneName', Z: 'timeZoneName', X: 'timeZoneName', x: 'timeZoneName'};
@@ -1510,12 +1542,12 @@ function formatParts(s, pattern, x) {
             if (it.lit === '') continue;
             const last = parts.length > 0 ? parts[parts.length - 1] : null;
             if (last !== null && last.type === 'literal') last.value += it.lit;
-            else push(parts, {type: 'literal', value: it.lit});
+            else push(parts, {__proto__: null, type: 'literal', value: it.lit});
             continue;
         }
         const type = own(PART_TYPE, it.ch);
         if (type === undefined) continue;
-        push(parts, {type: type, value: fieldText(s, f, it.ch, it.len, pattern), ch: it.ch});
+        push(parts, {__proto__: null, type: type, value: fieldText(s, f, it.ch, it.len, pattern), ch: it.ch});
     }
     return parts;
 }
@@ -1524,9 +1556,9 @@ function partsToArray(parts) {
     const out = [];
     for (let i = 0; i < parts.length; i++) {
         const o = {};
-        o.type = parts[i].type;
-        o.value = parts[i].value;
-        if (parts[i].source !== undefined) o.source = parts[i].source;
+        put(o, 'type', parts[i].type);
+        put(o, 'value', parts[i].value);
+        if (parts[i].source !== undefined) put(o, 'source', parts[i].source);
         push(out, o);
     }
     return out;
@@ -1538,32 +1570,34 @@ function partsToArray(parts) {
 // is that algorithm, over CLDR's intervalFormats. Its quirks are theirs
 // and kept: a 2-digit hour prints as 1 digit, a month-and-day range whose
 // years differ prints the years.
-const IV = G.intervalFormats;
-const IV_FALLBACK = own(IV, 'intervalFormatFallback');
 // ICU's interval indices, by the calendar field that differs.
 const IV_ERA = 0, IV_YEAR = 1, IV_MONTH = 2, IV_DATE = 3, IV_AM_PM = 4, IV_HOUR = 5, IV_MINUTE = 6,
       IV_SECOND = 7, IV_MILLISECOND = 8, IV_COUNT = 9;
 const IV_LETTER = ['G', 'y', 'M', 'd', 'a', 'h', 'm', 's', 'S'];
 const IV_LEVEL = [0, 10, 20, 30, 40, 50, 60, 70, 80];
 // Which index an intervalFormats key letter fills.
-const IV_INDEX = {G: IV_ERA, y: IV_YEAR, M: IV_MONTH, d: IV_DATE, a: IV_AM_PM, B: IV_AM_PM, h: IV_HOUR, H: IV_HOUR,
+const IV_INDEX = {__proto__: null, G: IV_ERA, y: IV_YEAR, M: IV_MONTH, d: IV_DATE, a: IV_AM_PM, B: IV_AM_PM, h: IV_HOUR, H: IV_HOUR,
     m: IV_MINUTE};
 // A pattern letter's level (ICU's fgPatternCharToLevel); a letter not
 // listed is no level at all.
-const LETTER_LEVEL = {G: 0, y: 10, Y: 10, u: 10, U: 10, r: 10, Q: 20, q: 20, M: 20, L: 20, w: 20, D: 20, W: 30,
+const LETTER_LEVEL = {__proto__: null, G: 0, y: 10, Y: 10, u: 10, U: 10, r: 10, Q: 20, q: 20, M: 20, L: 20, w: 20, D: 20, W: 30,
     d: 30, E: 30, e: 30, c: 30, F: 30, g: 0, l: 0, a: 40, A: 40, h: 50, H: 50, k: 50, K: 50, m: 60, s: 70, S: 80,
     z: 0, Z: 0, v: 0, V: 0, O: 0, X: 0, x: 0};
 // Each letter's count in a skeleton, by letter.
 function letterCounts(s) {
-    const counts = {};
+    const counts = {__proto__: null};
     for (let i = 0; i < s.length; i++) { const c = fromCharCode(codeAt(s, i)); counts[c] = (own(counts, c) || 0) + 1; }
     return counts;
 }
-const IV_SKELETONS = (function () {
+// The intervalFormats skeletons with their letters counted, made by the
+// first range that asks.
+let intervalSkeletons = null;
+function ivSkeletons() {
+    if (intervalSkeletons !== null) return intervalSkeletons;
     const out = [];
-    for (const k in IV) if (hasOwn(IV, k) && k !== 'intervalFormatFallback') push(out, {skeleton: k, counts: letterCounts(k)});
-    return out;
-})();
+    for (const k in IV) if (hasOwn(IV, k) && k !== 'intervalFormatFallback') push(out, {__proto__: null, skeleton: k, counts: letterCounts(k)});
+    return intervalSkeletons = out;
+}
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 // ICU's DateIntervalInfo::getBestSkeleton: the nearest intervalFormats
 // skeleton, and how near (0 the same, 1 the same fields at other widths,
@@ -1575,6 +1609,7 @@ function bestIntervalSkeleton(skeleton) {
         replaced = true;
     }
     const want = letterCounts(input);
+    const IV_SKELETONS = ivSkeletons();
     let best = null, bestDistance = 0x7fffffff, info = 0;
     for (let i = 0; i < IV_SKELETONS.length; i++) {
         const have = IV_SKELETONS[i].counts;
@@ -1591,7 +1626,7 @@ function bestIntervalSkeleton(skeleton) {
         if (d === 0) { info = 0; break; }
     }
     if (replaced && info !== -1) info = 2;
-    return {skeleton: best, info: info};
+    return {__proto__: null, skeleton: best, info: info};
 }
 function intervalPatternOf(skeleton, index) {
     const entry = own(IV, skeleton);
@@ -1630,7 +1665,7 @@ function adjustFieldWidth(inputSkeleton, bestSkeleton, pattern, info) {
         if (it.ch === undefined) continue;
         const key = it.ch === 'L' ? 'M' : it.ch;
         const have = own(best, key) || 0, want = own(input, key) || 0;
-        if (have === it.len && want > have) items[i] = {ch: it.ch, len: want};
+        if (have === it.len && want > have) items[i] = {__proto__: null, ch: it.ch, len: want};
     }
     return untokenize(items);
 }
@@ -1638,7 +1673,7 @@ function adjustFieldWidth(inputSkeleton, bestSkeleton, pattern, info) {
 // whose letter has already appeared; the second part is the rest.
 function splitInterval(pattern) {
     const items = tokenize(pattern);
-    const seen = {};
+    const seen = {__proto__: null};
     let first = [], second = [], inSecond = false;
     for (let i = 0; i < items.length; i++) {
         const it = items[i];
@@ -1648,7 +1683,7 @@ function splitInterval(pattern) {
         }
         push(inSecond ? second : first, it);
     }
-    return {first: untokenize(first), second: untokenize(second)};
+    return {__proto__: null, first: untokenize(first), second: untokenize(second)};
 }
 
 // The range formatter of a format, built once: per index the interval
@@ -1662,15 +1697,15 @@ function intervalFormatOf(s) {
     // staticGetSkeleton: the default day period it adds is not reported.
     let skeleton = sk.original;
     if (sk.addedDayPeriod) skeleton = replaceAll(skeleton, /a/, '');
-    const st = {p: [], single: best(skeleton), datePattern: null, timePattern: null, glue: null};
+    const st = {__proto__: null, p: {__proto__: null}, single: best(skeleton), datePattern: null, timePattern: null, glue: null};
     s.interval = st;
     const converted = normalizeHourLetters(skeleton);
     const t = splitDateTime(converted);
     if (t.time !== '' && t.date !== '') st.glue = own(G.dateTimeFormats, 'medium');
     const timeOnlyFallbacks = () => {
         const pattern = best('yMd' + t.time);
-        st.p[IV_DATE] = st.p[IV_MONTH] = st.p[IV_YEAR] = {first: '', second: pattern};
-        st.p[IV_ERA] = {first: '', second: best('GyMd' + t.time)};
+        st.p[IV_DATE] = st.p[IV_MONTH] = st.p[IV_YEAR] = {__proto__: null, first: '', second: pattern};
+        st.p[IV_ERA] = {__proto__: null, first: '', second: best('GyMd' + t.time)};
     };
     if (!separateDateTime(st, t, best)) {
         if (t.time !== '' && t.date === '') timeOnlyFallbacks();
@@ -1686,7 +1721,7 @@ function intervalFormatOf(s) {
     for (let i = 0; i < prefixes.length; i++) {
         if (indexOf(t.date, prefixes[i][1], 0) >= 0) continue;
         fallback = prefixes[i][1] + fallback;
-        st.p[prefixes[i][0]] = {first: '', second: best(fallback)};
+        st.p[prefixes[i][0]] = {__proto__: null, first: '', second: best(fallback)};
     }
     const datePattern = best(t.date);
     const timeIndices = [IV_AM_PM, IV_HOUR, IV_MINUTE];
@@ -1759,7 +1794,7 @@ function splitDateTime(skeleton) {
     if (m > 0) normTime += 'm';
     if (z > 0) normTime += 'z';
     if (v > 0) normTime += 'v';
-    return {date: date, normDate: normDate, time: time, normTime: normTime};
+    return {__proto__: null, date: date, normDate: normDate, time: time, normTime: normTime};
 }
 // ICU's setSeparateDateTimePtn: the interval patterns of the time half
 // (or of the date half, when there is no time), and the halves' own
@@ -1777,7 +1812,7 @@ function separateDateTime(st, t, best) {
         // Once the month's lookup extends the skeletons, ICU's year and era
         // lookups read the extension's own strings, which each of them
         // extends again ("Md", then "yMd" for the year, "GyMd" for the era).
-        const ext = {skeleton: '', best: ''};
+        const ext = {__proto__: null, skeleton: '', best: ''};
         setIntervalPattern(st, IV_DATE, skeleton, bestSkeleton, found.info, ext, false);
         const extended = setIntervalPattern(st, IV_MONTH, skeleton, bestSkeleton, found.info, ext, false);
         if (extended) { skeleton = ext.skeleton; bestSkeleton = ext.best; }
@@ -1846,7 +1881,7 @@ function largestDifference(fx, fy) {
 function fallbackRange(s, pattern, x, y, out) {
     const at0 = indexOf(IV_FALLBACK, '{0}', 0), at1 = indexOf(IV_FALLBACK, '{1}', 0);
     appendParts(out, formatParts(s, pattern, x));
-    appendParts(out, [{type: 'literal', value: slice(IV_FALLBACK, at0 + 3, at1)}]);
+    appendParts(out, [{__proto__: null, type: 'literal', value: slice(IV_FALLBACK, at0 + 3, at1)}]);
     appendParts(out, formatParts(s, pattern, y));
 }
 // ICU's fallbackFormat: on one day, the date once beside the time's
@@ -1854,7 +1889,7 @@ function fallbackRange(s, pattern, x, y, out) {
 function fallbackFormat(s, st, pattern, x, y, sameDay, out) {
     if (!sameDay || st.datePattern === null || st.timePattern === null) { fallbackRange(s, pattern, x, y, out); return; }
     const at0 = indexOf(st.glue, '{0}', 0), at1 = indexOf(st.glue, '{1}', 0);
-    const between = [{type: 'literal', value: slice(st.glue, (at0 < at1 ? at0 : at1) + 3, at0 < at1 ? at1 : at0)}];
+    const between = [{__proto__: null, type: 'literal', value: slice(st.glue, (at0 < at1 ? at0 : at1) + 3, at0 < at1 ? at1 : at0)}];
     if (at0 < at1) {
         fallbackRange(s, st.timePattern, x, y, out);
         appendParts(out, between);
@@ -1910,25 +1945,24 @@ function intervalParts(s, x, y) {
         out[i].source = i >= s1a && i <= s1b ? 'startRange' : i >= s2a && i <= s2b ? 'endRange' : 'shared';
     return out;
 }
-// formatRange's string, or its parts: the start alone, all shared, when
-// the ends are practically equal; that string is format()'s own.
+// A range: {parts, equal}. When the ends are practically equal, the parts
+// are the start's alone, all shared, and formatRange's string is format()'s.
 function formatRangeParts(s, x, y) {
     const parts = intervalParts(s, x, y);
-    if (parts !== null) return parts;
+    if (parts !== null) return {__proto__: null, parts: parts, equal: false};
     const single = formatParts(s, s.pattern, x);
     for (let i = 0; i < single.length; i++) single[i].source = 'shared';
-    single.equal = true;
-    return single;
+    return {__proto__: null, parts: single, equal: true};
 }
 
 // ── The prototype ───────────────────────────────────────────────────────
 method(DateTimeFormat, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
-defineProperty(DateTimeFormatPrototype, toStringTag, {value: 'Intl.DateTimeFormat', writable: false, enumerable: false, configurable: true});
+defineProperty(DateTimeFormatPrototype, toStringTag, {__proto__: null, value: 'Intl.DateTimeFormat', writable: false, enumerable: false, configurable: true});
 getter(DateTimeFormatPrototype, 'format', function () {
     const s = UnwrapDateTimeFormat(this, 'format');
     if (s.bound === undefined) {
         const bound = (date) => asciiSpaces(partsToString(formatParts(s, s.pattern, toInstant(date))));
-        defineProperty(bound, 'name', {value: '', configurable: true});
+        defineProperty(bound, 'name', {__proto__: null, value: '', configurable: true});
         s.bound = bound;
     }
     return s.bound;
@@ -1941,18 +1975,18 @@ method(DateTimeFormatPrototype, 'formatRange', methodOf(function (startDate, end
     const s = UnwrapDateTimeFormat(this, 'formatRange');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
     const x = timeClip(ToNumber(startDate)), y = timeClip(ToNumber(endDate));
-    const parts = formatRangeParts(s, x, y);
-    return parts.equal === true ? asciiSpaces(partsToString(parts)) : partsToString(parts);
+    const range = formatRangeParts(s, x, y);
+    return range.equal ? asciiSpaces(partsToString(range.parts)) : partsToString(range.parts);
 }), 2);
 method(DateTimeFormatPrototype, 'formatRangeToParts', methodOf(function (startDate, endDate) {
     const s = UnwrapDateTimeFormat(this, 'formatRangeToParts');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
     const x = timeClip(ToNumber(startDate)), y = timeClip(ToNumber(endDate));
-    return partsToArray(formatRangeParts(s, x, y));
+    return partsToArray(formatRangeParts(s, x, y).parts);
 }), 2);
 // resolvedOptions: what the pattern holds, read back as other browsers
 // read it (a minute is "2-digit" whenever the pattern pads it).
-const RESOLVED_FROM = {
+const RESOLVED_FROM = {__proto__: null,
     G: ['era', len => len === 4 ? 'long' : len === 5 ? 'narrow' : 'short'],
     y: ['year', len => len === 2 ? '2-digit' : 'numeric'],
     M: ['month', len => len === 1 ? 'numeric' : len === 2 ? '2-digit' : len === 3 ? 'short' : len === 4 ? 'long' : 'narrow'],
@@ -1973,10 +2007,11 @@ const RESOLVED_FROM = {
 method(DateTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
     const s = UnwrapDateTimeFormat(this, 'resolvedOptions');
     const o = {};
-    o.locale = s.locale; o.calendar = s.calendar; o.numberingSystem = s.numberingSystem; o.timeZone = s.timeZone;
-    if (s.hourCycle !== undefined) { o.hourCycle = s.hourCycle; o.hour12 = s.hourCycle === 'h11' || s.hourCycle === 'h12'; }
+    put(o, 'locale', s.locale); put(o, 'calendar', s.calendar); put(o, 'numberingSystem', s.numberingSystem);
+    put(o, 'timeZone', s.timeZone);
+    if (s.hourCycle !== undefined) { put(o, 'hourCycle', s.hourCycle); put(o, 'hour12', s.hourCycle === 'h11' || s.hourCycle === 'h12'); }
     if (s.dateStyle === undefined && s.timeStyle === undefined) {
-        const found = {};
+        const found = {__proto__: null};
         const items = tokenize(s.pattern);
         for (let i = 0; i < items.length; i++) {
             const r = own(RESOLVED_FROM, items[i].ch);
@@ -1984,19 +2019,19 @@ method(DateTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
         }
         for (let i = 0; i < COMPONENTS.length; i++) {
             const prop = COMPONENTS[i][0];
-            if (own(found, prop) !== undefined) o[prop] = own(found, prop);
+            if (own(found, prop) !== undefined) put(o, prop, own(found, prop));
         }
     } else {
-        if (s.dateStyle !== undefined) o.dateStyle = s.dateStyle;
-        if (s.timeStyle !== undefined) o.timeStyle = s.timeStyle;
+        if (s.dateStyle !== undefined) put(o, 'dateStyle', s.dateStyle);
+        if (s.timeStyle !== undefined) put(o, 'timeStyle', s.timeStyle);
     }
     return o;
 }), 0);
 
 // ── The Intl object ─────────────────────────────────────────────────────
-const Intl = {};
-defineProperty(Intl, toStringTag, {value: 'Intl', writable: false, enumerable: false, configurable: true});
-defineProperty(Intl, 'Locale', {value: Locale, writable: true, enumerable: false, configurable: true});
-defineProperty(Intl, 'DateTimeFormat', {value: DateTimeFormat, writable: true, enumerable: false, configurable: true});
+const Intl = {};     // script-visible: its properties are defined, below
+defineProperty(Intl, toStringTag, {__proto__: null, value: 'Intl', writable: false, enumerable: false, configurable: true});
+defineProperty(Intl, 'Locale', {__proto__: null, value: Locale, writable: true, enumerable: false, configurable: true});
+defineProperty(Intl, 'DateTimeFormat', {__proto__: null, value: DateTimeFormat, writable: true, enumerable: false, configurable: true});
 return Intl;
 })

@@ -951,6 +951,153 @@ static void setup_allocation_cases(void)
     }
     os64_js_destroy(runtime);
 }
+/* ECMA-402 (INTL.md): the door installs a working Intl once, idle, before
+ * the first evaluation; the global is a global property (writable,
+ * configurable, not enumerable); the machine's zone follows TZ as Date's
+ * local time does; and a refused allocation anywhere in the install leaves
+ * no Intl and no allocation behind. The formats themselves are test262's
+ * and the captured fixtures' to prove (INTL.md § 8). */
+static bool intl_eval(os64_js_runtime_t *runtime, const char *source)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t result = os64_js_eval(runtime, source, strlen(source), "intl case", &outcome);
+    if (result != OS64_JS_OK) printf("intl case: %s\n", outcome.message);
+    return result == OS64_JS_OK;
+}
+
+static os64_js_runtime_t *intl_fixture(const os64_js_config_t *config, const char *tz)
+{
+    if (tz != NULL) setenv("TZ", tz, 1);
+    else unsetenv("TZ");
+    os64_js_runtime_t *runtime = create_fixture(config);
+    os64_js_outcome_t outcome;
+    if (runtime != NULL && os64_js_install_intl(runtime, "en-US", &outcome) != OS64_JS_OK) {
+        printf("intl install: %s\n", outcome.message);
+        os64_js_destroy(runtime);
+        return NULL;
+    }
+    return runtime;
+}
+
+static void intl_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    config.limits.execution_ms = 10000;
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = intl_fixture(&config, "EST5EDT");
+    check(runtime != NULL, "Intl installs");
+    if (runtime == NULL) return;
+    check(intl_eval(runtime,
+        "const d = Object.getOwnPropertyDescriptor(globalThis, 'Intl');\n"
+        "if (!d.writable || d.enumerable || !d.configurable) throw new Error('Intl attributes');\n"
+        "const f = new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'});\n"
+        "if (f.format(0) !== '1/1/1970') throw new Error(f.format(0));\n"
+        "const z = new Intl.DateTimeFormat(undefined, {timeStyle: 'long'});\n"
+        "if (z.resolvedOptions().timeZone !== 'America/New_York') throw new Error(z.resolvedOptions().timeZone);\n"
+        "if (z.format(Date.UTC(2026, 6, 4, 16)) !== '12:00:00 PM EDT') throw new Error(z.format(Date.UTC(2026, 6, 4, 16)));\n"
+        "if (z.resolvedOptions().locale !== 'en-US') throw new Error('locale');\n"
+        "if (new Intl.Locale('EN-latn-us').toString() !== 'en-Latn-US') throw new Error('Locale');\n"),
+        "Intl formats in the host's zone, published as a global property");
+    check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
+          "Intl installs once and only before evaluation");
+    os64_js_destroy(runtime);
+    runtime = create_fixture(&config);
+    if (runtime == NULL) return;
+    check(os64_js_install_intl(runtime, NULL, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_intl(runtime, "", &outcome) == OS64_JS_BAD_ARGUMENT,
+          "Intl requires a default locale");
+    check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_OK &&
+          os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
+          "a refused locale installs nothing; a second install is refused");
+    os64_js_destroy(runtime);
+
+    /* The machine's zone: a rule names the zone that keeps it, by its
+     * text or by the same times; a rule no zone keeps, and the kernel's
+     * offset with no TZ, are offset zones; no offset is UTC. */
+    static const struct { const char *tz, *zone; } zones[] = {
+        {"EST5EDT,M3.2.0,M11.1.0", "America/New_York"}, {"CET-1CEST,M3.5.0,M10.5.0/3", "Europe/Paris"},
+        {"PST8PDT", "America/Los_Angeles"}, {"JST-9", "Asia/Tokyo"}, {"UTC0", "UTC"},
+        {"XST-4:15", "+04:15"}, {NULL, "+05:30"},
+    };
+    for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
+        runtime = intl_fixture(&config, zones[i].tz);
+        if (runtime == NULL) { check(false, "Intl installs for a host zone"); continue; }
+        char source[160];
+        snprintf(source, sizeof(source),
+                 "const tz = new Intl.DateTimeFormat().resolvedOptions().timeZone;"
+                 "if (tz !== '%s') throw new Error(tz);", zones[i].zone);
+        check(intl_eval(runtime, source), "the host zone follows TZ as Date does");
+        os64_js_destroy(runtime);
+    }
+    unsetenv("TZ");
+
+    /* Every allocation of an install refused in turn, on the path every
+     * realm after the first takes (the process keeps the compiled scripts):
+     * a sticky host failure, no Intl, nothing left allocated. A stride keeps
+     * the sanitized sweep short; the first allocations are each refused. */
+    runtime = create_fixture(&config);
+    if (runtime == NULL) return;
+    size_t before = attempts;
+    check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_OK, "Intl allocation inventory");
+    size_t inventory = attempts - before;
+    os64_js_destroy(runtime);
+    size_t stride = inventory / 400 + 1, swept = 0;
+    for (size_t i = 1; i <= inventory; i += i < 64 ? 1 : stride, swept++) {
+        runtime = create_fixture(&config);
+        if (runtime == NULL) return;
+        JSContext *inspection = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue global = JS_GetGlobalObject(inspection);
+        fail_at = attempts + i;
+        os64_js_status_t result = os64_js_install_intl(runtime, "en-US", &outcome);
+        fail_at = 0;
+        JSValue intl = JS_GetPropertyStr(inspection, global, "Intl");
+        check(result == OS64_JS_HOST_FAILURE && JS_IsUndefined(intl),
+              "an Intl install refused an allocation is a sticky failure and defines nothing");
+        JS_FreeValue(inspection, intl);
+        JS_FreeValue(inspection, global);
+        os64_js_destroy(runtime);
+        check(live == 0, "a refused Intl install releases what it made");
+    }
+    printf("libjs intl: an install reading kept bytecode makes %zu allocations, %zu refusals swept\n",
+           inventory, swept);
+
+    /* The CLDR data is evaluated by a realm's first construction, not by
+     * the install: each allocation of that first construction refused in
+     * turn is the runtime's sticky failure, with nothing left behind. The
+     * construction is compiled beforehand and called as a host task, so the
+     * sweep refuses Intl's allocations and none of the test's own compile
+     * (DEBTS: a compile whose name atom is refused runs nameless). */
+    static const char first[] = "function first() { new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).format(0) }";
+    for (size_t i = 0, inventory = 0, swept = 0;; i += i < 64 ? 1 : inventory / 400 + 1) {
+        if (i > 0 && i > inventory) {
+            printf("libjs intl: a first construction makes %zu allocations, %zu refusals swept\n", inventory, swept);
+            break;
+        }
+        runtime = intl_fixture(&config, NULL);
+        if (runtime == NULL || !intl_eval(runtime, first)) { check(false, "the first construction compiles"); return; }
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue global = JS_GetGlobalObject(context);
+        JSValue function = JS_GetPropertyStr(context, global, "first");
+        JS_FreeValue(context, global);
+        check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "intl first", &outcome) == OS64_JS_OK, "the first construction's task opens");
+        size_t before = attempts;
+        if (i > 0) fail_at = attempts + i;
+        os64_js_status_t result = os64_js_call(runtime, OS64_JS_ABI_ID, function, JS_UNDEFINED, 0, NULL, NULL, &outcome);
+        fail_at = 0;
+        if (i == 0) {
+            inventory = attempts - before;
+            check(result == OS64_JS_OK, "a realm's first construction loads the data");
+        } else {
+            check(result == OS64_JS_HOST_FAILURE, "a refused first construction is a sticky failure");
+            swept++;
+        }
+        os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome);
+        JS_FreeValue(context, function);
+        os64_js_destroy(runtime);
+        check(live == 0, "a refused first construction releases what it made");
+    }
+}
+
 /* Host tasks (CONTRACT.md § Host tasks): a function value called under one
  * deadline and job cap that span every call and checkpoint of the task. */
 /* Values are looked up and freed through a context borrowed while the runtime
@@ -2074,6 +2221,11 @@ int main(int argc, char **argv)
         printf("libjs compile failure: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--intl")) {
+        intl_cases();
+        printf("libjs intl alone: %u checks, %u failures, %zu live allocations\n", checks, failures, live);
+        return failures != 0;
+    }
     if (argc >= 2 && !strcmp(argv[1], "--raw-construction")) {
         fail_at = attempts + (argc == 3 ? strtoul(argv[2], NULL, 10) : 12);
         JSRuntime *engine = JS_NewRuntime();
@@ -2121,6 +2273,7 @@ int main(int argc, char **argv)
     module_sweep_cases();
     bytecode_cases();
     module_bytecode_cases();
+    intl_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

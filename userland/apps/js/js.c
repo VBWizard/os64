@@ -380,6 +380,10 @@ int main(int argc, char **argv)
                                         &outcome);
     if (status == OS64_JS_OK)
         status = os64_js_install_args(runtime, (size_t)plan.extra_count + 1, args, &outcome);
+    // ECMA-402, always: a shell has no Modern Web switch and no classic
+    // page to protect (INTL.md § 9.4).
+    if (status == OS64_JS_OK)
+        status = os64_js_install_intl(runtime, OS64_JS_LOCALE, &outcome);
     if (status == OS64_JS_OK) {
         if (plan.kind == JS_FROM_FILE)
             status = os64_js_run_file(runtime, plan.operand, &outcome);

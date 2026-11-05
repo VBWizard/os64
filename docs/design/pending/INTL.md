@@ -104,13 +104,15 @@ data and the Gregorian calendar, complete to ECMA-402 for that data.**
   before either was written: Slice B adds the define, and this slice uses
   it from userland once B has merged, or from B's branch if A1 is ready
   first. A1 does not define it.
-- **The C underneath is small: one zone door.** `(zone name, ms since
-  epoch) → {offset minutes, isDST, abbreviation}`, over the zone table
-  (§ 5) and libos64's own POSIX-rule evaluator (`os64/date.h`, what
-  `Date`'s local time already runs on), so `Date` and `Intl` cannot
+- **The C underneath is small: one zone door** (`libjs/intl/intl.c`),
+  three verbs over the zone table (§ 5): a name's canonical zone, a
+  zone's offset in minutes at an instant, and the machine's own zone.
+  Offsets come from libos64's own POSIX-rule evaluator (`os64/date.h`,
+  what `Date`'s local time already runs on), so `Date` and `Intl` cannot
   disagree about an offset and no second evaluator is written in
-  JavaScript. The host's zone name comes through the same door (`name`
-  omitted). Everything else is JavaScript over intrinsics captured at
+  JavaScript. Whether an offset is daylight time the script decides
+  (above the year's lower offset), and the names it prints are CLDR's,
+  not the rule's abbreviations. Everything else is JavaScript over intrinsics captured at
   install, as streams.js captures its own, so a page that replaces
   `Array.prototype.push` or `Date.prototype.getUTCFullYear` cannot change
   what Intl does. (Fable's finding 3.)
@@ -203,12 +205,15 @@ The hard part, because pages pass zone names and read them back:
   must be an IANA name, and os64's `TZ` is a POSIX string, which many
   zones share (`EST5EDT,M3.2.0,M11.1.0` is New York's rule and Toronto's
   and thirty others'). So, without guessing silently (Fable's finding 4):
-  where `TZ` is one of tzdata's own legacy names (`EST5EDT`, `CST6CDT`,
-  `MST7MDT`, `PST8PDT`, which is what the P5 runs), that name, because it
-  IS an IANA zone; for any other rule, a fixed preference, one row per
-  rule in a small table in the tree, the most populous zone that carries
-  it; a rule no zone carries, `Etc/GMT±N` for its standard offset; no
-  `TZ`, `UTC`. The real cure is letting the system's `TZ` be an IANA
+  a `TZ` rule names the table's preferred zone for that rule
+  (`kRulePreferred`, generated beside the names: the metazone's golden
+  zone when one carries the rule, else the first by name), matched by
+  its text, else by keeping the same times under other names (`EST5EDT`,
+  what the P5 runs, is New York's rule written short, and resolves to
+  `America/New_York` exactly as other browsers resolve the IANA name
+  `EST5EDT`); a rule no zone carries is an offset zone (`+04:15`) at its
+  standard offset; no `TZ` is the kernel's offset as an offset zone, and
+  no offset is `UTC`. The real cure is letting the system's `TZ` be an IANA
   name too (`bootenv.conf`'s `TZ = America/Toronto`, resolved through the
   same table); that is libos64's parser and is booked, not this slice.
 - **History is the honest gap.** A footer is the zone's CURRENT rule. A
@@ -247,6 +252,18 @@ The hard part, because pages pass zone names and read them back:
   stub from the real thing, and a load that fails inside `new
   Intl.DateTimeFormat` mid-page is a failure path no page expects.
   (Fable's finding 9, the § 9.3 ruling.)
+- **Measured (A1, 2026-11-04, natively on the dev machine, a realm reading
+  the kept bytecode):** all eager, the install cost 5 ms and 660 KiB a
+  realm, nearly all of it the script's own tables (the pattern map) and
+  CLDR's data, over budget. So the ruled fallback: the constructors and
+  prototypes are installed eagerly and whole (0.4 ms, 195 KiB), the
+  pattern and interval tables are built by the first format that needs
+  them, and the data (`intl_data.js`) is evaluated by a realm's first
+  construction (about 0.8 ms and 690 KiB with the tables, in a realm that
+  formats). A refused allocation in that first construction is the
+  runtime's sticky failure like any other, swept in libjs's suite. The
+  first compile in a process costs about 6 ms for the script and 5 ms for
+  the data.
 - **The page's bytecode cache.** A kept blob is keyed by the engine's
   build identity, a hash over upstream and the libjs patch series
   (BYTECODE_CACHE.md). Intl's script is not among those sources, and a
@@ -286,11 +303,13 @@ The hard part, because pages pass zone names and read them back:
   found, formatted against a fixed date and number, compared BYTE FOR BYTE
   with the string Chrome produces for it (captured once into a file in the
   tree, as W1's captures were). This is the "formats like Chrome" line,
-  held by test. Byte for byte matters: Chrome's en-US times have put
-  U+202F NARROW NO-BREAK SPACE before `AM`/`PM` since ICU 72, and
-  `formatRange` joins with U+2009 THIN SPACE around an en dash; "like
-  Chrome" means emitting both, and a comparison that folds whitespace
-  would hide a wrong one. (Fable's finding 5.)
+  held by test. Byte for byte matters: CLDR puts U+202F NARROW NO-BREAK
+  SPACE before `AM`/`PM`, which other browsers keep in `formatToParts`
+  and in every range, and write as a plain space in the string `format`
+  returns (and in a range whose ends are practically equal, which is
+  `format`'s); ranges join with U+2009 THIN SPACE around an en dash.
+  "Like Chrome" means each of those where Chrome has it, and a comparison
+  that folds whitespace would hide a wrong one. (Fable's finding 5.)
 - **The glass draws them:** yonder's text painter must draw U+202F and
   U+2009 as spaces, not as missing glyphs, in every face it ships; a test
   page formatting `timeStyle: "short"` and a range is the proof, on QEMU

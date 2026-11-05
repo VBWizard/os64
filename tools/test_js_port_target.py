@@ -9,10 +9,11 @@ root = Path(__file__).resolve().parents[1]
 core = root / 'userland/obj/js/core.o'
 math = set('acos acosh asin asinh atan atan2 atanh cbrt ceil cos cosh exp expm1 fabs floor fmax fmin fmod hypot log log10 log1p log2 lrint pow round sin sinh sqrt tan tanh trunc'.split())
 services = set('os64_exit os64_free os64_hprintf os64_localtime os64_malloc os64_malloc_size os64_memchr os64_memcmp os64_memcpy os64_memmove os64_memset os64_realloc os64_strchr os64_strcmp os64_strlen os64_strrchr os64_time os64_write'.split())
-runtime_services = services | {'os64_micros', 'os64_open', 'os64_read', 'os64_close', 'os64_snprintf'}
+runtime_services = services | {'os64_micros', 'os64_open', 'os64_read', 'os64_close', 'os64_snprintf',
+                               'os64_getenv', 'os64_tz_parse', 'os64_tz_offset_at'}
 runtime_exports = {'os64_js_' + name for name in
-                   'create context class_id eval run run_file install_output install_args drain_jobs cancel destroy task_begin call checkpoint task_end set_execution_ms check_budget create_with_teardown destroy_report '
-                   'set_script_host take_rejection '
+                   'create context class_id eval run run_file install_output install_args install_intl drain_jobs cancel destroy task_begin call checkpoint task_end set_execution_ms check_budget create_with_teardown destroy_report '
+                   'set_script_host take_rejection run_bytecode module_compile_bytecode turn_open '
                    'set_module_loader module_compile module_requests module_run module_state module_release'.split()}
 
 def run(*args):
@@ -98,6 +99,7 @@ for prerequisite in ['libjs/shared.mk', 'tools/app_bases.py']:
     recipe = run('make', '-C', str(root / 'userland'), '-n',
                  '-o', str(core), '-o', str(root / 'userland/bin/libos64.so'),
                  '-o', str(root / 'userland/obj/js/runtime/runtime.o'),
+                 '-o', str(root / 'userland/obj/js/intl/intl.o'),
                  '-o', str(root / 'userland/bin/libmath.so'), '-W', prerequisite, 'js-library')
     assert '-soname libjs.so' in recipe, prerequisite
 print(f'QuickJS production link: {len(runtime_exports)} runtime exports; 32 math / {len(runtime_services)} os64 imports; real dependencies, public maths header and relink triggers: PASS (no guest execution)')

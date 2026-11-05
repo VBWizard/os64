@@ -14,9 +14,9 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -DJS_ACCEPTANCE_HOST -I userland/libmath/include -I userland/libjs/include
     -I userland/libjs/port -I userland/libos64/include -I abi/include
     -I userland/obj/js/acceptance -isystem userland/obj/js/upstream
-    -fsanitize=address,undefined -fno-sanitize-recover=all)
+    -fsanitize=address,undefined -fno-sanitize-recover=all -DLIBJS_INTL_DIR='"userland/libjs/intl/"')
 for source in tools/js_acceptance/consumer.c tools/js_acceptance/host.c \
-    userland/libjs/runtime/runtime.c userland/libos64/str.c userland/libos64/fmt.c \
+    userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
     tools/test_js_port_calendar.c; do
     cc "${flags[@]}" -c "$source" -o "$js_acceptance_work/$(basename "$source" .c).o"
 done

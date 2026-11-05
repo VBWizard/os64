@@ -41,6 +41,8 @@ keyname() {
         '\') echo backslash ;;
         '[') echo bracket_left ;;
         ']') echo bracket_right ;;
+        '{') echo shift-bracket_left ;;
+        '}') echo shift-bracket_right ;;
         '`') echo grave_accent ;;
         '_') echo shift-minus ;;
         '|') echo shift-backslash ;;
