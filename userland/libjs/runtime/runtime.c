@@ -1216,10 +1216,10 @@ static bool write_indent(os64_js_runtime_t *runtime, uint32_t depth)
     return write_output(runtime, kSpaces, indent_size(depth));
 }
 
-/* Where QuickJS's printer writes an Error. It hands over a character at a
- * time for much of what it prints, so the bytes gather here and reach the
- * output a buffer at a time. `indent` is a line's indent owed once something
- * follows its line break, so no line is only an indent. */
+/* Where an Error is written (write_error): its pieces gather here and reach
+ * the output a buffer at a time, each line after the first indented as the
+ * first was. `indent` is a line's indent owed once something follows its
+ * line break, so no line is only an indent. */
 typedef struct {
     os64_js_runtime_t *runtime;
     uint32_t depth;
@@ -1267,15 +1267,95 @@ static void error_sink(void *opaque, const char *bytes, size_t size)
     }
 }
 
+/* `key` as a string `object` holds as data, else JS_UNDEFINED: a getter is
+ * not called, and `object` is the Error or an ordinary prototype, whose own
+ * properties are read without running page code. -1 with the exception
+ * pending when the engine cannot allocate. */
+static int error_field(JSContext *context, JSValueConst object, const char *key, JSValue *out)
+{
+    *out = JS_UNDEFINED;
+    JSAtom atom = JS_NewAtom(context, key);
+    if (atom == JS_ATOM_NULL) return -1;
+    JSPropertyDescriptor desc;
+    int has = JS_GetOwnProperty(context, &desc, object, atom);
+    JS_FreeAtom(context, atom);
+    if (has <= 0) return has;
+    if (!(desc.flags & JS_PROP_GETSET) && JS_IsString(desc.value)) *out = desc.value;
+    else JS_FreeValue(context, desc.value);
+    JS_FreeValue(context, desc.getter);
+    JS_FreeValue(context, desc.setter);
+    return 0;
+}
+
+/* `field`, a string or undefined, through the sink; it is let go of. */
+static int sink_string(ErrorSink *sink, JSContext *context, JSValue field)
+{
+    if (JS_IsUndefined(field)) return 0;
+    size_t length;
+    const char *text = JS_ToCStringLen(context, &length, field);
+    JS_FreeValue(context, field);
+    if (text == NULL) return -1;
+    error_sink(sink, text, length);
+    JS_FreeCString(context, text);
+    return 0;
+}
+
+/* An Error as other browsers' consoles print one, with no page code run:
+ * its head, the name ("Error" without one) and then ": " and the message
+ * when there is one, each a string the Error holds or, failing that, its
+ * prototype does when that is an ordinary object (a Proxy's traps would be
+ * page code: DEBTS.md); then its own stack on the lines after, less one
+ * line break at its end. -1 with the exception pending when the engine
+ * cannot allocate. */
+static int write_error(ErrorSink *sink, JSContext *context, JSValueConst error)
+{
+    JSValue fields[3] = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED};
+    static const char *const kKeys[3] = {"name", "message", "stack"};
+    JSValue prototype = JS_GetPrototype(context, error), plain = JS_NewObject(context);
+    int status = JS_IsException(prototype) || JS_IsException(plain) ? -1 : 0;
+    bool ordinary = status == 0 && JS_IsObject(prototype) &&
+                    (JS_GetClassID(prototype) == JS_GetClassID(plain) ||
+                     JS_GetClassID(prototype) == JS_GetClassID(error));
+    for (int i = 0; i < 3 && status == 0; i++) {
+        status = error_field(context, error, kKeys[i], &fields[i]);
+        if (status == 0 && i < 2 && JS_IsUndefined(fields[i]) && ordinary)
+            status = error_field(context, prototype, kKeys[i], &fields[i]);
+    }
+    JS_FreeValue(context, prototype);
+    JS_FreeValue(context, plain);
+    if (status == 0 && JS_IsUndefined(fields[0])) error_sink(sink, "Error", 5);
+    if (status == 0) status = sink_string(sink, context, fields[0]);
+    else JS_FreeValue(context, fields[0]);
+    fields[0] = JS_UNDEFINED;
+    if (status == 0 && !JS_IsUndefined(fields[1])) {
+        size_t length;
+        const char *text = JS_ToCStringLen(context, &length, fields[1]);
+        if (text == NULL) status = -1;
+        else {
+            if (length != 0) {
+                error_sink(sink, ": ", 2);
+                error_sink(sink, text, length);
+            }
+            JS_FreeCString(context, text);
+        }
+    }
+    if (status == 0 && !JS_IsUndefined(fields[2])) {
+        size_t length;
+        const char *text = JS_ToCStringLen(context, &length, fields[2]);
+        if (text == NULL) status = -1;
+        else {
+            error_sink(sink, "\n", 1);
+            error_sink(sink, text, length != 0 && text[length - 1] == '\n' ? length - 1 : length);
+            JS_FreeCString(context, text);
+        }
+    }
+    for (int i = 0; i < 3; i++) JS_FreeValue(context, fields[i]);
+    return status;
+}
+
 /* Each value by QuickJS string conversion, spaces between them, but an
- * Error as other browsers' consoles show one, through QuickJS's own
- * printer: its name and message, then its stack, then its own enumerable
- * properties as ` { key: value }` in the printer's notation (strings quoted,
- * cut at 1000 characters; 100 items; two levels deep). The printer reads
- * what the Error holds and runs no page code (a getter is shown, not
- * called), and takes `name` and `message` only as strings the Error or its
- * prototype holds (DEBTS.md). `depth` is the open console groups its later
- * lines are indented for. */
+ * Error as write_error writes one. `depth` is the open console groups its
+ * later lines are indented for. */
 static bool write_values(os64_js_runtime_t *runtime, JSContext *context, int argc,
                          JSValueConst *args, uint32_t depth, bool *thrown)
 {
@@ -1283,10 +1363,9 @@ static bool write_values(os64_js_runtime_t *runtime, JSContext *context, int arg
         if (JS_IsError(context, args[i])) {
             ErrorSink sink = {.runtime = runtime, .depth = depth};
             if (i != 0 && !write_output(runtime, " ", 1)) return false;
-            JS_PrintValue(context, error_sink, &sink, args[i], NULL);
+            int status = write_error(&sink, context, args[i]);
             sink_flush(&sink);
-            /* The printer's own strings can fail to allocate. */
-            if (JS_HasException(context)) {
+            if (status < 0) {
                 *thrown = true;
                 return false;
             }
