@@ -344,8 +344,94 @@ static int32_t property_named(const char *name)
     return -1;
 }
 
+/* The names a declaration answers to that are not longhands (garb_prop_name_at's
+ * shorthands, aliases and flow-relative names), each with the longhands it
+ * stands for, in the order libgarb sets them when the name is given a
+ * CSS-wide keyword: learned once, by reading `<name>:initial`, so the
+ * table is libgarb's own and not a second copy of it. A name whose
+ * longhands that reading cannot list is kept with none (`n` 0), and
+ * answers "". */
+#define SHORT_MAX 512
+#define SHORT_PROPS 16
+typedef struct {
+    int32_t name_at;
+    int32_t n;
+    garb_prop_t props[SHORT_PROPS];
+} DShort;
+static DShort kShort[SHORT_MAX];
+static int32_t kShortCount = -1;
+
+static int shorts_learn(os64_dom_t *dom)
+{
+    if (kShortCount >= 0) return 0;
+    garb_set_t *sets = d_alloc(dom, sizeof(*sets) * GARB_NPROPS);
+    if (sets == NULL) return -1;
+    int32_t count = 0;
+    const char *name;
+    for (int32_t k = 0; (name = garb_prop_name_at(k)) != NULL && count < SHORT_MAX; k++) {
+        if (property_named(name) >= 0) continue;
+        DShort *s = &kShort[count++];
+        s->name_at = k;
+        s->n = 0;
+        char text[160];
+        int length = os64_snprintf(text, sizeof(text), "%s:initial", name);
+        if (length <= 0 || (size_t)length >= sizeof(text)) continue;
+        garb_parsed_t parsed = {0};
+        if (garb_parse_one_declaration(text, (size_t)length, &parsed) == GARB_OK && !parsed.incomplete) {
+            garb_reading_t how = {0};
+            int32_t n = garb_read_declaration(&parsed, &parsed.decl, how, sets);
+            if (n > 0 && n <= SHORT_PROPS) {
+                s->n = n;
+                for (int32_t i = 0; i < n; i++) s->props[i] = sets[i].prop;
+            }
+        }
+        garb_free(&parsed);
+    }
+    d_free(dom, sets);
+    // A table too small to hold every name would leave one answering
+    // through the inline style's member; refuse it rather than ship that.
+    if (name != NULL) return -1;
+    kShortCount = count;
+    return 0;
+}
+
+// A non-longhand's entry by its name, ASCII case folded; NULL for none.
+static const DShort *short_named(const char *name)
+{
+    for (int32_t i = 0; i < kShortCount; i++) {
+        const char *p = garb_prop_name_at(kShort[i].name_at), *n = name;
+        while (*p != '\0' && *n != '\0' &&
+               (*n >= 'A' && *n <= 'Z' ? *n + ('a' - 'A') : *n) == *p) { p++; n++; }
+        if (*p == '\0' && *n == '\0') return &kShort[i];
+    }
+    return NULL;
+}
+
+/* Whether `s`'s four longhands are a box's sides in CSS's order (top,
+ * right, bottom, left), or its corners in theirs (top-left, top-right,
+ * bottom-right, bottom-left, whose names hold the same four words in the
+ * same order): what the one-to-four value form serializes. */
+static bool contains(const char *text, const char *word)
+{
+    size_t n = os64_strlen(word), length = os64_strlen(text);
+    for (size_t at = 0; at + n <= length; at++)
+        if (os64_memcmp(text + at, word, n) == 0) return true;
+    return false;
+}
+
+static bool short_is_box(const DShort *s)
+{
+    static const char *const kSides[] = {"top", "right", "bottom", "left"};
+    if (s->n != 4) return false;
+    for (int32_t i = 0; i < 4; i++)
+        if (!contains(garb_prop_name(s->props[i]), kSides[i])) return false;
+    return true;
+}
+
 enum {
-    C_TEXT = GARB_NPROPS, C_LENGTH, C_ITEM, C_GET, C_PRIORITY, C_SET, C_REMOVE, C_PARENT_RULE
+    C_TEXT = GARB_NPROPS, C_LENGTH, C_ITEM, C_GET, C_PRIORITY, C_SET, C_REMOVE, C_PARENT_RULE,
+    /* A non-longhand's member: C_SHORT plus its kShort index. */
+    C_SHORT
 };
 
 #define READ_ONLY "This declaration is a computed style, which a script cannot change"
@@ -376,6 +462,63 @@ static JSValue computed_value(os64_dom_t *dom, JSContext *ctx, const DComputed *
     return JS_NewStringLen(ctx, text, length);
 }
 
+static bool same_text(const char *a, size_t al, const char *b, size_t bl)
+{
+    return al == bl && os64_memcmp(a, b, al) == 0;
+}
+
+/* A non-longhand, from its longhands' computed values, as CSSOM serializes
+ * a shorthand where it can: one value when every longhand agrees
+ * (`overflow: visible`, `margin: 0px`); a box's sides or corners in the
+ * one-to-four value form; a pair's two values in its order (`overflow:
+ * hidden auto`, `gap: 8px 16px`); and "" for the rest, which CSSOM lets a
+ * shorthand answer when it cannot be written as one value (`font`,
+ * `background`, `border`, a grid line pair's slashed form). */
+static JSValue short_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, const DShort *s)
+{
+    if (s->n == 0 || computed_empty(dom, ctx, c)) return JS_NewString(ctx, "");
+    if (dom->computed == NULL)
+        return d_error(ctx, "InvalidStateError", "No style provider is installed");
+    const os64_html_node_t *node = d_node(dom, ctx, c->element);
+    if (node == NULL) return JS_EXCEPTION;
+    int made = snapshot_of(dom, ctx, node);
+    if (made < 0) return JS_EXCEPTION;
+    if (made == 0) return d_error(ctx, "InvalidStateError", "A current style could not be produced");
+    const char *text[SHORT_PROPS];
+    size_t length[SHORT_PROPS];
+    bool same = true, spaced = false;
+    for (int32_t i = 0; i < s->n; i++) {
+        text[i] = snapshot_value(dom, s->props[i], &length[i]);
+        same = same && same_text(text[i], length[i], text[0], length[0]);
+        spaced = spaced || os64_memchr(text[i], ' ', length[i]) != NULL;
+    }
+    if (same) return JS_NewStringLen(ctx, text[0], length[0]);
+    int32_t used;
+    if (short_is_box(s) && !spaced) {
+        // top right bottom left: left goes when it is right, bottom when it
+        // is top, right when it is top (all four the same answered above).
+        used = !same_text(text[1], length[1], text[3], length[3]) ? 4
+             : !same_text(text[0], length[0], text[2], length[2]) ? 3 : 2;
+    } else if (s->n == 2 && !contains(garb_prop_name_at(s->name_at), "grid-")) {
+        used = 2;
+    } else {
+        return JS_NewString(ctx, "");
+    }
+    size_t total = 0;
+    for (int32_t i = 0; i < used; i++) total += length[i] + 1;
+    char *joined = d_alloc(dom, total);
+    if (joined == NULL) return d_error(ctx, "QuotaExceededError", "No room for a computed style");
+    size_t at = 0;
+    for (int32_t i = 0; i < used; i++) {
+        if (i != 0) joined[at++] = ' ';
+        os64_memcpy(joined + at, text[i], length[i]);
+        at += length[i];
+    }
+    JSValue value = JS_NewStringLen(ctx, joined, at);
+    d_free(dom, joined);
+    return value;
+}
+
 static JSValue computed_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                int magic, JSValue *data)
 {
@@ -388,6 +531,7 @@ static JSValue computed_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     if (set || magic == C_SET || magic == C_REMOVE)
         return d_error(ctx, "NoModificationAllowedError", READ_ONLY);
     if (magic < GARB_NPROPS) return computed_value(dom, ctx, c, magic);
+    if (magic >= C_SHORT) return short_value(dom, ctx, c, &kShort[magic - C_SHORT]);
     switch (magic) {
     case C_TEXT: return JS_NewString(ctx, "");
     case C_LENGTH: return JS_NewInt32(ctx, computed_empty(dom, ctx, c) ? 0 : GARB_NPROPS);
@@ -405,8 +549,11 @@ static JSValue computed_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         DString name = {0};
         if (!d_string(dom, ctx, argv[0], &name)) return JS_EXCEPTION;
         int32_t prop = property_named(name.data);
+        const DShort *s = prop < 0 && garb_prop_known(name.data, name.length, !dom->options.modern)
+                        ? short_named(name.data) : NULL;
         d_string_free(dom, &name);
-        return prop >= 0 ? computed_value(dom, ctx, c, prop) : JS_NewString(ctx, "");
+        return prop >= 0 ? computed_value(dom, ctx, c, prop)
+             : s != NULL ? short_value(dom, ctx, c, s) : JS_NewString(ctx, "");
     }
     default: return JS_ThrowTypeError(ctx, "Unknown CSSStyleDeclaration member");
     }
@@ -489,8 +636,9 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     /* A computed declaration and an element's style are one interface,
      * CSSStyleDeclaration (CSSOM), whose interface object names the style
      * object's prototype: the computed one inherits it, shadowing every
-     * member with its read-only own, so `instanceof` answers truly for
-     * both. */
+     * member with its read-only own (the longhands, then every other name
+     * below), so `instanceof` answers truly for both and no read reaches
+     * a member that only an element's style can answer. */
     JSValue prototype = JS_NewObjectProto(ctx, dom->style_prototype->value);
     dom->computed_prototype = d_retain(dom, ctx, prototype);
     if (dom->computed_prototype == NULL) return -1;
@@ -515,6 +663,26 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (JS_IsException(listed) ||
             JS_DefinePropertyValueUint32(ctx, prototype, (uint32_t)i, listed, JS_PROP_ENUMERABLE) < 0)
             return -1;
+    }
+    /* Every other name an element's style answers to, as it is spelled
+     * there (style.c's d_style_install) and under the same switch, read
+     * from the longhands (short_value): none reaches the inline style's
+     * member, which a computed declaration is not. */
+    if (shorts_learn(dom) < 0) return -1;
+    for (int32_t k = 0; k < kShortCount; k++) {
+        const char *name = garb_prop_name_at(kShort[k].name_at);
+        if (!garb_prop_known(name, os64_strlen(name), !dom->options.modern)) continue;
+        int magic = C_SHORT + k;
+        if (magic >= D_SET) return -1;
+        char attribute[128];
+        camel(name, attribute, sizeof(attribute), false);
+        if (d_accessor(dom, ctx, prototype, attribute, computed_member, magic, true) < 0) return -1;
+        if (os64_strchr(name, '-') != NULL && d_accessor(dom, ctx, prototype, name, computed_member, magic, true) < 0)
+            return -1;
+        if (os64_strlen(name) > 8 && os64_memcmp(name, "-webkit-", 8) == 0) {
+            camel(name, attribute, sizeof(attribute), true);
+            if (d_accessor(dom, ctx, prototype, attribute, computed_member, magic, true) < 0) return -1;
+        }
     }
     if (d_accessor(dom, ctx, prototype, "cssText", computed_member, C_TEXT, true) < 0 ||
         d_accessor(dom, ctx, prototype, "length", computed_member, C_LENGTH, false) < 0 ||
