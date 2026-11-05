@@ -255,7 +255,7 @@ static char *native_serialized(const os64_html_node_t *node)
 typedef struct {
     DomFixture *fixture;
     unsigned calls;
-    bool refuse, slow;
+    bool refuse, slow, unboxed;
 } GeometryFixture;
 
 static bool fake_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
@@ -266,7 +266,7 @@ static bool fake_geometry(void *opaque, const os64_html_node_t *node, os64_dom_g
     *out=(os64_dom_geometry_t){.x=1.25,.y=-3.5,.width=20.5,.height=30.25,
         .offset_left=2,.offset_top=3,.offset_width=21,.offset_height=30,
         .client_left=1,.client_top=2,.client_width=19,.client_height=27,
-        .offset_parent=fixture->fixture->document->body,.layouts=1,.elapsed_us=250};
+        .offset_parent=fixture->fixture->document->body,.layouts=1,.elapsed_us=250,.boxed=!fixture->unboxed};
     if(fixture->slow) dom_clock+=2000000;
     return !fixture->refuse;
 }
@@ -285,7 +285,8 @@ static void dom_geometry_cases(void)
         "'clientLeft','clientTop','clientWidth','clientHeight'])assert(foreign[name]===0);"
         "assert(foreign.offsetParent===null);"
         "const r=foreign.getBoundingClientRect();assert(r instanceof DOMRect);"
-        "for(const k of ['x','y','width','height','top','right','bottom','left'])assert(r[k]===0,k);}",
+        "for(const k of ['x','y','width','height','top','right','bottom','left'])assert(r[k]===0,k);"
+        "assert(foreign.getClientRects().length===0,'a foreign element has no box');}",
         "foreign-geometry-without-provider");
     GeometryFixture provider={.fixture=&f};
     os64_dom_set_geometry(f.binding,fake_geometry,&provider);
@@ -307,6 +308,25 @@ static void dom_geometry_cases(void)
     os64_dom_geometry_stats_t stats=os64_dom_geometry_stats(f.binding,true);
     check(stats.layouts==11&&stats.elapsed_us==2750&&os64_dom_geometry_stats(f.binding,false).layouts==0,
           "geometry telemetry counts provider work and resets independently");
+    /* getClientRects (CSSOM View § 6.1): the border box an element with a
+     * box has, in a DOMRectList; empty for one with none. */
+    dom_script(&f,GEOMETRY_ASSERT
+        "var node=document.getElementById('one'),list=node.getClientRects();"
+        "assert(list instanceof DOMRectList&&list.length===1&&list.item(0)===list[0]&&list.item(1)===null);"
+        "assert(list[0] instanceof DOMRect&&list[0].x===1.25&&list[0].width===20.5&&list[0].height===30.25);"
+        "assert([...list].length===1&&list[0]!==node.getClientRects()[0],'iterable, and a new list each read');"
+        "throws('TypeError',()=>new DOMRectList());throws('TypeError',()=>list.item());"
+        "throws('TypeError',()=>DOMRectList.prototype.item.call({},0));"
+        "throws('TypeError',()=>node.getClientRects.call(document));"
+        "assert(Object.getOwnPropertyDescriptor(list,0).writable===false);",
+        "geometry-client-rects");
+    provider.unboxed=true;
+    dom_script(&f,GEOMETRY_ASSERT
+        "var empty=document.getElementById('one').getClientRects();"
+        "assert(empty.length===0&&empty.item(0)===null&&empty[0]===undefined&&[...empty].length===0);",
+        "geometry-client-rects-without-a-box");
+    provider.unboxed=false;
+    os64_dom_geometry_stats(f.binding,true);
     unsigned before_foreign=provider.calls;
     dom_script(&f,GEOMETRY_ASSERT
         "assert(holder.firstChild.clientWidth===0);assert(holder.firstChild.firstChild.getBoundingClientRect().width===0);",

@@ -5188,6 +5188,8 @@ static void geometry_cases(void)
         "var hidden=document.createElement('div');eq(hidden.offsetWidth,0);eq(hidden.offsetParent,null);"
         "eq(hidden.getBoundingClientRect().width,0);"
         "document.body.appendChild(hidden);hidden.setAttribute('style','display:none');eq(hidden.offsetHeight,0);"
+        "eq(hidden.getClientRects().length,0);eq(document.createElement('p').getClientRects().length,0);"
+        "var rects=box.getClientRects();eq(rects.length,1);eq(rects[0].width,150);eq(rects[0].height,50);"
         "box.setAttribute('data-geometry-pass','yes');"
         "</script>",true);
     check(script_turn(), "geometry script task completes and rebuilds");
@@ -5201,7 +5203,7 @@ static void geometry_cases(void)
           value.width==17 && value.offset_left==11 && value.offset_top==13 && value.offset_parent==NULL, "fixed viewport geometry ignores page scrolling");
     const os64_html_node_t *box=probe_id("box");
     check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,box,800,600,1000,
-          (flow_point_t){7,9},&value) && value.x==17 && value.y==25,
+          (flow_point_t){7,9},&value) && value.x==17 && value.y==25 && value.boxed,
           "ordinary bounding rectangle subtracts page scroll");
     g.zoom=2000;
     check(lay_out_page(&g.page,800,600), "geometry zoom layout");

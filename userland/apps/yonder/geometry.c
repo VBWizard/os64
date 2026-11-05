@@ -106,6 +106,7 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
         include(&raw, box->rect);
         if (rect.w > 0 && rect.h > 0) include(&visual, rect);
     }
+    out->boxed = first != NULL;
     bool is_root = node == document->html;
     bool is_body = node == document->body;
     if ((is_root && document->quirks != OS64_HTML_QUIRKS) ||

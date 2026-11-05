@@ -150,6 +150,74 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
 
 /* The DOMRect row (modern.c): DOMRectReadOnly, and DOMRect inheriting it,
  * whose four numbers are writable. */
+/* DOMRECTLIST AND getClientRects (CSSOM View § 6.1): a list made for one
+ * read, its rects its own read-only indexed properties and its length
+ * kept on its opaque (one more than the count, so an empty list is not a
+ * NULL one). An element with a layout box answers its border box, one
+ * rect for the whole element (DEBTS.md: a box split across lines answers
+ * one rect, where a browser answers one per fragment); an element with
+ * none (display: none, detached) answers an empty list. */
+static JSClassID list_slot;
+enum { L_LENGTH, L_ITEM };
+
+static JSValue list_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                           JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    uintptr_t stored = (uintptr_t)JS_GetOpaque(self, os64_js_class_id(&list_slot));
+    if (stored == 0) return JS_ThrowTypeError(ctx, "Expected a DOMRectList");
+    uint32_t length = (uint32_t)(stored - 1);
+    if (magic == L_LENGTH) return JS_NewUint32(ctx, length);
+    if (argc < 1) return JS_ThrowTypeError(ctx, "item needs an index");
+    uint32_t index;
+    if (JS_ToUint32(ctx, &index, argv[0]) < 0) return JS_EXCEPTION;
+    return index < length ? JS_GetPropertyUint32(ctx, self, index) : JS_NULL;
+}
+
+static JSValue client_rects(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                            JSValue *data)
+{
+    (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *node = d_node(dom, ctx, self);
+    if (node == NULL) return JS_EXCEPTION;
+    if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Geometry requires an element");
+    os64_dom_geometry_t box;
+    if (!d_geometry_read(dom, ctx, node, &box)) return JS_EXCEPTION;
+    JSValue list = JS_NewObjectClass(ctx, (int)os64_js_class_id(&list_slot));
+    if (JS_IsException(list)) return list;
+    uint32_t length = box.boxed ? 1 : 0;
+    if (length != 0) {
+        JSValue rect = d_rect_new(dom, ctx, false, box.x, box.y, box.width, box.height);
+        if (JS_IsException(rect) || JS_DefinePropertyValueUint32(ctx, list, 0, rect, JS_PROP_ENUMERABLE) < 0) {
+            JS_FreeValue(ctx, list);
+            return JS_EXCEPTION;
+        }
+    }
+    JS_SetOpaque(list, (void *)(uintptr_t)(length + 1));
+    return list;
+}
+
+static int list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSClassID id = os64_js_class_id(&list_slot);
+    JSClassDef definition = {.class_name = "DOMRectList"};
+    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &definition) < 0) return -1;
+    JSValue proto = JS_NewObject(ctx);
+    if (d_retain(dom, ctx, proto) == NULL) return -1;
+    JS_SetClassProto(ctx, id, JS_DupValue(ctx, proto));
+    if (d_accessor(dom, ctx, proto, "length", list_member, L_LENGTH, false) < 0 ||
+        d_method(dom, ctx, proto, "item", list_member, 1, L_ITEM) < 0 || d_iterable(ctx, proto, false) < 0)
+        return -1;
+    JSValue constructor = d_interface_new(ctx, "DOMRectList", 0, NULL, proto, JS_UNDEFINED);
+    if (JS_IsException(constructor) ||
+        JS_DefinePropertyValueStr(ctx, global, "DOMRectList", constructor, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    return d_method(dom, ctx, dom->prototypes[D_PROTO_ELEMENT]->value, "getClientRects", client_rects, 0, 0);
+}
+
 int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue parent = JS_UNDEFINED, parent_proto = JS_UNDEFINED;
@@ -179,5 +247,5 @@ int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         parent = constructor;
         parent_proto = proto;
     }
-    return 0;
+    return list_install(dom, ctx, global);
 }

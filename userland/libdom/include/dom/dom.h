@@ -302,6 +302,10 @@ typedef struct {
      * potentially scrollable); 0 for an element with no box. scroll_left
      * and scroll_top read by the same rule. */
     int32_t scroll_width, scroll_height;
+    /* Whether the element has a layout box (a border-box fragment) in the
+     * provider's layout: what getClientRects answers an empty list without
+     * (CSSOM View § 6.1), since a box can be empty and still be one. */
+    bool boxed;
 } os64_dom_geometry_t;
 
 typedef bool (*os64_dom_geometry_provider_t)(void *opaque,
