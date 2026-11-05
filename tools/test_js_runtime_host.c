@@ -725,6 +725,58 @@ static void console_cases(void)
     os64_js_destroy(runtime);
 }
 
+/* An Error prints as its name and message and then its stack, the stack's
+ * lines indented with its console group, without running a getter it
+ * holds; print writes one the same way. */
+static void console_error_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    reset_io("");
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_CONSOLE | OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_OK,
+          "console and print installed");
+    check(execute_fixture(runtime,
+          "function thrower(){throw new TypeError('boom')}"
+          "let e;try{thrower()}catch(x){e=x}"
+          "Object.defineProperty(e,'trap',{get(){throw Error('getter ran')},enumerable:true});"
+          "console.group('g');console.log('x',e);console.groupEnd();print(e);",
+          &outcome) == OS64_JS_OK, "an Error printed without running its getter");
+    char text[2048] = {0};
+    memcpy(text, output, output_len < sizeof(text) - 1 ? output_len : sizeof(text) - 1);
+    char *grouped = strstr(text, "g\n  x TypeError: boom\n      at thrower (");
+    char *printed = strstr(text, "\nTypeError: boom\n    at thrower (");
+    check(grouped != NULL, "a console line's Error: name, message, and its stack indented with the group");
+    check(printed != NULL, "print's Error: name, message, and its stack");
+    check(strstr(text, "getter ran") == NULL && strstr(text, "trap") == NULL,
+          "no page code runs, and the Error's other properties are not printed");
+    reset_io("");
+    check(execute_fixture(runtime,
+          "const f=new Error('y');f.stack='one\\n\\ntwo';f.when=new Date(NaN);"
+          "console.group();console.log(f);console.groupEnd();",
+          &outcome) == OS64_JS_OK, "an Error with a stack of its own and an invalid Date printed");
+    char second[512] = {0};
+    memcpy(second, output, output_len < sizeof(second) - 1 ? output_len : sizeof(second) - 1);
+    check(strcmp(second, "  Error: y\n  one\n\n  two\n") == 0, "no line is only an indent");
+    /* Concatenated strings, a NUL, and fields the head may not read. */
+    reset_io("");
+    check(execute_fixture(runtime,
+          "const g=new Error('x');g.message='pre-'+'m'.repeat(3);g.stack='at a\\n'+'at b';print(g);"
+          "const r=new RangeError('a\\0b');delete r.stack;print(r);"
+          "const h=new Error('q');delete h.stack;"
+          "Object.defineProperty(h,'name',{get(){throw Error('name getter ran')}});print(h);"
+          "const k=new Error('z');delete k.stack;Object.setPrototypeOf(k,new Proxy({},{getOwnPropertyDescriptor(){"
+          "throw Error('trap ran')}}));print(k);",
+          &outcome) == OS64_JS_OK, "Errors with page-made fields printed");
+    static const char third[] = "Error: pre-mmm\nat a\nat b\nRangeError: a\0b\nError: q\n";
+    check(output_len > sizeof(third) - 1 && memcmp(output, third, sizeof(third) - 1) == 0,
+          "concatenated message and stack whole, a NUL kept, an accessor name not called");
+    check(output_len >= 9 && memcmp(output + output_len - 9, "Error: z\n", 9) == 0,
+          "a Proxy prototype is not asked");
+    os64_js_destroy(runtime);
+}
+
 static void output_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -2266,7 +2318,7 @@ int main(int argc, char **argv)
         return 1;
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
-    file_cases(); file_boundary_cases(); output_cases(); console_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
+    file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
     script_host_cases();
     module_cases();

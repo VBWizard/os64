@@ -307,7 +307,7 @@ static void implementation_windowless_cases(void)
 {
     DomFixture f = event_fixture(event_html, "http://fixture.test/dir/page.html");
     if (!fixture_ready(&f)) return;
-    os64_dom_cookies_t cookies = {cookie_get, cookie_set, NULL};
+    os64_dom_cookies_t cookies = {cookie_get, cookie_set, NULL, NULL};
     os64_dom_set_cookies(f.binding, &cookies);
     cookie_heard[0] = 0;
     write_answer = OS64_HTML_OK;

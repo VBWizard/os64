@@ -163,6 +163,8 @@ void way_jar_clear(way_jar_t *jar);
 // `cookies = off`: while `refuse` is true the jar hears no cookie and
 // sends none. What it holds stays until it is cleared.
 void way_jar_refuse(way_jar_t *jar, bool refuse);
+// Whether it refuses now; a NULL jar, which keeps nothing, does.
+bool way_jar_refusing(way_jar_t *jar);
 
 // RFC 6265 §5.1.1: a cookie date, read the forgiving way. False when it is
 // not one.

@@ -191,7 +191,7 @@ struct DValue {
     struct DPath2D *canvas_path2d;
     bool canvas_reset_pending;
     bool image_reported;
-    DQuery *child_nodes, *children, *images, *forms, *elements;
+    DQuery *child_nodes, *children, *images, *forms, *links, *scripts, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
     /* A labelable element's labels, made once ([SameObject]). */
@@ -404,6 +404,9 @@ struct os64_dom {
     bool attr_ordinary;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     DValue *invoke, *navigator, *style_prototype, *static_list;
+    /* navigator.languages, plugins and mimeTypes, each [SameObject]; made by
+     * the Modern Web's window objects row (window.c), NULL without it. */
+    DValue *languages, *plugins, *mime_types;
     const char *(*user_agent)(void *opaque);
     void *user_agent_opaque;
     os64_dom_cookies_t cookies;
@@ -624,6 +627,8 @@ struct os64_dom {
     size_t intersections_held;
     os64_dom_intersections_provider_t intersections_provider;
     void *intersections_opaque;
+    /* The traversal row's walkers and iterators (walker.c). */
+    struct DWalks *walks;
     /* ResizeObserver (resize.c), the same three. */
     struct DResizes *resizes;
     size_t resizes_held;
@@ -912,7 +917,10 @@ enum {
     /* The node row's (mixin.c d_nodes_install, behind the modern switch). */
     D_ROOT_NODE, D_NORMALIZE
 };
-/* OPTIONS and SELECTED_OPTIONS are a select's list of options (libpage's
+/* LINKS is a document's `a` and `area` elements that have an href, and
+ * SCRIPTS its HTML `script` elements (HTML § 3.1.4, document.links and
+ * document.scripts). OPTIONS and SELECTED_OPTIONS are a
+ * select's list of options (libpage's
  * walk, os64_page_option_next) and the ones of it that are selected; the
  * second also changes with control state, not only with the tree. LABELS
  * are the labels whose labeled control is the query's owner, walked from
@@ -926,7 +934,8 @@ enum {
  * last, each group in tree order (HTML § 4.9.1); SECTION_ROWS a section's
  * tr children; CELLS a row's td and th children; AREAS a map's area
  * descendants. */
-enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
+enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_LINKS, D_QUERY_SCRIPTS, D_QUERY_CONTROLS,
+       D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS,
        D_QUERY_FIELDSET, D_QUERY_SHEETS, D_QUERY_TBODIES, D_QUERY_TABLE_ROWS, D_QUERY_SECTION_ROWS,
        D_QUERY_CELLS, D_QUERY_AREAS };
@@ -1723,6 +1732,10 @@ void d_intersections_free(os64_dom_t *dom);
 int d_resizes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_resizes_drain(os64_dom_t *dom);
 void d_resizes_free(os64_dom_t *dom);
+/* DOM § 6's traversal (walker.c): its row, and the teardown halves. */
+int d_walkers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_walkers_drain(os64_dom_t *dom);
+void d_walkers_free(os64_dom_t *dom);
 /* DOMRectReadOnly and DOMRect (rect.c): the row's installer, and a new
  * rect of either for the binding's own answers (the switch on). */
 int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

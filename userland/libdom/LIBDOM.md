@@ -783,6 +783,37 @@ The host runs the step when its layout moved or a report is owed
 passed over, or what a step left undone: a refused gather, a callback
 whose entries could not be made). An observer is held while it observes.
 
+## Traversal
+
+`document.createTreeWalker` and `createNodeIterator`, with `TreeWalker`,
+`NodeIterator` and `NodeFilter` (`walker.c`; DOM § 6), are a Modern Web
+row. The moves are the standard's steps over libhtml's links, and a walker
+traverses one node tree: a template's contents are no element's children,
+and a shadow root would be no child of its host. A walker's record holds
+its root and its current node (an iterator's reference) with libhtml's
+hold, and a traversal holds the node it stands on, since the filter is
+page code that may take that node out of the tree, whose subtree libhtml
+would otherwise reclaim at once. Removals reach a live NodeIterator as a
+mutation consumer, which runs DOM's pre-removing steps from the record of
+the removal (the parent and the siblings the removed run lay between) on
+its reference and, while a traversal is running, on the traversal's
+position, which the reference becomes when a node is accepted; so a filter
+that removes the node it is filtering returns that node and leaves the
+iterator where the removal put it, as WPT's
+`NodeIterator-removal-during-filtering.html` asks. libhtml tells a move's
+removal once the node is placed, so the steps' walks step around the nodes
+the change moved, which is the only way the tree then differs from the one
+the steps read; and a removal that takes the root out of its tree leaves
+the iterator as it is, as WPT and other browsers have it. An iterator
+walked from its own filter never touches the running traversal: it
+answers null when there is nowhere to go, and InvalidStateError when its
+filter would be asked. A current node set
+outside the root makes `nextNode` end with null where DOM's steps would
+filter the same node for ever. Lifetime is the observers': a finalizer
+marks its record dead, and the dead are swept when the next walker is made
+and at teardown, which releases the holds. An Attr root is a TypeError
+(DEBTS.md).
+
 ## The CSS namespace
 
 `CSS` (`css.c`) is a WebIDL namespace object with `escape` and `supports`.
@@ -842,7 +873,20 @@ location, [LegacyUnforgeable], with its own `valueOf` and
 `Symbol.toPrimitive`, its prototype holding no member. Each object is made
 over a prototype level of its own, empty without the switch, so its chain
 has the same levels either way, and each member checks that it is called
-on its object, with the switch or without).
+on its object, with the switch or without). With the switch the
+navigator has the rest of HTML's Navigator, beside the classic
+`userAgent`, `appName`, `appVersion` and `platform`: NavigatorID's
+constants (`appCodeName`, `product`, `vendorSub`, and `productSub` and
+`vendor` as the navigator compatibility mode of the agent's browser has
+them: Chrome's, WebKit's for Safari, else Gecko's), `language` and
+`languages` (libjs's `OS64_JS_LOCALE`, the locale Intl is to format in;
+`languages` one frozen array of it and its language alone, the tags every
+agent's Accept-Language sends), `onLine` true, since nothing tells a page
+the network went away, `cookieEnabled` (false with no cookie provider,
+else the provider's `enabled`, true when it has none), `hardwareConcurrency` 4,
+`maxTouchPoints` 0, and, there being no PDF viewer, `pdfViewerEnabled`
+and `javaEnabled()` false and `plugins` and `mimeTypes` an empty
+`PluginArray` and `MimeTypeArray`, each the same object every read.
 An element's own scroll is a row of its own (CSSOM View § 7, `view.c`'s
 `d_element_scroll_install`): setters beside the classic `scrollLeft` and
 `scrollTop` getters, `scrollWidth` and `scrollHeight`, and `scroll`,
@@ -1376,6 +1420,11 @@ text, ASCII whitespace collapsed, an SVG document's own; its setter
 converts the value, then replaces that element's text, making one in the
 head (or, for SVG, first in the root) when there is none. `dir` reflects
 the html element's, `rootElement` is an SVG root, `clear()` does nothing.
+`links` is the live collection of the document's `a` and `area` elements
+that have an href, and `scripts` of its HTML `script` elements, each made
+once as `images` and `forms` are; their siblings `anchors`, `embeds` and
+`plugins` are not built, since no page in the corpus reads one (11/04
+count, 191 hosts: `scripts` 36, `links` 7, the three 0).
 `onreadystatechange`, `onvisibilitychange` and `onprerenderingchange` are
 the document's handler slots (§ Events).
 

@@ -513,9 +513,47 @@ static void dom_document_sweep_cases(void)
     engine_sweep("document", kOperations, n, &options);
 }
 
+/* document.links and document.scripts (HTML § 3.1.4): live, [SameObject],
+ * every `a` and `area` with an href, and every HTML `script`, and nothing
+ * else, in tree order; links for a document of its own too. */
+static void dom_document_links_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "const P=Object.getPrototypeOf(document),d=Object.getOwnPropertyDescriptor(P,'links');"
+        "assert(d&&d.get&&!d.set&&d.enumerable,'an attribute');"
+        "throws('TypeError',()=>d.get.call(document.body));"
+        "const L=document.links;assert(L===document.links&&L instanceof HTMLCollection,'[SameObject]');"
+        "const before=L.length;"
+        "const box=document.createElement('div');"
+        "box.innerHTML='<a href=1 id=one>x</a><a name=anchor>y</a><map><area href=2 id=two><area></map>'+"
+        "'<svg><a href=3></a></svg><link href=4><a id=late>z</a>';"
+        "assert(L.length===before,'detached links are not the document\\'s');"
+        "document.body.appendChild(box);"
+        "assert(L.length===before+2&&L[before].id==='one'&&L[before+1].id==='two','a and area with href, in order');"
+        "document.getElementById('late').setAttribute('href','5');"
+        "assert(L.length===before+3&&L.namedItem('late').id==='late','live, and by id');"
+        "box.remove();assert(L.length===before,'and gone');"
+        "let n=0;for(const x of L)n++;assert(n===L.length,'iterable');"
+        "const other=document.implementation.createHTMLDocument('');"
+        "other.body.innerHTML='<a href=x></a>';"
+        "assert(other.links.length===1&&other.links!==L&&other.links===other.links,'a document of its own');"
+        "const S=document.scripts,s0=S.length;assert(S===document.scripts&&S instanceof HTMLCollection);"
+        "const holder=document.createElement('div');"
+        "holder.innerHTML='<script id=s1>0</script><svg><script>1</script></svg><p><script id=s2>2</script></p>';"
+        "document.body.appendChild(holder);"
+        "assert(S.length===s0+2&&S[s0].id==='s1'&&S[s0+1].id==='s2','HTML scripts, in order, live');"
+        "holder.remove();assert(S.length===s0);"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(P,'scripts').get.call({}));",
+        "document-links");
+    fixture_free(&f);
+}
+
 static void dom_document_cases(void)
 {
     dom_document_readiness_cases();
+    dom_document_links_cases();
     dom_document_member_cases();
     dom_document_focus_cases();
     dom_document_script_cases();
