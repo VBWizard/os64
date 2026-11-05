@@ -178,7 +178,7 @@ for (const options of pluralBags) {
 // length.
 const relativeUnits = ['second', 'minutes', 'hour', 'days', 'week', 'month', 'quarters', 'year'];
 const relativeValues = ['n:0', 'n:-0', 'n:1', 'n:-1', 'n:2', 'n:-2', 'n:0.004', 'n:0.005', 'n:0.995', 'n:-1.004', 'n:1.5',
-    'n:-3', 'n:1000', 'n:-1234.5678', 'n:1e21'];
+    'n:-3', 'n:1000', 'n:-1234.5678', 'n:1e21', 'n:1.0005', 'n:0.0025', 'n:-1.0625', 'n:-0.0005'];
 for (const style of ['long', 'short', 'narrow']) for (const numeric of ['always', 'auto']) {
     const options = {style, numeric};
     const rtf = new Intl.RelativeTimeFormat('en-US', options);

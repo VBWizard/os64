@@ -930,9 +930,9 @@ core, 25,679 sanitized.
 
 `tools/test262_host.sh` adds `intl402/RelativeTimeFormat` and
 `intl402/ListFormat`: 142 of 160 and 150 of 162 run as written and strict,
-the rest Polish and Spanish (locales the data does not hold), a numbering
-system other than latn and `$262`'s second realm, each listed with its
-reason. The earlier directories are unchanged, and Chrome 156's capture
+the rest locales the data does not hold (Polish, Spanish, and the
+locales-valid tests' others), a numbering system other than latn and
+`$262`'s second realm, each listed with its reason. The earlier directories are unchanged, and Chrome 156's capture
 still agrees in all 5,635 fields; the capture page now asks both
 constructors' cases for the next capture (INTL.md § 8, § 9.6). The `js`
 runner's suites (199 and 40 checks) and the acceptance suite pass. The

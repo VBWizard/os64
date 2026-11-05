@@ -426,8 +426,10 @@ made:
    them, one character early; RelativeTimeFormat's `numeric: "auto"`
    finds its words ("today", "tomorrow") for a value that rounds to a
    whole -2..2 at hundredths, so 0.004 days is "today" (ECMA-402 matches
-   the exact value); and ListFormat's `formatToParts` writes no part for an
-   empty element, joining the text around it into one literal. One
+   the exact value), and rounds its number half to even, as ICU's
+   default formatter does ("in 1 day" for 1.0005); and ListFormat's
+   `formatToParts` writes no part for an empty element, joining the text
+   around it into one literal. One
    departure is deliberate: V8 writes a percent per a unit in the short and
    narrow widths as the percent alone ("2%" for `percent-per-second`) yet
    keeps the denominator in its compact and range forms ("12K%/s",

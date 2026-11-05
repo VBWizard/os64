@@ -3191,9 +3191,12 @@ function RelativeTimeFormat(locales, options) {
     s.style = GetOption(options, 'style', 'string', ['long', 'short', 'narrow'], 'long');
     s.numeric = GetOption(options, 'numeric', 'string', ['always', 'auto'], 'always');
     // The NumberFormat and PluralRules a relative time is formatted with:
-    // the locale's defaults, as `new Intl.NumberFormat(locale)` has them.
+    // the locale's defaults, as `new Intl.NumberFormat(locale)` has them,
+    // except that the value rounds half to even, as V8's (ICU's default
+    // formatter's) does: "in 1 day" for 1.0005 (INTL.md § 9.6).
     const nf = {__proto__: null, style: 'decimal', notation: 'standard', signDisplay: 'auto', useGrouping: 'auto'};
     SetNumberFormatDigitOptions(nf, objectCreate(null), 0, 3, 'standard');
+    nf.roundingMode = 'halfEven';
     s.nf = nf;
     apply(wm_set, RELATIVE_TIME_FORMATS, [made, s]);
     return made;
@@ -3216,8 +3219,8 @@ function relativeTimeParts(s, value, unit, name) {
         throw new RangeError_('Invalid unit argument for Intl.RelativeTimeFormat.prototype.' + name + "() '" + unit + "'");
     const fields = own(RELATIVE, s.style === 'long' ? singular : singular + '-' + s.style);
     const out = [];
-    // numeric "auto": a value within 2.1 of now names its day in words
-    // where CLDR has one ("tomorrow"), judged as ICU judges it, by the value
+    // numeric "auto": a value within 2.1 of now is named in words where
+    // CLDR has them ("tomorrow", "this hour"), judged as ICU judges it, by the value
     // rounded to hundredths in doubles (so V8 calls 0.004 days "today" and
     // 0.005 "in 0.005 days"; ECMA-402 would match the exact value; § 9.6).
     if (s.numeric === 'auto' && value > -2.1 && value < 2.1) {
@@ -3305,12 +3308,11 @@ function StringListFromIterable(iterable) {
     const list = [];
     if (iterable === undefined) return list;
     for (const element of iterable) {
-        if (typeof element !== 'string') throw new TypeError_('Iterable yielded ' + ToDisplayString(element) + ' which is not a string');
+        if (typeof element !== 'string') throw new TypeError_('Intl.ListFormat: an element of the list is not a string');
         push(list, element);
     }
     return list;
 }
-function ToDisplayString(v) { return typeof v === 'symbol' ? 'a Symbol' : isObject(v) ? 'an object' : String_(v); }
 // CreatePartsFromList: CLDR's patterns ({0} and {1}) applied from the end
 // of the list: the last two by "end", each earlier one by "middle", the
 // first by "start", and two alone by "2".
