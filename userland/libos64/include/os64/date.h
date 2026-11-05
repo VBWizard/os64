@@ -105,21 +105,25 @@ int64_t os64_localtime(int64_t epoch, os64_date_t *out);
 //     TZ=CET-1CEST,M3.5.0,M10.5.0    the EU, with explicit rules
 //
 // Grammar: <std name><offset>[<dst name>[<offset>]][,<start>,<end>]
-//  * Names are 3+ letters. The DAYLIGHT name's presence enables DST; its
-//    offset defaults to one hour ahead of standard (right for virtually
-//    everyone on Earth).
+//  * Names are 3+ letters, or POSIX's quoted form `<+0530>`: 3+ letters,
+//    digits, `+` and `-` in angle brackets, which tzdata writes for every
+//    zone whose abbreviation is a number. The DAYLIGHT name's presence
+//    enables DST; its offset defaults to one hour ahead of standard (right
+//    for virtually everyone on Earth).
 //  * Offsets are h[h][:mm], counting hours WEST of UTC — V7's little prank:
 //    Eastern is 5, Tokyo is -9. Everyone hits this once.
-//  * Rules are M<month>.<week>.<weekday>[/h[:mm]] — weekday 0 = Sunday,
-//    week 5 = "last", transition time defaults to 2:00 local. Rules omitted
-//    = the US rule (M3.2.0,M11.1.0), matching POSIX's default. The J/day-
-//    number rule forms are declined until someone actually needs them.
+//  * Rules are M<month>.<week>.<weekday>[/[+|-]h[:mm]] — weekday 0 =
+//    Sunday, week 5 = "last", transition time defaults to 2:00 local and
+//    may be negative or past 24 hours (-167 to 167, POSIX's range: tzdata
+//    writes `/-1` and `/26`). Rules omitted = the US rule (M3.2.0,M11.1.0),
+//    matching POSIX's default. The J/day-number rule forms are declined: no
+//    zone in tzdata uses one.
 
 typedef struct {
     int32_t month;    // 1..12
     int32_t week;     // 1..5, 5 = last <weekday> of the month
     int32_t weekday;  // 0..6, 0 = Sunday
-    int32_t minute;   // transition time, minutes after local midnight
+    int32_t minute;   // transition time, minutes from local midnight (may be negative or past a day)
 } os64_tz_rule_t;
 
 typedef struct {

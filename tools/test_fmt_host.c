@@ -408,6 +408,50 @@ int main(void)
         os64_env_publish(NULL);
     }
 
+    // Every rule tzdata's zones carry (libjs's zone table, INTL.md § 5)
+    // parses, and the unusual forms answer the offset Python's zoneinfo
+    // gives at instants around their transitions: quoted names, h:mm
+    // offsets, a transition at -1 h (Greenland) and at 26 h (Israel),
+    // half-hour daylight saving (Lord Howe) and :45 zones (Chatham).
+    {
+        typedef struct { const char *name; uint16_t canonical, rule, listed; } IntlZoneName;
+#include "../userland/libjs/intl/zones.inc"
+        (void)kZoneNames; (void)kRulePreferred;
+        os64_tz_t tz;
+        for (size_t i = 0; i < sizeof(kZoneRules) / sizeof(kZoneRules[0]); i++) {
+            int64_t parsed = os64_tz_parse(kZoneRules[i], &tz);
+            if (parsed != 0) printf("  rule does not parse: %s\n", kZoneRules[i]);
+            EXPECT(parsed == 0);
+        }
+        static const struct { const char *rule; int64_t epoch; int32_t east; } kAt[] = {
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1774740600, -120},   // America/Nuuk 2026-03-28T23:30Z
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1774744200, -120},   // America/Nuuk 2026-03-29T00:30Z
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1774747800, -60},    // America/Nuuk 2026-03-29T01:30Z, past -1 h
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1792888200, -60},    // America/Nuuk 2026-10-25T00:30Z
+            {"<-02>2<-01>,M3.5.0/-1,M10.5.0/0", 1792891800, -120},   // America/Nuuk 2026-10-25T01:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1774567800, 120},         // Asia/Jerusalem 2026-03-26T23:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1774571400, 180},         // Asia/Jerusalem 2026-03-27T00:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1792881000, 180},         // Asia/Jerusalem 2026-10-24T22:30Z
+            {"IST-2IDT,M3.4.4/26,M10.5.0", 1792884600, 120},         // Asia/Jerusalem 2026-10-24T23:30Z
+            {"IST-5:30", 1780272000, 330},                           // Asia/Kolkata 2026-06-01T00:00Z
+            {"<+1030>-10:30<+11>-11,M10.1.0,M4.1.0", 1768435200, 660},          // Australia/Lord_Howe 2026-01-15
+            {"<+1030>-10:30<+11>-11,M10.1.0,M4.1.0", 1784073600, 630},          // Australia/Lord_Howe 2026-07-15
+            {"<-03>3", 1768435200, -180},                                        // America/Sao_Paulo 2026-01-15
+            {"GMT0IST,M3.5.0/1,M10.5.0", 1768435200, 0},                         // Europe/Dublin 2026-01-15
+            {"GMT0IST,M3.5.0/1,M10.5.0", 1784073600, 60},                        // Europe/Dublin 2026-07-15
+            {"<+1245>-12:45<+1345>,M9.5.0/2:45,M4.1.0/3:45", 1768435200, 825},   // Pacific/Chatham 2026-01-15
+            {"<+1245>-12:45<+1345>,M9.5.0/2:45,M4.1.0/3:45", 1784073600, 765},   // Pacific/Chatham 2026-07-15
+        };
+        for (size_t i = 0; i < sizeof(kAt) / sizeof(kAt[0]); i++) {
+            int32_t east = os64_tz_parse(kAt[i].rule, &tz) == 0 ? os64_tz_offset_at(&tz, kAt[i].epoch) : 99999;
+            if (east != kAt[i].east) printf("  %s at %lld: %d, not %d\n", kAt[i].rule, (long long)kAt[i].epoch, east, kAt[i].east);
+            EXPECT(east == kAt[i].east);
+        }
+        EXPECT(os64_tz_parse("<+0530-5:30", &tz) < 0 && os64_tz_parse("<+5>-5", &tz) < 0 &&
+               os64_tz_parse("EST5EDT,M3.2.0/168,M11.1.0", &tz) < 0);
+        EXPECT(os64_tz_parse("<+0530>-5:30", &tz) == 0 && !strcmp(tz.std_name, "+0530") && tz.std_offset_min == 330);
+    }
+
     if (failures == 0) {
         printf("libos64 host tests: ALL PASS\n");
         return 0;
