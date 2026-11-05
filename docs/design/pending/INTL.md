@@ -421,9 +421,15 @@ made:
    `"standard"`; a `roundingPriority` with trailing zeros stripped reports
    `"auto"`; PluralRules resolves `en-US` to `en`; a plural range CLDR
    does not list is `other`; a range's approximately sign is never written
-   into an accounting negative; `formatRangeToParts` reports the
-   parts beside a collapsed currency code's spacing as ICU's spans place
-   them, one character early; RelativeTimeFormat's `numeric: "auto"`
+   into an accounting negative; a range's two ends are one value when
+   they were equal before rounding as the same kind of input (Numbers
+   with Numbers, strings and BigInts with each other, a zero equal to a
+   zero whatever its sign) or are equal as rounded, sign and all; a
+   rounding that carries a value to the next exponent formats the rounded
+   value there (999.9 compact by increments of 2 is "2K", where ECMA-402
+   rounds the original again and writes "0K"); `formatRangeToParts`
+   reports the parts beside a collapsed currency code's spacing as ICU's
+   spans place them, one character early; RelativeTimeFormat's `numeric: "auto"`
    finds its words ("today", "tomorrow") for a value that rounds to a
    whole -2..2 at hundredths, so 0.004 days is "today" (ECMA-402 matches
    the exact value), and rounds its number half to even, as ICU's

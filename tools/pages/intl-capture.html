@@ -105,7 +105,7 @@ const numberValues = ['n:0', 'n:-0', 'n:1', 'n:-1', 'n:2', 'n:1.5', 'n:0.5', 'n:
 const numberRanges = [['n:3', 'n:5'], ['n:-3', 'n:5'], ['n:-5', 'n:-3'], ['n:3', 'n:3'], ['n:-3', 'n:-3'], ['n:0', 'n:1'],
     ['n:1', 'n:1.5'], ['n:3000', 'n:5000'], ['n:3000', 'n:3001'], ['n:3000', 'n:5000000'], ['n:-0', 'n:0'], ['s:-0', 'n:0'],
     ['n:5', 'n:3'], ['n:1', 'n:Infinity'], ['n:1.999', 'n:2.001'], ['n:-0.0001', 'n:0'], ['n:Infinity', 'n:Infinity'],
-    ['n:-Infinity', 'n:-Infinity']];
+    ['n:-Infinity', 'n:-Infinity'], ['s:-0', 's:0'], ['n:-0', 's:-0'], ['n:-0', 's:0'], ['n:-0', 'n:0.0001']];
 const numberStyles = [{}, {style: 'percent'}, {style: 'currency', currency: 'USD'}, {style: 'currency', currency: 'EUR'},
     {style: 'currency', currency: 'JPY'}, {style: 'currency', currency: 'USD', currencyDisplay: 'code'},
     {style: 'currency', currency: 'USD', currencyDisplay: 'name'}, {style: 'currency', currency: 'CAD', currencyDisplay: 'narrowSymbol'},
@@ -123,7 +123,8 @@ const numberModifiers = [{}, {notation: 'compact'}, {notation: 'compact', compac
     {roundingPriority: 'lessPrecision', maximumSignificantDigits: 2, maximumFractionDigits: 2},
     {trailingZeroDisplay: 'stripIfInteger', minimumFractionDigits: 2},
     {trailingZeroDisplay: 'stripIfInteger', roundingPriority: 'lessPrecision'}, {notation: 'compact', useGrouping: 'auto'},
-    {notation: 'scientific', maximumSignificantDigits: 2, roundingMode: 'floor'}, {notation: 'compact', roundingMode: 'floor'}];
+    {notation: 'scientific', maximumSignificantDigits: 2, roundingMode: 'floor'}, {notation: 'compact', roundingMode: 'floor'},
+    {notation: 'compact', roundingIncrement: 2, minimumFractionDigits: 0, maximumFractionDigits: 0}];
 const numberBags = [];
 for (const s of numberStyles) for (const m of numberModifiers) numberBags.push(Object.assign({}, s, m));
 let seed = 12345;
