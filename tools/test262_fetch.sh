@@ -30,6 +30,7 @@ TEST262_DIRS=(
     test/intl402/PluralRules
     test/intl402/RelativeTimeFormat
     test/intl402/ListFormat
+    test/intl402/Collator
 )
 
 top=$(git rev-parse --show-toplevel)

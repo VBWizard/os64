@@ -1098,7 +1098,9 @@ static void intl_cases(void)
         "if (new Intl.RelativeTimeFormat('en-US', {numeric: 'auto'}).format(-1, 'days') !== 'yesterday')\n"
         "    throw new Error('RelativeTimeFormat');\n"
         "if (new Intl.ListFormat('en-US', {type: 'disjunction'}).format(['a', 'b', 'c']) !== 'a, b, or c')\n"
-        "    throw new Error('ListFormat');\n"),
+        "    throw new Error('ListFormat');\n"
+        "if (['b', 'A', 'a', '_', '1'].sort(new Intl.Collator('en-US').compare).join() !== '_,1,a,A,b')\n"
+        "    throw new Error('Collator');\n"),
         "Intl formats in the host's zone, published as a global property");
     check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
           "Intl installs once and only before evaluation");
@@ -1176,10 +1178,10 @@ static void intl_cases(void)
            inventory, swept);
 
     /* The CLDR data is evaluated by a realm's first construction, not by
-     * the install, and the number tables by its first NumberFormat,
-     * PluralRules or RelativeTimeFormat: each allocation of such a
-     * construction refused in turn is the runtime's sticky failure, with
-     * nothing left behind. */
+     * the install, the number tables by its first NumberFormat, PluralRules
+     * or RelativeTimeFormat, the collation by its first Collator: each
+     * allocation of such a construction refused in turn is the runtime's
+     * sticky failure, with nothing left behind. */
     intl_first_sweep(&config, "", "function first() { new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).format(0) }",
                      "a first construction");
     intl_first_sweep(&config, "", "function first() { new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(1) }",
@@ -1191,6 +1193,8 @@ static void intl_cases(void)
                      "a first RelativeTimeFormat");
     intl_first_sweep(&config, "", "function first() { new Intl.ListFormat('en-US').format(['a', 'b', 'c']) }",
                      "a first ListFormat");
+    intl_first_sweep(&config, "", "function first() { new Intl.Collator('en-US', {numeric: true}).compare('a10', 'a9') }",
+                     "a first Collator");
 }
 
 /* Host tasks (CONTRACT.md § Host tasks): a function value called under one

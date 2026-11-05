@@ -5,7 +5,9 @@ Usage: tools/intl_cldr.py <cldr dir> [zoneinfo dir] > userland/libjs/intl/intl_d
   <cldr dir> holds the cldr-json packages of one version, unpacked:
   cldr-core/, cldr-dates-full/, cldr-numbers-full/, cldr-bcp47/,
   cldr-localenames-full/, cldr-units-full/ and cldr-misc-full/ (npm's
-  tarballs; the last three only their main/en).
+  tarballs; the last three only their main/en), and cldr-uca/ holding
+  CLDR's root collation, common/uca/allkeys_CLDR.txt from the same
+  release's source.
 
 INTL.md § 4.2: every table the formatters read is CLDR's, taken whole for
 `en` and copied, never typed, its version written into the file's head.
@@ -44,6 +46,10 @@ What is taken:
                  and the future and past patterns by plural category
   lists          the list patterns of the three types in each width
                  (conjunction is CLDR's "standard", disjunction its "or")
+  collation      deferred (built by the first Collator): CLDR root's
+                 collation elements for Latin (U+0000-024F), the combining
+                 marks (U+0300-036F) and general punctuation (U+2000-206F),
+                 the contractions among them ("l·"), and the UCA version
   aliases        language, script, territory and variant aliases (the
                  canonical form of every locale argument, UTS 35)
   uAliases       each -u- key's value aliases, from the bcp47 data: a
@@ -57,6 +63,7 @@ Object.prototype; a deferred part's function is called, never looked in.
 """
 import json
 import os
+import re
 import sys
 
 
@@ -84,6 +91,52 @@ def literal(value):
     if isinstance(value, list):
         return '[' + ','.join(literal(v) for v in value) + ']'
     return json.dumps(value, ensure_ascii=False)
+
+# ── Collation (INTL.md § 4.1): CLDR root's collation elements, from
+# allkeys_CLDR.txt, for the characters a page's names and words are made
+# of; everything else collates by code point after them.
+COLLATION_RANGES = ((0x0000, 0x024F), (0x0300, 0x036F), (0x2000, 0x206F))
+
+
+def in_collation_ranges(cp):
+    return any(lo <= cp <= hi for lo, hi in COLLATION_RANGES)
+
+
+def collation(root):
+    """{cp: [element, ...]} and {first cp: {second cp: elements}}: each
+    collation element its primary, secondary and tertiary weights and
+    whether it is variable (ignorable under ignorePunctuation: CLDR's
+    maxVariable is punct, so its spaces, punctuation and the whitespace
+    controls are, symbols are not; in these ranges the file marks exactly
+    those with `*`), packed into one number, p * 0x10000 + s * 0x40 + t * 2 + v, because a
+    realm holds them as numbers far more cheaply than as arrays."""
+    path = os.path.join(root, 'cldr-uca', 'allkeys_CLDR.txt')
+    version = None
+    singles, pairs = {}, {}
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            line = line.split('#', 1)[0].strip()
+            if line.startswith('@version'):
+                version = line.split()[1]
+                continue
+            if not line or ';' not in line:
+                continue
+            chars, ces = line.split(';', 1)
+            cps = [int(c, 16) for c in chars.split()]
+            if not all(in_collation_ranges(c) for c in cps) or len(cps) > 2:
+                continue
+            elements = []
+            for m in re.finditer(r'\[([.*])([0-9A-F]{4})\.([0-9A-F]{4})\.([0-9A-F]{4})\]', ces):
+                variable = m.group(1) == '*'
+                p, s, t = int(m.group(2), 16), int(m.group(3), 16), int(m.group(4), 16)
+                if s >= 0x400 or t >= 0x20:
+                    sys.exit('intl_cldr: collation weights of %04X do not pack' % cps[0])
+                elements.append(p * 0x10000 + s * 0x40 + t * 2 + (1 if variable else 0))
+            if len(cps) == 1:
+                singles[cps[0]] = elements
+            else:
+                pairs.setdefault(cps[0], {})[cps[1]] = elements
+    return version, singles, pairs
 
 
 def main():
@@ -234,6 +287,7 @@ def main():
             relative[unit + width] = {k: v for k, v in entry.items()
                                       if k.startswith('relative-type-') or k.startswith('relativeTime-type-')}
     lists = load(root, 'cldr-misc-full', 'main', 'en', 'listPatterns.json')['main']['en']['listPatterns']
+    uca_version, coll_singles, coll_pairs = collation(root)
 
     dtf = greg['dateTimeFormats']
     # The fields' names, which an append item's {2} writes (ICU's
@@ -276,6 +330,11 @@ def main():
             'relative': relative,
         }),
         'lists': lists,
+        # Collator's elements, built by the first Collator a realm constructs.
+        'collation': Deferred({'singles': {str(cp): ces for cp, ces in coll_singles.items()},
+                               'pairs': {str(cp): {str(c2): ces for c2, ces in follow.items()}
+                                         for cp, follow in coll_pairs.items()},
+                               'uca': uca_version}),
         'hourCycles': {'US': time_data['US'], '001': time_data['001']},
         'likely': {k: v for k, v in likely.items()
                    if k in ('und', 'en') or k.startswith('en-') or k.startswith('und-')},

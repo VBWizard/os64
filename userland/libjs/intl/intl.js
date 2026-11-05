@@ -33,6 +33,7 @@
 // ── The captures ────────────────────────────────────────────────────────
 const Object_ = Object, Array_ = Array, String_ = String, Number_ = Number, Math_ = Math;
 const TypeError_ = TypeError, RangeError_ = RangeError, Symbol_ = Symbol, Date_ = Date, BigInt_ = BigInt;
+const Float64Array_ = Float64Array;
 const apply = Reflect.apply;
 const defineProperty = Object_.defineProperty;
 const getOwnPropertyDescriptor = Object_.getOwnPropertyDescriptor;
@@ -62,14 +63,14 @@ const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.z
 // eagerly, and a realm that never constructs one never evaluates CLDR's
 // tables. Every door into them calls loadData first: the constructors and
 // supportedLocalesOf; a method has an instance, so its realm has loaded.
-let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES, LISTS, NUMBER_DATA;
+let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES, LISTS, NUMBER_DATA, COLLATION_DATA;
 let dataLoaded = false;
 function loadData() {
     if (dataLoaded) return;
     const D = I.data();
     ALIASES = D.aliases; U_VALUE_ALIASES = D.uAliases; LIKELY = D.likely; G = D.gregorian; Z = D.zones;
     IV = G.intervalFormats; IV_FALLBACK = own(IV, 'intervalFormatFallback'); DAY_PERIOD_RULES = D.dayPeriods;
-    LISTS = D.lists; NUMBER_DATA = D.numbers;
+    LISTS = D.lists; NUMBER_DATA = D.numbers; COLLATION_DATA = D.collation;
     dataLoaded = true;
 }
 // The number tables are a deferred part of the data, which the generator
@@ -77,6 +78,33 @@ function loadData() {
 // them: NumberFormat, PluralRules and RelativeTimeFormat build them at
 // their first construction.
 let NUM, UNITS, PLURALS, RELATIVE;
+// Collator's elements are a deferred part of the data too, built by the
+// first Collator.
+// The table is read into a dense array by slot (collationSlot), so a
+// compare looks an element up without a property lookup, and the primary
+// of each character that is one element with a primary into a typed array
+// (SIMPLE_PRIMARY; 0 for any other, SIMPLE_VARIABLE marking the variable
+// ones), which compareStrings walks without a call.
+let COLLATION, COLLATION_DENSE, SIMPLE_PRIMARY, SIMPLE_VARIABLE;
+function loadCollationData() {
+    loadData();
+    if (COLLATION !== undefined) return;
+    const data = apply(COLLATION_DATA, undefined, []), dense = [];
+    for (let r = 0; r < COLLATION_RANGES.length; r++)
+        for (let cp = COLLATION_RANGES[r][0]; cp <= COLLATION_RANGES[r][1]; cp++) {
+            const ces = own(data.singles, String_(cp));
+            push(dense, ces === undefined ? null : ces);
+        }
+    const simple = new Float64Array_(dense.length), variable = new Float64Array_(dense.length);
+    for (let slot = 0; slot < dense.length; slot++) {
+        const ces = dense[slot];
+        if (ces === null || ces.length !== 1 || elementPrimary(ces[0]) === 0) continue;
+        simple[slot] = elementPrimary(ces[0]);
+        variable[slot] = elementVariable(ces[0]) ? 1 : 0;
+    }
+    COLLATION_DENSE = dense; SIMPLE_PRIMARY = simple; SIMPLE_VARIABLE = variable;
+    COLLATION = data;              // last: it says the table is whole
+}
 function loadNumberData() {
     loadData();
     if (NUM !== undefined) return;
@@ -3375,12 +3403,279 @@ method(ListFormatPrototype, 'resolvedOptions', methodOf(function () {
     return o;
 }), 0);
 
+
+// ── Intl.Collator (ECMA-402 § 10; the collation is INTL.md § 4.1's) ─────
+// CLDR root's collation elements for the characters the data holds (Latin,
+// the combining marks, general punctuation; COLLATION in the data), each
+// packed into one number; any other character is one element whose
+// primary follows every primary in the table, in code-point order (the
+// booked gap: DEBTS, full DUCET).
+const COLLATORS = new WeakMap();
+const IMPLICIT_PRIMARY = 0x10000;
+// The code-point ranges the table holds (the generator's), and a code
+// point's slot in the dense table, or -1 outside them.
+const COLLATION_RANGES = [[0x0000, 0x024F], [0x0300, 0x036F], [0x2000, 0x206F]];
+function collationSlot(cp) {
+    if (cp <= 0x024F) return cp;
+    if (cp >= 0x0300 && cp <= 0x036F) return cp - 0x0300 + 0x0250;
+    if (cp >= 0x2000 && cp <= 0x206F) return cp - 0x2000 + 0x02C0;
+    return -1;
+}
+// A packed element's weights (the generator's p * 0x10000 + s * 0x40 + t * 2
+// + v, below 2^32).
+const elementPrimary = n => (n - n % 0x10000) / 0x10000;
+const elementSecondary = n => (n % 0x10000) >> 6;
+const elementTertiary = n => ((n % 0x10000) >> 1) & 0x1F;
+const elementVariable = n => n % 2 === 1;
+const isAsciiDigit = cp => cp >= 48 && cp <= 57;
+// ICU's numeric collation (CODAN) reads a run of digits as numbers of at
+// most 254 digits each, the run's leading zeros and each number's own not
+// counted ("01" and "1" are one number at every level).
+const NUMERIC_SEGMENT = 254;
+// One unit of a string at `i` (a character, CLDR root's contraction "l·",
+// or under numeric a run of digits): its packed elements, or for a run its
+// digits' bounds, and where the next unit starts. Written into `unit`, a
+// record the caller owns, so walking a string allocates nothing.
+function collationUnit(c, text, i, unit) {
+    let cp = codeAt(text, i), next = i + 1;
+    if (cp >= 0xD800 && cp <= 0xDBFF && next < text.length) {
+        const lo = codeAt(text, next);
+        if (lo >= 0xDC00 && lo <= 0xDFFF) { cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00); next++; }
+    }
+    unit.digits = false;
+    if (c.numeric && isAsciiDigit(cp)) {
+        while (next < text.length && isAsciiDigit(codeAt(text, next))) next++;
+        unit.digits = true; unit.from = i; unit.to = next; unit.next = next;
+        return;
+    }
+    unit.next = next;
+    if (next < text.length && (cp === 0x6C || cp === 0x4C)) {           // the root's contractions start with l or L
+        const following = own(COLLATION.pairs, String_(cp));
+        const both = following !== undefined ? own(following, String_(codeAt(text, next))) : undefined;
+        if (both !== undefined) { unit.elements = both; unit.next = next + 1; unit.implicit = 0; return; }
+    }
+    const slot = collationSlot(cp);
+    const ces = slot >= 0 ? COLLATION_DENSE[slot] : null;
+    unit.elements = ces;
+    unit.implicit = ces === null ? IMPLICIT_PRIMARY + cp : 0;
+}
+// The numbers of a digit run text[from, to), each [start, end) with its
+// leading zeros skipped (one zero left of an all-zero number), to `visit`.
+function numericSegments(text, from, to, visit) {
+    while (from < to - 1 && codeAt(text, from) === 48) from++;
+    for (let at = from; at < to; at += NUMERIC_SEGMENT) {
+        let start = at;
+        const end = at + NUMERIC_SEGMENT < to ? at + NUMERIC_SEGMENT : to;
+        while (start < end - 1 && codeAt(text, start) === 48) start++;
+        visit(start, end);
+    }
+}
+// A cursor over one string's primary weights, filled a unit at a time into
+// its own buffer: two strings are compared in step and the comparison stops
+// at the first primary that differs, which is where sorting words decides.
+// The buffer is a Float64Array, whose elements no page can intercept.
+function primaryCursor() {
+    return {__proto__: null, text: '', i: 0, buf: new Float64Array_(64), cap: 64, head: 0, tail: 0,
+            unit: {__proto__: null, digits: false, from: 0, to: 0, next: 0, elements: null, implicit: 0}};
+}
+// A cursor between compares holds no caller's string and no buffer a long
+// run of digits grew, so a long-lived collator keeps nothing of what it
+// compared.
+function releaseCursor(cur) {
+    cur.text = '';
+    if (cur.cap > 64) { cur.buf = new Float64Array_(64); cur.cap = 64; }
+}
+function cursorPush(cur, p) {
+    if (cur.tail === cur.cap) {
+        const grown = new Float64Array_(cur.cap * 2);
+        for (let k = 0; k < cur.cap; k++) grown[k] = cur.buf[k];
+        cur.buf = grown; cur.cap *= 2;
+    }
+    cur.buf[cur.tail++] = p;
+}
+function nextPrimary(c, cur) {
+    while (cur.head === cur.tail) {
+        cur.head = 0; cur.tail = 0;
+        if (cur.i >= cur.text.length) return -1;
+        const unit = cur.unit, text = cur.text;
+        collationUnit(c, text, cur.i, unit);
+        cur.i = unit.next;
+        if (unit.digits) {
+            const zero = elementPrimary(COLLATION_DENSE[48][0]);
+            numericSegments(text, unit.from, unit.to, (start, end) => {
+                cursorPush(cur, zero); cursorPush(cur, end - start);
+                for (let d = start; d < end; d++) cursorPush(cur, zero + codeAt(text, d) - 48);
+            });
+        } else if (unit.elements === null) cursorPush(cur, unit.implicit);
+        else for (let k = 0; k < unit.elements.length; k++) {
+            const n = unit.elements[k], p = elementPrimary(n);
+            if (p !== 0 && !(c.ignorePunctuation && elementVariable(n))) cursorPush(cur, p);
+        }
+    }
+    return cur.buf[cur.head++];
+}
+// The tertiary weights of an uppercase character's elements (UCA's
+// table of tertiary values: upper, wide, compatibility, font, circled, ...).
+const UPPER_TERTIARIES = [0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0E, 0x11, 0x12, 0x1D];
+const isUpperTertiary = t => contains(UPPER_TERTIARIES, t);
+// The weights of one string below the primary level: level 2
+// secondaries, level 3 tertiaries ordered by caseFirst, and the case
+// level ("case" sensitivity: case only). Asked only of strings whose
+// primaries tie. ignorePunctuation (UCA's "shifted") ignores a variable
+// element and every element without a primary after it (the second
+// element of a curly quote); a number counts once at each level.
+function lowerLevels(c, text) {
+    const s = [], t = [], k = [];
+    const unit = {__proto__: null, digits: false, from: 0, to: 0, next: 0, elements: null, implicit: 0};
+    let shifted = false;
+    const tertiary = (w, primary) => {
+        const upper = isUpperTertiary(w);
+        const rank = c.caseFirst === 'upper' ? (upper ? 0 : 1) : (upper ? 1 : 0);
+        push(t, c.caseFirst === 'false' ? w : rank * 0x100 + w);
+        if (primary) push(k, rank);
+    };
+    for (let i = 0; i < text.length; i = unit.next) {
+        collationUnit(c, text, i, unit);
+        if (unit.digits) {
+            const n = COLLATION_DENSE[48][0];
+            numericSegments(text, unit.from, unit.to, () => { push(s, elementSecondary(n)); tertiary(elementTertiary(n), true); });
+            shifted = false;
+            continue;
+        }
+        if (unit.elements === null) { push(s, 0x20); tertiary(0x02, true); shifted = false; continue; }
+        for (let e = 0; e < unit.elements.length; e++) {
+            const n = unit.elements[e], p = elementPrimary(n);
+            if (c.ignorePunctuation) {
+                if (elementVariable(n)) { shifted = true; continue; }
+                if (p !== 0) shifted = false;
+                else if (shifted) continue;
+            }
+            if (elementSecondary(n) !== 0) push(s, elementSecondary(n));
+            if (elementTertiary(n) !== 0) tertiary(elementTertiary(n), p !== 0);
+        }
+    }
+    return {__proto__: null, s: s, t: t, k: k};
+}
+function compareWeights(a, b) {
+    const n = a.length < b.length ? a.length : b.length;
+    for (let i = 0; i < n; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+    return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+// The primary of the character at text[i] when it is a whole unit of one
+// element with a primary under these options, else 0: not a digit under
+// numeric, not a variable under ignorePunctuation, not the "l" of "l·".
+function simplePrimary(c, text, i) {
+    const cp = codeAt(text, i), slot = collationSlot(cp);
+    if (slot < 0) return 0;
+    const p = SIMPLE_PRIMARY[slot];
+    if (p === 0 || (c.ignorePunctuation && SIMPLE_VARIABLE[slot] === 1) || (c.numeric && isAsciiDigit(cp))) return 0;
+    if ((cp === 0x6C || cp === 0x4C) && i + 1 < text.length && codeAt(text, i + 1) === 0xB7) return 0;
+    return p;
+}
+// CompareStrings: the primaries in step (inline while both characters are
+// simple, then through the cursors), then the lower levels the
+// sensitivity asks for. The collator's two cursors are its own, reused and
+// released on every way out: nothing between here and the result runs a
+// page's code.
+function compareStrings(c, x, y) {
+    if (x === y) return 0;
+    let i = 0, j = 0;
+    while (i < x.length && j < y.length) {
+        const p = simplePrimary(c, x, i), q = simplePrimary(c, y, j);
+        if (p === 0 || q === 0) break;
+        if (p !== q) return p < q ? -1 : 1;
+        i++; j++;
+    }
+    const a = c.cursors[0], b = c.cursors[1];
+    a.text = x; a.i = i; a.head = 0; a.tail = 0;
+    b.text = y; b.i = j; b.head = 0; b.tail = 0;
+    let order = 0;
+    try {
+        for (;;) {
+            const p = nextPrimary(c, a), q = nextPrimary(c, b);
+            if (p !== q) { order = p < q ? -1 : 1; break; }
+            if (p === -1) break;
+        }
+    } finally {
+        releaseCursor(a); releaseCursor(b);
+    }
+    if (order !== 0 || c.sensitivity === 'base') return order;
+    const u = lowerLevels(c, x), v = lowerLevels(c, y);
+    if (c.sensitivity === 'case') return compareWeights(u.k, v.k);
+    const r = compareWeights(u.s, v.s);
+    if (r !== 0 || c.sensitivity === 'accent') return r;
+    return compareWeights(u.t, v.t);
+}
+
+// The locale data a Collator resolves its -u- keys against: no collation
+// but the root's, numeric off unless asked, caseFirst off unless asked.
+function collatorLocaleData(locale, key) {
+    if (key === 'co') return [null];
+    if (key === 'kn') return ['false', 'true'];
+    return ['false', 'lower', 'upper'];
+}
+function Collator(locales, options) {
+    const made = new.target === undefined ? objectCreate(CollatorPrototype) : constructed(this, CollatorPrototype);
+    loadCollationData();
+    const requested = CanonicalizeLocaleList(locales);
+    options = CoerceOptionsToObject(options);
+    const c = {__proto__: null};
+    c.usage = GetOption(options, 'usage', 'string', ['sort', 'search'], 'sort');
+    const opt = {__proto__: null};
+    opt.localeMatcher = GetOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const collation = GetOption(options, 'collation', 'string', undefined, undefined);
+    if (collation !== undefined && !isTypeSequence(lower(collation))) throw new RangeError_('Invalid collation : ' + collation);
+    opt.co = collation === undefined ? undefined : lower(collation);
+    let numeric = GetOption(options, 'numeric', 'boolean', undefined, undefined);
+    if (numeric !== undefined) numeric = ToString(numeric);
+    opt.kn = numeric;
+    opt.kf = GetOption(options, 'caseFirst', 'string', ['upper', 'lower', 'false'], undefined);
+    const r = ResolveLocale(AVAILABLE, requested, opt, ['co', 'kf', 'kn'], collatorLocaleData);
+    c.locale = r.locale;
+    c.collation = r.co === null || r.co === undefined ? 'default' : r.co;
+    c.numeric = r.kn === 'true';
+    c.caseFirst = r.kf;
+    c.sensitivity = GetOption(options, 'sensitivity', 'string', ['base', 'accent', 'case', 'variant'], 'variant');
+    const ignore = GetOption(options, 'ignorePunctuation', 'boolean', undefined, undefined);
+    c.ignorePunctuation = ignore === undefined ? false : ignore;
+    c.cursors = [primaryCursor(), primaryCursor()];
+    apply(wm_set, COLLATORS, [made, c]);
+    return made;
+}
+const CollatorPrototype = Collator.prototype;
+defineProperty(Collator, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(Collator, 'length', {__proto__: null, value: 0, configurable: true});
+function thisCollator(o, name) {
+    const c = slots(COLLATORS, o);
+    if (c === undefined) throw new TypeError_('Method Intl.Collator.prototype.' + name + ' called on incompatible receiver');
+    return c;
+}
+method(Collator, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
+defineProperty(CollatorPrototype, toStringTag, {__proto__: null, value: 'Intl.Collator', writable: false, enumerable: false, configurable: true});
+getter(CollatorPrototype, 'compare', function () {
+    const c = thisCollator(this, 'compare');
+    if (c.bound === undefined) {
+        const bound = (x, y) => compareStrings(c, ToString(x), ToString(y));
+        defineProperty(bound, 'name', {__proto__: null, value: '', configurable: true});
+        c.bound = bound;
+    }
+    return c.bound;
+});
+method(CollatorPrototype, 'resolvedOptions', methodOf(function () {
+    const c = thisCollator(this, 'resolvedOptions');
+    const o = {};
+    put(o, 'locale', c.locale); put(o, 'usage', c.usage); put(o, 'sensitivity', c.sensitivity);
+    put(o, 'ignorePunctuation', c.ignorePunctuation); put(o, 'collation', c.collation);
+    put(o, 'numeric', c.numeric); put(o, 'caseFirst', c.caseFirst);
+    return o;
+}), 0);
+
 // ── The Intl object ─────────────────────────────────────────────────────
 const Intl = {};     // script-visible: its properties are defined, below
 defineProperty(Intl, toStringTag, {__proto__: null, value: 'Intl', writable: false, enumerable: false, configurable: true});
 // The constructors in Chrome's order, so a page listing Intl's names reads
 // these in the order it would there.
-const CONSTRUCTORS = [['DateTimeFormat', DateTimeFormat], ['NumberFormat', NumberFormat], ['PluralRules', PluralRules],
+const CONSTRUCTORS = [['DateTimeFormat', DateTimeFormat], ['NumberFormat', NumberFormat], ['Collator', Collator], ['PluralRules', PluralRules],
                       ['RelativeTimeFormat', RelativeTimeFormat], ['ListFormat', ListFormat], ['Locale', Locale]];
 for (let i = 0; i < CONSTRUCTORS.length; i++)
     defineProperty(Intl, CONSTRUCTORS[i][0], {__proto__: null, value: CONSTRUCTORS[i][1], writable: true, enumerable: false, configurable: true});

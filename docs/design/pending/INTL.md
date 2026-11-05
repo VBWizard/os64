@@ -157,19 +157,25 @@ code-point order puts `_` after the capitals. A collation that folds case
 and then compares code points would be "present but wrong" on every
 symbol. So the collation is written down (Fable's finding 2):
 
-- **Latin-1 in a UCA-shaped order:** whitespace and punctuation, then
-  symbols, then digits, then letters, the classes in DUCET's order and
-  each character's place within its class taken from DUCET (a table of
-  the 191 printable Latin-1 characters, generated from the named DUCET
-  version, not typed).
+- **Latin in CLDR root's order:** the collation elements of CLDR's root
+  collation (`allkeys_CLDR.txt`, UCA 17, the release CLDR 48.2 ships)
+  for U+0000-024F (Latin-1 and Latin Extended-A and -B, so "ā" sorts
+  between "a" and "b"), the combining marks U+0300-036F (so "e" plus an
+  acute accent is "é") and general punctuation U+2000-206F, with the
+  root's contractions among them ("l·"); generated, not typed. As built
+  (A2): wider than the Latin-1 first planned, because names are.
 - **Three levels:** the base letter (accents and case ignored), then the
   accent, then case, lower before upper; `sensitivity` stops at the level
   it names (`base` the first, `accent` the second, `case` the first and
   third, `variant` all three), `caseFirst` reorders the third.
 - **`numeric: true`** compares a run of digits as the number it spells;
-  **`ignorePunctuation`** skips the first class.
-- **Beyond Latin-1, code-point order** after the Latin-1 letters, the gap
-  booked by name (DEBTS: full DUCET, its size stated).
+  **`ignorePunctuation`** skips spaces, punctuation and the whitespace
+  controls (tab, newline; CLDR's `maxVariable` is punct: symbols still
+  count).
+- **Beyond those ranges, code-point order** after every letter in the
+  table, the gap booked by name (DEBTS: full DUCET, its size stated). The
+  collator does not normalize: two strings that differ only in the order
+  of two or more stacked marks compare unequal (DEBTS).
 
 The fixtures hold what the 72 hosts ask (`{numeric: true, sensitivity:
 "base"}` over names and version strings) against Chrome's order.
@@ -288,6 +294,18 @@ The hard part, because pages pass zone names and read them back:
   first construction builds too (1.9 ms and 735 KiB as a realm's first);
   the list patterns are small and in the data proper, so a realm's first
   ListFormat costs what its first DateTimeFormat does (1.3 ms, 569 KiB).
+- **Measured (A2's Collator, 2026-11-05, the same way):** the script 191
+  KiB of source and 128 KiB of bytecode, the data 202 KiB and 148 KiB.
+  The install costs 0.54 ms and 335 KiB a realm. The collation (815
+  characters' elements and the root's contractions) is a deferred part of
+  the data of its own, built by a realm's first Collator (2.3 ms and 759
+  KiB as a realm's first construction, with its dense table). Each element
+  is written as one number, not an array: as arrays the table cost a realm
+  200 KiB more. A compare walks both strings' primaries in step and stops
+  at the first that differs: sorting 10,000 random words costs about
+  176 ms natively, 1.3 µs a compare (a plain JavaScript comparator, 8 ms;
+  Chrome's ICU, under 10 ms in Node), and two 100,000-character strings
+  that differ at the front compare at once.
 - **The page's bytecode cache.** A kept blob is keyed by the engine's
   build identity, a hash over upstream and the libjs patch series
   (BYTECODE_CACHE.md). Intl's script is not among those sources, and a
@@ -307,7 +325,7 @@ The hard part, because pages pass zone names and read them back:
 - Segmenter, DisplayNames, DurationFormat (§ 4).
 - Historical time-zone rules (§ 5).
 - An IANA name in the system's `TZ` (§ 5; libos64's, booked).
-- Collation beyond Latin-1 (§ 4.1; full DUCET, booked).
+- Collation beyond Latin and its marks (§ 4.1; full DUCET, booked).
 - Likely subtags beyond English and `und`: `maximize` and `minimize`
   answer the tag itself for a language the data lacks (§ 4).
 - Changing what `Date.prototype.toString` prints (ECMA-262's, not 402's).
@@ -441,3 +459,6 @@ made:
    keeps the denominator in its compact and range forms ("12K%/s",
    "1–5%/s"), which is ICU contradicting itself; libjs composes it as CLDR
    does everywhere ("2%/s").
+   Where test262 speaks against V8, libjs follows test262 as the rule
+   says: a Collator whose `caseFirst` option overrides a `-u-kf` in the
+   locale resolves without it ("en", where V8 keeps "en-u-kf-upper").
