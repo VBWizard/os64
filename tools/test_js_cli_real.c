@@ -191,6 +191,11 @@ int main(void)
     st = JS("maths", NULL, "-e", "print(Math.acosh(-49152), Math.sin(1e300), Math.round(-2.5))");
     check(st == 0 && !strcmp(s_out, "NaN -0.8178819121159085 -2\n"), "libmath underneath, with JavaScript's own rounding");
 
+    st = JS("intl", NULL, "-e",
+            "print(new Intl.DateTimeFormat('en-US', {timeZone: 'UTC', dateStyle: 'long'}).format(0),"
+            " new Intl.DateTimeFormat().resolvedOptions().locale)");
+    check(st == 0 && !strcmp(s_out, "January 1, 1970 en-US\n"), "Intl, always, in the system's locale");
+
     st = JS("throw", NULL, "-e", "function f() { throw new TypeError('nope') }\nf()");
     check(st == 1 && has(s_err, "js: -e: TypeError: nope\n") && has(s_err, "at f"),
           "an uncaught exception exits 1 with its message and stack");

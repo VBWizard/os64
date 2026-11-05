@@ -564,6 +564,12 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         out->status = OS64_JS_HOST_FAILURE;
         return false;
     }
+    // ECMA-402 is the Modern Web's (INTL.md § 9.4): a classic page keeps
+    // the engine it was written against, with no Intl at all.
+    if (s->options.modern && os64_js_install_intl(s->runtime, OS64_JS_LOCALE, out) != OS64_JS_OK) {
+        out->status = OS64_JS_HOST_FAILURE;
+        return false;
+    }
     // The module map comes with the runtime, so a classic script's
     // dynamic import() has its loader; a map that cannot be made leaves
     // the page's modules failing, not its classic scripts.

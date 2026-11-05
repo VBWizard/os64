@@ -133,7 +133,8 @@ static void grammar(void)
     fresh();
     int st = run("file", "js tool.js a b");
     check(st == 0, "a script that finishes exits 0");
-    check(!strcmp(js_fake.calls, "create output args run_file destroy"), "the call sequence");
+    check(!strcmp(js_fake.calls, "create output args intl run_file destroy"), "the call sequence");
+    check(!strcmp(js_fake.locale, OS64_JS_LOCALE), "Intl is installed in the system's locale");
     check(js_fake.abi_matched, "the runner passes its own ABI identifier");
     check(!strcmp(js_fake.path, "tool.js"), "the file goes to run_file as typed");
     check(js_fake.output_handle == 1, "output is handle 1, so redirection applies");
@@ -158,7 +159,7 @@ static void grammar(void)
 
     fresh();
     st = run("eval", "js -e 'print(6 * 7)' a");
-    check(st == 0 && !strcmp(js_fake.calls, "create output args run destroy"), "-e runs source");
+    check(st == 0 && !strcmp(js_fake.calls, "create output args intl run destroy"), "-e runs source");
     check(!strcmp(js_fake.source, "print(6 * 7)") && js_fake.source_length == 12,
           "-e hands SOURCE over exactly, without its terminator");
     check(!strcmp(js_fake.source_name, "-e"), "-e's source is named -e");
@@ -180,7 +181,7 @@ static void grammar(void)
     s_stdin_len = strlen(s_stdin);
     s_stdin_chunk = 5;
     st = run("stdin", "js - a b");
-    check(st == 0 && !strcmp(js_fake.calls, "create output args run destroy"), "- runs stdin");
+    check(st == 0 && !strcmp(js_fake.calls, "create output args intl run destroy"), "- runs stdin");
     check(!strcmp(js_fake.source, "print(scriptArgs)"), "short reads reassemble the script");
     check(!strcmp(js_fake.source_name, "-") && !strcmp(js_fake.args[0], "-") &&
           js_fake.arg_count == 3, "stdin's script is named -");
@@ -335,6 +336,11 @@ static void outcomes(void)
     st = run("output", "js tool.js");
     check(st == 3 && !strcmp(js_fake.calls, "create output destroy"),
           "a failed installer stops before evaluation and still destroys");
+    fresh();
+    js_fake.intl = (js_fake_answer_t){.status = OS64_JS_HOST_FAILURE};
+    st = run("intl", "js tool.js");
+    check(st == 3 && !strcmp(js_fake.calls, "create output args intl destroy"),
+          "a failed Intl install stops before evaluation and still destroys");
 }
 
 static void standard_input(void)

@@ -28,7 +28,7 @@ python3 tools/ce_reactions.py --selftest
 make -C userland -j8 js-runtime-test > "$work/build.log" 2>&1 || { cat "$work/build.log"; exit 1; }
 flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
-    '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"'
+    '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"' '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
     -Iuserland/libsvg/include -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
     -Iuserland/libgarb/include -Iuserland/libway/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
@@ -38,7 +38,7 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
 # side of the mark (a style member that goes with the switch) has one to
 # hold to (tools/test_dom_modern.inc); libgarb's own suite proves the rest.
 objects=()
-for source in userland/libjs/runtime/runtime.c userland/libos64/str.c userland/libos64/fmt.c \
+for source in userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
     userland/libos64/text.c userland/libos64/text_cache.c userland/libos64/text_decode.c userland/libos64/text_bitmap.c \
     userland/libos64/bidi.c userland/libos64/url.c userland/libos64/arena.c tools/test_js_port_calendar.c tools/test_dom_host.c \
     userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \

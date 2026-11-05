@@ -73,7 +73,7 @@ os64_js_status_t os64_js_create(const os64_js_config_t *config, const char *call
     if (js_fake.create.status != OS64_JS_OK)
         return answer(&js_fake.create, outcome);
     s_runtime.alive = 1;
-    js_fake.installed_output = js_fake.installed_args = js_fake.evaluated = 0;
+    js_fake.installed_output = js_fake.installed_args = js_fake.installed_intl = js_fake.evaluated = 0;
     *out = &s_runtime;
     begin(outcome, OS64_JS_OK);
     return OS64_JS_OK;
@@ -113,6 +113,19 @@ os64_js_status_t os64_js_install_args(os64_js_runtime_t *rt, size_t count,
     }
     js_fake.arg_count = count;
     js_fake.installed_args = 1;
+    begin(outcome, OS64_JS_OK);
+    return OS64_JS_OK;
+}
+
+os64_js_status_t os64_js_install_intl(os64_js_runtime_t *rt, const char *locale, os64_js_outcome_t *outcome)
+{
+    record("intl");
+    if (bad_runtime(rt) || locale == NULL || locale[0] == 0 || js_fake.installed_intl || js_fake.evaluated)
+        return answer(&(js_fake_answer_t){.status = OS64_JS_BAD_ARGUMENT}, outcome);
+    strncpy(js_fake.locale, locale, sizeof(js_fake.locale) - 1);
+    js_fake.installed_intl = 1;
+    if (js_fake.intl.status != OS64_JS_OK)
+        return answer(&js_fake.intl, outcome);
     begin(outcome, OS64_JS_OK);
     return OS64_JS_OK;
 }

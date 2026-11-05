@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Intl on the glass</title>
+<style>
+  body { font: 18px sans-serif; margin: 24px; }
+  td { padding: 4px 12px; border-bottom: 1px solid #ccc; }
+  .ok { color: #070; } .bad { color: #b00; font-weight: bold; }
+  #verdict { font-weight: bold; margin-top: 16px; font-size: 22px; }
+</style>
+<h1>Intl on the glass</h1>
+<p>Intl.DateTimeFormat's en-US strings, as Chrome writes them (INTL.md § 8,
+its capture): each row is checked byte for byte, except the German request,
+which resolves to the only locale os64 holds. Chrome writes an ASCII space
+where CLDR has a narrow no-break or thin space, in format, parts and ranges
+alike. With the Modern Web switch off there is no Intl, and the page says
+so.</p>
+<table id="rows"></table>
+<div id="verdict">running</div>
+<script>
+  const rows = document.getElementById('rows');
+  const at = Date.UTC(2026, 6, 4, 16, 5, 9);
+  function row(what, actual, expected) {
+    const tr = rows.insertRow();
+    tr.insertCell().textContent = what;
+    tr.insertCell().textContent = actual;
+    const ok = actual === expected;
+    const verdict = tr.insertCell();
+    verdict.textContent = ok ? 'same' : 'expected ' + JSON.stringify(expected);
+    verdict.className = ok ? 'ok' : 'bad';
+    return ok;
+  }
+  if (typeof Intl !== 'object') {
+    document.getElementById('verdict').textContent = 'no Intl here (is modern = on?)';
+  } else {
+    const ny = {timeZone: 'America/New_York'};
+    const cases = [
+      ['dateStyle full, timeStyle long', () => new Intl.DateTimeFormat('en-US', {...ny, dateStyle: 'full', timeStyle: 'long'}).format(at),
+       'Saturday, July 4, 2026 at 12:05:09 PM EDT'],
+      ['parts, ASCII spaces', () => new Intl.DateTimeFormat('en-US', {...ny, timeStyle: 'short'}).formatToParts(at).map(p => p.value).join(''),
+       '12:05 PM'],
+      ['a range, same day', () => new Intl.DateTimeFormat('en-US', {...ny, hour: 'numeric', minute: 'numeric'}).formatRange(at, at + 5400000),
+       '12:05 – 1:35 PM'],
+      ['a range of days', () => new Intl.DateTimeFormat('en-US', {...ny, month: 'short', day: 'numeric'}).formatRange(at, at + 5 * 86400000),
+       'Jul 4 – 9'],
+      ['generic zone', () => new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Kolkata', hour: 'numeric', timeZoneName: 'longGeneric'}).format(at),
+       '9 PM India Standard Time'],
+      ['offset zone', () => new Intl.DateTimeFormat('en-US', {timeZone: 'Europe/Paris', timeZoneName: 'longOffset'}).format(at),
+       '7/4/2026, GMT+02:00'],
+      ['day period', () => new Intl.DateTimeFormat('en-US', {...ny, hour: 'numeric', dayPeriod: 'long'}).format(at),
+       '12 noon'],
+      // Not Chrome's answer by design: os64's data is en-US's, so a request for
+      // German resolves to it, as ECMA-402 permits (INTL.md § 3).
+      ['de-DE resolves to en-US', () => new Intl.DateTimeFormat('de-DE').resolvedOptions().locale, 'en-US'],
+      ['Locale', () => new Intl.Locale('EN-latn-us', {hourCycle: 'h23'}).toString(), 'en-Latn-US-u-hc-h23'],
+    ];
+    let good = 0;
+    for (const [what, f, expected] of cases) {
+      let actual;
+      try { actual = f(); } catch (e) { actual = 'threw ' + e; }
+      if (row(what, actual, expected)) good++;
+    }
+    document.getElementById('verdict').textContent = good === cases.length
+      ? `PASS: ${good} of ${cases.length} as Chrome writes them`
+      : `FAIL: ${good} of ${cases.length}`;
+  }
+</script>

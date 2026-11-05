@@ -7,6 +7,7 @@
 #include "allocator.h"
 #include "platform.h"
 #include "os64_js_engine_id.h"
+#include "../intl/intl.h"
 #include <limits.h>
 
 #define JS_PUBLIC __attribute__((visibility("default")))
@@ -44,7 +45,7 @@ struct os64_js_runtime {
     /* A host task holds one turn open across several calls and checkpoints;
      * rejections are judged only at a checkpoint while it is open. */
     bool active, turn, task, checkpointing, source_truncated;
-    bool evaluated, output_installed, args_installed;
+    bool evaluated, output_installed, args_installed, intl_installed;
     int32_t output_handle;
     /* console.group's nesting: each console line is indented by it. */
     uint32_t console_depth;
@@ -1782,6 +1783,35 @@ JS_PUBLIC os64_js_status_t os64_js_install_args(os64_js_runtime_t *runtime,
     JS_FreeValue(context, array);
     if (installed < 0) setup_exception(runtime, outcome);
     else if (!observe(runtime)) runtime->args_installed = true;
+    return leave(runtime, outcome);
+}
+
+/* ECMA-402 (INTL.md): the Intl object, made by intl.c and published as a
+ * global property is (writable, configurable, not enumerable). Nothing is
+ * defined unless the whole object was made. */
+JS_PUBLIC os64_js_status_t os64_js_install_intl(os64_js_runtime_t *runtime, const char *locale,
+                                              os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (locale == NULL || locale[0] == '\0')
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "a default locale is required");
+    result = setup(runtime, runtime->intl_installed, outcome, "<intl setup>");
+    if (result != OS64_JS_OK) return result;
+    if (observe(runtime)) return leave(runtime, outcome);
+    JSContext *context = runtime->context;
+    JSValue intl = js_intl_build(context, locale);
+    int installed = JS_IsException(intl) ? -1 : 0;
+    if (installed >= 0 && !observe(runtime)) {
+        JSValue global = JS_GetGlobalObject(context);
+        installed = JS_DefinePropertyValueStr(context, global, "Intl", intl,
+                                              JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE | JS_PROP_THROW);
+        intl = JS_UNDEFINED;
+        JS_FreeValue(context, global);
+    }
+    JS_FreeValue(context, intl);
+    if (installed < 0) setup_exception(runtime, outcome);
+    else if (!observe(runtime)) runtime->intl_installed = true;
     return leave(runtime, outcome);
 }
 

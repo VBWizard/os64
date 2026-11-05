@@ -849,3 +849,44 @@ and frees everything it made. `loop_arrow_class` stays pending for
 on both probes: 1,893 target-core and 15,137 instrumented checks, zero
 failures, zero live allocations. The compile sweeps' 40 checks pass on
 each. `tools/test_js_prepare.py` passes. The export count is unchanged.
+
+## Intl (ECMA-402, slice A1) validation, 2026-11-04
+
+`os64_js_install_intl` (INTL.md) installs `Intl` with `Intl.Locale` and
+`Intl.DateTimeFormat`. The runtime suite's Intl cases install it once,
+idle and before evaluation, refuse a second install and an empty locale,
+check the global's attributes, format in the host's zone, and resolve the
+host's zone from `TZ` as `Date` does, each held by its name and by the
+offset it formats: a rule's own text, the same times under other names
+(`PST8PDT`, `JST-9`), an offset zone for a rule no zone keeps (`+04:15`),
+and the kernel's offset with no `TZ` (`+05:30`). A default locale the
+data does not hold (`de-DE`) is refused with nothing defined. Two sweeps
+refuse each allocation in turn, at a stride past the first 64: the
+install on the path every later realm takes (96 allocations on the target
+core, every one refused), and a realm's first construction, which
+evaluates the CLDR data. Each refusal is the runtime's sticky failure,
+defines nothing, and frees everything. Both sweeps run once the process
+has kept the compiled script and data, as every realm but its first
+does: the first compile's own refusals (a bytecode write refused, the
+cache left EMPTY for the next realm) are not swept, since the cache is
+the process's and the suite's first case fills it. `--intl` runs the Intl
+cases alone.
+
+The first construction is compiled before its sweep and called as a host
+task: the same sweep through `os64_js_eval` met DEBTS' row "An Error made
+by code compiled under memory pressure can read past a heap block" at the
+cut that refuses the script's name atom, which is that row's cause.
+
+`tools/test262_host.sh` runs test262 (pinned by `tools/test262_fetch.sh`)
+through this library on the target core, ASan/UBSan over the runtime and
+Intl. Every test of `intl402/DateTimeFormat`, `intl402/Locale` and
+`intl402/Intl` passes or is listed in `tools/test262/expected/` with its
+reason: 308 of 490, 216 of 380 and 6 of 132 run as written and strict,
+the rest Temporal, calendars, locales and numbering systems the data does
+not hold, the Locale Info proposal, A2's and A3's constructors and
+functions, `$262`'s second realm, and a zone's name, kept as Chrome gives
+it. `tools/test_intl_capture_host.sh` holds the formats to Chrome 156's
+capture (`tools/intl_captures/`), byte for byte: 5,635 of 5,635 fields. The `js` runner's suites pass (199 fake-library and 40 real
+checks, an Intl case among them), and so does the acceptance suite. The
+library gains one export, `os64_js_install_intl`, and imports
+`os64_getenv`, `os64_tz_parse` and `os64_tz_offset_at`.

@@ -25,7 +25,7 @@ yonder_host_build() {
     fi
     host_flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
         -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns
-        -fno-stack-protector -DOS64_JS_TARGET '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"'
+        -fno-stack-protector -DOS64_JS_TARGET '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"' '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
         -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libxml/include -Iuserland/libsvg/include -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
         -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
         -Iuserland/libflow/include -Iuserland/libgarb/include -Iuserland/libway/include
@@ -49,7 +49,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
 ')
     local objects=() source object private
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
-        userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
+        userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,animation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker}.c \
         userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
