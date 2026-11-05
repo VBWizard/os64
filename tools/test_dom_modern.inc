@@ -79,7 +79,7 @@ static char *modern_chain_shape(DomFixture *f)
         "document.createElement('a'),document.createElement('script'),holder.firstChild,holder.firstChild.firstChild,"
         "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment(),"
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
-        "var row=/(^constructor$|^isPointInFill$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^oninvalid$|^scrollingElement$"
+        "var row=/(^constructor$|^isPointInFill$|^getClientRects$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^oninvalid$|^scrollingElement$"
         "|^defaultView$|^(willValidate|validity|validationMessage|checkValidity|reportValidity|setCustomValidity)$"
         "|^(valueAsNumber|valueAsDate|stepUp|stepDown)$"
         "|^(text|link|vLink|aLink|bgColor|background|onpopstate|onhashchange|ononline|onoffline|onlanguagechange"
