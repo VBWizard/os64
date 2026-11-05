@@ -1666,7 +1666,8 @@ function formatParts(s, pattern, x) {
     }
     return parts;
 }
-function partsToString(parts) { let out = ''; for (let i = 0; i < parts.length; i++) out += parts[i].value; return out; }
+// Parts' text, joined once (a list's parts are as many as its elements).
+function partsToString(parts) { const values = []; for (let i = 0; i < parts.length; i++) push(values, parts[i].value); return join(values, ''); }
 function partsToArray(parts) {
     const out = [];
     for (let i = 0; i < parts.length; i++) {
@@ -3324,44 +3325,37 @@ function StringListFromIterable(iterable) {
     }
     return list;
 }
-// CreatePartsFromList: CLDR's patterns ({0} and {1}) applied from the end
-// of the list: the last two by "end", each earlier one by "middle", the
-// first by "start", and two alone by "2".
+// CreatePartsFromList: CLDR's patterns ({0} then {1}, as every en pattern
+// is) applied from the end of the list: the last two by "end", each
+// earlier one by "middle", the first by "start", and two alone by "2".
+// Written front to back in one pass, which is linear in the list: each
+// pattern's text before {0}, the element, the text between, and once the
+// last element is out, the text after {1} of every pattern, innermost
+// first. As ICU reports fields, which V8 reads, an empty element is no
+// part and the text around it is one literal (INTL.md § 9.6).
 function listParts(s, list) {
     const out = [];
     const n = list.length;
     if (n === 0) return out;
-    const element = i => [{__proto__: null, type: 'element', value: list[i]}];
     const kind = s.type === 'conjunction' ? 'standard' : s.type === 'disjunction' ? 'or' : 'unit';
     const table = own(LISTS, 'listPattern-type-' + kind + (s.style === 'long' ? '' : '-' + s.style));
-    let parts;
-    if (n === 1) parts = element(0);
-    else if (n === 2) parts = fillListPattern(own(table, '2'), element(0), element(1));
-    else {
-        parts = fillListPattern(own(table, 'end'), element(n - 2), element(n - 1));
-        for (let i = n - 3; i >= 1; i--) parts = fillListPattern(own(table, 'middle'), element(i), parts);
-        parts = fillListPattern(own(table, 'start'), element(0), parts);
-    }
-    // As ICU reports fields, which V8 reads: an empty element is no field,
-    // and the text around it is one literal (INTL.md § 9.6).
-    for (let i = 0; i < parts.length; i++) {
-        if (parts[i].value === '') continue;
+    const add = (type, value) => {
+        if (value === '') return;
         const last = out.length > 0 ? out[out.length - 1] : null;
-        if (parts[i].type === 'literal' && last !== null && last.type === 'literal') last.value += parts[i].value;
-        else push(out, parts[i]);
+        if (type === 'literal' && last !== null && last.type === 'literal') last.value += value;
+        else push(out, {__proto__: null, type: type, value: value});
+    };
+    const after = [];          // each pattern's text after {1}, outermost first
+    for (let i = 0; i < n - 1; i++) {
+        const pattern = own(table, n === 2 ? '2' : i === 0 ? 'start' : i === n - 2 ? 'end' : 'middle');
+        const at0 = indexOf(pattern, '{0}', 0), at1 = indexOf(pattern, '{1}', 0);
+        add('literal', slice(pattern, 0, at0));
+        add('element', list[i]);
+        add('literal', slice(pattern, at0 + 3, at1));
+        push(after, slice(pattern, at1 + 3, pattern.length));
     }
-    return out;
-}
-function fillListPattern(pattern, first, second) {
-    const out = [];
-    const at0 = indexOf(pattern, '{0}', 0), at1 = indexOf(pattern, '{1}', 0);
-    const literal = text => { if (text !== '') push(out, {__proto__: null, type: 'literal', value: text}); };
-    const all = list => { for (let i = 0; i < list.length; i++) push(out, list[i]); };
-    literal(slice(pattern, 0, at0));
-    all(first);
-    literal(slice(pattern, at0 + 3, at1));
-    all(second);
-    literal(slice(pattern, at1 + 3, pattern.length));
+    add('element', list[n - 1]);
+    for (let i = after.length - 1; i >= 0; i--) add('literal', after[i]);
     return out;
 }
 method(ListFormat, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
