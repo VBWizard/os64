@@ -26,6 +26,7 @@
 #define CONF_KEEP_PAGES "keep_pages"
 #define CONF_APPEARANCE "appearance"
 #define CONF_SCRIPT_SECONDS "script_seconds"
+#define CONF_SCRIPT_MEMORY_MB "script_memory_mb"
 #define CONF_ANIMATIONS "animations"
 #define CONF_MOTION "motion"
 #define CONF_MODERN "modern"
@@ -189,6 +190,19 @@ uint32_t yonder_settings_saved_script_seconds(void)
         return YONDER_SCRIPT_SECONDS_DEFAULT;
     }
     return (uint32_t)seconds;
+}
+
+uint32_t yonder_settings_saved_script_memory_mb(void)
+{
+    char v[16];
+    uint64_t mb;
+    if (os64_conf_get(CONF_NAME, CONF_SCRIPT_MEMORY_MB, v, sizeof(v)) != 0)
+        return YONDER_SCRIPT_MEMORY_MB_DEFAULT;
+    if (!os64_parse_u64(v, &mb) || mb < YONDER_SCRIPT_MEMORY_MB_MIN || mb > YONDER_SCRIPT_MEMORY_MB_MAX) {
+        os64_debug_log("yonder: yonder.conf's script_memory_mb is not 16 to 2048; using 256");
+        return YONDER_SCRIPT_MEMORY_MB_DEFAULT;
+    }
+    return (uint32_t)mb;
 }
 
 bool yonder_settings_saved_agent(char *out, size_t cap)

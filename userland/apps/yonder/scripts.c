@@ -479,9 +479,10 @@ static size_t own_stack_bytes(void)
     return 0;
 }
 
-// The runtime and its binding, made at the first script that runs. Heap
-// keeps the profile measured for libdom (DOM.md § D5b); source is yonder's
-// own limit (SCRIPT_SOURCE_MAX), which the fetches refuse past. The stack
+// The runtime and its binding, made at the first script that runs. The heap
+// is the host's (options.memory_bytes, yonder.conf's script_memory_mb), else
+// libjs's standalone profile; source is yonder's own limit
+// (SCRIPT_SOURCE_MAX), which the fetches refuse past. The stack
 // is the engine's share of yonder's window thread, which layout shares
 // (SCRIPT_STACK.md): the thread's size, read once, less layout's headroom
 // (yonder_script_stack_limit). The deadline is the page's task budget, and
@@ -498,6 +499,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_js_config_t config = {os64_js_default_limits()};
     config.limits.stack_bytes = engine_stack;
     config.limits.source_bytes = SCRIPT_SOURCE_MAX;
+    if (s->options.memory_bytes != 0)
+        config.limits.memory_bytes = s->options.memory_bytes;
     config.limits.execution_ms = s->options.execution_ms;
     config.limits.jobs_per_turn = (uint64_t)1 << 20;
     if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
@@ -1855,6 +1858,12 @@ void yonder_scripts_set_execution_ms(yonder_scripts_t *s, uint64_t ms)
 uint64_t yonder_scripts_execution_ms(const yonder_scripts_t *s)
 {
     return s != NULL ? s->options.execution_ms : 0;
+}
+
+size_t yonder_scripts_memory_bytes(const yonder_scripts_t *s)
+{
+    if (s == NULL) return 0;
+    return s->options.memory_bytes != 0 ? s->options.memory_bytes : os64_js_default_limits().memory_bytes;
 }
 
 bool yonder_scripts_alive(const yonder_scripts_t *s)
