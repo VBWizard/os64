@@ -916,3 +916,24 @@ NumberFormat's and PluralRules' strings wait for the next capture
 test262 where it speaks and V8 where it is silent (INTL.md § 9.6). The `js`
 runner's suites (199 and 40 checks) and the acceptance suite (383 checks)
 pass. The library's exports and imports are unchanged.
+
+## Intl (ECMA-402, slice A2: RelativeTimeFormat, ListFormat) validation, 2026-11-05
+
+`Intl.RelativeTimeFormat` and `Intl.ListFormat` join the install. The
+runtime suite's Intl case formats "yesterday" and a disjunction through
+them, and two sweeps join the others: a realm's first RelativeTimeFormat
+(the data and the number tables, which hold its fields: 355 allocations on
+the target core, every one refused) and its first ListFormat (the data
+alone: 259, every one refused). Each refusal is the runtime's sticky
+failure and frees everything. The suite passes: 8,325 checks on the target
+core, 25,679 sanitized.
+
+`tools/test262_host.sh` adds `intl402/RelativeTimeFormat` and
+`intl402/ListFormat`: 142 of 160 and 150 of 162 run as written and strict,
+the rest locales the data does not hold (Polish, Spanish, and the
+locales-valid tests' others), a numbering system other than latn and
+`$262`'s second realm, each listed with its reason. The earlier directories are unchanged, and Chrome 156's capture
+still agrees in all 5,635 fields; the capture page now asks both
+constructors' cases for the next capture (INTL.md § 8, § 9.6). The `js`
+runner's suites (199 and 40 checks) and the acceptance suite pass. The
+library's exports and imports are unchanged.

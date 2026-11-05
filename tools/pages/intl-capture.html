@@ -8,11 +8,12 @@
 </style>
 <h1>Intl capture</h1>
 <p>What this browser's <code>Intl</code> answers for en-US, captured as a file:
-the strings libjs is held to byte for byte (INTL.md § 8). It formats a fixed
-matrix of DateTimeFormat cases (option bags, zones, instants, ranges, parts)
-and of NumberFormat and PluralRules cases (option bags, values, ranges,
-parts, plural categories), asks the questions other browsers answer
-differently (an alias zone's name), and lists the browser's Intl surface.</p>
+the strings libjs is held to byte for byte (INTL.md § 8). It formats fixed
+matrices of DateTimeFormat cases (option bags, zones, instants, ranges,
+parts), of NumberFormat and PluralRules cases (option bags, values, ranges,
+parts, plural categories) and of RelativeTimeFormat and ListFormat cases,
+asks the questions other browsers answer differently (an alias zone's
+name), and lists the browser's Intl surface.</p>
 <p>Open it from <code>tools/intl_capture_server.py</code>, which serves this
 directory and saves what the page sends to the file it names; or press
 <b>Save</b> for a download.</p>
@@ -171,6 +172,28 @@ for (const options of pluralBags) {
     c.select = pluralValues.map(v => [v, attempt(() => pr.select(numberValue(v)))]);
     c.selectRange = numberRanges.map(([x, y]) => [x, y, attempt(() => pr.selectRange(numberValue(x), numberValue(y)))]);
     capture.numberCases.push(c);
+}
+// RelativeTimeFormat and ListFormat: every style and numeric choice, the
+// units singular and plural, values about now (where numeric "auto" has
+// words) and away from it; every list type and style over lists of every
+// length.
+const relativeUnits = ['second', 'minutes', 'hour', 'days', 'week', 'month', 'quarters', 'year'];
+const relativeValues = ['n:0', 'n:-0', 'n:1', 'n:-1', 'n:2', 'n:-2', 'n:0.004', 'n:0.005', 'n:0.995', 'n:-1.004', 'n:1.5',
+    'n:-3', 'n:1000', 'n:-1234.5678', 'n:1e21', 'n:1.0005', 'n:0.0025', 'n:-1.0625', 'n:-0.0005'];
+for (const style of ['long', 'short', 'narrow']) for (const numeric of ['always', 'auto']) {
+    const options = {style, numeric};
+    const rtf = new Intl.RelativeTimeFormat('en-US', options);
+    const c = {kind: 'RelativeTimeFormat', options, resolved: rtf.resolvedOptions(), relative: []};
+    for (const u of relativeUnits) for (const v of relativeValues)
+        c.relative.push([v, u, attempt(() => rtf.format(numberValue(v), u)), attempt(() => rtf.formatToParts(numberValue(v), u))]);
+    capture.numberCases.push(c);
+}
+const listInputs = [[], ['a'], ['a', 'b'], ['a', 'b', 'c'], ['Motorcycle', 'Bus', 'Car', 'Train'], ['a', '', 'c'], ['']];
+for (const type of ['conjunction', 'disjunction', 'unit']) for (const style of ['long', 'short', 'narrow']) {
+    const options = {type, style};
+    const lf = new Intl.ListFormat('en-US', options);
+    capture.numberCases.push({kind: 'ListFormat', options, resolved: lf.resolvedOptions(),
+                              lists: listInputs.map(l => [l, lf.format(l), lf.formatToParts(l)])});
 }
 // The questions other browsers answer differently from test262 or from
 // one another: each is what the browser said.

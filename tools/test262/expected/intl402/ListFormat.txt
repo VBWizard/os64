@@ -1,0 +1,14 @@
+# test262 intl402/ListFormat, held by tools/test262/run.py (its docstring says how).
+[excluded]
+intl402/ListFormat/constructor/constructor/locales-valid.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/constructor/constructor/locales-valid.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/constructor/constructor/proto-from-ctor-realm.js	needs test262's $262 host hooks (a second realm), which the runner does not provide
+intl402/ListFormat/constructor/constructor/proto-from-ctor-realm.js (strict)	needs test262's $262 host hooks (a second realm), which the runner does not provide
+intl402/ListFormat/prototype/format/es-es-long.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/prototype/format/es-es-long.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/prototype/format/es-es-short.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/prototype/format/es-es-short.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/prototype/formatToParts/es-es-long.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/prototype/formatToParts/es-es-long.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/prototype/formatToParts/es-es-short.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)
+intl402/ListFormat/prototype/formatToParts/es-es-short.js (strict)	a locale other than en (de, ja, ...): data not held (INTL.md § 7)

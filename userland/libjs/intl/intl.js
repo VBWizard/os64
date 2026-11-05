@@ -62,26 +62,26 @@ const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.z
 // eagerly, and a realm that never constructs one never evaluates CLDR's
 // tables. Every door into them calls loadData first: the constructors and
 // supportedLocalesOf; a method has an instance, so its realm has loaded.
-let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES, NUMBER_DATA;
+let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES, LISTS, NUMBER_DATA;
 let dataLoaded = false;
 function loadData() {
     if (dataLoaded) return;
     const D = I.data();
     ALIASES = D.aliases; U_VALUE_ALIASES = D.uAliases; LIKELY = D.likely; G = D.gregorian; Z = D.zones;
     IV = G.intervalFormats; IV_FALLBACK = own(IV, 'intervalFormatFallback'); DAY_PERIOD_RULES = D.dayPeriods;
-    NUMBER_DATA = D.numbers;
+    LISTS = D.lists; NUMBER_DATA = D.numbers;
     dataLoaded = true;
 }
 // The number tables are a deferred part of the data, which the generator
 // writes as a function, so a realm that formats only dates never builds
-// them: NumberFormat and PluralRules build them at their first
-// construction.
-let NUM, UNITS, PLURALS;
+// them: NumberFormat, PluralRules and RelativeTimeFormat build them at
+// their first construction.
+let NUM, UNITS, PLURALS, RELATIVE;
 function loadNumberData() {
     loadData();
     if (NUM !== undefined) return;
     const N = apply(NUMBER_DATA, undefined, []);
-    UNITS = N.units; PLURALS = N.plurals; NUM = N.numbers;      // NUM last: it says the tables are here
+    UNITS = N.units; PLURALS = N.plurals; RELATIVE = N.relative; NUM = N.numbers;      // NUM last: it says the tables are here
 }
 // The default locale is the host's, and ECMA-402 requires it to be one the
 // data holds: a host that names another is refused (the install fails),
@@ -1666,7 +1666,8 @@ function formatParts(s, pattern, x) {
     }
     return parts;
 }
-function partsToString(parts) { let out = ''; for (let i = 0; i < parts.length; i++) out += parts[i].value; return out; }
+// Parts' text, joined once (a list's parts are as many as its elements).
+function partsToString(parts) { const values = []; for (let i = 0; i < parts.length; i++) push(values, parts[i].value); return join(values, ''); }
 function partsToArray(parts) {
     const out = [];
     for (let i = 0; i < parts.length; i++) {
@@ -3181,12 +3182,207 @@ method(NumberFormatPrototype, 'resolvedOptions', methodOf(function () {
     return o;
 }), 0);
 
+
+// ── Intl.RelativeTimeFormat (ECMA-402 § 18) ─────────────────────────────
+const RELATIVE_TIME_FORMATS = new WeakMap();
+const RELATIVE_UNITS = ['second', 'minute', 'hour', 'day', 'week', 'month', 'quarter', 'year'];
+function RelativeTimeFormat(locales, options) {
+    if (new.target === undefined) throw new TypeError_("Constructor Intl.RelativeTimeFormat requires 'new'");
+    const made = constructed(this, RelativeTimeFormatPrototype);
+    loadNumberData();
+    const requested = CanonicalizeLocaleList(locales);
+    options = CoerceOptionsToObject(options);
+    const opt = {__proto__: null};
+    opt.localeMatcher = GetOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const nu = GetOption(options, 'numberingSystem', 'string', undefined, undefined);
+    if (nu !== undefined && !isTypeSequence(lower(nu))) throw new RangeError_('Invalid numberingSystem');
+    opt.nu = nu === undefined ? undefined : lower(nu);
+    const r = ResolveLocale(AVAILABLE, requested, opt, ['nu'], dtfLocaleData);
+    const s = {__proto__: null};
+    s.locale = r.locale; s.numberingSystem = r.nu;
+    s.style = GetOption(options, 'style', 'string', ['long', 'short', 'narrow'], 'long');
+    s.numeric = GetOption(options, 'numeric', 'string', ['always', 'auto'], 'always');
+    // The NumberFormat and PluralRules a relative time is formatted with:
+    // the locale's defaults, as `new Intl.NumberFormat(locale)` has them,
+    // except that the value rounds half to even, as V8's (ICU's default
+    // formatter's) does: "in 1 day" for 1.0005 (INTL.md § 9.6).
+    const nf = {__proto__: null, style: 'decimal', notation: 'standard', signDisplay: 'auto', useGrouping: 'auto'};
+    SetNumberFormatDigitOptions(nf, objectCreate(null), 0, 3, 'standard');
+    nf.roundingMode = 'halfEven';
+    s.nf = nf;
+    apply(wm_set, RELATIVE_TIME_FORMATS, [made, s]);
+    return made;
+}
+const RelativeTimeFormatPrototype = RelativeTimeFormat.prototype;
+defineProperty(RelativeTimeFormat, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(RelativeTimeFormat, 'length', {__proto__: null, value: 0, configurable: true});
+function thisRelativeTimeFormat(o, name) {
+    const s = slots(RELATIVE_TIME_FORMATS, o);
+    if (s === undefined) throw new TypeError_('Method Intl.RelativeTimeFormat.prototype.' + name + ' called on incompatible receiver');
+    return s;
+}
+// PartitionRelativeTimePattern: the parts of `value` `unit`s from now. A
+// number's parts carry the unit they count, singular.
+function relativeTimeParts(s, value, unit, name) {
+    if (!isFinite_(value)) throw new RangeError_('Value need to be finite number for Intl.RelativeTimeFormat.prototype.' + name + '()');
+    let singular = unit;
+    if (unit !== '' && codeAt(unit, unit.length - 1) === 115) singular = slice(unit, 0, unit.length - 1);     // "days"
+    if (!contains(RELATIVE_UNITS, singular))
+        throw new RangeError_('Invalid unit argument for Intl.RelativeTimeFormat.prototype.' + name + "() '" + unit + "'");
+    const fields = own(RELATIVE, s.style === 'long' ? singular : singular + '-' + s.style);
+    const out = [];
+    // numeric "auto": a value within 2.1 of now is named in words where
+    // CLDR has them ("tomorrow", "this hour"), judged as ICU judges it, by the value
+    // rounded to hundredths in doubles (so V8 calls 0.004 days "today" and
+    // 0.005 "in 0.005 days"; ECMA-402 would match the exact value; § 9.6).
+    if (s.numeric === 'auto' && value > -2.1 && value < 2.1) {
+        const hundredths = value * 100;
+        const offset = trunc(hundredths < 0 ? hundredths - 0.5 : hundredths + 0.5);
+        const word = offset % 100 === 0 ? own(fields, 'relative-type-' + String_(offset / 100)) : undefined;
+        if (word !== undefined) { push(out, {__proto__: null, type: 'literal', value: word}); return out; }
+    }
+    const past = value < 0 || (value === 0 && 1 / value < 0);
+    const x = decimalOfNumber(past ? -value : value);
+    const category = pluralCategory('cardinal', formatNumericToString(s.nf, x).string);
+    const patterns = own(fields, past ? 'relativeTime-type-past' : 'relativeTime-type-future');
+    let pattern = own(patterns, 'relativeTimePattern-count-' + category);
+    if (pattern === undefined) pattern = own(patterns, 'relativeTimePattern-count-other');
+    const at = indexOf(pattern, '{0}', 0);
+    if (at > 0) push(out, {__proto__: null, type: 'literal', value: slice(pattern, 0, at)});
+    const number = numberParts(s.nf, x);
+    for (let i = 0; i < number.length; i++) push(out, {__proto__: null, type: number[i].type, value: number[i].value, unit: singular});
+    if (at + 3 < pattern.length) push(out, {__proto__: null, type: 'literal', value: slice(pattern, at + 3, pattern.length)});
+    return out;
+}
+method(RelativeTimeFormat, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
+defineProperty(RelativeTimeFormatPrototype, toStringTag, {__proto__: null, value: 'Intl.RelativeTimeFormat', writable: false, enumerable: false, configurable: true});
+method(RelativeTimeFormatPrototype, 'format', methodOf(function (value, unit) {
+    const s = thisRelativeTimeFormat(this, 'format');
+    const v = ToNumber(value), u = ToString(unit);
+    return partsToString(relativeTimeParts(s, v, u, 'format'));
+}), 2);
+method(RelativeTimeFormatPrototype, 'formatToParts', methodOf(function (value, unit) {
+    const s = thisRelativeTimeFormat(this, 'formatToParts');
+    const v = ToNumber(value), u = ToString(unit);
+    const parts = relativeTimeParts(s, v, u, 'formatToParts'), out = [];
+    for (let i = 0; i < parts.length; i++) {
+        const o = {};
+        put(o, 'type', parts[i].type); put(o, 'value', parts[i].value);
+        if (parts[i].unit !== undefined) put(o, 'unit', parts[i].unit);
+        push(out, o);
+    }
+    return out;
+}), 2);
+method(RelativeTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
+    const s = thisRelativeTimeFormat(this, 'resolvedOptions');
+    const o = {};
+    put(o, 'locale', s.locale); put(o, 'style', s.style); put(o, 'numeric', s.numeric);
+    put(o, 'numberingSystem', s.numberingSystem);
+    return o;
+}), 0);
+
+// ── Intl.ListFormat (ECMA-402 § 13) ─────────────────────────────────────
+const LIST_FORMATS = new WeakMap();
+// GetOptionsObject: an object as it is, undefined as no options, anything
+// else refused, as ECMA-402's newer constructors take their options
+// (CoerceOptionsToObject, which the older ones use, wraps a primitive).
+function GetOptionsObject(options) {
+    if (options === undefined) return objectCreate(null);
+    if (isObject(options)) return options;
+    throw new TypeError_('Options must be an object');
+}
+function ListFormat(locales, options) {
+    if (new.target === undefined) throw new TypeError_("Constructor Intl.ListFormat requires 'new'");
+    const made = constructed(this, ListFormatPrototype);
+    loadData();
+    const requested = CanonicalizeLocaleList(locales);
+    options = GetOptionsObject(options);
+    const opt = {__proto__: null};
+    opt.localeMatcher = GetOption(options, 'localeMatcher', 'string', ['lookup', 'best fit'], 'best fit');
+    const s = {__proto__: null};
+    s.locale = ResolveLocale(AVAILABLE, requested, opt, [], () => []).locale;
+    s.type = GetOption(options, 'type', 'string', ['conjunction', 'disjunction', 'unit'], 'conjunction');
+    s.style = GetOption(options, 'style', 'string', ['long', 'short', 'narrow'], 'long');
+    apply(wm_set, LIST_FORMATS, [made, s]);
+    return made;
+}
+const ListFormatPrototype = ListFormat.prototype;
+defineProperty(ListFormat, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
+defineProperty(ListFormat, 'length', {__proto__: null, value: 0, configurable: true});
+function thisListFormat(o, name) {
+    const s = slots(LIST_FORMATS, o);
+    if (s === undefined) throw new TypeError_('Method Intl.ListFormat.prototype.' + name + ' called on incompatible receiver');
+    return s;
+}
+// StringListFromIterable: the iterable's strings, by the iteration ECMA-402
+// asks for (its own iterator, closed when an element is not a string).
+function StringListFromIterable(iterable) {
+    const list = [];
+    if (iterable === undefined) return list;
+    for (const element of iterable) {
+        if (typeof element !== 'string') throw new TypeError_('Intl.ListFormat: an element of the list is not a string');
+        push(list, element);
+    }
+    return list;
+}
+// CreatePartsFromList: CLDR's patterns ({0} then {1}, as every en pattern
+// is) applied from the end of the list: the last two by "end", each
+// earlier one by "middle", the first by "start", and two alone by "2".
+// Written front to back in one pass, which is linear in the list: each
+// pattern's text before {0}, the element, the text between, and once the
+// last element is out, the text after {1} of every pattern, innermost
+// first. As ICU reports fields, which V8 reads, an empty element is no
+// part and the text around it is one literal (INTL.md § 9.6).
+function listParts(s, list) {
+    const out = [];
+    const n = list.length;
+    if (n === 0) return out;
+    const kind = s.type === 'conjunction' ? 'standard' : s.type === 'disjunction' ? 'or' : 'unit';
+    const table = own(LISTS, 'listPattern-type-' + kind + (s.style === 'long' ? '' : '-' + s.style));
+    const add = (type, value) => {
+        if (value === '') return;
+        const last = out.length > 0 ? out[out.length - 1] : null;
+        if (type === 'literal' && last !== null && last.type === 'literal') last.value += value;
+        else push(out, {__proto__: null, type: type, value: value});
+    };
+    const after = [];          // each pattern's text after {1}, outermost first
+    for (let i = 0; i < n - 1; i++) {
+        const pattern = own(table, n === 2 ? '2' : i === 0 ? 'start' : i === n - 2 ? 'end' : 'middle');
+        const at0 = indexOf(pattern, '{0}', 0), at1 = indexOf(pattern, '{1}', 0);
+        add('literal', slice(pattern, 0, at0));
+        add('element', list[i]);
+        add('literal', slice(pattern, at0 + 3, at1));
+        push(after, slice(pattern, at1 + 3, pattern.length));
+    }
+    add('element', list[n - 1]);
+    for (let i = after.length - 1; i >= 0; i--) add('literal', after[i]);
+    return out;
+}
+method(ListFormat, 'supportedLocalesOf', methodOf(supportedLocalesOf), 1);
+defineProperty(ListFormatPrototype, toStringTag, {__proto__: null, value: 'Intl.ListFormat', writable: false, enumerable: false, configurable: true});
+method(ListFormatPrototype, 'format', methodOf(function (list) {
+    const s = thisListFormat(this, 'format');
+    return partsToString(listParts(s, StringListFromIterable(list)));
+}), 1);
+method(ListFormatPrototype, 'formatToParts', methodOf(function (list) {
+    const s = thisListFormat(this, 'formatToParts');
+    return numberPartsToArray(listParts(s, StringListFromIterable(list)), false);
+}), 1);
+method(ListFormatPrototype, 'resolvedOptions', methodOf(function () {
+    const s = thisListFormat(this, 'resolvedOptions');
+    const o = {};
+    put(o, 'locale', s.locale); put(o, 'type', s.type); put(o, 'style', s.style);
+    return o;
+}), 0);
+
 // ── The Intl object ─────────────────────────────────────────────────────
 const Intl = {};     // script-visible: its properties are defined, below
 defineProperty(Intl, toStringTag, {__proto__: null, value: 'Intl', writable: false, enumerable: false, configurable: true});
-defineProperty(Intl, 'Locale', {__proto__: null, value: Locale, writable: true, enumerable: false, configurable: true});
-defineProperty(Intl, 'DateTimeFormat', {__proto__: null, value: DateTimeFormat, writable: true, enumerable: false, configurable: true});
-defineProperty(Intl, 'NumberFormat', {__proto__: null, value: NumberFormat, writable: true, enumerable: false, configurable: true});
-defineProperty(Intl, 'PluralRules', {__proto__: null, value: PluralRules, writable: true, enumerable: false, configurable: true});
+// The constructors in Chrome's order, so a page listing Intl's names reads
+// these in the order it would there.
+const CONSTRUCTORS = [['DateTimeFormat', DateTimeFormat], ['NumberFormat', NumberFormat], ['PluralRules', PluralRules],
+                      ['RelativeTimeFormat', RelativeTimeFormat], ['ListFormat', ListFormat], ['Locale', Locale]];
+for (let i = 0; i < CONSTRUCTORS.length; i++)
+    defineProperty(Intl, CONSTRUCTORS[i][0], {__proto__: null, value: CONSTRUCTORS[i][1], writable: true, enumerable: false, configurable: true});
 return Intl;
 })

@@ -28,6 +28,8 @@ TEST262_DIRS=(
     test/intl402/DateTimeFormat
     test/intl402/NumberFormat
     test/intl402/PluralRules
+    test/intl402/RelativeTimeFormat
+    test/intl402/ListFormat
 )
 
 top=$(git rev-parse --show-toplevel)
