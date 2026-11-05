@@ -3484,6 +3484,13 @@ function primaryCursor() {
     return {__proto__: null, text: '', i: 0, buf: new Float64Array_(64), cap: 64, head: 0, tail: 0,
             unit: {__proto__: null, digits: false, from: 0, to: 0, next: 0, elements: null, implicit: 0}};
 }
+// A cursor between compares holds no caller's string and no buffer a long
+// run of digits grew, so a long-lived collator keeps nothing of what it
+// compared.
+function releaseCursor(cur) {
+    cur.text = '';
+    if (cur.cap > 64) { cur.buf = new Float64Array_(64); cur.cap = 64; }
+}
 function cursorPush(cur, p) {
     if (cur.tail === cur.cap) {
         const grown = new Float64Array_(cur.cap * 2);
@@ -3573,8 +3580,9 @@ function simplePrimary(c, text, i) {
 }
 // CompareStrings: the primaries in step (inline while both characters are
 // simple, then through the cursors), then the lower levels the
-// sensitivity asks for. The collator's two cursors are its own, reused:
-// nothing between here and the result runs a page's code.
+// sensitivity asks for. The collator's two cursors are its own, reused and
+// released on every way out: nothing between here and the result runs a
+// page's code.
 function compareStrings(c, x, y) {
     if (x === y) return 0;
     let i = 0, j = 0;
@@ -3587,12 +3595,17 @@ function compareStrings(c, x, y) {
     const a = c.cursors[0], b = c.cursors[1];
     a.text = x; a.i = i; a.head = 0; a.tail = 0;
     b.text = y; b.i = j; b.head = 0; b.tail = 0;
-    for (;;) {
-        const p = nextPrimary(c, a), q = nextPrimary(c, b);
-        if (p !== q) return p < q ? -1 : 1;
-        if (p === -1) break;
+    let order = 0;
+    try {
+        for (;;) {
+            const p = nextPrimary(c, a), q = nextPrimary(c, b);
+            if (p !== q) { order = p < q ? -1 : 1; break; }
+            if (p === -1) break;
+        }
+    } finally {
+        releaseCursor(a); releaseCursor(b);
     }
-    if (c.sensitivity === 'base') return 0;
+    if (order !== 0 || c.sensitivity === 'base') return order;
     const u = lowerLevels(c, x), v = lowerLevels(c, y);
     if (c.sensitivity === 'case') return compareWeights(u.k, v.k);
     const r = compareWeights(u.s, v.s);
