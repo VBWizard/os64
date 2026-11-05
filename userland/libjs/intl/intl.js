@@ -36,10 +36,7 @@ const apply = Reflect.apply;
 const defineProperty = Object_.defineProperty;
 const getOwnPropertyDescriptor = Object_.getOwnPropertyDescriptor;
 const objectCreate = Object_.create;
-const freeze = Object_.freeze;
-const isArray = Array_.isArray;
 const toStringTag = Symbol_.toStringTag;
-const SymbolToPrimitive = Symbol_.toPrimitive;
 // OrdinaryHasInstance, which the legacy constructor behaviour asks: never
 // `instanceof`, which a page's Symbol.hasInstance would answer.
 const ordinaryHasInstance = Function.prototype[Symbol_.hasInstance];
@@ -54,7 +51,6 @@ const s_charCodeAt = StringProto.charCodeAt, s_split = StringProto.split, s_repl
 const s_padStart = StringProto.padStart;
 const a_sort = Array_.prototype.sort, a_join = Array_.prototype.join;
 const DateProto = Date_.prototype;
-const d_getTime = DateProto.getTime;
 const d_getUTCFullYear = DateProto.getUTCFullYear, d_getUTCMonth = DateProto.getUTCMonth;
 const d_getUTCDate = DateProto.getUTCDate, d_getUTCDay = DateProto.getUTCDay;
 const d_getUTCHours = DateProto.getUTCHours, d_getUTCMinutes = DateProto.getUTCMinutes;
@@ -166,11 +162,6 @@ function GetNumberOption(options, property, minimum, maximum, fallback) {
 }
 function CoerceOptionsToObject(options) {
     return options === undefined ? objectCreate(null) : ToObject(options);
-}
-function GetOptionsObject(options) {
-    if (options === undefined) return objectCreate(null);
-    if (isObject(options)) return options;
-    throw new TypeError_('Options must be an object');
 }
 
 // ── Language tags (UTS 35 § 3; ECMA-402 § 6.2) ──────────────────────────

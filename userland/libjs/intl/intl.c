@@ -109,7 +109,9 @@ static int64_t epoch_second(double ms)
 }
 
 /* zoneOffset(canonical, ms): minutes east of UTC under the zone's current
- * rule; 0 for a name the table does not hold, which the script never asks. */
+ * rule; 0 for a name the table does not hold, which the script never asks,
+ * and for an instant past ECMAScript's time range (NaN, infinities), which
+ * no conversion to seconds may see. */
 static JSValue zone_offset(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv)
 {
     (void)this_value;
@@ -121,7 +123,7 @@ static JSValue zone_offset(JSContext *ctx, JSValueConst this_value, int argc, JS
     JS_FreeCString(ctx, name);
     if (argc < 2 || JS_ToFloat64(ctx, &ms, argv[1]) < 0) return JS_EXCEPTION;
     os64_tz_t tz;
-    if (at < 0 || ms != ms || os64_tz_parse(kZoneRules[kZoneNames[at].rule], &tz) != 0) return JS_NewInt32(ctx, 0);
+    if (at < 0 || !(ms > -9e15 && ms < 9e15) || os64_tz_parse(kZoneRules[kZoneNames[at].rule], &tz) != 0) return JS_NewInt32(ctx, 0);
     return JS_NewInt32(ctx, os64_tz_offset_at(&tz, epoch_second(ms)));
 }
 
@@ -160,8 +162,8 @@ static JSValue offset_zone(JSContext *ctx, int32_t minutes)
  * table's preferred zone for that rule, kRulePreferred): the same text
  * first, then the same times under other names ("EST5EDT" is
  * "EST5EDT,M3.2.0,M11.1.0"). A rule no zone keeps is its standard offset
- * as an offset zone, and so is the kernel's offset when there is no TZ;
- * no offset at all is UTC. */
+ * as an offset zone, and so is the kernel's offset when there is no TZ
+ * or one that does not parse (Date's policy too); no offset at all is UTC. */
 static JSValue zone_host(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv)
 {
     (void)this_value; (void)argc; (void)argv;
@@ -210,7 +212,7 @@ static Compiled s_script = {js_intl_script_source, js_intl_script_source_end, "<
  * file names and line numbers stay, for a failure's frames. A bytecode
  * write the engine had no memory for is no verdict on the script: the
  * next realm tries again, and the runtime's allocator has recorded the
- * refusal, which the installer reports. */
+ * refusal, which the runtime reports as its sticky failure. */
 static JSValue completion(JSContext *ctx, Compiled *c)
 {
     if (__atomic_load_n(&c->state, __ATOMIC_ACQUIRE) == CACHE_READY) {

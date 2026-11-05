@@ -138,7 +138,7 @@ it); a present one that misbehaves is rule 1's worse case.
 | `Intl.RelativeTimeFormat` — `format`, `formatToParts`, `numeric`, `style` | 18 hosts, GitHub's relative dates |
 | `Intl.ListFormat` — the three types and three styles | 21 hosts |
 | `Intl.Collator` and `String.prototype.localeCompare` through it — `usage`, `sensitivity`, `ignorePunctuation`, `numeric`, `caseFirst`, over the collation § 4.1 names | 72 hosts call `localeCompare` with arguments; GitHub's checks module constructs one at module scope |
-| `Intl.Locale` — parsing and canonicalizing a BCP 47 tag, its parts; `maximize`/`minimize` by CLDR's likely subtags for the English tags, and the identity for any tag the data lacks (the algorithm's own answer when no row matches: `new Intl.Locale("de-DE").maximize()` is `de-DE`) | 15 hosts; every constructor's locale argument is parsed the same way; primer-react's RelativeTime constructs one in render |
+| `Intl.Locale` — parsing and canonicalizing a BCP 47 tag, its parts; `maximize`/`minimize` by CLDR's likely subtags for the English tags and every `und` row, and the identity for any other tag the data lacks (the algorithm's own answer when no row matches: `new Intl.Locale("de-DE").maximize()` is `de-DE`) | 15 hosts; every constructor's locale argument is parsed the same way; primer-react's RelativeTime constructs one in render |
 | `Intl.getCanonicalLocales`, `Intl.supportedValuesOf` | small, and the second answers truly what the data holds |
 | The redefined built-ins: `Date.prototype.toLocaleString`/`DateString`/`TimeString`, `Number.prototype.toLocaleString`, `BigInt.prototype.toLocaleString`, `Array.prototype.toLocaleString` (unchanged in shape, its elements' now honoured) | 32 hosts; as § 1 says, wrong silently today |
 
@@ -210,8 +210,8 @@ The hard part, because pages pass zone names and read them back:
   zone when one carries the rule, else the first by name), matched by
   its text, else by keeping the same times under other names (`EST5EDT`,
   what the P5 runs, is New York's rule written short, and resolves to
-  `America/New_York` exactly as other browsers resolve the IANA name
-  `EST5EDT`); a rule no zone carries is an offset zone (`+04:15`) at its
+  `America/New_York`, as Node's V8 resolves the IANA name `EST5EDT`;
+  Chrome 156 keeps that name, booked in DEBTS); a rule no zone carries is an offset zone (`+04:15`) at its
   standard offset; no `TZ` is the kernel's offset as an offset zone, and
   no offset is `UTC`. The real cure is letting the system's `TZ` be an IANA
   name too (`bootenv.conf`'s `TZ = America/Toronto`, resolved through the
@@ -284,21 +284,26 @@ The hard part, because pages pass zone names and read them back:
 - Historical time-zone rules (§ 5).
 - An IANA name in the system's `TZ` (§ 5; libos64's, booked).
 - Collation beyond Latin-1 (§ 4.1; full DUCET, booked).
-- Likely subtags beyond English: `maximize` and `minimize` answer the tag
-  itself for one the data lacks (§ 4).
+- Likely subtags beyond English and `und`: `maximize` and `minimize`
+  answer the tag itself for a language the data lacks (§ 4).
 - Changing what `Date.prototype.toString` prints (ECMA-262's, not 402's).
 
 ## 8. Proof
 
 - **test262's `intl402/`** is ECMA-402's conformance suite, as WPT is the
   platform's. libjs has no test262 runner (VALIDATION.md keeps 59 upstream
-  functions, not test262). The slice adds one: a host runner over a pinned
-  test262 checkout, read like the WPT runner (expectations per directory,
-  required and passing sections, lost/new reporting), run for `intl402/`
-  and for `built-ins/Date/prototype/toLocale*` and the other redefined
-  built-ins. The gate: every test in a shipped constructor's directory
-  passes, except those that need a locale, calendar, numbering system or
-  historical zone the data does not hold, each listed with its reason.
+  functions, not test262). A1 adds one (`tools/test262_host.sh`, the
+  checkout pinned by `tools/test262_fetch.sh`): each test run as written
+  and strict through the real library, held to one expectation file per
+  directory (`tools/test262/expected/`) that lists only what is excluded,
+  each with its reason; an excluded test that passes fails the run, so
+  the list cannot go stale. A1 runs `intl402/` for what it ships; each
+  later cut adds its directories (A3 the redefined built-ins under
+  `built-ins/`). The gate: every test in a shipped constructor's
+  directory passes, except those that need what the data or the engine
+  does not hold (a locale, calendar, numbering system, historical zone,
+  Temporal), a later cut's surface, or a host hook, each listed with its
+  reason.
 - **The census's own calls, as fixtures:** every literal option bag § 1
   found, formatted against a fixed date and number, compared BYTE FOR BYTE
   with the string Chrome produces for it (captured once into a file in the

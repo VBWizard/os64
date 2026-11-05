@@ -141,10 +141,14 @@ evaluation, once, under the setup budget and the runtime's memory. The object
 is published as one global property (writable, configurable, not enumerable)
 only once all of it is made, so a refused allocation or a failed definition
 leaves no `Intl`. Its script captures the built-ins it calls as it loads,
-which is why it must run before any page script. The compiled script is kept
-for the process and read by every later runtime; that bytecode never leaves
-the process. The machine's zone is `TZ`'s, by the policy `Date`'s local time
-follows (`os64/date.h`), resolved to a zone name as INTL.md § 5 says.
+which is why it must run before any page script. Its CLDR data is evaluated
+by the realm's first construction (a constructor or `supportedLocalesOf`),
+not by the install, inside whatever call made it and under that call's
+budget: a refused allocation there is the runtime's sticky failure, as in
+any script. The compiled script and data are kept for the process and read
+by every later runtime; that bytecode never leaves the process. The
+machine's zone is `TZ`'s, by the policy `Date`'s local time follows
+(`os64/date.h`), resolved to a zone name as INTL.md § 5 says.
 
 Custom bindings use QuickJS values and lifetime rules directly. `examples/binding.c`
 shows argument conversion, a thrown callback exception, and ownership on
