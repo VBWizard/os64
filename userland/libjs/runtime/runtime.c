@@ -1202,50 +1202,89 @@ static bool write_output(os64_js_runtime_t *runtime, const char *bytes, size_t s
 /* Deeper console groups still count; their lines stop moving right. */
 #define CONSOLE_INDENT_MAX 32
 
+static const char kSpaces[2 * CONSOLE_INDENT_MAX] =
+    "                                                                ";
+
 /* Two spaces for each of `depth` open groups, capped. */
-static bool write_indent(os64_js_runtime_t *runtime, uint32_t depth)
+static size_t indent_size(uint32_t depth)
 {
-    static const char spaces[2 * CONSOLE_INDENT_MAX] =
-        "                                                                ";
-    return write_output(runtime, spaces, 2 * (size_t)(depth < CONSOLE_INDENT_MAX ? depth : CONSOLE_INDENT_MAX));
+    return 2 * (size_t)(depth < CONSOLE_INDENT_MAX ? depth : CONSOLE_INDENT_MAX);
 }
 
+static bool write_indent(os64_js_runtime_t *runtime, uint32_t depth)
+{
+    return write_output(runtime, kSpaces, indent_size(depth));
+}
+
+/* Where QuickJS's printer writes an Error. It hands over a character at a
+ * time for much of what it prints, so the bytes gather here and reach the
+ * output a buffer at a time. `indent` is a line's indent owed once something
+ * follows its line break, so no line is only an indent. */
 typedef struct {
     os64_js_runtime_t *runtime;
     uint32_t depth;
-    bool failed;
+    bool failed, indent;
+    size_t used;
+    char buffer[512];
 } ErrorSink;
 
-/* QuickJS's printer writes an Error as its name and message, then its
- * stack: each line after the first is indented as the first was. */
+static void sink_flush(ErrorSink *sink)
+{
+    if (sink->used != 0 && !sink->failed && !write_output(sink->runtime, sink->buffer, sink->used))
+        sink->failed = true;
+    sink->used = 0;
+}
+
+static void sink_put(ErrorSink *sink, const char *bytes, size_t size)
+{
+    while (size != 0 && !sink->failed) {
+        if (sink->used == sizeof(sink->buffer)) sink_flush(sink);
+        size_t room = sizeof(sink->buffer) - sink->used, n = size < room ? size : room;
+        os64_memcpy(sink->buffer + sink->used, bytes, n);
+        sink->used += n;
+        bytes += n;
+        size -= n;
+    }
+}
+
+/* Each line after the first indented as the first was. */
 static void error_sink(void *opaque, const char *bytes, size_t size)
 {
     ErrorSink *sink = opaque;
     while (size != 0 && !sink->failed) {
+        if (sink->indent && bytes[0] != '\n') {
+            sink_put(sink, kSpaces, indent_size(sink->depth));
+            sink->indent = false;
+        }
         size_t line = 0;
         while (line < size && bytes[line] != '\n') line++;
         bool newline = line < size;
         if (newline) line++;
-        if (!write_output(sink->runtime, bytes, line) || (newline && !write_indent(sink->runtime, sink->depth)))
-            sink->failed = true;
+        sink_put(sink, bytes, line);
+        if (newline) sink->indent = true;
         bytes += line;
         size -= line;
     }
 }
 
 /* Each value by QuickJS string conversion, spaces between them, but an
- * Error as other browsers' consoles show one: its name and message and then
- * its stack, through QuickJS's own printer, which reads what the Error holds
- * and runs no page code (a getter is shown, not called). `depth` is the open
- * console groups its later lines are indented for. */
+ * Error as other browsers' consoles show one, through QuickJS's own
+ * printer: its name and message, then its stack, then its own enumerable
+ * properties as ` { key: value }` in the printer's notation (strings quoted,
+ * cut at 1000 characters; 100 items; two levels deep). The printer reads
+ * what the Error holds and runs no page code (a getter is shown, not
+ * called), and takes `name` and `message` only as strings the Error or its
+ * prototype holds (DEBTS.md). `depth` is the open console groups its later
+ * lines are indented for. */
 static bool write_values(os64_js_runtime_t *runtime, JSContext *context, int argc,
                          JSValueConst *args, uint32_t depth, bool *thrown)
 {
     for (int i = 0; i < argc && !observe(runtime); i++) {
         if (JS_IsError(context, args[i])) {
-            ErrorSink sink = {runtime, depth, false};
+            ErrorSink sink = {.runtime = runtime, .depth = depth};
             if (i != 0 && !write_output(runtime, " ", 1)) return false;
             JS_PrintValue(context, error_sink, &sink, args[i], NULL);
+            sink_flush(&sink);
             /* The printer's own strings can fail to allocate. */
             if (JS_HasException(context)) {
                 *thrown = true;

@@ -86,9 +86,10 @@ OS64_JS_OUTPUT_CONSOLE grants the WHATWG Console Standard's `console`
 namespace. Its levels (`log`, `info`, `debug`, `warn`, `error`, `trace`,
 `dir`, `dirxml`, `table`) all print as `log` does, to the one handle.
 `print` and every console method write each value as its string
-conversion, but an Error as other browsers' consoles do: its name and
-message, then its stack, through QuickJS's own printer, which runs no page
-code, the stack's lines indented with the line's console group;
+conversion, but an Error as other browsers' consoles do, through QuickJS's
+own printer, which runs no page code: its name and message, then its
+stack, then its own enumerable properties as ` { key: value }`, the later
+lines indented with the line's console group;
 `assert` prints `Assertion failed` (with its message) when its condition is
 falsy; `group`/`groupCollapsed` print their label and indent later console
 lines two spaces per level, `groupEnd` closes one and `clear` closes all;

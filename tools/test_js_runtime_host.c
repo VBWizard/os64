@@ -749,7 +749,17 @@ static void console_error_cases(void)
     char *printed = strstr(text, "\nTypeError: boom\n    at thrower (");
     check(grouped != NULL, "a console line's Error: name, message, and its stack indented with the group");
     check(printed != NULL, "print's Error: name, message, and its stack");
-    check(strstr(text, "getter ran") == NULL, "the printer runs no page code");
+    check(strstr(text, "getter ran") == NULL && strstr(text, "{ trap: [Getter] }") != NULL,
+          "the printer runs no page code, and shows the Error's own properties after its stack");
+    reset_io("");
+    check(execute_fixture(runtime,
+          "const f=new Error('y');f.stack='one\\n\\ntwo';f.code='E'+'1'.repeat(3);"
+          "console.group();console.log(f);console.groupEnd();",
+          &outcome) == OS64_JS_OK, "an Error with a stack of its own printed");
+    char second[512] = {0};
+    memcpy(second, output, output_len < sizeof(second) - 1 ? output_len : sizeof(second) - 1);
+    check(strstr(second, "  Error: y\n  one\n\n  two { code: \"E111\" }\n") != NULL,
+          "no line is only an indent, and the properties follow");
     os64_js_destroy(runtime);
 }
 
