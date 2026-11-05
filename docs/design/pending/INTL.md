@@ -415,4 +415,8 @@ made:
    does not list is `other`; a range's approximately sign is never written
    into an accounting negative; and `formatRangeToParts` reports the
    parts beside a collapsed currency code's spacing as ICU's spans place
-   them, one character early.
+   them, one character early. One departure is deliberate: V8 writes
+   a percent per a unit in the short and narrow widths as the percent
+   alone ("2%" for `percent-per-second`) yet keeps the denominator in its
+   compact and range forms ("12K%/s", "1–5%/s"), which is ICU contradicting
+   itself; libjs composes it as CLDR does everywhere ("2%/s").
