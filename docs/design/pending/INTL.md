@@ -334,7 +334,10 @@ The hard part, because pages pass zone names and read them back:
 - An IANA name in the system's `TZ` (§ 5; libos64's, booked).
 - Collation beyond Latin and its marks (§ 4.1; full DUCET, booked).
 - Likely subtags beyond English and `und`: `maximize` and `minimize`
-  answer the tag itself for a language the data lacks (§ 4).
+  answer the tag itself for a language the data lacks (§ 4). A retired
+  region with several replacements is the one exception the data makes:
+  it holds the likely region of each language and language-script that
+  picks one other than the first ("hy-SU" is "hy-AM").
 - Changing what `Date.prototype.toString` prints (ECMA-262's, not 402's).
 
 ## 8. Proof
@@ -436,11 +439,22 @@ made:
    the tree predates NumberFormat, so until the next one the rule is:
    test262 where it tests the behaviour, V8's answer (Node 22's, the V8
    at hand) where it is silent; a Chrome capture overrules both. Node 22's
-   V8 is older than test262's pin in three places, and libjs follows
-   test262 in each: PluralRules' `notation` option (ECMA-402 2025); a
-   `roundingIncrement` with no fraction digits given, which ECMA-402 now
-   rounds to whole numbers where Node's V8 throws; and a currency's own
-   digits, the default in standard notation only. Where test262 is
+   V8 is older than test262's pin in two places, and libjs follows
+   test262 in each: PluralRules' `notation` option (ECMA-402 2025), and
+   a currency's own digits, the default in standard notation only.
+   Chrome's second capture (Chrome 156, 2026-11-05, A2's and A3's
+   cases) overruled four answers, and libjs gives Chrome's: a percent
+   per a unit formatted alone, short or narrow and not compact, is the
+   percent alone ("2%" for `percent-per-second`), while its ranges and
+   compact forms keep the denominator ("3–5%/s", "1.2K%/s"), as V8 writes
+   them too; a `roundingIncrement` whose fraction digits are left to
+   their defaults throws a RangeError, as Node's V8 does too (ECMA-402's
+   text lowers the default maximum to the minimum and rounds to whole
+   numbers; test262 does not test it); `pluralCategories` lists in
+   ECMA-402's order ("one", "two", "few", "other"), where Node's V8 sorts
+   them; and a PluralRules reports its significant digits when it has
+   any and its fraction digits only when it has none, so a compact or
+   `roundingPriority` one reports the significant pair alone. Where test262 is
    silent, libjs answers as V8 does, each written at its code: an
    accounting `currencySign` with `signDisplay: "never"` reports
    `"standard"`; a `roundingPriority` with trailing zeros stripped reports
@@ -460,12 +474,7 @@ made:
    the exact value), and rounds its number half to even, as ICU's
    default formatter does ("in 1 day" for 1.0005); and ListFormat's
    `formatToParts` writes no part for an empty element, joining the text
-   around it into one literal. One
-   departure is deliberate: V8 writes a percent per a unit in the short and
-   narrow widths as the percent alone ("2%" for `percent-per-second`) yet
-   keeps the denominator in its compact and range forms ("12K%/s",
-   "1–5%/s"), which is ICU contradicting itself; libjs composes it as CLDR
-   does everywhere ("2%/s").
+   around it into one literal.
    Where test262 speaks against V8, libjs follows test262 as the rule
    says: a Collator whose `caseFirst` option overrides a `-u-kf` in the
    locale resolves without it ("en", where V8 keeps "en-u-kf-upper"), and
