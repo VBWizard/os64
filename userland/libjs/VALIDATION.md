@@ -856,17 +856,21 @@ each. `tools/test_js_prepare.py` passes. The export count is unchanged.
 `Intl.DateTimeFormat`. The runtime suite's Intl cases install it once,
 idle and before evaluation, refuse a second install and an empty locale,
 check the global's attributes, format in the host's zone, and resolve the
-host's zone from `TZ` as `Date` does: a rule's own text, the same times
-under other names (`PST8PDT`, `JST-9`), an offset zone for a rule no zone
-keeps (`+04:15`), and the kernel's offset with no `TZ` (`+05:30`). Two
-sweeps refuse each allocation in turn, at a stride past the first 64:
-the install on the path every later realm takes (96 allocations on the
-target core, every one refused; 3,406 instrumented, 435 refused), and a
-realm's first construction, which evaluates the CLDR data (749 and
-65,159; 406 and 463 refused). Each refusal is the runtime's sticky
-failure, defines nothing, and frees everything. The runtime suite passes
-on both probes: 3,832 target-core and 18,321 instrumented checks, zero
-failures, zero live allocations. `--intl` runs the Intl cases alone.
+host's zone from `TZ` as `Date` does, each held by its name and by the
+offset it formats: a rule's own text, the same times under other names
+(`PST8PDT`, `JST-9`), an offset zone for a rule no zone keeps (`+04:15`),
+and the kernel's offset with no `TZ` (`+05:30`). A default locale the
+data does not hold (`de-DE`) is refused with nothing defined. Two sweeps
+refuse each allocation in turn, at a stride past the first 64: the
+install on the path every later realm takes (96 allocations on the target
+core, every one refused), and a realm's first construction, which
+evaluates the CLDR data. Each refusal is the runtime's sticky failure,
+defines nothing, and frees everything. Both sweeps run once the process
+has kept the compiled script and data, as every realm but its first
+does: the first compile's own refusals (a bytecode write refused, the
+cache left EMPTY for the next realm) are not swept, since the cache is
+the process's and the suite's first case fills it. `--intl` runs the Intl
+cases alone.
 
 The first construction is compiled before its sweep and called as a host
 task: the same sweep through `os64_js_eval` met DEBTS' row "An Error made

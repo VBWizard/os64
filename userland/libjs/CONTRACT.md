@@ -135,8 +135,9 @@ members outside the namespace are untouched. An accessor or non-object console i
 the installer does not invoke a global console getter to discover the object.
 
 `os64_js_install_intl` installs ECMA-402's `Intl` (docs/design/pending/INTL.md)
-with `locale`, a BCP 47 tag, as the realm's default locale; NULL or empty is
-BAD_ARGUMENT. It follows the installers' rules above: idle, before the first
+with `locale` as the realm's default locale; NULL or empty is BAD_ARGUMENT, and
+a tag the data does not hold (it holds `en` and `en-US`, as written) is a setup
+exception: ECMA-402 requires the default to be an available locale. It follows the installers' rules above: idle, before the first
 evaluation, once, under the setup budget and the runtime's memory. The object
 is published as one global property (writable, configurable, not enumerable)
 only once all of it is made, so a refused allocation or a failed definition

@@ -194,9 +194,9 @@ version, generated or copied from CLDR, never literals typed from memory.
 
 The hard part, because pages pass zone names and read them back:
 
-- **Names.** IANA names, from the build machine's tzdata at build time:
-  every zone and link `/usr/share/zoneinfo` holds (about 450 here), each mapped
-  to the POSIX rule its TZif file's footer carries (`America/New_York` →
+- **Names.** CLDR's zone names (its bcp47 table, every name and alias
+  other browsers' ICU accepts; `tools/intl_zones.py`), each mapped to the
+  POSIX rule its TZif file's footer carries in the build machine's tzdata (`America/New_York` →
   `EST5EDT,M3.2.0,M11.1.0`). A generated table, a few tens of KiB,
   compiled into libjs. A name not in it is a `RangeError`, as other
   browsers throw for one they do not know, so a page's typo behaves as it
@@ -226,7 +226,8 @@ The hard part, because pages pass zone names and read them back:
   same gap, so Intl and `Date` agree.
 - **The offset of a named zone at an instant** is the zone door's (§ 3),
   evaluating the rule from the table with libos64's code, so the
-  `M.m.w.d`, `Jn` and `/time` forms are read by one evaluator.
+  `M.m.w.d` and `/time` forms tzdata's footers use are read by one
+  evaluator.
 - **Zone names in output** (`timeZoneName`): `short` gives `EST`/`EDT` for
   the zones whose en-US names CLDR gives (the US ones) and `GMT-5` for the
   rest, which is CLDR's own rule for en-US; `long` gives CLDR's long names

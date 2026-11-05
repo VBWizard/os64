@@ -47,15 +47,12 @@ const fromCharCode = String_.fromCharCode;
 const StringProto = String_.prototype;
 const s_slice = StringProto.slice, s_indexOf = StringProto.indexOf, s_lastIndexOf = StringProto.lastIndexOf;
 const s_toLowerCase = StringProto.toLowerCase, s_toUpperCase = StringProto.toUpperCase;
-const s_charCodeAt = StringProto.charCodeAt, s_split = StringProto.split, s_replace = StringProto.replace;
+const s_charCodeAt = StringProto.charCodeAt;
 const s_padStart = StringProto.padStart;
 const a_sort = Array_.prototype.sort, a_join = Array_.prototype.join;
-const DateProto = Date_.prototype;
-const d_getUTCFullYear = DateProto.getUTCFullYear, d_getUTCMonth = DateProto.getUTCMonth;
-const d_getUTCDate = DateProto.getUTCDate, d_getUTCDay = DateProto.getUTCDay;
-const d_getUTCHours = DateProto.getUTCHours, d_getUTCMinutes = DateProto.getUTCMinutes;
-const d_getUTCSeconds = DateProto.getUTCSeconds, d_getUTCMilliseconds = DateProto.getUTCMilliseconds;
 const DateNow = Date_.now;
+const getPrototypeOf = Object_.getPrototypeOf, setPrototypeOf = Object_.setPrototypeOf;
+const ObjectPrototype = Object_.prototype;
 const RegExpProto = RegExp.prototype, r_exec = RegExpProto.exec;
 const zoneCanonical = I.zoneCanonical, zoneOffset = I.zoneOffset, zoneHost = I.zoneHost;
 
@@ -73,6 +70,9 @@ function loadData() {
     IV = G.intervalFormats; IV_FALLBACK = own(IV, 'intervalFormatFallback'); DAY_PERIOD_RULES = D.dayPeriods;
     dataLoaded = true;
 }
+// The default locale is the host's, and ECMA-402 requires it to be one the
+// data holds: a host that names another is refused (the install fails),
+// rather than every format reporting a locale it was not written in.
 const DEFAULT_LOCALE = I.locale;
 
 const slice = (s, a, b) => apply(s_slice, s, [a, b]);
@@ -81,12 +81,32 @@ const lastIndexOf = (s, t) => apply(s_lastIndexOf, s, [t]);
 const lower = s => apply(s_toLowerCase, s, []);
 const upper = s => apply(s_toUpperCase, s, []);
 const codeAt = (s, i) => apply(s_charCodeAt, s, [i]);
-const split = (s, sep) => apply(s_split, s, [sep]);
-const replaceAll = (s, pattern, by) => apply(s_replace, s, [pattern, by]);
 const pad = (s, n) => apply(s_padStart, s, [n, '0']);
 const join = (a, sep) => apply(a_join, a, [sep]);
 const sortStrings = a => apply(a_sort, a, [(x, y) => x < y ? -1 : x > y ? 1 : 0]);
 const exec = (re, s) => apply(r_exec, re, [s]);
+// split and a character swap written out: String.prototype.split and
+// replace ask the separator or pattern for Symbol.split or Symbol.replace,
+// which a page can put on String.prototype or RegExp.prototype.
+function split(s, sep) {
+    const out = [];
+    for (let from = 0;;) {
+        const at = indexOf(s, sep, from);
+        if (at < 0) { push(out, slice(s, from, s.length)); return out; }
+        push(out, slice(s, from, at));
+        from = at + sep.length;
+    }
+}
+// `s` with each character the table names replaced by its entry.
+function swapChars(s, table) {
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+        const c = fromCharCode(codeAt(s, i));
+        const r = own(table, c);
+        out += r !== undefined ? r : c;
+    }
+    return out;
+}
 // CreateDataProperty: a new own data property, never a [[Set]] that a
 // setter a page put on Object.prototype or Array.prototype could answer.
 function put(o, k, v) { defineProperty(o, k, {__proto__: null, value: v, writable: true, enumerable: true, configurable: true}); }
@@ -107,6 +127,16 @@ function method(target, name, fn, length) {
 function getter(target, name, fn) {
     const get = getOwnPropertyDescriptor({__proto__: null, get [name]() { return apply(fn, this, []); }}, name).get;
     defineProperty(target, name, {__proto__: null, get: get, enumerable: false, configurable: true});
+}
+// The object `new` made for a constructor (the engine's
+// OrdinaryCreateFromConstructor, which read newTarget.prototype once, as
+// ECMA-402 reads it). Where that was no object, the engine fell back to
+// Object.prototype and ECMA-402 to the constructor's own prototype, which
+// this restores; a newTarget whose prototype IS Object.prototype gets the
+// constructor's too, the one case the two cannot be told apart.
+function constructed(made, intrinsic) {
+    if (getPrototypeOf(made) === ObjectPrototype) setPrototypeOf(made, intrinsic);
+    return made;
 }
 // A method that is not a constructor (a built-in method has no
 // [[Construct]]): an arrow, or a concise method, never a function
@@ -280,7 +310,7 @@ function replaceAliases(t) {
             match = own(langAliases, t.language + '-' + t.region), matchedVariant = '';
         if (match === null && own(langAliases, t.language) !== undefined) match = own(langAliases, t.language);
         if (match !== null) {
-            const r = parseTag(replaceAll(match, '_', '-'));
+            const r = parseTag(swapChars(match, {__proto__: null, _: '-'}));
             if (r === null) break;
             if (matchedVariant) {
                 const kept = [];
@@ -291,7 +321,6 @@ function replaceAliases(t) {
             if (t.script === '' && r.script !== '') t.script = r.script;
             if (t.region === '' && r.region !== '') t.region = r.region;
             for (let v = 0; v < r.variants.length; v++) if (!contains(t.variants, r.variants[v])) push(t.variants, r.variants[v]);
-            changed = r.language !== match || r.region !== '' || r.script !== '';
             changed = own(langAliases, t.language) !== undefined && own(langAliases, t.language) !== match;
         }
     }
@@ -453,6 +482,8 @@ function CanonicalizeLocaleList(locales) {
 
 // The locales the data holds (INTL.md § 3).
 const AVAILABLE = ['en', 'en-US'];
+if (!contains(AVAILABLE, DEFAULT_LOCALE))
+    throw new RangeError_('Intl: the default locale ' + DEFAULT_LOCALE + ' is not one the data holds');
 
 function removeUnicodeExtensions(locale) {
     const t = parseTag(locale);
@@ -667,8 +698,9 @@ function addLikely(t) {
 }
 
 function Locale(tag, options) {
-    loadData();
     if (new.target === undefined) throw new TypeError_("Constructor Intl.Locale requires 'new'");
+    const locale = constructed(this, LocalePrototype);
+    loadData();
     if (typeof tag !== 'string' && !isObject(tag)) throw new TypeError_('First argument to Intl.Locale constructor can\'t be empty or missing');
     const existing = slots(LOCALES, tag);
     tag = existing !== undefined ? existing.locale : ToString(tag);
@@ -692,8 +724,6 @@ function Locale(tag, options) {
     if (nu !== undefined && !isTypeSequence(lower(nu))) throw new RangeError_('Incorrect numberingSystem');
     opt.nu = nu === undefined ? undefined : lower(nu);
     const r = makeLocaleRecord(tag, opt);
-    const locale = objectCreate(new.target.prototype === undefined || !isObject(new.target.prototype)
-        ? LocalePrototype : new.target.prototype);
     apply(wm_set, LOCALES, [locale, r]);
     return locale;
 }
@@ -864,7 +894,7 @@ function untokenize(items) {
         for (let k = 0; k < it.lit.length && !needsQuote; k++) needsQuote = isPatternLetter(codeAt(it.lit, k)) || codeAt(it.lit, k) === 39;
         if (!needsQuote) { out += it.lit; continue; }
         if (it.lit === "'") { out += "''"; continue; }
-        out += "'" + replaceAll(it.lit, /'/g, "''") + "'";
+        out += "'" + swapChars(it.lit, {__proto__: null, "'": "''"}) + "'";
     }
     return out;
 }
@@ -1146,12 +1176,12 @@ const COMPONENTS = [
 const SKELETON = {__proto__: null,
     weekday: {__proto__: null, narrow: 'EEEEE', short: 'EEE', long: 'EEEE'},
     era: {__proto__: null, narrow: 'GGGGG', short: 'G', long: 'GGGG'},
-    year: {'2-digit': 'yy', numeric: 'y'},
-    month: {'2-digit': 'MM', numeric: 'M', narrow: 'MMMMM', short: 'MMM', long: 'MMMM'},
-    day: {'2-digit': 'dd', numeric: 'd'},
+    year: {__proto__: null, '2-digit': 'yy', numeric: 'y'},
+    month: {__proto__: null, '2-digit': 'MM', numeric: 'M', narrow: 'MMMMM', short: 'MMM', long: 'MMMM'},
+    day: {__proto__: null, '2-digit': 'dd', numeric: 'd'},
     dayPeriod: {__proto__: null, narrow: 'BBBBB', short: 'B', long: 'BBBB'},
-    minute: {'2-digit': 'mm', numeric: 'm'},
-    second: {'2-digit': 'ss', numeric: 's'},
+    minute: {__proto__: null, '2-digit': 'mm', numeric: 'm'},
+    second: {__proto__: null, '2-digit': 'ss', numeric: 's'},
     timeZoneName: {__proto__: null, short: 'z', long: 'zzzz', shortOffset: 'O', longOffset: 'OOOO', shortGeneric: 'v', longGeneric: 'vvvv'},
 };
 const HOUR_SKELETON = {__proto__: null, h11: 'K', h12: 'h', h23: 'H', h24: 'k'};
@@ -1209,7 +1239,8 @@ function stylePattern(dateStyle, timeStyle, hc) {
 // Chrome writes an ASCII space for each, in format(), formatToParts() and
 // the ranges alike (INTL.md § 8, its capture). Applied where a string
 // leaves Intl, so the patterns stay CLDR's own.
-function asciiSpaces(text) { return replaceAll(text, /[\u202f\u2009]/g, ' '); }
+const CLDR_SPACES = {__proto__: null, '\u202f': ' ', '\u2009': ' '};
+function asciiSpaces(text) { return swapChars(text, CLDR_SPACES); }
 
 function hourCycleOfPattern(pattern) {
     const items = tokenize(pattern);
@@ -1233,10 +1264,8 @@ function parseOffsetZone(s) {
             minutes: minutes};
 }
 
-function CreateDateTimeFormat(newTarget, locales, options, required, defaults) {
+function CreateDateTimeFormat(dtf, locales, options, required, defaults) {
     loadData();
-    const proto = newTarget !== undefined && isObject(newTarget.prototype) ? newTarget.prototype : DateTimeFormatPrototype;
-    const dtf = objectCreate(proto);
     const requested = CanonicalizeLocaleList(locales);
     options = CoerceOptionsToObject(options);
     const opt = {__proto__: null};
@@ -1258,17 +1287,15 @@ function CreateDateTimeFormat(newTarget, locales, options, required, defaults) {
     if (hour12 === true) hc = 'h12';
     else if (hour12 === false) hc = 'h23';
     else hc = r.hc === null || r.hc === undefined ? 'h12' : r.hc;
+    // The machine's zone is a name or an offset zone, as a given one is.
     let timeZone = options.timeZone;
-    if (timeZone === undefined) timeZone = zoneHost();
+    timeZone = timeZone === undefined ? zoneHost() : ToString(timeZone);
+    const offset = parseOffsetZone(timeZone);
+    if (offset !== null) { s.offsetMinutes = offset.minutes; timeZone = offset.name; }
     else {
-        timeZone = ToString(timeZone);
-        const offset = parseOffsetZone(timeZone);
-        if (offset !== null) { s.offsetMinutes = offset.minutes; timeZone = offset.name; }
-        else {
-            const canonical = zoneCanonical(timeZone);
-            if (canonical === undefined) throw new RangeError_('Invalid time zone specified: ' + timeZone);
-            timeZone = canonical;
-        }
+        const canonical = zoneCanonical(timeZone);
+        if (canonical === undefined) throw new RangeError_('Invalid time zone specified: ' + timeZone);
+        timeZone = canonical;
     }
     s.timeZone = timeZone;
     const fmt = {__proto__: null};
@@ -1320,8 +1347,8 @@ function CreateDateTimeFormat(newTarget, locales, options, required, defaults) {
 }
 
 function DateTimeFormat(locales, options) {
-    const newTarget = new.target === undefined ? DateTimeFormat : new.target;
-    const dtf = CreateDateTimeFormat(newTarget, locales, options, 'any', 'date');
+    const made = new.target === undefined ? objectCreate(DateTimeFormatPrototype) : constructed(this, DateTimeFormatPrototype);
+    const dtf = CreateDateTimeFormat(made, locales, options, 'any', 'date');
     // The legacy constructor mode (ECMA-402 § 11.1.1 and Annex: the
     // ChainDateTimeFormat other browsers implement).
     if (new.target === undefined && isObject(this) && hasInstance(DateTimeFormat, this)) {
@@ -1351,15 +1378,34 @@ function toInstant(date) {
     return timeClip(ToNumber(date));
 }
 
+// The proleptic Gregorian date of a count of days from 1970-01-01, and its
+// inverse (Howard Hinnant's civil_from_days and days_from_civil): plain
+// arithmetic, since a Date cannot hold an instant TimeClip allows once a
+// zone's offset moves it past the range (Asia/Tokyo at 8.64e15).
+const DAY_MS = 86400000;
+function civilFromDays(days) {
+    const z = days + 719468, era = floor(z / 146097), doe = z - era * 146097;
+    const yoe = floor((doe - floor(doe / 1460) + floor(doe / 36524) - floor(doe / 146096)) / 365);
+    const doy = doe - (365 * yoe + floor(yoe / 4) - floor(yoe / 100));
+    const mp = floor((5 * doy + 2) / 153), m = mp < 10 ? mp + 3 : mp - 9;
+    return {__proto__: null, year: yoe + era * 400 + (m <= 2 ? 1 : 0), month: m - 1, day: doy - floor((153 * mp + 2) / 5) + 1};
+}
+function daysFromCivil(year, month, day) {
+    const y = month <= 1 ? year - 1 : year, era = floor(y / 400), yoe = y - era * 400;
+    const m = month + 1, doy = floor((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5) + day - 1;
+    return era * 146097 + yoe * 365 + floor(yoe / 4) - floor(yoe / 100) + doy - 719468;
+}
 // The calendar fields of instant `x` in the format's zone.
 function localFields(s, x) {
     const offset = s.offsetMinutes !== undefined ? s.offsetMinutes : zoneOffset(s.timeZone, x);
-    const d = new Date_(x + offset * 60000);
-    return {__proto__: null,
-        year: apply(d_getUTCFullYear, d, []), month: apply(d_getUTCMonth, d, []), day: apply(d_getUTCDate, d, []),
-        weekday: apply(d_getUTCDay, d, []), hour: apply(d_getUTCHours, d, []), minute: apply(d_getUTCMinutes, d, []),
-        second: apply(d_getUTCSeconds, d, []), ms: apply(d_getUTCMilliseconds, d, []), offset: offset, instant: x,
-    };
+    const t = x + offset * 60000, days = floor(t / DAY_MS);
+    let ms = t - days * DAY_MS;
+    const c = civilFromDays(days);
+    const hour = floor(ms / 3600000); ms -= hour * 3600000;
+    const minute = floor(ms / 60000); ms -= minute * 60000;
+    const second = floor(ms / 1000); ms -= second * 1000;
+    return {__proto__: null, year: c.year, month: c.month, day: c.day, weekday: ((days % 7) + 11) % 7,
+            hour: hour, minute: minute, second: second, ms: ms, offset: offset, instant: x};
 }
 
 // ── Time zone names (UTS 35 § 7) ────────────────────────────────────────
@@ -1374,8 +1420,9 @@ function gmtOffset(minutes, long) {
 function isDaylight(s, x, offset) {
     if (s.offsetMinutes !== undefined) return false;
     // Daylight time: the offset is past the zone's January and July minimum.
-    const year = apply(d_getUTCFullYear, new Date_(x), []);
-    const jan = zoneOffset(s.timeZone, Date_.UTC(year, 0, 1)), jul = zoneOffset(s.timeZone, Date_.UTC(year, 6, 1));
+    const year = civilFromDays(floor(x / DAY_MS)).year;
+    const jan = zoneOffset(s.timeZone, daysFromCivil(year, 0, 1) * DAY_MS);
+    const jul = zoneOffset(s.timeZone, daysFromCivil(year, 6, 1) * DAY_MS);
     return offset > (jan < jul ? jan : jul);
 }
 function zoneSpecific(zone, width, kind) {
@@ -1415,7 +1462,7 @@ function locationName(zone) {
     if (zonesInCountry === 1 || own(Z.primary, country) === zone) place = own(Z.countries, country);
     else {
         place = own(own(Z.zones, zone) || {__proto__: null}, 'exemplarCity');
-        if (place === undefined) place = replaceAll(slice(zone, lastIndexOf(zone, '/') + 1), /_/g, ' ');
+        if (place === undefined) place = swapChars(slice(zone, lastIndexOf(zone, '/') + 1, zone.length), {__proto__: null, _: ' '});
     }
     return place === undefined ? undefined : simpleFormat(own(Z.formats, 'regionFormat'), [place]);
 }
@@ -1595,11 +1642,8 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 // skeleton, and how near (0 the same, 1 the same fields at other widths,
 // 2 only z/k/K/a/b told apart, -1 other fields).
 function bestIntervalSkeleton(skeleton) {
-    let input = skeleton, replaced = false;
-    if (exec(/[zkKab]/, skeleton) !== null) {
-        input = replaceAll(replaceAll(replaceAll(replaceAll(skeleton, /z/g, 'v'), /k/g, 'H'), /K/g, 'h'), /[ab]/g, '');
-        replaced = true;
-    }
+    const input = swapChars(skeleton, {__proto__: null, z: 'v', k: 'H', K: 'h', a: '', b: ''});
+    const replaced = input !== skeleton;
     const want = letterCounts(input);
     const IV_SKELETONS = ivSkeletons();
     let best = null, bestDistance = 0x7fffffff, info = 0;
@@ -1644,10 +1688,10 @@ function adjustFieldWidth(inputSkeleton, bestSkeleton, pattern, info) {
     const input = letterCounts(inputSkeleton), best = letterCounts(bestSkeleton);
     let adjusted = pattern;
     if (info === 2) {
-        if (indexOf(inputSkeleton, 'z', 0) >= 0) { best.z = own(best, 'v'); adjusted = replaceAll(adjusted, /v/g, 'z'); }
-        if (indexOf(inputSkeleton, 'K', 0) >= 0) adjusted = replaceAll(adjusted, /h/g, 'K');
-        if (indexOf(inputSkeleton, 'k', 0) >= 0) adjusted = replaceAll(adjusted, /H/g, 'k');
-        if (indexOf(inputSkeleton, 'b', 0) >= 0) adjusted = replaceAll(adjusted, /a/g, 'b');
+        if (indexOf(inputSkeleton, 'z', 0) >= 0) { best.z = own(best, 'v'); adjusted = swapChars(adjusted, {__proto__: null, v: 'z'}); }
+        if (indexOf(inputSkeleton, 'K', 0) >= 0) adjusted = swapChars(adjusted, {__proto__: null, h: 'K'});
+        if (indexOf(inputSkeleton, 'k', 0) >= 0) adjusted = swapChars(adjusted, {__proto__: null, H: 'k'});
+        if (indexOf(inputSkeleton, 'b', 0) >= 0) adjusted = swapChars(adjusted, {__proto__: null, a: 'b'});
     }
     if (indexOf(adjusted, 'a', 0) >= 0 && !own(best, 'a')) best.a = 1;
     if (indexOf(adjusted, 'b', 0) >= 0 && !own(best, 'b')) best.b = 1;
@@ -1688,7 +1732,10 @@ function intervalFormatOf(s) {
     const sk = makeSkeleton(s.pattern);
     // staticGetSkeleton: the default day period it adds is not reported.
     let skeleton = sk.original;
-    if (sk.addedDayPeriod) skeleton = replaceAll(skeleton, /a/, '');
+    if (sk.addedDayPeriod) {
+        const at = indexOf(skeleton, 'a', 0);
+        skeleton = slice(skeleton, 0, at) + slice(skeleton, at + 1, skeleton.length);
+    }
     const st = {__proto__: null, p: {__proto__: null}, single: best(skeleton), datePattern: null, timePattern: null, glue: null};
     s.interval = st;
     const converted = normalizeHourLetters(skeleton);
@@ -1966,13 +2013,15 @@ method(DateTimeFormatPrototype, 'formatToParts', methodOf(function (date) {
 method(DateTimeFormatPrototype, 'formatRange', methodOf(function (startDate, endDate) {
     const s = UnwrapDateTimeFormat(this, 'formatRange');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
-    const x = timeClip(ToNumber(startDate)), y = timeClip(ToNumber(endDate));
+    const xn = ToNumber(startDate), yn = ToNumber(endDate);       // both converted, then clipped
+    const x = timeClip(xn), y = timeClip(yn);
     return asciiSpaces(partsToString(formatRangeParts(s, x, y)));
 }), 2);
 method(DateTimeFormatPrototype, 'formatRangeToParts', methodOf(function (startDate, endDate) {
     const s = UnwrapDateTimeFormat(this, 'formatRangeToParts');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
-    const x = timeClip(ToNumber(startDate)), y = timeClip(ToNumber(endDate));
+    const xn = ToNumber(startDate), yn = ToNumber(endDate);       // both converted, then clipped
+    const x = timeClip(xn), y = timeClip(yn);
     return partsToArray(formatRangeParts(s, x, y));
 }), 2);
 // resolvedOptions: what the pattern holds, read back as other browsers

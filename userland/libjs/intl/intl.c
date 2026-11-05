@@ -12,8 +12,10 @@
  * first asks, and the zones — a name's canonical zone, a zone's offset at
  * an instant, and the machine's own zone. Offsets come from libos64's TZ
  * evaluator (os64/date.h), the one Date's local time runs on, over each
- * zone's current rule (zones.inc), so Date and Intl cannot disagree about
- * an offset. */
+ * zone's current rule (zones.inc), so where the machine's TZ is a zone's
+ * rule, Date and Intl agree about its offsets. A TZ no zone keeps is an
+ * offset zone at its standard offset, which does not follow its daylight
+ * changes (DEBTS). */
 
 #ifndef LIBJS_INTL_DIR
 #define LIBJS_INTL_DIR "libjs/intl/"
@@ -189,23 +191,25 @@ static JSValue zone_host(JSContext *ctx, JSValueConst this_value, int argc, JSVa
  * each script and keeps its bytecode here, and every later one reads it,
  * which costs a small part of a compile. The bytes never leave the
  * process, so the engine that reads them is the one that wrote them. The
- * buffers are static, so the cache is no allocation of anybody's to
- * account for, and untouched pages of them cost nothing; a script that
- * outgrows its buffer is compiled by every realm, which is slower and
- * nothing else. One realm claims FILLING, fills, then releases READY; a
- * realm reads the bytes only after acquiring READY. */
+ * buffers are static and zero-initialized (.bss, apart from the records
+ * that name them), so the cache is no allocation of anybody's to account
+ * for, adds nothing to libjs.so, and its untouched pages cost nothing; a
+ * script that outgrows its buffer is compiled by every realm, which is
+ * slower and nothing else. One realm claims FILLING, fills, then releases
+ * READY; a realm reads the bytes only after acquiring READY. */
 #define INTL_BYTECODE_MAX ((size_t)512 * 1024)
 enum { CACHE_EMPTY, CACHE_FILLING, CACHE_READY, CACHE_UNCACHED };
 
 typedef struct {
     const char *source, *end, *name;
-    uint8_t bytes[INTL_BYTECODE_MAX];
+    uint8_t *bytes;
     size_t length;
     uint32_t state;
 } Compiled;
 
-static Compiled s_data = {js_intl_data_source, js_intl_data_source_end, "<intl data>", {0}, 0, CACHE_EMPTY};
-static Compiled s_script = {js_intl_script_source, js_intl_script_source_end, "<intl>", {0}, 0, CACHE_EMPTY};
+static uint8_t s_data_bytes[INTL_BYTECODE_MAX], s_script_bytes[INTL_BYTECODE_MAX];
+static Compiled s_data = {js_intl_data_source, js_intl_data_source_end, "<intl data>", s_data_bytes, 0, CACHE_EMPTY};
+static Compiled s_script = {js_intl_script_source, js_intl_script_source_end, "<intl>", s_script_bytes, 0, CACHE_EMPTY};
 
 /* The script's completion value, or JS_EXCEPTION. A compile keeps no
  * source text, so Intl's functions read as native ones do to toString;
@@ -236,7 +240,7 @@ static JSValue completion(JSContext *ctx, Compiled *c)
         if (bytes == NULL) {
             state = CACHE_EMPTY;
             JS_FreeValue(ctx, JS_GetException(ctx));
-        } else if (length <= sizeof(c->bytes)) {
+        } else if (length <= INTL_BYTECODE_MAX) {
             os64_memcpy(c->bytes, bytes, length);
             c->length = length;
             state = CACHE_READY;

@@ -1062,22 +1062,34 @@ static void intl_cases(void)
           os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
           "a refused locale installs nothing; a second install is refused");
     os64_js_destroy(runtime);
+    /* ECMA-402's default locale is one the data holds: another is refused
+     * as a setup exception, with no Intl defined. */
+    runtime = create_fixture(&config);
+    if (runtime == NULL) return;
+    check(os64_js_install_intl(runtime, "de-DE", &outcome) == OS64_JS_EXCEPTION &&
+          intl_eval(runtime, "if (typeof Intl !== 'undefined') throw new Error('Intl defined');"),
+          "a default locale the data does not hold is refused, and nothing is defined");
+    os64_js_destroy(runtime);
 
     /* The machine's zone: a rule names the zone that keeps it, by its
      * text or by the same times; a rule no zone keeps, and the kernel's
-     * offset with no TZ, are offset zones; no offset is UTC. */
-    static const struct { const char *tz, *zone; } zones[] = {
-        {"EST5EDT,M3.2.0,M11.1.0", "America/New_York"}, {"CET-1CEST,M3.5.0,M10.5.0/3", "Europe/Paris"},
-        {"PST8PDT", "America/Los_Angeles"}, {"JST-9", "Asia/Tokyo"}, {"UTC0", "UTC"},
-        {"XST-4:15", "+04:15"}, {NULL, "+05:30"},
+     * offset with no TZ, are offset zones; no offset is UTC. Each is held
+     * by its name and by what it formats (January 1970, standard time). */
+    static const struct { const char *tz, *zone, *offset; } zones[] = {
+        {"EST5EDT,M3.2.0,M11.1.0", "America/New_York", "GMT-05:00"},
+        {"CET-1CEST,M3.5.0,M10.5.0/3", "Europe/Paris", "GMT+01:00"},
+        {"PST8PDT", "America/Los_Angeles", "GMT-08:00"}, {"JST-9", "Asia/Tokyo", "GMT+09:00"},
+        {"UTC0", "UTC", "GMT+00:00"}, {"XST-4:15", "+04:15", "GMT+04:15"}, {NULL, "+05:30", "GMT+05:30"},
     };
     for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
         runtime = intl_fixture(&config, zones[i].tz);
         if (runtime == NULL) { check(false, "Intl installs for a host zone"); continue; }
-        char source[160];
+        char source[320];
         snprintf(source, sizeof(source),
                  "const tz = new Intl.DateTimeFormat().resolvedOptions().timeZone;"
-                 "if (tz !== '%s') throw new Error(tz);", zones[i].zone);
+                 "if (tz !== '%s') throw new Error(tz);"
+                 "const f = new Intl.DateTimeFormat('en-US', {timeZoneName: 'longOffset'}).format(0);"
+                 "if (!f.endsWith(' %s')) throw new Error(f);", zones[i].zone, zones[i].offset);
         check(intl_eval(runtime, source), "the host zone follows TZ as Date does");
         os64_js_destroy(runtime);
     }

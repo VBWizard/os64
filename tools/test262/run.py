@@ -10,7 +10,10 @@ INTERPRETING.md says: the harness's assert.js and sta.js, then the files
 its `includes` names (doneprintHandle.js first for an async test), then
 the test, once as written and once strict ("use strict" first) unless its
 flags say onlyStrict, noStrict or raw. A module test is not run (libjs's
-classic runner has no module host) and fails as such.
+classic runner has no module host) and fails as such. A negative test
+passes on an exception of its type in any phase: the runner does not tell
+a parse-phase SyntaxError from a runtime one (intl402 has no negative
+tests; a directory that does needs the phase told apart first).
 
 THE GATE: every test of a directory passes, except those its expectation
 file lists under [excluded], each with the reason it cannot pass here (a

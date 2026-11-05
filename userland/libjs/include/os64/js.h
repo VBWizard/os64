@@ -164,9 +164,10 @@ os64_js_status_t os64_js_install_output(os64_js_runtime_t *runtime,
 os64_js_status_t os64_js_install_args(os64_js_runtime_t *runtime,
                                       size_t count, const char *const *args,
                                       os64_js_outcome_t *outcome);
-/* ECMA-402's Intl (INTL.md), its default locale `locale` (a BCP 47 tag;
- * the data is en-US's, so every locale resolves to "en" or "en-US"). An
- * installer like the two above: idle, before the first evaluation, once. */
+/* ECMA-402's Intl (INTL.md), its default locale `locale`, one the data
+ * holds ("en" or "en-US"; another is refused). The data is en-US's, so
+ * every locale a script asks for resolves to one of the two. An installer
+ * like the two above: idle, before the first evaluation, once. */
 os64_js_status_t os64_js_install_intl(os64_js_runtime_t *runtime, const char *locale,
                                       os64_js_outcome_t *outcome);
 /* Cancellation is sticky. This is the cross-thread operation; callers keep the
