@@ -11,6 +11,9 @@
 #define OS64_JS_SOURCE_NAME_CAP 128
 #define OS64_JS_STACK_TRACE_CAP 1024
 #define OS64_JS_FATAL_EXIT ((int32_t)0x4A534641) /* JSFA */
+/* The locale the page is told it runs in, a BCP 47 language tag: Intl is
+ * to format in it and no other. */
+#define OS64_JS_LOCALE "en-US"
 
 typedef struct os64_js_runtime os64_js_runtime_t;
 

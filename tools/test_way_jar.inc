@@ -775,11 +775,14 @@ static void cookie_switch(void)
 {
     way_jar_t *jar = way_jar_new();
     hear(jar, "http://o.test/", false, "a=1; Max-Age=100", 10);
+    expect("refusing: a new jar does not", !way_jar_refusing(jar), NULL);
     way_jar_refuse(jar, true);
+    expect("refusing: says so once off", way_jar_refusing(jar) && way_jar_refusing(NULL), NULL);
     hear(jar, "http://o.test/", false, "b=2; Max-Age=100", 11);
     jar_expect("off: nothing sent", jar, "http://o.test/", false, 12, "");
     way_jar_read(jar, "o.test\tFALSE\t/\tFALSE\t500\tc\t3\n", 29, 12, NULL);
     way_jar_refuse(jar, false);
+    expect("refusing: and not once on again", !way_jar_refusing(jar), NULL);
     jar_expect("off: nothing heard nor read while it was", jar, "http://o.test/", false, 13, "a=1");
     hear(jar, "http://o.test/", false, "b=2; Max-Age=100", 14);
     hear(jar, "http://o.test/", false, "a=gone; Max-Age=0", 15);

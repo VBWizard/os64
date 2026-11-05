@@ -404,6 +404,9 @@ struct os64_dom {
     bool attr_ordinary;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     DValue *invoke, *navigator, *style_prototype, *static_list;
+    /* navigator.languages, plugins and mimeTypes, each [SameObject]; made by
+     * the Modern Web's window objects row (window.c), NULL without it. */
+    DValue *languages, *plugins, *mime_types;
     const char *(*user_agent)(void *opaque);
     void *user_agent_opaque;
     os64_dom_cookies_t cookies;

@@ -41,9 +41,10 @@ fallback can paint at all.
 **The repo home.** Shows for half a second, then "It looks like your
 network connection is down." The network was fine: all 125 requests on
 the record came back 200/204. The boundary's test is literally
-`error instanceof Error && !navigator.onLine`; libdom's Navigator has no
-`onLine`, so the check reads `undefined` and every render error on this
-app is labelled "offline". The error it mislabels is Intl again, by a
+`error instanceof Error && !navigator.onLine`; libdom's Navigator had no
+`onLine` that day (Slice B's second PR paid it), so the check read
+`undefined` and every render error on this app was labelled "offline".
+The error it mislabels is Intl again, by a
 shorter road: this app is Vite-built ES modules; the banners chunk
 constructs `new Intl.DateTimeFormat("en-US", {dateStyle:"long",
 timeZone:"UTC"})` at module scope and is STATICALLY imported by the
