@@ -97,6 +97,52 @@ static void dom_walker_cases(void)
         "r.removeChild(y);assert(j.referenceNode.id==='x'&&!j.pointerBeforeReferenceNode,'the previous sibling\\'s last');"
         "const k=document.createNodeIterator(r);r.remove();assert(k.referenceNode===r,'the root itself stays');}",
         "walker-removal");
+    /* An iterator walked from its own filter; a removal around the root;
+     * moves, whose removal libhtml tells once the node is placed. */
+    dom_script(&f, WALK_ASSERT "{"
+        "const host=document.createElement('div');document.body.appendChild(host);"
+        "host.innerHTML='<p id=n1></p><p id=n2></p>';"
+        "let inner=[];const it=document.createNodeIterator(host,NodeFilter.SHOW_ELEMENT,n=>{"
+        "try{inner.push(String(it.nextNode()))}catch(e){inner.push(e.name)}return NodeFilter.FILTER_SKIP});"
+        "assert(it.nextNode()===null&&inner.join()==='InvalidStateError,InvalidStateError,InvalidStateError',inner.join());"
+        "assert(it.referenceNode===host&&it.pointerBeforeReferenceNode,'the outer walk left the reference alone');"
+        "const ok=document.createNodeIterator(host,NodeFilter.SHOW_ELEMENT,n=>{try{ok.nextNode()}catch(e){}return 1});"
+        "assert(ok.nextNode()===host&&ok.nextNode().id==='n1'&&ok.referenceNode.id==='n1','accepted after a nested try');"
+        "let armed=false,last;const tail=document.createNodeIterator(host,NodeFilter.SHOW_ELEMENT,n=>{"
+        "if(armed)last=tail.nextNode();return 1});"
+        "tail.nextNode();tail.nextNode();tail.nextNode();"
+        "assert(tail.referenceNode.id==='n2'&&!tail.pointerBeforeReferenceNode,'tail at '+tail.referenceNode.id);"
+        "armed=true;"
+        "assert(tail.previousNode().id==='n2'&&last===null&&tail.referenceNode.id==='n2'&&"
+        "tail.pointerBeforeReferenceNode,'a nested walk with nowhere to go answers null and moves nothing');"
+        /* The fixture's page has ids of its own, so these are looked up in host. */
+        "const $=id=>host.querySelector('#'+id);"
+        "host.innerHTML='<hr id=h><section id=s><div id=r><p></p></div></section><span id=t></span>';"
+        "const r=$('r'),around=document.createNodeIterator(r);"
+        "$('s').remove();"
+        "assert(around.referenceNode===r&&around.pointerBeforeReferenceNode&&around.nextNode()===r,"
+        "'a removal around the root leaves it be');"
+        "host.innerHTML='<div id=r2><p id=a><b id=b></b></p><i id=x></i></div>';"
+        "const m=document.createNodeIterator($('r2'),NodeFilter.SHOW_ELEMENT);"
+        "for(let i=0;i<4;i++)m.nextNode();assert(m.referenceNode.id==='x','m at '+m.referenceNode.id);"
+        "$('a').appendChild($('x'));"
+        "assert(m.referenceNode.id==='b'&&!m.pointerBeforeReferenceNode,'moved into its previous sibling: '+m.referenceNode.id);"
+        "assert(m.nextNode().id==='x');"
+        "host.innerHTML='<div id=r3><p id=a3><i id=x3></i></p><s id=s3></s></div>';"
+        "const r3=$('r3'),m3=document.createNodeIterator(r3,NodeFilter.SHOW_ELEMENT);"
+        "m3.nextNode();m3.nextNode();m3.nextNode();m3.previousNode();"
+        "assert(m3.referenceNode.id==='x3'&&m3.pointerBeforeReferenceNode,'m3 at '+m3.referenceNode.id);"
+        "r3.insertBefore($('x3'),$('s3'));"
+        "assert(m3.referenceNode.id==='s3'&&m3.pointerBeforeReferenceNode,'moved out, before: '+m3.referenceNode.id);"
+        "assert(m3.nextNode().id==='s3');"
+        "host.innerHTML='<div id=r4><u id=u4><em></em></u><a id=a4></a><b id=b4><i id=i4></i></b></div>';"
+        "const r4=$('r4'),m4=document.createNodeIterator(r4,NodeFilter.SHOW_ELEMENT);"
+        "for(let i=0;i<6;i++)m4.nextNode();assert(m4.referenceNode.id==='i4','m4 at '+m4.referenceNode.id);"
+        "r4.replaceChild($('a4'),$('b4'));"
+        "assert(m4.referenceNode.nodeName==='EM'&&!m4.pointerBeforeReferenceNode,"
+        "'replaced by its previous sibling: '+m4.referenceNode.nodeName);"
+        "host.remove();}",
+        "walker-reader-cases");
     /* A filter that empties the box the walk stands in: the walk reads on
      * through nodes nothing else holds. */
     dom_script(&f, WALK_ASSERT "{"

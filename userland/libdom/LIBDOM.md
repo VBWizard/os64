@@ -800,7 +800,14 @@ its reference and, while a traversal is running, on the traversal's
 position, which the reference becomes when a node is accepted; so a filter
 that removes the node it is filtering returns that node and leaves the
 iterator where the removal put it, as WPT's
-`NodeIterator-removal-during-filtering.html` asks. A current node set
+`NodeIterator-removal-during-filtering.html` asks. libhtml tells a move's
+removal once the node is placed, so the steps' walks step around the nodes
+the change moved, which is the only way the tree then differs from the one
+the steps read; and a removal that takes the root out of its tree leaves
+the iterator as it is, as WPT and other browsers have it. An iterator
+walked from its own filter never touches the running traversal: it
+answers null when there is nowhere to go, and InvalidStateError when its
+filter would be asked. A current node set
 outside the root makes `nextNode` end with null where DOM's steps would
 filter the same node for ever. Lifetime is the observers': a finalizer
 marks its record dead, and the dead are swept when the next walker is made

@@ -18,9 +18,10 @@
  * AN ITERATOR FOLLOWS REMOVALS. DOM's "NodeIterator pre-removing steps"
  * move an iterator's reference off a node about to be removed. libhtml
  * tells the binding after the removal (mutation.c's consumers), with the
- * parent and the siblings the removed run lay between, which is all the
- * steps read: the node that followed the run within the root, or the last
- * node of the run's previous sibling, else the parent.
+ * parent and the siblings the removed run lay between; the steps read the
+ * tree around them as it was, which differs from the tree as it is only by
+ * the nodes the change moved, so the steps' walks step around those
+ * (retarget).
  *
  * LIFETIME is the observers' (resize.c): the records sit on one list, a
  * finalizer only marks its record dead, and the dead are swept when the
@@ -331,6 +332,17 @@ static const os64_html_node_t *preceding(const os64_html_node_t *node, const os6
 static int iterator_traverse(os64_dom_t *dom, JSContext *ctx, DWalk *w, bool next,
                              const os64_html_node_t **accepted)
 {
+    /* Called from this iterator's own filter: the position is the running
+     * traversal's and is not touched. From the reference, which is still
+     * the last node accepted, either there is no node to go to, null, or
+     * the filter would be asked of it while it runs, InvalidStateError. */
+    if (w->flight != NULL) {
+        const os64_html_node_t *candidate = next == w->before ? w->at
+            : next ? following(w->at, w->root) : preceding(w->at, w->root);
+        if (candidate == NULL) return 0;
+        d_error(ctx, "InvalidStateError", "The traversal's filter is already running");
+        return -1;
+    }
     int found = 0;
     step_to(dom, &w->flight, w->at);
     w->flight_before = w->before;
@@ -366,34 +378,62 @@ static bool inclusive_ancestor(const os64_html_node_t *ancestor, const os64_html
     return false;
 }
 
+static bool in_run(const os64_html_node_t *node, const os64_html_node_t *first, size_t count)
+{
+    for (size_t i = 0; i < count && first != NULL; i++, first = first->next)
+        if (first == node) return true;
+    return false;
+}
+
+/* Whether the change put `node` where it now is: a node it removed that
+ * lies in another parent already (libhtml tells a move's removal once the
+ * node is placed), or one it added. */
+static bool moved(const os64_html_node_t *node, const os64_html_change_t *c)
+{
+    return in_run(node, c->removed, c->nremoved) || in_run(node, c->added, c->nadded);
+}
+
 /* DOM's "NodeIterator pre-removing steps" for one position (`*slot`, held,
  * and whether before it), from the removal's record: the removed run lay
- * between c->previous_sibling and c->next_sibling under c->target, which is
- * all the steps read, the tree around them being as it was. */
+ * between c->previous_sibling and c->next_sibling under c->target. The
+ * steps read the tree as it was before the removal, and the tree differs
+ * from that only by the nodes the change moved, so every walk here steps
+ * around them. A removal that takes the root out of its tree, or
+ * anything around it, leaves the iterator as it is: the steps are for a
+ * node inside the root, as WPT's NodeIterator-removal.html and other
+ * browsers have them. */
 static void retarget(os64_dom_t *dom, const DWalk *w, const os64_html_change_t *c,
                      const os64_html_node_t **slot, bool *before)
 {
     bool moves = false;
     const os64_html_node_t *gone = c->removed;
     for (size_t i = 0; i < c->nremoved && gone != NULL && !moves; i++, gone = gone->next)
-        moves = gone != w->root && inclusive_ancestor(gone, *slot);
+        moves = !inclusive_ancestor(gone, w->root) && inclusive_ancestor(gone, *slot);
     if (!moves) return;
     if (*before) {
         /* The node after the run, within the root. */
-        const os64_html_node_t *next = NULL;
-        if (inclusive_ancestor(w->root, c->target)) {
-            next = c->next_sibling;
-            for (const os64_html_node_t *at = c->target; next == NULL && at != NULL && at != w->root;
-                 at = at->parent)
-                next = at->next;
-        }
+        const os64_html_node_t *next = c->next_sibling;
+        while (next != NULL && moved(next, c)) next = next->next;
+        for (const os64_html_node_t *at = c->target; next == NULL && at != NULL && at != w->root; at = at->parent)
+            for (next = at->next; next != NULL && moved(next, c);) next = next->next;
         if (next != NULL) {
             step_to(dom, slot, next);
             return;
         }
         *before = false;
     }
-    step_to(dom, slot, c->previous_sibling != NULL ? last_of(c->previous_sibling) : c->target);
+    /* The previous sibling's last inclusive descendant, else the parent. */
+    const os64_html_node_t *last = c->previous_sibling;
+    while (last != NULL && moved(last, c)) last = last->prev;
+    for (const os64_html_node_t *child = last != NULL ? last->last_child : NULL; child != NULL;) {
+        if (moved(child, c)) {
+            child = child->prev;
+            continue;
+        }
+        last = child;
+        child = child->last_child;
+    }
+    step_to(dom, slot, last != NULL ? last : c->target);
 }
 
 /* The steps for every iterator's reference, and for its traversal's
