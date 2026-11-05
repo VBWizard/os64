@@ -201,8 +201,9 @@ for (const type of ['conjunction', 'disjunction', 'unit']) for (const style of [
 // under every sensitivity, numeric, caseFirst and ignorePunctuation.
 const collatorPairs = [['a', 'A'], ['a', '\u00e1'], ['\u00df', 'ss'], ['\u00e6', 'ae'], ['1', 'a'], ['_', '1'], ['a-b', 'ab'],
     ['a$b', 'ab'], ['e\u0301', '\u00e9'], ['item 10', 'item 9'], ['a01', 'a1'], ['l\u00b7l', 'll'], ['\u0101', 'b'],
-    ['\u0142', 'm'], ['co-op', 'coop'], ['\u201cq\u201d', 'q'], ['\u03b1', 'z'], ['\u4e00', '\u0430']];
-const collatorAlphabet = 'aAbBeEzZ019 -_.,\'\u00e9\u00c9\u00df\u00e6\u00c6\u00f8\u00d8\u0101\u0142\u0301\u2013\u201c$';
+    ['\u0142', 'm'], ['co-op', 'coop'], ['\u201cq\u201d', 'q'], ['\u03b1', 'z'], ['\u4e00', '\u0430'], ['a\tb', 'ab'],
+    ['x\r\ny', 'xy'], ['\u20ac', '1'], ['\ud83d\ude00', 'a'], ['9'.repeat(300), '1' + '0'.repeat(300)]];
+const collatorAlphabet = 'aAbBeEzZ019 -_.,\'\u00e9\u00c9\u00df\u00e6\u00c6\u00f8\u00d8\u0101\u0142\u0301\u2013\u201c$\t\n';
 for (let i = 0; i < 200; i++) {
     const word = () => { let s = ''; for (let n = 1 + rand(4); n > 0; n--) s += collatorAlphabet[rand(collatorAlphabet.length)]; return s; };
     collatorPairs.push([word(), word()]);

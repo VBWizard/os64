@@ -65,7 +65,6 @@ import json
 import os
 import re
 import sys
-import unicodedata
 
 
 def load(*parts):
@@ -107,8 +106,9 @@ def collation(root):
     """{cp: [element, ...]} and {first cp: {second cp: elements}}: each
     collation element its primary, secondary and tertiary weights and
     whether it is variable (ignorable under ignorePunctuation: CLDR's
-    maxVariable is punct, so spaces and punctuation are, symbols are not),
-    packed into one number, p * 0x10000 + s * 0x40 + t * 2 + v, because a
+    maxVariable is punct, so its spaces, punctuation and the whitespace
+    controls are, symbols are not; in these ranges the file marks exactly
+    those with `*`), packed into one number, p * 0x10000 + s * 0x40 + t * 2 + v, because a
     realm holds them as numbers far more cheaply than as arrays."""
     path = os.path.join(root, 'cldr-uca', 'allkeys_CLDR.txt')
     version = None
@@ -127,7 +127,7 @@ def collation(root):
                 continue
             elements = []
             for m in re.finditer(r'\[([.*])([0-9A-F]{4})\.([0-9A-F]{4})\.([0-9A-F]{4})\]', ces):
-                variable = m.group(1) == '*' and unicodedata.category(chr(cps[0]))[0] in 'PZ'
+                variable = m.group(1) == '*'
                 p, s, t = int(m.group(2), 16), int(m.group(3), 16), int(m.group(4), 16)
                 if s >= 0x400 or t >= 0x20:
                     sys.exit('intl_cldr: collation weights of %04X do not pack' % cps[0])

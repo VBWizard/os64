@@ -169,8 +169,9 @@ symbol. So the collation is written down (Fable's finding 2):
   it names (`base` the first, `accent` the second, `case` the first and
   third, `variant` all three), `caseFirst` reorders the third.
 - **`numeric: true`** compares a run of digits as the number it spells;
-  **`ignorePunctuation`** skips spaces and punctuation (CLDR's
-  `maxVariable` is punct: symbols still count).
+  **`ignorePunctuation`** skips spaces, punctuation and the whitespace
+  controls (tab, newline; CLDR's `maxVariable` is punct: symbols still
+  count).
 - **Beyond those ranges, code-point order** after every letter in the
   table, the gap booked by name (DEBTS: full DUCET, its size stated). The
   collator does not normalize: two strings that differ only in the order
@@ -293,13 +294,18 @@ The hard part, because pages pass zone names and read them back:
   first construction builds too (1.9 ms and 735 KiB as a realm's first);
   the list patterns are small and in the data proper, so a realm's first
   ListFormat costs what its first DateTimeFormat does (1.3 ms, 569 KiB).
-- **Measured (A2's Collator, 2026-11-05, the same way):** the script 185
-  KiB of source and 124 KiB of bytecode, the data 202 KiB and 148 KiB.
-  The install costs 0.52 ms and 329 KiB a realm. The collation (815
+- **Measured (A2's Collator, 2026-11-05, the same way):** the script 191
+  KiB of source and 128 KiB of bytecode, the data 202 KiB and 148 KiB.
+  The install costs 0.54 ms and 335 KiB a realm. The collation (815
   characters' elements and the root's contractions) is a deferred part of
-  the data of its own, built by a realm's first Collator (1.5 ms and 713
-  KiB as a realm's first construction). Each element is written as one
-  number, not an array: as arrays the table cost a realm 200 KiB more.
+  the data of its own, built by a realm's first Collator (2.3 ms and 759
+  KiB as a realm's first construction, with its dense table). Each element
+  is written as one number, not an array: as arrays the table cost a realm
+  200 KiB more. A compare walks both strings' primaries in step and stops
+  at the first that differs: sorting 10,000 random words costs about
+  176 ms natively, 1.3 µs a compare (a plain JavaScript comparator, 8 ms;
+  Chrome's ICU, under 10 ms in Node), and two 100,000-character strings
+  that differ at the front compare at once.
 - **The page's bytecode cache.** A kept blob is keyed by the engine's
   build identity, a hash over upstream and the libjs patch series
   (BYTECODE_CACHE.md). Intl's script is not among those sources, and a

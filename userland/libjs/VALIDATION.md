@@ -944,9 +944,9 @@ library's exports and imports are unchanged.
 Latin, the combining marks and general punctuation (INTL.md § 4.1). The
 runtime suite's Intl case sorts with it, and a sweep refuses each
 allocation of a realm's first Collator, which builds the collation, a
-deferred part of the data (309 allocations on the target core, every one
+deferred part of the data (365 allocations on the target core, every one
 refused): each refusal is the runtime's sticky failure and frees
-everything. The suite passes: 9,233 checks on the target core, 27,450
+everything. The suite passes: 10,451 checks on the target core, 27,491
 sanitized.
 
 `tools/test262_host.sh` adds `intl402/Collator`: 120 of 130 run as written
