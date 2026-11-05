@@ -387,9 +387,11 @@ function replaceAliases(t) {
                 // The region the language and script are likeliest in, when
                 // it is among the choices (UTS 35 Annex C.10), else the
                 // first. The data holds that region for the languages and
-                // scripts it makes a difference to, looked up as likely
-                // subtags are: the language with its script, then alone
-                // (und with a script only with it).
+                // scripts it makes a difference to: the language with its
+                // script, then alone. Likely subtags would go on to und with
+                // the script for a language CLDR does not list; the table
+                // cannot say which languages CLDR lists, so und with a
+                // script is looked up only for und itself.
                 let likely = t.script !== '' ? own(LIKELY_REGIONS, t.language + '-' + titleCase(t.script)) : undefined;
                 if (likely === undefined && t.language !== 'und') likely = own(LIKELY_REGIONS, t.language);
                 if (likely !== undefined)
