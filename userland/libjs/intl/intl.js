@@ -324,6 +324,7 @@ function replaceAliases(t) {
             changed = own(langAliases, t.language) !== undefined && own(langAliases, t.language) !== match;
         }
     }
+    variantRules(t);
     if (t.script !== '') {
         const s = own(ALIASES.scriptAlias, titleCase(t.script)) || own(ALIASES.scriptAlias, t.script);
         if (s !== undefined) t.script = lower(s);
@@ -352,6 +353,39 @@ function replaceAliases(t) {
         if (!contains(variants, name)) push(variants, name);
     }
     t.variants = variants;
+}
+
+// CLDR's language aliases rooted at "und" name variants and apply to any
+// language: "und-hepburn-heploc" is "und-alalc97" (both variants go, one
+// comes), "und-aaland" is "und-AX" (the variant goes, a region comes where
+// the tag has none). A language's own rule ("hy-arevmda" is "hyw") is more
+// specific, so these run after the language aliases.
+let undVariantRules = null;      // [{source, replacement}], made once a realm
+function variantRules(t) {
+    if (undVariantRules === null) {
+        const rules = [], langAliases = ALIASES.languageAlias;
+        for (const key in langAliases) {
+            if (!hasOwn(langAliases, key) || slice(key, 0, 4) !== 'und-') continue;
+            const source = parseTag(key), replacement = parseTag(own(langAliases, key));
+            if (source === null || replacement === null || source.script !== '' || source.region !== '' ||
+                source.variants.length === 0) continue;
+            push(rules, {__proto__: null, source: source, replacement: replacement});
+        }
+        undVariantRules = rules;
+    }
+    for (let i = 0; i < undVariantRules.length; i++) {
+        const source = undVariantRules[i].source, r = undVariantRules[i].replacement;
+        let all = true;
+        for (let v = 0; v < source.variants.length && all; v++) all = contains(t.variants, source.variants[v]);
+        if (!all) continue;
+        const kept = [];
+        for (let v = 0; v < t.variants.length; v++) if (!contains(source.variants, t.variants[v])) push(kept, t.variants[v]);
+        for (let v = 0; v < r.variants.length; v++) if (!contains(kept, r.variants[v])) push(kept, r.variants[v]);
+        t.variants = kept;
+        if (r.language !== 'und' && t.language === 'und') t.language = r.language;
+        if (t.script === '' && r.script !== '') t.script = r.script;
+        if (t.region === '' && r.region !== '') t.region = r.region;
+    }
 }
 
 // The canonical value of a -u- keyword (UTS 35 § 3.6.4): CLDR's bcp47
@@ -2095,7 +2129,7 @@ method(DateTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
     if (s.dateStyle === undefined && s.timeStyle === undefined) {
         const found = {__proto__: null}, runs = longestRuns(s.pattern);
         for (let i = 0; i < RESOLVED_FROM.length; i++) {
-            const [ch, prop, value] = RESOLVED_FROM[i];
+            const ch = RESOLVED_FROM[i][0], prop = RESOLVED_FROM[i][1], value = RESOLVED_FROM[i][2];
             const n = own(runs, ch);
             if (n !== undefined && own(found, prop) === undefined) found[prop] = value(n);
         }
