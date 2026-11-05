@@ -8,6 +8,14 @@
 
 #define MODERN_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}"
 
+/* The agent a navigator mode case hands the binding. */
+static const char *modern_agent;
+static const char *modern_agent_of(void *opaque)
+{
+    (void)opaque;
+    return modern_agent;
+}
+
 /* libdom's internal.h: the harness links the binding's own objects. */
 const char *d_modern_name(size_t index);
 
@@ -993,11 +1001,15 @@ static void dom_modern_cases(void)
         "function throws(f,name){try{f()}catch(x){return x.name===name}return false}"
         "function own(o,n){return Object.prototype.hasOwnProperty.call(o,n)}"
         "var n=navigator,N=Navigator.prototype;"
-        "assert(n.appCodeName==='Mozilla'&&n.product==='Gecko'&&n.productSub==='20030107'&&n.vendor===''&&"
+        "assert(n.appCodeName==='Mozilla'&&n.product==='Gecko'&&n.productSub==='20100101'&&n.vendor===''&&"
         "n.vendorSub===''&&n.onLine===true&&n.hardwareConcurrency===4&&n.maxTouchPoints===0&&"
-        "n.pdfViewerEnabled===false&&n.javaEnabled()===false,'the constants');"
-        "assert(n.language==='en-US'&&n.languages===n.languages&&n.languages.length===1&&"
-        "n.languages[0]==='en-US'&&Object.isFrozen(n.languages),'the locale, one frozen list');"
+        "n.pdfViewerEnabled===false&&n.javaEnabled()===false,'the constants, yonder\\'s own agent in Gecko\\'s mode');"
+        "assert(n.language==='en-US'&&n.languages===n.languages&&n.languages.length===2&&"
+        "n.languages[0]==='en-US'&&n.languages[1]==='en'&&Object.isFrozen(n.languages),"
+        "'the locale and its language, one frozen list');"
+        "assert(throws(function(){structuredClone(n.plugins)},'DataCloneError')&&"
+        "throws(function(){structuredClone(n.mimeTypes)},'DataCloneError')&&"
+        "structuredClone(n.languages).join()==='en-US,en','the lists are platform objects, languages an array');"
         "['appCodeName','product','vendor','language','languages','onLine','cookieEnabled','hardwareConcurrency',"
         "'maxTouchPoints','pdfViewerEnabled','plugins','mimeTypes'].forEach(function(k){"
         "var d=Object.getOwnPropertyDescriptor(N,k);assert(d&&d.get.name==='get '+k&&!d.set&&d.enumerable,k);"
@@ -1017,6 +1029,25 @@ static void dom_modern_cases(void)
         "var told=0;p.item({valueOf:function(){told++;return 0}});m.namedItem({toString:function(){told++;return ''}});"
         "assert(told===2,'arguments converted');",
         "modern-on-navigator");
+    /* productSub and vendor follow the navigator compatibility mode of the
+     * agent's browser. */
+    static const struct { const char *agent, *sub, *vendor; } kModes[] = {
+        {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+         "Chrome/156.0.0.0 Safari/537.36", "20030107", "Google Inc."},
+        {"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+         "(KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1", "20030107", "Apple Computer, Inc."},
+        {"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0", "20100101", ""},
+        {"Lynx/2.9.2 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/3.0.13", "20100101", ""},
+    };
+    for (size_t i = 0; i < sizeof(kModes) / sizeof(kModes[0]); i++) {
+        modern_agent = kModes[i].agent;
+        os64_dom_set_user_agent(f.binding, modern_agent_of, NULL);
+        char source[256];
+        snprintf(source, sizeof(source), MODERN_ASSERT "assert(navigator.productSub==='%s'&&navigator.vendor==='%s',"
+                 "navigator.productSub+' '+navigator.vendor);", kModes[i].sub, kModes[i].vendor);
+        dom_script(&f, source, "modern-navigator-mode");
+    }
+    os64_dom_set_user_agent(f.binding, NULL, NULL);
     dom_script(&f, MODERN_ASSERT
         "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
         /* checkValidity and reportValidity fire invalid: cancelable, not bubbling, trusted */

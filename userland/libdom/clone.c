@@ -39,8 +39,9 @@
  * one), a view out of its buffer's bounds, a detached buffer, any other
  * object with internal state (a Promise, a WeakMap, an arguments object),
  * and every other platform object: a node, an Event, the window, and
- * location, history and navigator, which are ordinary objects in this
- * binding but platform objects in HTML. What a getter or a message's
+ * location, history and navigator, and the navigator's plugins and
+ * mimeTypes, which are ordinary objects in this binding but platform
+ * objects in HTML. What a getter or a message's
  * toString throws is thrown as it is.
  *
  * TRANSFER: the transfer list's ArrayBuffers (anything else, a duplicate, a
@@ -574,8 +575,8 @@ static int buffer_copy(DWriter *w, JSValueConst buffer, DData *data)
  * objects in HTML, which refuses them. */
 static bool binding_object(const os64_dom_t *dom, JSValueConst object)
 {
-    const DValue *mine[3] = {dom->location, dom->history, dom->navigator};
-    for (int i = 0; i < 3; i++)
+    const DValue *mine[5] = {dom->location, dom->history, dom->navigator, dom->plugins, dom->mime_types};
+    for (int i = 0; i < 5; i++)
         if (mine[i] != NULL && JS_VALUE_GET_PTR(mine[i]->value) == JS_VALUE_GET_PTR(object)) return true;
     return false;
 }

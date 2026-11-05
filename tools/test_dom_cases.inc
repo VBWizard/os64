@@ -194,7 +194,7 @@ static void cookie_set(void *opaque, const char *text, size_t length)
     (void)opaque;
     snprintf(cookie_heard, sizeof(cookie_heard), "%.*s", (int)length, text);
 }
-static bool cookie_refusing(void *opaque)
+static bool cookie_disabled(void *opaque)
 {
     (void)opaque;
     return false;
@@ -208,7 +208,7 @@ static void dom_cookie_cases(void)
         "cookie-averse.js");
     dom_script(&f,DOM_ASSERT "assert(navigator.cookieEnabled===false,'no provider, no cookies');",
         "cookie-averse-navigator.js");
-    os64_dom_cookies_t cookies={cookie_get,cookie_set,NULL,cookie_refusing};
+    os64_dom_cookies_t cookies={cookie_get,cookie_set,NULL,cookie_disabled};
     os64_dom_set_cookies(f.binding,&cookies);
     dom_script(&f,DOM_ASSERT "assert(navigator.cookieEnabled===false,'a jar that refuses');",
         "cookie-refused-navigator.js");

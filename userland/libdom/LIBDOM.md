@@ -844,13 +844,15 @@ over a prototype level of its own, empty without the switch, so its chain
 has the same levels either way, and each member checks that it is called
 on its object, with the switch or without). With the switch the
 navigator has the rest of HTML's Navigator, beside the classic
-`userAgent`, `appName`, `appVersion` and `platform`: the constants of a
-browser not in Gecko's compatibility mode (`appCodeName`, `product`,
-`productSub`, `vendorSub`, and `vendor` as the agent's browser reports
-it), `language` and `languages` (libjs's `OS64_JS_LOCALE`, the locale
-Intl formats in, `languages` one frozen array), `onLine` true, since
-nothing tells a page the network went away, `cookieEnabled` (the cookie
-provider's `enabled`, false with none), `hardwareConcurrency` 4,
+`userAgent`, `appName`, `appVersion` and `platform`: NavigatorID's
+constants (`appCodeName`, `product`, `vendorSub`, and `productSub` and
+`vendor` as the navigator compatibility mode of the agent's browser has
+them: Chrome's, WebKit's for Safari, else Gecko's), `language` and
+`languages` (libjs's `OS64_JS_LOCALE`, the locale Intl is to format in;
+`languages` one frozen array of it and its language alone, the tags every
+agent's Accept-Language sends), `onLine` true, since nothing tells a page
+the network went away, `cookieEnabled` (false with no cookie provider,
+else the provider's `enabled`, true when it has none), `hardwareConcurrency` 4,
 `maxTouchPoints` 0, and, there being no PDF viewer, `pdfViewerEnabled`
 and `javaEnabled()` false and `plugins` and `mimeTypes` an empty
 `PluginArray` and `MimeTypeArray`, each the same object every read.

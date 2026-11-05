@@ -1462,15 +1462,22 @@ static int empty_list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst glob
     return result;
 }
 
-/* navigator.languages: the one locale (OS64_JS_LOCALE), a frozen array, the
- * same one every read, since the person's languages never change here. */
+/* navigator.languages: the locale (OS64_JS_LOCALE) and then its language
+ * alone, the two tags every agent's Accept-Language sends (yonder's
+ * agent.c), as other browsers derive both from one list; a frozen array,
+ * the same one every read, since the person's languages never change
+ * here. */
 static int languages_install(os64_dom_t *dom, JSContext *ctx)
 {
     JSValue array = JS_NewArray(ctx);
     if (JS_IsException(array)) return -1;
+    const char *dash = os64_strchr(OS64_JS_LOCALE, '-');
     JSAtom length = JS_NewAtom(ctx, "length");
     int result = length == JS_ATOM_NULL ||
         JS_DefinePropertyValueUint32(ctx, array, 0, JS_NewString(ctx, OS64_JS_LOCALE), JS_PROP_ENUMERABLE) < 0 ||
+        (dash != NULL &&
+         JS_DefinePropertyValueUint32(ctx, array, 1, JS_NewStringLen(ctx, OS64_JS_LOCALE, (size_t)(dash - OS64_JS_LOCALE)),
+                                      JS_PROP_ENUMERABLE) < 0) ||
         JS_DefineProperty(ctx, array, length, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_PROP_HAS_WRITABLE) < 0 ||
         JS_PreventExtensions(ctx, array) < 0 ? -1 : 0;
     if (length != JS_ATOM_NULL) JS_FreeAtom(ctx, length);

@@ -370,12 +370,14 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         case C_PLATFORM:
             return JS_NewString(ctx, contains(agent,"Windows") || contains(agent,"Win98") ? "Win32" :
                 contains(agent,"iPhone") ? "iPhone" : contains(agent,"Macintosh") ? "MacIntel" : "OS64 x86_64");
-        /* HTML § 8.9.1.1's constants for a browser not in Gecko's
-         * compatibility mode, which no agent yonder wears is; the vendor is
-         * the one the agent's browser reports, else none. */
+        /* HTML § 8.9.1.1's constants. productSub and vendor are the
+         * navigator compatibility mode's, the one the agent's browser is in:
+         * Chrome's, WebKit's (Safari), else Gecko's, whose vendor is none,
+         * which is also the truth for an agent no such browser wears. */
         case C_APP_CODE_NAME: return JS_NewString(ctx, "Mozilla");
         case C_PRODUCT: return JS_NewString(ctx, "Gecko");
-        case C_PRODUCT_SUB: return JS_NewString(ctx, "20030107");
+        case C_PRODUCT_SUB:
+            return JS_NewString(ctx, contains(agent,"Chrome/") || contains(agent,"Safari/") ? "20030107" : "20100101");
         case C_VENDOR:
             return JS_NewString(ctx, contains(agent,"Chrome/") ? "Google Inc." :
                 contains(agent,"Safari/") ? "Apple Computer, Inc." : "");
