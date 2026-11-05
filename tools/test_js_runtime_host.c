@@ -1378,6 +1378,19 @@ static void task_cases(void)
           "and never falls once the script lets it go");
     os64_js_destroy(runtime);
 
+    /* A peak only a resize reaches: one array grown by reallocation to
+     * 4 MB and let go before anything else is allocated. */
+    runtime = task_fixture(&config, "globalThis.burst=()=>{(function(){var a=[];"
+                                    "for(var i=0;i<(1<<18);i++)a.push(1);})()}");
+    if (!runtime) return;
+    peak_before = os64_js_heap_peak(runtime);
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "burst", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "burst", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK, "a task that grows one array runs");
+    check(os64_js_heap_peak(runtime) >= peak_before + ((size_t)2 << 20),
+          "the heap peak follows a block that grows in place of another");
+    os64_js_destroy(runtime);
+
     runtime = task_fixture(&config, deadline_source);
     if (!runtime) return;
     check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "overrun", &outcome) == OS64_JS_OK, "overrun task opens");

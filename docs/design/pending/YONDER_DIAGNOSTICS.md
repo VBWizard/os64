@@ -164,9 +164,10 @@ a timer's task keeps the plain `failed`, since it evaluates no script):
 most its runtime's heap held against the limit it was made with
 (`yonder.conf`'s `script_memory_mb`), read again at each write and kept
 from a runtime the page retired. A runtime stopped by a limit says which:
-`execution stopped after <n> s`, `the script heap's <n> MiB ran out`, `the
-script stack ran out` or `too many jobs in one turn`, each followed by
-`(this page runs without script)`.
+`execution stopped after <n> s`, `the script heap's <n> MiB ran out`, `a
+script longer than <n> MiB once decoded` or `too many jobs in one turn`,
+each followed by `(this page runs without script)`. (A stack overflow is
+an ordinary exception, libjs's CONTRACT.md, and stops nothing.)
 
 **A `javascript:` link's script** (MODERN_WEB.md slice 0c) is a script of
 the page's, run as one task, and recorded as one: `script

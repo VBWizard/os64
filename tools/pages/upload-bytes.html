@@ -10,7 +10,9 @@
 <p>A speed test's upload: a string of 25 MiB, four Blobs made of it, each
 sent by an XMLHttpRequest. The string is the page's, but the Blobs' bytes
 are the page's body bound's (XHR_BYTES.md § 7), so four of them, 100 MiB,
-fit beside a 64 MiB script heap and the scripts keep running after.</p>
+fit beside a 64 MiB script heap and the scripts keep running after. Run
+it with <code>script_memory_mb = 64</code> in yonder.conf: under the
+default heap the bytes would fit in the heap either way.</p>
 <p>Serve this page over http from a server that answers a POST (yonder, like
 other browsers, refuses a request for a file: address), for example
 <code>python3 -c "import http.server as h

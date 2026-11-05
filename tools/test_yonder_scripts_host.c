@@ -2452,17 +2452,22 @@ static void bounded_resources(void) {
     while(yonder_scripts_step(g.page.scripts,&out)) ran++;
     check(ran==4096,"a page's scripts past the 4096th are not queued");
     probe_drop();
-    /* An inline script one past the source limit, built by the page: a
-     * parsed page cannot carry one, since the HTML parser's own input
-     * budget is no larger than the limit. It is refused without a report
-     * (DEBTS.md), so what is checked is that it does not run and the
-     * scripts after it do. */
-    char over[512];
+    /* An inline script one past the source limit, built by the page from
+     * two text nodes: a parsed page cannot carry one, since the HTML
+     * parser's own input budget is no larger than the limit, and one
+     * string that long is past libdom's own string quota. */
+    char over[640];
     snprintf(over,sizeof over,"<script>var s=document.createElement('script');"
-        "s.text=' '.repeat(%zu)+\"document.body.id='ran'\";document.body.appendChild(s);</script>"
-        "<script>document.body.className='after';</script>",(size_t)SCRIPT_SOURCE_MAX);
+        "s.appendChild(document.createTextNode(' '.repeat(%zu)));"
+        "s.appendChild(document.createTextNode(' '.repeat(%zu)+\"document.body.id='ran'\"));"
+        "document.body.appendChild(s);</script>"
+        "<script>document.body.className='after';</script>",
+        (size_t)SCRIPT_SOURCE_MAX/2,(size_t)SCRIPT_SOURCE_MAX/2);
     probe_page(over,true);
-    while(yonder_scripts_step(g.page.scripts,&out)) {}
+    bool refused=false;
+    while(yonder_scripts_step(g.page.scripts,&out))
+        refused|=out.status==OS64_JS_EXCEPTION && strstr(out.message,"longer than a script may be")!=NULL;
+    check(refused,"an inline script past the source limit is reported in its place");
     check(os64_html_attr(g.page.way.doc->body,"id")==NULL,"an inline script past the source limit does not run");
     check(os64_html_attr(g.page.way.doc->body,"class") &&
         os64_streq(os64_html_attr(g.page.way.doc->body,"class")->value,"after"),

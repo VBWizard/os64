@@ -9402,8 +9402,12 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
             os64_snprintf(failure, sizeof(failure), "the script heap's %lu MiB ran out "
                           "(this page runs without script)",
                           (unsigned long)(yonder_scripts_memory_bytes(host) >> 20));
-        else if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_STACK)
-            os64_snprintf(failure, sizeof(failure), "the script stack ran out (this page runs without script)");
+        else if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_SOURCE)
+            // Past the fetch's limit by its bytes, a script can still decode
+            // longer (windows-1252, U+FFFD's three bytes) and meet the
+            // runtime's.
+            os64_snprintf(failure, sizeof(failure), "a script longer than %lu MiB once decoded "
+                          "(this page runs without script)", (unsigned long)(SCRIPT_SOURCE_MAX >> 20));
         else if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_JOBS)
             os64_snprintf(failure, sizeof(failure), "too many jobs in one turn (this page runs without script)");
         else
