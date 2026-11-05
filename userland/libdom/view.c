@@ -470,10 +470,12 @@ static bool same_text(const char *a, size_t al, const char *b, size_t bl)
 /* A non-longhand, from its longhands' computed values, as CSSOM serializes
  * a shorthand where it can: one value when every longhand agrees
  * (`overflow: visible`, `margin: 0px`); a box's sides or corners in the
- * one-to-four value form; a pair's two values in its order (`overflow:
- * hidden auto`, `gap: 8px 16px`); and "" for the rest, which CSSOM lets a
- * shorthand answer when it cannot be written as one value (`font`,
- * `background`, `border`, a grid line pair's slashed form). */
+ * one-to-four value form, when no one of them is two values (an
+ * elliptical corner's pair takes a slashed form); a pair's two values in
+ * its order (`overflow: hidden auto`, `gap: 8px 16px`); and "" for the
+ * rest, which CSSOM lets a shorthand answer when it cannot be written as
+ * one value (`font`, `background`, `border`, a grid line pair's slashed
+ * form, those elliptical corners). */
 static JSValue short_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, const DShort *s)
 {
     if (s->n == 0 || computed_empty(dom, ctx, c)) return JS_NewString(ctx, "");
@@ -665,7 +667,7 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
             return -1;
     }
     /* Every other name an element's style answers to, as it is spelled
-     * there (style.c's d_style_install) and under the same switch, read
+     * there and under the same switch, read
      * from the longhands (short_value): none reaches the inline style's
      * member, which a computed declaration is not. */
     if (shorts_learn(dom) < 0) return -1;
