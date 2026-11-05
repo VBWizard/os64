@@ -877,11 +877,12 @@ cut that refuses the script's name atom, which is that row's cause.
 through this library on the target core, ASan/UBSan over the runtime and
 Intl. Every test of `intl402/DateTimeFormat`, `intl402/Locale` and
 `intl402/Intl` passes or is listed in `tools/test262/expected/` with its
-reason: 306 of 490, 216 of 380 and 6 of 132 run as written and strict,
+reason: 308 of 490, 216 of 380 and 6 of 132 run as written and strict,
 the rest Temporal, calendars, locales and numbering systems the data does
 not hold, the Locale Info proposal, A2's and A3's constructors and
-functions, `$262`'s second realm, and two answers kept as other browsers
-give them. The `js` runner's suites pass (199 fake-library and 40 real
+functions, `$262`'s second realm, and a zone's name, kept as Chrome gives
+it. `tools/test_intl_capture_host.sh` holds the formats to Chrome 156's
+capture (`tools/intl_captures/`), byte for byte: 5,635 of 5,635 fields. The `js` runner's suites pass (199 fake-library and 40 real
 checks, an Intl case among them), and so does the acceptance suite. The
 library gains one export, `os64_js_install_intl`, and imports
 `os64_getenv`, `os64_tz_parse` and `os64_tz_offset_at`.

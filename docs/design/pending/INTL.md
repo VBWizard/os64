@@ -304,16 +304,19 @@ The hard part, because pages pass zone names and read them back:
   with the string Chrome produces for it (captured once into a file in the
   tree, as W1's captures were). This is the "formats like Chrome" line,
   held by test. Byte for byte matters: CLDR puts U+202F NARROW NO-BREAK
-  SPACE before `AM`/`PM`, which other browsers keep in `formatToParts`
-  and in every range, and write as a plain space in the string `format`
-  returns (and in a range whose ends are practically equal, which is
-  `format`'s); ranges join with U+2009 THIN SPACE around an en dash.
-  "Like Chrome" means each of those where Chrome has it, and a comparison
-  that folds whitespace would hide a wrong one. (Fable's finding 5.)
-- **The glass draws them:** yonder's text painter must draw U+202F and
-  U+2009 as spaces, not as missing glyphs, in every face it ships; a test
-  page formatting `timeStyle: "short"` and a range is the proof, on QEMU
-  and the P5.
+  SPACE before `AM`/`PM` and U+2009 THIN SPACE around a range's en dash,
+  and engines have disagreed about writing them. **Chrome's capture
+  settled it** (Chrome 156, 2026-11-04, `tools/intl_captures/`): Chrome
+  writes an ASCII space for both, in `format`, in `formatToParts` and in
+  every range, and libjs does the same (Node 22's older V8 still keeps
+  them in parts and ranges, which is why a capture and not a V8 build is
+  the oracle). `tools/test_intl_capture_host.sh` holds libjs to that
+  capture's 5,635 fields, unfolded, so a wrong space fails. (Fable's
+  finding 5.)
+- **The glass:** `tools/pages/intl.html` shows the strings in yonder,
+  checked against Chrome's, on QEMU and the P5. Since Intl writes only
+  ASCII spaces, yonder's boxes for U+2000-block spaces (DEBTS) are not on
+  its path.
 - **The three GitHub pages, on QEMU and the P5:** each draws (after A2,
   § 9); the record carries no `Intl` miss.
 - **The corpus census rerun** before A2 is cut, with module sources kept

@@ -1213,11 +1213,12 @@ function stylePattern(dateStyle, timeStyle, hc) {
     return replaceHourCycle(bestPattern(skeleton), hc);
 }
 
-// format()'s string: other browsers write an ASCII space where CLDR has
-// U+202F before AM/PM (V8's workaround for pages that parse the string).
-// formatToParts and the ranges keep CLDR's own U+202F, as V8 does, except
-// a range whose ends are practically equal: its string is format()'s.
-function asciiSpaces(text) { return replaceAll(text, / /g, ' '); }
+// What a script is handed: CLDR's patterns put U+202F NARROW NO-BREAK
+// SPACE before AM/PM and U+2009 THIN SPACE round a range's dash, and
+// Chrome writes an ASCII space for each, in format(), formatToParts() and
+// the ranges alike (INTL.md § 8, its capture). Applied where a string
+// leaves Intl, so the patterns stay CLDR's own.
+function asciiSpaces(text) { return replaceAll(text, /[\u202f\u2009]/g, ' '); }
 
 function hourCycleOfPattern(pattern) {
     const items = tokenize(pattern);
@@ -1557,7 +1558,7 @@ function partsToArray(parts) {
     for (let i = 0; i < parts.length; i++) {
         const o = {};
         put(o, 'type', parts[i].type);
-        put(o, 'value', parts[i].value);
+        put(o, 'value', asciiSpaces(parts[i].value));
         if (parts[i].source !== undefined) put(o, 'source', parts[i].source);
         push(out, o);
     }
@@ -1945,14 +1946,14 @@ function intervalParts(s, x, y) {
         out[i].source = i >= s1a && i <= s1b ? 'startRange' : i >= s2a && i <= s2b ? 'endRange' : 'shared';
     return out;
 }
-// A range: {parts, equal}. When the ends are practically equal, the parts
-// are the start's alone, all shared, and formatRange's string is format()'s.
+// A range's parts. When the ends are practically equal, they are the
+// start's alone, all shared.
 function formatRangeParts(s, x, y) {
     const parts = intervalParts(s, x, y);
-    if (parts !== null) return {__proto__: null, parts: parts, equal: false};
+    if (parts !== null) return parts;
     const single = formatParts(s, s.pattern, x);
     for (let i = 0; i < single.length; i++) single[i].source = 'shared';
-    return {__proto__: null, parts: single, equal: true};
+    return single;
 }
 
 // ── The prototype ───────────────────────────────────────────────────────
@@ -1975,14 +1976,13 @@ method(DateTimeFormatPrototype, 'formatRange', methodOf(function (startDate, end
     const s = UnwrapDateTimeFormat(this, 'formatRange');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
     const x = timeClip(ToNumber(startDate)), y = timeClip(ToNumber(endDate));
-    const range = formatRangeParts(s, x, y);
-    return range.equal ? asciiSpaces(partsToString(range.parts)) : partsToString(range.parts);
+    return asciiSpaces(partsToString(formatRangeParts(s, x, y)));
 }), 2);
 method(DateTimeFormatPrototype, 'formatRangeToParts', methodOf(function (startDate, endDate) {
     const s = UnwrapDateTimeFormat(this, 'formatRangeToParts');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
     const x = timeClip(ToNumber(startDate)), y = timeClip(ToNumber(endDate));
-    return partsToArray(formatRangeParts(s, x, y).parts);
+    return partsToArray(formatRangeParts(s, x, y));
 }), 2);
 // resolvedOptions: what the pattern holds, read back as other browsers
 // read it (a minute is "2-digit" whenever the pattern pads it).

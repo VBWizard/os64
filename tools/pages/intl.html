@@ -8,12 +8,12 @@
   #verdict { font-weight: bold; margin-top: 16px; font-size: 22px; }
 </style>
 <h1>Intl on the glass</h1>
-<p>Intl.DateTimeFormat's en-US strings, as other browsers write them (INTL.md
-§ 8): each row is checked against V8's string, byte for byte, except
-the German request, which resolves to the only locale os64 holds. The times'
-narrow no-break space (U+202F) and a range's thin spaces (U+2009) must draw
-as spaces, never as missing glyphs. With the Modern Web switch off there is
-no Intl, and the page says so.</p>
+<p>Intl.DateTimeFormat's en-US strings, as Chrome writes them (INTL.md § 8,
+its capture): each row is checked byte for byte, except the German request,
+which resolves to the only locale os64 holds. Chrome writes an ASCII space
+where CLDR has a narrow no-break or thin space, in format, parts and ranges
+alike. With the Modern Web switch off there is no Intl, and the page says
+so.</p>
 <table id="rows"></table>
 <div id="verdict">running</div>
 <script>
@@ -36,19 +36,19 @@ no Intl, and the page says so.</p>
     const cases = [
       ['dateStyle full, timeStyle long', () => new Intl.DateTimeFormat('en-US', {...ny, dateStyle: 'full', timeStyle: 'long'}).format(at),
        'Saturday, July 4, 2026 at 12:05:09 PM EDT'],
-      ['parts keep U+202F', () => new Intl.DateTimeFormat('en-US', {...ny, timeStyle: 'short'}).formatToParts(at).map(p => p.value).join(''),
-       '12:05 PM'],
+      ['parts, ASCII spaces', () => new Intl.DateTimeFormat('en-US', {...ny, timeStyle: 'short'}).formatToParts(at).map(p => p.value).join(''),
+       '12:05 PM'],
       ['a range, same day', () => new Intl.DateTimeFormat('en-US', {...ny, hour: 'numeric', minute: 'numeric'}).formatRange(at, at + 5400000),
-       '12:05 – 1:35 PM'],
+       '12:05 – 1:35 PM'],
       ['a range of days', () => new Intl.DateTimeFormat('en-US', {...ny, month: 'short', day: 'numeric'}).formatRange(at, at + 5 * 86400000),
-       'Jul 4 – 9'],
+       'Jul 4 – 9'],
       ['generic zone', () => new Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Kolkata', hour: 'numeric', timeZoneName: 'longGeneric'}).format(at),
        '9 PM India Standard Time'],
       ['offset zone', () => new Intl.DateTimeFormat('en-US', {timeZone: 'Europe/Paris', timeZoneName: 'longOffset'}).format(at),
        '7/4/2026, GMT+02:00'],
       ['day period', () => new Intl.DateTimeFormat('en-US', {...ny, hour: 'numeric', dayPeriod: 'long'}).format(at),
        '12 noon'],
-      // Not V8's answer by design: os64's data is en-US's, so a request for
+      // Not Chrome's answer by design: os64's data is en-US's, so a request for
       // German resolves to it, as ECMA-402 permits (INTL.md § 3).
       ['de-DE resolves to en-US', () => new Intl.DateTimeFormat('de-DE').resolvedOptions().locale, 'en-US'],
       ['Locale', () => new Intl.Locale('EN-latn-us', {hourCycle: 'h23'}).toString(), 'en-Latn-US-u-hc-h23'],
@@ -60,7 +60,7 @@ no Intl, and the page says so.</p>
       if (row(what, actual, expected)) good++;
     }
     document.getElementById('verdict').textContent = good === cases.length
-      ? `PASS: ${good} of ${cases.length} as V8 writes them`
+      ? `PASS: ${good} of ${cases.length} as Chrome writes them`
       : `FAIL: ${good} of ${cases.length}`;
   }
 </script>

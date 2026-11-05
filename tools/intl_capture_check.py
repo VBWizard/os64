@@ -2,7 +2,7 @@
 """libjs's Intl held to a browser's capture, byte for byte (INTL.md § 8).
 
 Usage (tools/test_intl_capture_host.sh builds the runner and calls this):
-  intl_capture_check.py --runner <bin> <capture.json> [--show N]
+  intl_capture_check.py --runner <bin> <capture.json[.gz]> [--show N]
 
 The capture is what tools/pages/intl-capture.html recorded in a browser:
 every case's options, and per case the construction's outcome, the
@@ -15,6 +15,7 @@ person to read: they are the questions on which browsers differ, so they
 inform rather than gate. Exit 1 when a case differs.
 """
 import argparse
+import gzip
 import json
 import os
 import subprocess
@@ -64,7 +65,9 @@ def main():
     parser.add_argument('--show', type=int, default=40)
     parser.add_argument('capture')
     args = parser.parse_args()
-    capture = json.load(open(args.capture, encoding='utf-8'))
+    opener = gzip.open if args.capture.endswith('.gz') else open
+    with opener(args.capture, 'rt', encoding='utf-8') as f:
+        capture = json.load(f)
     cases = capture['cases']
     with tempfile.TemporaryDirectory(prefix='os64-intl-capture.') as work:
         script = os.path.join(work, 'check.js')
