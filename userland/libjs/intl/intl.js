@@ -2205,7 +2205,7 @@ function decimalOfNumber(x) {
     const neg = x < 0 || (x === 0 && 1 / x < 0);
     if (x === Infinity || x === -Infinity) return {__proto__: null, neg: neg, inf: true};
     const d = decimalOfLiteral(neg, String_(abs(x)));
-    if (x === 0) d.numberZero = true;          // a Number's ±0, which a range may unsign
+    d.number = true;                          // read from a Number, which a range compares as one
     return d;
 }
 // StringToNumber's whitespace (ECMA-262 StrWhiteSpaceChar).
@@ -2612,8 +2612,8 @@ function thisPluralRules(o, name) {
 // options show it, chosen by the value shown (a compact "1.5K" is 1500).
 function resolvePlural(s, n) {
     if (!isFinite_(n)) return 'other';
-    const x = decimalOfNumber(n);
-    const exponent = computeExponent(s, x).exponent;
+    const e = computeExponent(s, decimalOfNumber(n));
+    const x = e.value, exponent = e.exponent;
     const r = formatNumericToString(s, decimal(x.neg, x.digits, x.exp - exponent));
     return pluralCategory(s.type, r.string, exponent);
 }
@@ -2796,19 +2796,25 @@ function exponentForMagnitude(s, magnitude) {
     for (let i = 0; i < pattern.length; i++) if (codeAt(pattern, i) === 48) zeros++;
     return key.length - 1 - (zeros - 1);
 }
-// ComputeExponent, against the digits as rounded: {exponent, magnitude},
-// the magnitude the exponent was chosen for (which names the compact
-// pattern). The trial rounding keeps x's sign, as V8 rounds, so a
+// ComputeExponent, against the digits as rounded: {exponent, magnitude,
+// value}, the magnitude the exponent was chosen for (which names the
+// compact pattern) and the value to format at it. Where the rounding
+// carried the value to the next exponent, that value is the rounded one,
+// as V8 formats it: 999.9 compact by increments of 2 is 1000, then "2K"
+// (ECMA-402 rounds the original again at the new scale: "0K"). The trial
+// rounding keeps x's sign, as V8 rounds, so a
 // directional mode that carries a negative value up to a power of ten
 // takes the next exponent ("-1E1", never "-10E0"; ECMA-402 rounds the
 // magnitude; INTL.md § 9.6).
 function computeExponent(s, x) {
-    if (isZeroDecimal(x)) return {__proto__: null, exponent: 0, magnitude: 0};
+    if (isZeroDecimal(x)) return {__proto__: null, exponent: 0, magnitude: 0, value: x};
     const magnitude = magnitudeOf(x);
     const exponent = exponentForMagnitude(s, magnitude);
     const r = formatNumericToString(s, decimal(x.neg, x.digits, x.exp - exponent)).rounded;
-    if (isZeroDecimal(r) || magnitudeOf(r) === magnitude - exponent) return {__proto__: null, exponent: exponent, magnitude: magnitude};
-    return {__proto__: null, exponent: exponentForMagnitude(s, magnitude + 1), magnitude: magnitude + 1};
+    if (isZeroDecimal(r) || magnitudeOf(r) === magnitude - exponent)
+        return {__proto__: null, exponent: exponent, magnitude: magnitude, value: x};
+    return {__proto__: null, exponent: exponentForMagnitude(s, magnitude + 1), magnitude: magnitude + 1,
+            value: decimal(x.neg, r.digits, r.exp + exponent)};
 }
 // The integer digits grouped as #,##0 groups them (threes), when the
 // strategy calls for it at that length; "auto" in a compact format is
@@ -2931,6 +2937,7 @@ function formatLayers(s, x, forced) {
         const e = computeExponent(s, v);
         exponent = e.exponent;
         if (s.notation === 'compact' && exponent !== 0) compactKey = compactKeyFor(s, e.magnitude);
+        v = e.value;
         const r = formatNumericToString(s, decimal(v.neg, v.digits, v.exp - exponent));
         zero = isZeroDecimal(r.rounded);
         res.value = decimal(v.neg, r.rounded.digits, r.rounded.exp + exponent);
@@ -3040,16 +3047,20 @@ function countCodePoints(text) {
 }
 const layerCodePoints = layer => codePoints(layer.prefix) + codePoints(layer.suffix);
 const textLength = parts => { let n = 0; for (let i = 0; i < parts.length; i++) n += parts[i].value.length; return n; };
-// Whether a range's two values are one: the same middle (so the same sign
-// shown) and the same value as rounded. A Number's -0 is zero to a format
-// that shows no sign on zero (signDisplay other than auto and always), as
-// V8 answers; a "-0" string, and a value that rounded to zero, keep their
-// sign.
-function sameRangeValue(s, first, second, x, y) {
+// Whether a range's two values are one, as V8 decides it: the same middle
+// (so the same sign shown), and either equal before rounding as the same
+// kind of input (two Numbers, or two strings or BigInts; a zero equals a
+// zero whatever its sign) or equal as rounded, sign and all. So -0 and 0
+// are one, and so are "-0" and "0", but -0 and "0" are not, nor -0 and a
+// 0.0001 that rounded to zero (INTL.md § 9.6).
+function sameRangeValue(first, second, x, y) {
     if (first.value === null || second.value === null || first.middleKey !== second.middleKey) return false;
-    const signed = s.signDisplay === 'auto' || s.signDisplay === 'always';
-    const neg = (res, v) => res.value.neg && (signed || v.numberZero !== true);
-    return neg(first, x) === neg(second, y) && first.value.digits === second.value.digits && first.value.exp === second.value.exp;
+    if ((x.number === true) === (y.number === true) && !x.nan && !y.nan) {
+        if (x.inf || y.inf) { if (x.inf && y.inf && x.neg === y.neg) return true; }
+        else if (x.digits === y.digits && x.exp === y.exp && (x.neg === y.neg || isZeroDecimal(x))) return true;
+    }
+    const a = first.value, b = second.value;
+    return a.neg === b.neg && a.digits === b.digits && a.exp === b.exp;
 }
 // A range (ICU's NumberRangeFormatter, collapse "auto"): two values the
 // same as rounded, with the same middle, are one value approximately;
@@ -3069,7 +3080,7 @@ function sameRangeValue(s, first, second, x, y) {
 // reports them so, and so does this (INTL.md § 9.6).
 function numberRangeParts(s, x, y) {
     const first = formatLayers(s, x), second = formatLayers(s, y), out = [];
-    if (sameRangeValue(s, first, second, x, y)) {
+    if (sameRangeValue(first, second, x, y)) {
         if (first.approximate) {
             addParts(out, first.outer.prefix);
             push(out, {__proto__: null, type: 'approximatelySign', value: NUM.symbols.approximatelySign, source: 'shared'});
@@ -3198,9 +3209,12 @@ function RelativeTimeFormat(locales, options) {
     s.style = GetOption(options, 'style', 'string', ['long', 'short', 'narrow'], 'long');
     s.numeric = GetOption(options, 'numeric', 'string', ['always', 'auto'], 'always');
     // The NumberFormat and PluralRules a relative time is formatted with:
-    // the locale's defaults, as `new Intl.NumberFormat(locale)` has them.
+    // the locale's defaults, as `new Intl.NumberFormat(locale)` has them,
+    // except that the value rounds half to even, as V8's (ICU's default
+    // formatter's) does: "in 1 day" for 1.0005 (INTL.md § 9.6).
     const nf = {__proto__: null, style: 'decimal', notation: 'standard', signDisplay: 'auto', useGrouping: 'auto'};
     SetNumberFormatDigitOptions(nf, objectCreate(null), 0, 3, 'standard');
+    nf.roundingMode = 'halfEven';
     s.nf = nf;
     apply(wm_set, RELATIVE_TIME_FORMATS, [made, s]);
     return made;
@@ -3223,8 +3237,8 @@ function relativeTimeParts(s, value, unit, name) {
         throw new RangeError_('Invalid unit argument for Intl.RelativeTimeFormat.prototype.' + name + "() '" + unit + "'");
     const fields = own(RELATIVE, s.style === 'long' ? singular : singular + '-' + s.style);
     const out = [];
-    // numeric "auto": a value within 2.1 of now names its day in words
-    // where CLDR has one ("tomorrow"), judged as ICU judges it, by the value
+    // numeric "auto": a value within 2.1 of now is named in words where
+    // CLDR has them ("tomorrow", "this hour"), judged as ICU judges it, by the value
     // rounded to hundredths in doubles (so V8 calls 0.004 days "today" and
     // 0.005 "in 0.005 days"; ECMA-402 would match the exact value; § 9.6).
     if (s.numeric === 'auto' && value > -2.1 && value < 2.1) {
@@ -3312,12 +3326,11 @@ function StringListFromIterable(iterable) {
     const list = [];
     if (iterable === undefined) return list;
     for (const element of iterable) {
-        if (typeof element !== 'string') throw new TypeError_('Iterable yielded ' + ToDisplayString(element) + ' which is not a string');
+        if (typeof element !== 'string') throw new TypeError_('Intl.ListFormat: an element of the list is not a string');
         push(list, element);
     }
     return list;
 }
-function ToDisplayString(v) { return typeof v === 'symbol' ? 'a Symbol' : isObject(v) ? 'an object' : String_(v); }
 // CreatePartsFromList: CLDR's patterns ({0} and {1}) applied from the end
 // of the list: the last two by "end", each earlier one by "middle", the
 // first by "start", and two alone by "2".
