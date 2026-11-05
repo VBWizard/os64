@@ -216,9 +216,9 @@ the end of Slice B, which says why.)
 Accepts observers, `supportedEntryTypes` says what exists (`mark`,
 `measure`, `navigation`), never delivers what libdom does not record.
 Quiets 23 hosts of noise and the two unhandled rejections on every GitHub
-page. Could ride with B. Built, stacked on B's TreeWalker PR: it delivers
-the marks and measures libdom records as they are made, and the navigation
-entry to a `buffered` observer (LIBDOM.md § PerformanceObserver).
+page. Could ride with B. Built: it delivers the marks and measures libdom
+records as they are made, and the navigation entry once the window's load
+has run (LIBDOM.md, the PerformanceObserver paragraph).
 
 ## 6. Harness notes that cost an afternoon, so they cost nobody another
 

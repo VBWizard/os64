@@ -263,7 +263,8 @@ static void dom_performance_observer_cases(void)
         "assert(Object.prototype.toString.call(o)==='[object PerformanceObserver]');"
         "throws('TypeError',()=>o.observe());throws('TypeError',()=>o.observe({}));throws('TypeError',()=>o.observe(5));"
         "throws('TypeError',()=>o.observe({entryTypes:['mark'],type:'mark'}));"
-        "throws('TypeError',()=>o.observe({entryTypes:['mark'],buffered:false}),'buffered is there, false or not');"
+        /* Beside entryTypes, buffered is ignored, as other browsers do. */
+        "new PerformanceObserver(()=>1).observe({entryTypes:['paint'],buffered:true});"
         "throws('TypeError',()=>o.observe({entryTypes:'mark'}),'a sequence');"
         "o.observe({entryTypes:[]});o.observe({entryTypes:['resource','Mark']});"
         "throws('InvalidModificationError',()=>o.observe({type:'mark'}));"
@@ -322,6 +323,8 @@ static void dom_performance_observer_cases(void)
         "m.observe({entryTypes:['mark','measure']});m.observe({entryTypes:['measure','bogus']});"
         "globalThis.buffered=[];globalThis.b=new PerformanceObserver(l=>buffered.push(l.getEntries().map(e=>e.name).join()));"
         "b.observe({type:'mark',buffered:true});"
+        "globalThis.eb=[];new PerformanceObserver(l=>eb.push(l.getEntries().map(e=>e.name).join()))"
+        ".observe({entryTypes:['mark'],buffered:true});"
         "globalThis.nav=[];globalThis.n=new PerformanceObserver(l=>nav.push(l.getEntries().map(e=>e.entryType)));"
         "n.observe({type:'navigation'});"
         "globalThis.navb=[];new PerformanceObserver(l=>navb.push(l.getEntries().map(e=>e.entryType+':'+e.name).join()))"
@@ -334,8 +337,27 @@ static void dom_performance_observer_cases(void)
         /* Every mark buffered and the one made after, in startTime order
          * (the clock stands still, so a, b, c, d and z share one). */
         "assert(buffered.length===1&&buffered[0]==='early,a,b,c,d,z,t1,t2,late',buffered.join('|'));"
-        "assert(nav.length===0,'the navigation entry is only ever buffered');"
+        "assert(eb.length===1&&eb[0]==='z','entryTypes takes nothing buffered: '+eb.join('|'));"
+        "assert(nav.length===0&&navb.length===0,'the navigation entry waits for the load');",
+        "PerformanceObserver: entryTypes and buffered, delivered");
+    /* The window's load queues the navigation entry to every observer of
+     * it, buffered or not; a buffered observe() after it is handed it. */
+    os64_dom_event_t loaded = {.type = "load"};
+    os64_js_outcome_t load_out;
+    check(os64_dom_dispatch(f.binding, NULL, &loaded, NULL, &load_out) == OS64_JS_OK,
+          "PerformanceObserver: the window's load");
+    check(observer_fire(&f, OS64_JS_OK, "PerformanceObserver: the navigation entry") == 1,
+          "PerformanceObserver: the navigation entry is one task after the load");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(nav.length===1&&nav[0].join()==='navigation',JSON.stringify(nav));"
         "assert(navb.length===1&&navb[0]==='navigation:https://example.test/',navb.join('|'));"
+        "globalThis.navl=[];new PerformanceObserver(l=>navl.push(l.getEntries()[0].entryType))"
+        ".observe({type:'navigation',buffered:true});",
+        "PerformanceObserver: the navigation entry, after the load");
+    os64_dom_dispatch(f.binding, NULL, &loaded, NULL, &load_out);
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: buffered after the load");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(navl.join()==='navigation'&&nav.length===1&&navb.length===1,'once, however many loads');"
         /* disconnect: the buffer emptied and the types forgotten; observe
          * again with another type. */
         "performance.mark('gone');single.disconnect();assert(single.takeRecords().length===0);"
@@ -377,6 +399,20 @@ static void dom_performance_observer_cases(void)
         "var v=new PerformanceObserver(()=>v);v.observe({entryTypes:['measure']});performance.measure('v');",
         "PerformanceObserver: torn down waiting");
     fixture_free(&f);
+    /* A page the host says is complete: its load is behind it, so the
+     * navigation entry is queued already. */
+    options.readiness = OS64_DOM_COMPLETE;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "globalThis.done=[];new PerformanceObserver(l=>done.push(l.getEntries()[0].entryType))"
+        ".observe({type:'navigation',buffered:true});",
+        "PerformanceObserver: a complete page's navigation entry");
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: a complete page");
+    dom_script(&f, STORAGE_ASSERT "assert(done.join()==='navigation',done.join());",
+               "PerformanceObserver: a complete page hands it to a buffered observe()");
+    fixture_free(&f);
+    options.readiness = OS64_DOM_LOADING;
     static const char *const kOperations[] = {
         "new PerformanceObserver(()=>1).observe({type:'mark'});performance.mark('m')",
         "performance.mark('a');new PerformanceObserver(()=>1).observe({type:'mark',buffered:true})",

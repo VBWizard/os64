@@ -44,6 +44,7 @@ supportedEntryTypes.any.html	supportedEntryTypes exists and returns entries in a
 buffered-does-not-sync-invoke.html	Buffered PerformanceObservers should not invoke callbacks synchronously.
 buffered-flag-after-timeout.any.html	PerformanceObserver with buffered flag sees entry after timeout
 buffered-flag-observer.any.html	PerformanceObserver with buffered flag should see past and future entries.
+buffered-flag-with-entryTypes-observer.tentative.any.html	PerformanceObserver without buffered flag set to false cannot see past entries.
 case-sensitivity.any.html	observe() and case sensitivity for types/entryTypes and buffered.
 idlharness.any.html	Partial interface Performance: member names are unique
 idlharness.any.html	Partial interface Performance: original interface defined
