@@ -537,11 +537,12 @@ static JSValue position_value(os64_dom_t *dom, JSContext *ctx, const char *const
 /* A non-longhand, from its longhands' computed values, as a browser
  * serializes the shorthands this knows how to: a position's x and y paired
  * a layer at a time (`background-position: 0% 0%, 50% 100%`); grid lines
- * `auto` when every one is; otherwise one value when every longhand
- * agrees (`overflow: visible`, `margin: 0px`); a box's sides in the
- * one-to-four value form, and its corners too when no corner is two values
- * (an elliptical corner's pair takes a slashed form); a pair's two values
- * in its order (`overflow: hidden auto`, `gap: 8px 16px`). The rest answer
+ * `auto` when every one is; corners never when one is an ellipse (its two
+ * radii take a slashed form, so four equal `10px 5px` corners are not the
+ * shorthand `10px 5px`); otherwise one value when every longhand agrees
+ * (`overflow: visible`, `margin: 0px`); a box's sides or corners in the
+ * one-to-four value form; a pair's two values in its order
+ * (`overflow: hidden auto`, `gap: 8px 16px`). The rest answer
  * "", which CSSOM allows of a shorthand and which no page can mistake for
  * a value, where a browser writes most of them out (DEBTS.md: `font`,
  * `flex`, `border`, `background`, grid lines, the elliptical corners). */
@@ -566,10 +567,11 @@ static JSValue short_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, 
     if (short_is_position(s)) return position_value(dom, ctx, text, length);
     if (short_is_grid_lines(s))
         return JS_NewString(ctx, same && same_text(text[0], length[0], "auto", 4) ? "auto" : "");
+    if (spaced && short_is_box(s) && contains(garb_prop_name(s->props[0]), "radius"))
+        return JS_NewString(ctx, "");
     if (same) return JS_NewStringLen(ctx, text[0], length[0]);
     int32_t used;
-    bool corners = contains(garb_prop_name(s->props[0]), "radius");
-    if (short_is_box(s) && !(corners && spaced)) {
+    if (short_is_box(s)) {
         // top right bottom left: left goes when it is right, bottom when it
         // is top, right when it is top (all four the same answered above).
         used = !same_text(text[1], length[1], text[3], length[3]) ? 4

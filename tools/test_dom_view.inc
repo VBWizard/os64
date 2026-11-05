@@ -500,6 +500,10 @@ static void dom_view_computed_cases(void)
     c.body_value[GARB_BACKGROUND_POSITION_Y] = "0%";
     dom_script(&f, VIEW_ASSERT "assert(getComputedStyle(document.body).backgroundPosition==='','layers that do not pair');",
                "computed: a position's layers that do not pair");
+    for (int i = 0; i < 4; i++) c.body_value[GARB_BORDER_TOP_LEFT_RADIUS + i] = "10px 5px";
+    dom_script(&f, VIEW_ASSERT "var cs=getComputedStyle(document.body);"
+        "assert(cs.borderRadius==='','four equal ellipses are not one value: '+cs.borderRadius);",
+        "computed: four equal elliptical corners");
     memset(c.body_value, 0, sizeof(c.body_value));
     check(c.last != NULL && c.last->kind == OS64_HTML_ELEMENT, "computed: the provider is asked for the element");
     os64_dom_geometry_stats(f.binding, true);
