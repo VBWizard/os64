@@ -955,3 +955,24 @@ canonical equivalence with stacked marks reordered (the collator does not
 normalize; DEBTS) and `$262`'s second realm. Four tests elsewhere that had
 waited on a Collator now pass and left their exclusion lists. The capture
 page asks the sign of Collator comparisons for the next capture.
+
+## Intl (ECMA-402, slice A3: the redefined built-ins, Intl's functions) validation, 2026-11-05
+
+The install redefines, as its last step, the built-ins ECMA-402 redefines:
+`Date.prototype.toLocaleString`, `toLocaleDateString` and
+`toLocaleTimeString`, `Number.prototype.toLocaleString`,
+`BigInt.prototype.toLocaleString`, `Array.prototype.toLocaleString`,
+`String.prototype.localeCompare`, `toLocaleUpperCase` and
+`toLocaleLowerCase`; and `Intl` gains `getCanonicalLocales` and
+`supportedValuesOf`. The runtime suite's Intl case calls them, and the
+refused-locale case shows a refused install leaves every built-in as it
+was. The install's allocation sweep covers the redefinitions.
+
+`tools/test262_host.sh` adds `intl402/Date`, `Number`, `BigInt`, `String`
+and `Array`: 24 of 24, 14 of 14, 20 of 22, 26 of 38 and 4 of 4, the rest
+German, Turkish, Azeri and Lithuanian (locales the data does not hold).
+`intl402/Intl` now passes 116 of 132 (it was 6): the rest the calendars,
+numbering systems and DisplayNames not held, and four `-u-` values not
+canonicalized (DEBTS). Tests elsewhere that waited on A3 now pass and left
+their lists (DateTimeFormat 312 of 490, Locale 218 of 380, NumberFormat
+414 of 502).

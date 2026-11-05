@@ -6,8 +6,6 @@ intl402/DateTimeFormat/canonicalize-timezone.js	Chrome answers a zone by CLDR's 
 intl402/DateTimeFormat/canonicalize-timezone.js (strict)	Chrome answers a zone by CLDR's canonical name (its capture: Asia/Kolkata is Asia/Calcutta), as libjs does; ECMA-402 now keeps the name given
 intl402/DateTimeFormat/canonicalize-utc-timezone.js	Chrome answers a zone by CLDR's canonical name (its capture: Asia/Kolkata is Asia/Calcutta), as libjs does; ECMA-402 now keeps the name given
 intl402/DateTimeFormat/canonicalize-utc-timezone.js (strict)	Chrome answers a zone by CLDR's canonical name (its capture: Asia/Kolkata is Asia/Calcutta), as libjs does; ECMA-402 now keeps the name given
-intl402/DateTimeFormat/date-time-options.js	Date.prototype.toLocale* through Intl ships in A3 (INTL.md § 9.5)
-intl402/DateTimeFormat/date-time-options.js (strict)	Date.prototype.toLocale* through Intl ships in A3 (INTL.md § 9.5)
 intl402/DateTimeFormat/proto-from-ctor-realm.js	needs test262's $262 host hooks (a second realm), which the runner does not provide
 intl402/DateTimeFormat/proto-from-ctor-realm.js (strict)	needs test262's $262 host hooks (a second realm), which the runner does not provide
 intl402/DateTimeFormat/prototype/format/german-weekday-no-year.js	a locale other than en (de, ja, ...): data not held (INTL.md § 7)

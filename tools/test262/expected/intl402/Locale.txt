@@ -1,7 +1,5 @@
 # test262 intl402/Locale, held by tools/test262/run.py (its docstring says how).
 [excluded]
-intl402/Locale/canonicalize-locale-list-take-locale.js	Intl.getCanonicalLocales ships in A3 (INTL.md § 9.5)
-intl402/Locale/canonicalize-locale-list-take-locale.js (strict)	Intl.getCanonicalLocales ships in A3 (INTL.md § 9.5)
 intl402/Locale/constructor-apply-options-canonicalizes-twice.js	likely subtags of a language other than English: data not held (INTL.md § 7)
 intl402/Locale/constructor-apply-options-canonicalizes-twice.js (strict)	likely subtags of a language other than English: data not held (INTL.md § 7)
 intl402/Locale/constructor-non-iana-canon.js	likely subtags of a language other than English: data not held (INTL.md § 7)

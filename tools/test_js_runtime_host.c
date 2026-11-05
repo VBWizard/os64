@@ -1100,7 +1100,11 @@ static void intl_cases(void)
         "if (new Intl.ListFormat('en-US', {type: 'disjunction'}).format(['a', 'b', 'c']) !== 'a, b, or c')\n"
         "    throw new Error('ListFormat');\n"
         "if (['b', 'A', 'a', '_', '1'].sort(new Intl.Collator('en-US').compare).join() !== '_,1,a,A,b')\n"
-        "    throw new Error('Collator');\n"),
+        "    throw new Error('Collator');\n"
+        "if ((1234.5).toLocaleString() !== '1,234.5' || 'a'.localeCompare('B') !== -1 ||\n"
+        "    new Date(0).toLocaleDateString('en-US', {timeZone: 'UTC', month: 'long'}) !== 'January' ||\n"
+        "    [1e6, 2].toLocaleString() !== '1,000,000,2' || Intl.getCanonicalLocales('EN-us')[0] !== 'en-US')\n"
+        "    throw new Error('the redefined built-ins');\n"),
         "Intl formats in the host's zone, published as a global property");
     check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
           "Intl installs once and only before evaluation");
@@ -1119,8 +1123,9 @@ static void intl_cases(void)
     runtime = create_fixture(&config);
     if (runtime == NULL) return;
     check(os64_js_install_intl(runtime, "de-DE", &outcome) == OS64_JS_EXCEPTION &&
-          intl_eval(runtime, "if (typeof Intl !== 'undefined') throw new Error('Intl defined');"),
-          "a default locale the data does not hold is refused, and nothing is defined");
+          intl_eval(runtime, "if (typeof Intl !== 'undefined') throw new Error('Intl defined');\n"
+                             "if ((1234.5).toLocaleString() !== '1234.5') throw new Error('a built-in redefined');"),
+          "a default locale the data does not hold is refused, and nothing is defined or redefined");
     os64_js_destroy(runtime);
 
     /* The machine's zone: a rule names the zone that keeps it, by its

@@ -27,7 +27,7 @@ What is taken:
   hourCycles     the US's preferred and allowed hour cycles (timeData)
   likely         likely subtags for the English tags and every `und` row
                  (INTL.md § 7: other tags maximize to themselves)
-  numbers        deferred (a function returning the four below, which
+  numbers        deferred (a function returning the five below, which
                  the first NumberFormat, PluralRules or RelativeTimeFormat
                  calls):
     numbers      the latn symbols, the decimal, percent, scientific and
@@ -41,6 +41,7 @@ What is taken:
                  sanctioned per-units it has (km/h), and the compound
                  "per" patterns
     plurals      en's cardinal and ordinal rules and its plural ranges
+    currentCurrencies  the codes some region uses as tender today
     relative     the relative-time fields of RelativeTimeFormat's eight
                  units in each width: the words for -1, 0 and 1 ("yesterday")
                  and the future and past patterns by plural category
@@ -262,6 +263,12 @@ def main():
                     table[pair] = {k: v for k, v in entry.items() if k.startswith('unitPattern-count-')}
         units[width] = table
 
+    # The currencies some region uses as tender today (an entry with no
+    # `_to`, not marked `_tender: false`): supportedValuesOf's answer.
+    current_currencies = sorted({code for entries in load(root, 'cldr-core', 'supplemental', 'currencyData.json')
+                                 ['supplemental']['currencyData']['region'].values()
+                                 for entry in entries for code, info in entry.items()
+                                 if '_to' not in info and info.get('_tender', 'true') != 'false'})
     latn = lambda name: numbers[name + '-numberSystem-latn']
     number_data = {
         'symbols': latn('symbols'),
@@ -328,6 +335,7 @@ def main():
             'units': units,
             'plurals': {'cardinal': plural_rules, 'ordinal': ordinal_rules, 'ranges': plural_ranges},
             'relative': relative,
+            'currentCurrencies': current_currencies,
         }),
         'lists': lists,
         # Collator's elements, built by the first Collator a realm constructs.

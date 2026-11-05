@@ -31,6 +31,11 @@ TEST262_DIRS=(
     test/intl402/RelativeTimeFormat
     test/intl402/ListFormat
     test/intl402/Collator
+    test/intl402/Date
+    test/intl402/Number
+    test/intl402/BigInt
+    test/intl402/String
+    test/intl402/Array
 )
 
 top=$(git rev-parse --show-toplevel)
