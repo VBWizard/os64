@@ -270,4 +270,4 @@ Booked, with triggers (DEBTS.md):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Inline scripts | a page is not cached, so an inline script has no entry to sit beside; keyed by text alone it would be a second cache with its own cap | a page measured slow on a large inline script |
-| `SCRIPT_SOURCE_MAX` is 4 MiB | YouTube's 10.6 MB bundle is refused before it is compiled; the source limit and the runtime's memory are a per-page policy (MODERN_WEB.md's reopened decision) | the per-page memory policy |
+| `SCRIPT_SOURCE_MAX` is 8 MiB | YouTube's 10.6 MB bundle is refused before it is compiled; the source limit and the runtime's memory are a per-page policy (MODERN_WEB.md's reopened decision) | the per-page memory policy |

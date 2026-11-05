@@ -1,4 +1,5 @@
 #include "scripts.h"
+#include "bytecode.h"
 #include "modules.h"
 #include "importmap.h"
 #include "page/page.h"
@@ -479,7 +480,8 @@ static size_t own_stack_bytes(void)
 }
 
 // The runtime and its binding, made at the first script that runs. Heap
-// and source keep the profile measured for libdom (DOM.md § D5b). The stack
+// keeps the profile measured for libdom (DOM.md § D5b); source is yonder's
+// own limit (SCRIPT_SOURCE_MAX), which the fetches refuse past. The stack
 // is the engine's share of yonder's window thread, which layout shares
 // (SCRIPT_STACK.md): the thread's size, read once, less layout's headroom
 // (yonder_script_stack_limit). The deadline is the page's task budget, and
@@ -495,6 +497,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         engine_stack = yonder_script_stack_limit(own_stack_bytes());
     os64_js_config_t config = {os64_js_default_limits()};
     config.limits.stack_bytes = engine_stack;
+    config.limits.source_bytes = SCRIPT_SOURCE_MAX;
     config.limits.execution_ms = s->options.execution_ms;
     config.limits.jobs_per_turn = (uint64_t)1 << 20;
     if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
@@ -721,7 +724,7 @@ static bool inline_source(yonder_scripts_t *s, Item *it)
     os64_snprintf(it->name, sizeof(it->name), "%.*s#inline-%u", (int)(sizeof(it->name) - 24),
                   s->url, ++s->inline_count);
     // At most the source a runtime is created with (ensure_runtime).
-    size_t cap = os64_js_default_limits().source_bytes, length = 0;
+    size_t cap = SCRIPT_SOURCE_MAX, length = 0;
     for (const os64_html_node_t *n = it->node->first_child; n != NULL; n = n->next)
         if (n->kind == OS64_HTML_TEXT) {
             if (n->text_len > cap - length)
@@ -1444,7 +1447,7 @@ bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fr
     const char *rest = os64_strchr(url, ':');
     rest = rest != NULL ? rest + 1 : url;
     size_t length = os64_strlen(rest), extra = fragment != NULL ? os64_strlen(fragment) + 1 : 0;
-    size_t cap = os64_js_default_limits().source_bytes;
+    size_t cap = SCRIPT_SOURCE_MAX;
     if (length > cap || extra > cap - length)
         return false;
     // What the percent-decoding leaves, then the same as UTF-8: no byte
