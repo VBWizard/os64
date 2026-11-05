@@ -1096,6 +1096,14 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
     if (os64_dom_listens(dom, ev->type))
         d_host_dispatch(dom, node, NULL, ev->type, host_event, (void *)ev, prevented, outcome);
     if (submitting) dom->submitting = self.next;
+    /* The window's load has run: the navigation timing entry is queued
+     * (performance.c), unless the dispatch left the runtime stopping. */
+    if (node == NULL && os64_strcmp(ev->type, "load") == 0 && !sticky(outcome->status)) {
+        os64_js_outcome_t queued;
+        os64_memset(&queued, 0, sizeof(queued));
+        d_performance_loaded(dom, &queued);
+        d_outcome_fold(outcome, &queued);
+    }
     if (changed.status != OS64_JS_OK) {
         d_outcome_fold(&changed, outcome);
         *outcome = changed;

@@ -502,8 +502,20 @@ idlharness.any.html	Stringification of mark
 idlharness.any.html	Stringification of measure
 idlharness.any.html	idl_test setup
 idlharness.any.html	idl_test validation
+# Slice E (GITHUB_WALLS.md): the pages that observe marks and measures with a
+# PerformanceObserver. Each fails with the switch off.
+buffered-flag.any.html	PerformanceObserver with buffered flag sees previous measures
+case-sensitivity.any.html	getEntriesByType values are case sensitive
+mark-l3.any.html	mark entries' detail and startTime are customizable.
+measure-with-dict.any.html	measure entries' detail and start/end are customizable
+supported-usertiming-types.any.html	'mark' entries should be observable.
+supported-usertiming-types.any.html	'measure' entries should be observable.
+supported-usertiming-types.any.html	supportedEntryTypes contains 'mark' and 'measure'.
 [excluded]
 [passing]
+buffered-flag.any.html	PerformanceObserver with buffered flag sees previous marks
+buffered-flag.any.html	PerformanceObserver with buffered flag sees previous measures
+case-sensitivity.any.html	getEntriesByType values are case sensitive
 clearMarks.html	First loop: checking entries after removing "". Entries in entrylist should be in order.
 clearMarks.html	First loop: checking entries after removing "". Entry_list 0. Entry "1" should be one that we have set.
 clearMarks.html	First loop: checking entries after removing "". Entry_list 0. duration of mark should be 0.
@@ -716,6 +728,7 @@ mark-errors.any.html	[performance.mark]: NaN should be rejected as the mark-opti
 mark-errors.any.html	[performance.mark]: Negative startTime in mark-options should be rejected
 mark-errors.any.html	[performance.mark]: Number should be rejected as the mark-options.
 mark-errors.any.html	[performance.mark]: String should be rejected as the mark-options.
+mark-l3.any.html	mark entries' detail and startTime are customizable.
 mark-measure-feature-detection.html	Test PerformanceMark existence and feature detection
 mark-measure-feature-detection.html	Test PerformanceMeasure existence and feature detection
 mark-measure-return-objects.any.html	L3: performance.mark(name) should return an entry.
@@ -902,6 +915,7 @@ measure-exceptions.html	Passing DoesNotExist as a mark to measure API should cau
 measure-l3.any.html	When start and end mark are both given, the start time and end time of the measure entry should be the marks' time, repectively
 measure-l3.any.html	When the end mark is given and the start is unprovided, the end time of the measure entry should be the end mark's time, the start time should be 0.
 measure-l3.any.html	When the start mark is given and the end is unprovided, the start time of the measure entry should be the start mark's time, the end should be now.
+measure-with-dict.any.html	measure entries' detail and start/end are customizable
 measure-with-dict.any.html	measure should throw a TypeError when passed an invalid argument combination
 measure_exception.html	Invocation of performance.measure("Exception1", "NonExistMark1") should throw SYNTAX_ERR Exception.
 measure_exception.html	Invocation of performance.measure("Exception2", "NonExistMark1", "navigationStart") should throw SYNTAX_ERR Exception.
@@ -1066,6 +1080,9 @@ structured-serialize-detail.any.html	The detail property in the measure method s
 structured-serialize-detail.any.html	The detail property in the measure method should be the same reference.
 structured-serialize-detail.any.html	When accessing detail from a mark entry and the detail is not provided, just return a null value.
 structured-serialize-detail.any.html	When accessing detail from a measure entry and the detail is not provided, just return a null value.
+supported-usertiming-types.any.html	'mark' entries should be observable.
+supported-usertiming-types.any.html	'measure' entries should be observable.
+supported-usertiming-types.any.html	supportedEntryTypes contains 'mark' and 'measure'.
 user-timing-tojson.html	Test toJSON() in PerformanceMark
 user-timing-tojson.html	Test toJSON() in PerformanceMeasure
 user_timing_exists.any.html	self.performance.clearMarks is defined.

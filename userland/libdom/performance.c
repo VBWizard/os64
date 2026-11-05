@@ -20,7 +20,22 @@
  * matching entries in the order of their startTime, ties in the order
  * made. Nothing else is recorded: `resource`, `paint` and every other type
  * answers an empty list, which is what a browser that records none of them
- * answers. There is no PerformanceObserver.
+ * answers.
+ *
+ * THE OBSERVERS (Performance Timeline § 5). A PerformanceObserver is told
+ * of the entries this file records and of no others: supportedEntryTypes
+ * names mark, measure and navigation, and an observe() for any other type
+ * is ignored, as the standard has a browser ignore a type it does not
+ * support. A mark or measure that performance.mark() or measure() makes is
+ * queued to each registered observer that observes its type; the
+ * navigation entry is queued once the window's load event has run, as
+ * HTML's "the end" queues it, and a `buffered` observe() is handed it only
+ * from then (d_performance_loaded). The registered observers are held in C, in the
+ * order registered, which keeps each alive while registered, as its
+ * global's list does; the entries waiting for one are its own, traced by
+ * the collector with its callback. Delivery is one task, a binding timer
+ * due at once, queued when an observer is handed an entry and not already
+ * queued.
  *
  * Navigation Timing's attributes come from the host's milestones. Those it
  * does not measure are given as the standard has them for a document that
@@ -265,22 +280,27 @@ static int buffer_clear(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst 
 
 typedef struct { JSValue value; double start; } Found;
 
-/* The entries of `kind` (-1: every kind) named `name` (undefined: any),
- * the navigation entry among them, as a new Array in startTime order. */
-static JSValue buffer_query(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst name)
+/* The entries of `kind` (-1: every kind) named `name` (undefined: any), as
+ * a new Array in startTime order: those of `list`, `list_count` of them
+ * (a PerformanceObserverEntryList's), or with `list` NULL the buffer's, the
+ * navigation entry among them. */
+static JSValue entries_query(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst name, const JSValue *list,
+                             uint32_t list_count)
 {
-    uint32_t count = dom->performance_count;
+    uint32_t count = list != NULL ? list_count : dom->performance_count;
     /* The entries found, and as many again for the sort's scratch. */
     Found *found = d_alloc(dom, sizeof(*found) * ((size_t)count + 1) * 2);
     if (found == NULL) return d_error(ctx, "QuotaExceededError", "Performance entry quota exceeded");
     Found *scratch = found + count + 1;
     uint32_t used = 0;
     JSValue result = JS_EXCEPTION;
-    const DEntry *navigation = JS_GetOpaque(dom->navigation_entry->value, os64_js_class_id(&entry_slot));
+    const DEntry *navigation = list != NULL ? NULL
+                             : JS_GetOpaque(dom->navigation_entry->value, os64_js_class_id(&entry_slot));
     if ((kind < 0 || kind == K_NAVIGATION) && navigation != NULL && named(ctx, navigation, name))
         found[used++] = (Found){JS_DupValue(ctx, dom->navigation_entry->value), 0};
     for (uint32_t i = 0; i < count; i++) {
-        JSValue item = JS_GetPropertyUint32(ctx, dom->performance_entries->value, i);
+        JSValue item = list != NULL ? JS_DupValue(ctx, list[i])
+                     : JS_GetPropertyUint32(ctx, dom->performance_entries->value, i);
         if (JS_IsException(item)) goto done;
         DEntry *entry = JS_GetOpaque(item, os64_js_class_id(&entry_slot));
         if (entry == NULL || (kind >= 0 && entry->kind != kind) || !named(ctx, entry, name)) {
@@ -319,6 +339,273 @@ done:
     for (uint32_t i = 0; i < used; i++) JS_FreeValue(ctx, found[i].value);
     d_free(dom, found);
     return result;
+}
+
+/* The kind an entry type names, by its exact text (the Timeline compares
+ * types as they are written, case and all): -1 for a type this file
+ * records none of, -2 with an exception pending. `type` is a string. */
+static int kind_named(JSContext *ctx, JSValueConst type)
+{
+    size_t length;
+    const char *text = JS_ToCStringLen(ctx, &length, type);
+    if (text == NULL) return -2;
+    int kind = -1;
+    for (int k = 0; k < 3; k++)
+        if (os64_strlen(kKindNames[k]) == length && os64_memcmp(text, kKindNames[k], length) == 0) kind = k;
+    JS_FreeCString(ctx, text);
+    return kind;
+}
+
+/* getEntriesByType(type) and, `by_name`, getEntriesByName(name, type):
+ * Performance's, and with `list` a PerformanceObserverEntryList's (as
+ * entries_query has them). A type no entry has answers an empty Array. */
+static JSValue query_by(os64_dom_t *dom, JSContext *ctx, bool by_name, int argc, JSValueConst *argv,
+                        const JSValue *list, uint32_t list_count)
+{
+    if (argc < 1) return JS_ThrowTypeError(ctx, "The query needs an argument");
+    JSValue first = JS_ToString(ctx, argv[0]);
+    if (JS_IsException(first)) return first;
+    JSValue type = !by_name ? JS_DupValue(ctx, first)
+                 : argc > 1 && !JS_IsUndefined(argv[1]) ? JS_ToString(ctx, argv[1]) : JS_UNDEFINED;
+    if (JS_IsException(type)) { JS_FreeValue(ctx, first); return type; }
+    int kind = JS_IsUndefined(type) ? -1 : kind_named(ctx, type);
+    bool known = JS_IsUndefined(type) || kind >= 0;
+    JS_FreeValue(ctx, type);
+    JSValue result = kind == -2 ? JS_EXCEPTION
+                   : !known ? JS_NewArray(ctx)
+                   : entries_query(dom, ctx, kind, by_name ? first : JS_UNDEFINED, list, list_count);
+    JS_FreeValue(ctx, first);
+    return result;
+}
+
+/* ── The observers' queue ────────────────────────────────────────────── */
+
+static JSClassID observer_slot, list_slot;
+
+/* An observer's observer type (Performance Timeline's observe()): unset until
+ * its first observe(), then "single" for one that named a `type` and
+ * "multiple" for one given `entryTypes`, and never changed after. */
+enum { O_UNSET, O_SINGLE, O_MULTIPLE };
+
+/* A PerformanceObserver: its callback and the script it is, the entries
+ * queued for it and not yet delivered (its observer buffer, in the order
+ * queued), the kinds it observes (a bit each: the `entryTypes` it was last
+ * given, or the `type` of each observe() call, which is all of an
+ * observe()'s options that outlives the call here), its observer type,
+ * and whether its next callback is told droppedEntriesCount. */
+typedef struct {
+    JSValue callback;
+    JSValue *entries;
+    uint32_t count, cap, script;
+    uint8_t mode, kinds;
+    bool dropped_owed;
+} DObserver;
+
+/* A PerformanceObserverEntryList: the entries one delivery handed it. */
+typedef struct {
+    JSValue *entries;
+    uint32_t count;
+} DEntryList;
+
+static void values_free(JSRuntime *rt, JSValue *values, uint32_t count)
+{
+    for (uint32_t i = 0; i < count; i++) JS_FreeValueRT(rt, values[i]);
+    js_free_rt(rt, values);
+}
+
+static void observer_finalizer(JSRuntime *rt, JSValue value)
+{
+    DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
+    if (o == NULL) return;
+    JS_FreeValueRT(rt, o->callback);
+    values_free(rt, o->entries, o->count);
+    js_free_rt(rt, o);
+}
+
+static void observer_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DObserver *o = JS_GetOpaque(value, os64_js_class_id(&observer_slot));
+    if (o == NULL) return;
+    JS_MarkValue(rt, o->callback, mark);
+    for (uint32_t i = 0; i < o->count; i++) JS_MarkValue(rt, o->entries[i], mark);
+}
+
+static void list_finalizer(JSRuntime *rt, JSValue value)
+{
+    DEntryList *l = JS_GetOpaque(value, os64_js_class_id(&list_slot));
+    if (l == NULL) return;
+    values_free(rt, l->entries, l->count);
+    js_free_rt(rt, l);
+}
+
+static void list_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DEntryList *l = JS_GetOpaque(value, os64_js_class_id(&list_slot));
+    if (l == NULL) return;
+    for (uint32_t i = 0; i < l->count; i++) JS_MarkValue(rt, l->entries[i], mark);
+}
+
+/* Room in `o`'s buffer for `more` entries beyond those it holds; -1 with
+ * an exception pending. */
+static int observer_room(JSContext *ctx, DObserver *o, uint32_t more)
+{
+    if (more <= o->cap - o->count) return 0;
+    if (more > UINT32_MAX / 2 - o->count) {
+        d_error(ctx, "QuotaExceededError", "Performance entry quota exceeded");
+        return -1;
+    }
+    uint32_t cap = o->cap != 0 ? o->cap : 8;
+    while (cap < o->count + more) cap *= 2;
+    JSValue *grown = js_realloc(ctx, o->entries, (size_t)cap * sizeof(*grown));
+    if (grown == NULL) return -1;
+    o->entries = grown;
+    o->cap = cap;
+    return 0;
+}
+
+static DObserver *observer_at(const os64_dom_t *dom, uint32_t i)
+{
+    return JS_GetOpaque(dom->performance_observers[i], os64_js_class_id(&observer_slot));
+}
+
+/* A new PerformanceObserverEntryList, which `o`'s waiting entries leave
+ * `o` for. */
+static JSValue list_take(JSContext *ctx, DObserver *o)
+{
+    JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&list_slot));
+    DEntryList *l = JS_IsException(object) ? NULL : js_mallocz(ctx, sizeof(*l));
+    if (l == NULL) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    *l = (DEntryList){o->entries, o->count};
+    o->entries = NULL;
+    o->count = o->cap = 0;
+    JS_SetOpaque(object, l);
+    return object;
+}
+
+/* The exception pending, reported as `script`'s failure, unless the
+ * runtime is stopping, which answers false and leaves it pending. */
+static bool report_pending(os64_dom_t *dom, JSContext *ctx, uint32_t script)
+{
+    if (!d_exception_catchable(ctx)) return false;
+    JSValue error = JS_GetException(ctx);
+    d_report_as(dom, ctx, error, script);
+    JS_FreeValue(ctx, error);
+    return true;
+}
+
+/* "Queue the PerformanceObserver task"'s task: every observer registered as it
+ * begins, in the order registered, that has entries waiting is called with
+ * them as a PerformanceObserverEntryList, itself (as `this` too), and its
+ * callback options. What a callback throws is its script's, reported, and
+ * the next is called. The callbacks share the one task, so a microtask one
+ * queues runs when the task ends rather than before the next callback
+ * (DEBTS.md). */
+static JSValue observer_task(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    (void)self; (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    dom->performance_task_queued = false;
+    uint32_t count = dom->performance_observer_count;
+    if (count == 0) return JS_UNDEFINED;
+    JSValue *notify = d_alloc(dom, (size_t)count * sizeof(*notify));
+    if (notify == NULL) return d_error(ctx, "QuotaExceededError", "Performance observer quota exceeded");
+    for (uint32_t i = 0; i < count; i++) notify[i] = JS_DupValue(ctx, dom->performance_observers[i]);
+    JSValue result = JS_UNDEFINED;
+    for (uint32_t i = 0; i < count && !JS_IsException(result); i++) {
+        DObserver *o = JS_GetOpaque(notify[i], os64_js_class_id(&observer_slot));
+        if (o == NULL || o->count == 0) continue;
+        /* This browser drops no entry (marks and measures are kept without
+         * limit, and the navigation entry's buffer holds the one there
+         * is), so a count owed is 0. */
+        JSValue options = JS_NewObject(ctx);
+        if (!JS_IsException(options) && o->dropped_owed &&
+            JS_DefinePropertyValueStr(ctx, options, "droppedEntriesCount", JS_NewInt32(ctx, 0), JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, options);
+            options = JS_EXCEPTION;
+        }
+        JSValue list = JS_IsException(options) ? JS_EXCEPTION : list_take(ctx, o);
+        if (JS_IsException(list)) {
+            JS_FreeValue(ctx, options);
+            if (!report_pending(dom, ctx, D_SCRIPT_PAGE)) result = JS_EXCEPTION;
+            continue;
+        }
+        o->dropped_owed = false;
+        uint32_t script = o->script;
+        JSValue callback = JS_DupValue(ctx, o->callback);
+        JSValueConst args[3] = {list, notify[i], options};
+        DScripts before = d_script_enter(dom, script);
+        JSValue called = JS_Call(ctx, callback, notify[i], 3, args);
+        d_script_leave(dom, &before, false);
+        JS_FreeValue(ctx, callback);
+        JS_FreeValue(ctx, list);
+        JS_FreeValue(ctx, options);
+        if (!JS_IsException(called)) JS_FreeValue(ctx, called);
+        else if (!report_pending(dom, ctx, script)) result = JS_EXCEPTION;
+    }
+    for (uint32_t i = 0; i < count; i++) JS_FreeValue(ctx, notify[i]);
+    d_free(dom, notify);
+    return result;
+}
+
+/* "Queue the PerformanceObserver task": one binding timer due at once,
+ * which the host runs as the task it is, however many entries wait for it.
+ * One the timer table has no room for is not queued, and the entries wait
+ * in their observers for the next: the mark or the measure that queued
+ * them is made by then, and refusing it would misstate what was done. -1
+ * with an exception pending only when the runtime is stopping. */
+static int queue_task(os64_dom_t *dom, JSContext *ctx)
+{
+    if (dom->performance_task_queued) return 0;
+    JSValue data[1] = {dom->anchor->value};
+    JSValue fired = JS_NewCFunctionData(ctx, observer_task, 0, 0, 1, data);
+    if (!JS_IsException(fired) && d_timer_add(dom, ctx, fired, 0) != 0) {
+        dom->performance_task_queued = true;
+        return 0;
+    }
+    if (!d_exception_catchable(ctx)) return -1;
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return 0;
+}
+
+/* "Queue a PerformanceEntry", in two halves around the entry's
+ * joining the buffer, so that one that cannot be queued is refused rather
+ * than half queued: queue_room makes room for an entry of `kind` in every
+ * registered observer that observes it (-1 with an exception pending),
+ * and queue_entry appends `entry` there, which runs no page code and so
+ * finds the same observers, then queues the task when one took it. */
+static int queue_room(os64_dom_t *dom, JSContext *ctx, int kind)
+{
+    for (uint32_t i = 0; i < dom->performance_observer_count; i++) {
+        DObserver *o = observer_at(dom, i);
+        if (o != NULL && (o->kinds & (1u << kind)) != 0 && observer_room(ctx, o, 1) < 0) return -1;
+    }
+    return 0;
+}
+
+static int queue_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst entry, int kind)
+{
+    bool taken = false;
+    for (uint32_t i = 0; i < dom->performance_observer_count; i++) {
+        DObserver *o = observer_at(dom, i);
+        if (o == NULL || (o->kinds & (1u << kind)) == 0) continue;
+        o->entries[o->count++] = JS_DupValue(ctx, entry);
+        taken = true;
+    }
+    return taken ? queue_task(dom, ctx) : 0;
+}
+
+/* A mark or a measure performance.mark() or measure() made, recorded:
+ * added to the buffer and queued to its observers. -1 with an exception
+ * pending. */
+static int entry_record(os64_dom_t *dom, JSContext *ctx, JSValueConst entry, int kind)
+{
+    if (queue_room(dom, ctx, kind) < 0 || buffer_add(dom, ctx, entry) < 0) return -1;
+    return queue_entry(dom, ctx, entry, kind);
 }
 
 /* ── User Timing ─────────────────────────────────────────────────────── */
@@ -504,7 +791,7 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
     JSValue detail = detail_clone(dom, ctx, member[0]);
     if (JS_IsException(detail)) goto done;
     result = entry_new(ctx, dom->entry_prototypes[P_MEASURE]->value, K_MEASURE, name, begin, end - begin, detail);
-    if (!JS_IsException(result) && buffer_add(dom, ctx, result) < 0) {
+    if (!JS_IsException(result) && entry_record(dom, ctx, result, K_MEASURE) < 0) {
         JS_FreeValue(ctx, result);
         result = JS_EXCEPTION;
     }
@@ -669,7 +956,7 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
     }
     case M_MARK: {
         JSValue made = mark_make(dom, ctx, dom->entry_prototypes[P_MARK]->value, argc, argv);
-        if (!JS_IsException(made) && buffer_add(dom, ctx, made) < 0) {
+        if (!JS_IsException(made) && entry_record(dom, ctx, made, K_MARK) < 0) {
             JS_FreeValue(ctx, made);
             return JS_EXCEPTION;
         }
@@ -683,29 +970,8 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
         JS_FreeValue(ctx, name);
         return done < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
-    case M_ENTRIES: return buffer_query(dom, ctx, -1, JS_UNDEFINED);
-    case M_BY_TYPE: case M_BY_NAME: {
-        if (argc < 1) return JS_ThrowTypeError(ctx, "The query needs an argument");
-        JSValue first = JS_ToString(ctx, argv[0]);
-        if (JS_IsException(first)) return first;
-        JSValue type = magic == M_BY_TYPE ? JS_DupValue(ctx, first)
-                     : argc > 1 && !JS_IsUndefined(argv[1]) ? JS_ToString(ctx, argv[1]) : JS_UNDEFINED;
-        if (JS_IsException(type)) { JS_FreeValue(ctx, first); return type; }
-        int kind = -1;
-        bool known = JS_IsUndefined(type);
-        if (!known) {
-            const char *text = JS_ToCString(ctx, type);
-            if (text == NULL) { JS_FreeValue(ctx, first); JS_FreeValue(ctx, type); return JS_EXCEPTION; }
-            for (int k = 0; k < 3; k++)
-                if (os64_streq(text, kKindNames[k])) { kind = k; known = true; }
-            JS_FreeCString(ctx, text);
-        }
-        JS_FreeValue(ctx, type);
-        JSValue result = !known ? JS_NewArray(ctx)
-                       : buffer_query(dom, ctx, kind, magic == M_BY_NAME ? first : JS_UNDEFINED);
-        JS_FreeValue(ctx, first);
-        return result;
-    }
+    case M_ENTRIES: return entries_query(dom, ctx, -1, JS_UNDEFINED, NULL, 0);
+    case M_BY_TYPE: case M_BY_NAME: return query_by(dom, ctx, magic == M_BY_NAME, argc, argv, NULL, 0);
     default: return JS_ThrowTypeError(ctx, "Unknown Performance member");
     }
 }
@@ -948,4 +1214,313 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->navigation_entry = d_retain(dom, ctx, navigation_entry);
     if (dom->navigation_entry == NULL) return -1;
     return d_accessor(dom, ctx, global, "performance", performance_member, M_WINDOW, true);
+}
+
+/* ── PerformanceObserver ─────────────────────────────────────────────── */
+
+/* new PerformanceObserver(callback). */
+static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
+        return JS_ThrowTypeError(ctx, "A PerformanceObserver needs a callback function");
+    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
+    JSClassID id = os64_js_class_id(&observer_slot);
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
+    JS_FreeValue(ctx, prototype);
+    DObserver *o = JS_IsException(object) ? NULL : js_mallocz(ctx, sizeof(*o));
+    if (o == NULL) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    o->callback = JS_DupValue(ctx, argv[0]);
+    o->script = script;
+    JS_SetOpaque(object, o);
+    return object;
+}
+
+/* `self` on the registered list, at its end unless it is there already;
+ * -1 with an exception pending. */
+static int observer_register(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
+{
+    uint32_t count = dom->performance_observer_count;
+    for (uint32_t i = 0; i < count; i++)
+        if (JS_VALUE_GET_PTR(dom->performance_observers[i]) == JS_VALUE_GET_PTR(self)) return 0;
+    if (count == dom->performance_observer_cap) {
+        uint32_t cap = count < 8 ? 8 : count < UINT32_MAX / 2 ? count * 2 : 0;
+        JSValue *grown = cap != 0 ? d_alloc(dom, (size_t)cap * sizeof(*grown)) : NULL;
+        if (grown == NULL) {
+            d_error(ctx, "QuotaExceededError", "Performance observer quota exceeded");
+            return -1;
+        }
+        if (count != 0) os64_memcpy(grown, dom->performance_observers, (size_t)count * sizeof(*grown));
+        d_free(dom, dom->performance_observers);
+        dom->performance_observers = grown;
+        dom->performance_observer_cap = cap;
+    }
+    dom->performance_observers[dom->performance_observer_count++] = JS_DupValue(ctx, self);
+    return 0;
+}
+
+static void observer_unregister(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
+{
+    uint32_t count = dom->performance_observer_count;
+    for (uint32_t i = 0; i < count; i++) {
+        if (JS_VALUE_GET_PTR(dom->performance_observers[i]) != JS_VALUE_GET_PTR(self)) continue;
+        JSValue gone = dom->performance_observers[i];
+        os64_memmove(dom->performance_observers + i, dom->performance_observers + i + 1,
+                     (size_t)(count - i - 1) * sizeof(*dom->performance_observers));
+        dom->performance_observer_count--;
+        JS_FreeValue(ctx, gone);
+        return;
+    }
+}
+
+/* An entryTypes member's string, its kind added to the set `opaque`
+ * points at; a type this file records none of is left out. */
+static int entry_type_each(void *opaque, JSContext *ctx, JSValueConst item)
+{
+    JSValue text = JS_ToString(ctx, item);
+    if (JS_IsException(text)) return -1;
+    int kind = kind_named(ctx, text);
+    JS_FreeValue(ctx, text);
+    if (kind == -2) return -1;
+    if (kind >= 0) *(uint8_t *)opaque |= (uint8_t)(1u << kind);
+    return 0;
+}
+
+/* observe(options), the standard's steps. The members are read and
+ * converted in their names' order. A type this file does not record is
+ * left out of `entryTypes`, and an observe() left with no type ends
+ * without a word, as the standard has a browser that does not support one
+ * do (it SHOULD warn; the console is the page's). -1 with an exception
+ * pending. */
+static int observe(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DObserver *o, int argc, JSValueConst *argv)
+{
+    int options = d_dictionary(ctx, argc, argv, 0);
+    if (options < 0) return -1;
+    bool buffered = false, has_list = false, has_type = false;
+    uint8_t list = 0;
+    int type = -1;
+    if (options > 0) {
+        JSValue value = JS_GetPropertyStr(ctx, argv[0], "buffered");
+        if (JS_IsException(value)) return -1;
+        buffered = JS_ToBool(ctx, value) > 0;
+        JS_FreeValue(ctx, value);
+        value = JS_GetPropertyStr(ctx, argv[0], "entryTypes");
+        if (JS_IsException(value)) return -1;
+        has_list = !JS_IsUndefined(value);
+        int done = has_list ? d_sequence_each(dom, ctx, value, JS_UNDEFINED, entry_type_each, &list) : 0;
+        JS_FreeValue(ctx, value);
+        if (done < 0) return -1;
+        value = JS_GetPropertyStr(ctx, argv[0], "type");
+        if (JS_IsException(value)) return -1;
+        has_type = !JS_IsUndefined(value);
+        JSValue text = has_type ? JS_ToString(ctx, value) : JS_UNDEFINED;
+        JS_FreeValue(ctx, value);
+        if (JS_IsException(text)) return -1;
+        if (has_type) type = kind_named(ctx, text);
+        JS_FreeValue(ctx, text);
+        if (type == -2) return -1;
+    }
+    if (!has_list && !has_type) {
+        JS_ThrowTypeError(ctx, "observe() needs entryTypes or a type");
+        return -1;
+    }
+    /* The standard refuses `entryTypes` beside any other member. Beside
+     * `buffered` other browsers do not: they warn, ignore `buffered` and
+     * observe the list (WPT's tentative buffered-flag-with-entryTypes),
+     * and a page written against them would lose the rest of its script to
+     * the throw. So `type` alone is refused there, and `buffered` is never
+     * read by the `entryTypes` steps below. */
+    if (has_list && has_type) {
+        JS_ThrowTypeError(ctx, "observe() may not be given entryTypes beside a type");
+        return -1;
+    }
+    if (o->mode == O_UNSET) o->mode = has_list ? O_MULTIPLE : O_SINGLE;
+    if ((o->mode == O_SINGLE && has_list) || (o->mode == O_MULTIPLE && has_type)) {
+        d_error(ctx, "InvalidModificationError", o->mode == O_SINGLE
+                ? "This observer observes by type, and cannot be given entryTypes"
+                : "This observer observes entryTypes, and cannot be given a type");
+        return -1;
+    }
+    o->dropped_owed = true;
+    if (o->mode == O_MULTIPLE) {
+        if (list == 0) return 0;
+        if (observer_register(dom, ctx, self) < 0) return -1;
+        o->kinds = list;
+        return 0;
+    }
+    if (type < 0) return 0;
+    /* With `buffered`, the type's buffer, in the order buffered: for
+     * navigation, its one entry once that has been queued
+     * (d_performance_loaded), and nothing before. Counted and room made
+     * before the observer is registered, so one that cannot hold them is
+     * refused whole. Reading the buffer runs no page code. */
+    uint32_t found = 0;
+    if (buffered && type == K_NAVIGATION) found = dom->navigation_queued ? 1 : 0;
+    for (uint32_t i = 0; buffered && type != K_NAVIGATION && i < dom->performance_count; i++) {
+        JSValue item = JS_GetPropertyUint32(ctx, dom->performance_entries->value, i);
+        if (JS_IsException(item)) return -1;
+        const DEntry *entry = JS_GetOpaque(item, os64_js_class_id(&entry_slot));
+        if (entry != NULL && entry->kind == type) found++;
+        JS_FreeValue(ctx, item);
+    }
+    if (found != 0 && observer_room(ctx, o, found) < 0) return -1;
+    if (observer_register(dom, ctx, self) < 0) return -1;
+    o->kinds |= (uint8_t)(1u << type);
+    if (found == 0) return 0;
+    if (type == K_NAVIGATION) o->entries[o->count++] = JS_DupValue(ctx, dom->navigation_entry->value);
+    for (uint32_t i = 0; type != K_NAVIGATION && i < dom->performance_count; i++) {
+        JSValue item = JS_GetPropertyUint32(ctx, dom->performance_entries->value, i);
+        if (JS_IsException(item)) return -1;
+        const DEntry *entry = JS_GetOpaque(item, os64_js_class_id(&entry_slot));
+        if (entry != NULL && entry->kind == type) o->entries[o->count++] = item;
+        else JS_FreeValue(ctx, item);
+    }
+    return queue_task(dom, ctx);
+}
+
+/* HTML's "the end" queues the navigation timing entry once the window's
+ * load event has run, and os64_dom_dispatch says so here when that event
+ * has been dispatched; a binding made for a page already complete counts it
+ * queued from the start. Each registered observer of `navigation` is handed
+ * the entry, in a host task this opens to queue the delivery, and from
+ * here a buffered observe() is handed it too. The entry reads the host's
+ * milestones when asked, so a callback reads loadEventEnd as the host
+ * marked it after the dispatch. */
+void d_performance_loaded(os64_dom_t *dom, os64_js_outcome_t *outcome)
+{
+    if (dom->navigation_queued || dom->navigation_entry == NULL) return;
+    dom->navigation_queued = true;
+    bool wanted = false;
+    for (uint32_t i = 0; i < dom->performance_observer_count; i++) {
+        const DObserver *o = observer_at(dom, i);
+        if (o != NULL && (o->kinds & (1u << K_NAVIGATION)) != 0) wanted = true;
+    }
+    if (!wanted) return;
+    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, "navigation timing", outcome) != OS64_JS_OK) return;
+    os64_js_outcome_t access;
+    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    if (ctx != NULL && (queue_room(dom, ctx, K_NAVIGATION) < 0 ||
+                        queue_entry(dom, ctx, dom->navigation_entry->value, K_NAVIGATION) < 0))
+        report_pending(dom, ctx, D_SCRIPT_PAGE);
+    d_task_finish(dom, outcome);
+}
+
+enum { O_OBSERVE, O_DISCONNECT, O_TAKE_RECORDS, O_SUPPORTED, L_ENTRIES, L_BY_TYPE, L_BY_NAME };
+
+static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                               JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    magic &= ~D_SET;
+    /* A static attribute, read on the interface object. */
+    if (magic == O_SUPPORTED) return JS_DupValue(ctx, dom->supported_entry_types->value);
+    if (magic >= L_ENTRIES) {
+        DEntryList *l = JS_GetOpaque(self, os64_js_class_id(&list_slot));
+        if (l == NULL) return JS_ThrowTypeError(ctx, "Expected a PerformanceObserverEntryList");
+        if (magic == L_ENTRIES) return entries_query(dom, ctx, -1, JS_UNDEFINED, l->entries, l->count);
+        return query_by(dom, ctx, magic == L_BY_NAME, argc, argv, l->entries, l->count);
+    }
+    DObserver *o = JS_GetOpaque(self, os64_js_class_id(&observer_slot));
+    if (o == NULL) return JS_ThrowTypeError(ctx, "Expected a PerformanceObserver");
+    if (magic == O_OBSERVE) return observe(dom, ctx, self, o, argc, argv) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    /* takeRecords() answers the buffer in the order queued; disconnect()
+     * empties it, and forgets the types observed. */
+    JSValue records = magic == O_TAKE_RECORDS ? JS_NewArray(ctx) : JS_UNDEFINED;
+    if (JS_IsException(records)) return records;
+    for (uint32_t i = 0; magic == O_TAKE_RECORDS && i < o->count; i++)
+        if (JS_DefinePropertyValueUint32(ctx, records, i, JS_DupValue(ctx, o->entries[i]), JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, records);
+            return JS_EXCEPTION;
+        }
+    if (magic == O_DISCONNECT) {
+        observer_unregister(dom, ctx, self);
+        o->kinds = 0;
+    }
+    values_free(dom->engine, o->entries, o->count);
+    o->entries = NULL;
+    o->count = o->cap = 0;
+    return records;
+}
+
+/* supportedEntryTypes' FrozenArray: the types this file records, in the
+ * alphabetical order the standard keeps them in (kKindNames' own), made
+ * once, so every read is the same object. Frozen by definition, as
+ * serverTiming's. */
+static int supported_install(os64_dom_t *dom, JSContext *ctx)
+{
+    JSValue array = JS_NewArray(ctx);
+    if (JS_IsException(array)) return -1;
+    JSAtom length = JS_NewAtom(ctx, "length");
+    int result = length == JS_ATOM_NULL ? -1 : 0;
+    for (uint32_t k = 0; result == 0 && k < 3; k++)
+        if (JS_DefinePropertyValueUint32(ctx, array, k, JS_NewString(ctx, kKindNames[k]), JS_PROP_ENUMERABLE) < 0)
+            result = -1;
+    if (result == 0 &&
+        (JS_DefineProperty(ctx, array, length, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_PROP_HAS_WRITABLE) < 0 ||
+         JS_PreventExtensions(ctx, array) < 0))
+        result = -1;
+    if (length != JS_ATOM_NULL) JS_FreeAtom(ctx, length);
+    if (result < 0) {
+        JS_FreeValue(ctx, array);
+        return -1;
+    }
+    dom->supported_entry_types = d_retain(dom, ctx, array);
+    return dom->supported_entry_types != NULL ? 0 : -1;
+}
+
+int d_performance_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    static const JSClassDef observer_class = {.class_name = "PerformanceObserver", .finalizer = observer_finalizer,
+                                              .gc_mark = observer_mark};
+    static const JSClassDef list_class = {.class_name = "PerformanceObserverEntryList", .finalizer = list_finalizer,
+                                          .gc_mark = list_mark};
+    JSClassID observer_id = os64_js_class_id(&observer_slot), list_id = os64_js_class_id(&list_slot);
+    if (class_of(dom, observer_id, &observer_class) < 0 || class_of(dom, list_id, &list_class) < 0) return -1;
+    DValue *observer = prototype_new(dom, ctx, JS_UNDEFINED);
+    DValue *list = observer != NULL ? prototype_new(dom, ctx, JS_UNDEFINED) : NULL;
+    if (list == NULL) return -1;
+    JS_SetClassProto(ctx, observer_id, JS_DupValue(ctx, observer->value));
+    JS_SetClassProto(ctx, list_id, JS_DupValue(ctx, list->value));
+    static const struct { const char *name; int magic, argc; bool on_list; } kMethods[] = {
+        {"observe", O_OBSERVE, 0, false}, {"disconnect", O_DISCONNECT, 0, false},
+        {"takeRecords", O_TAKE_RECORDS, 0, false}, {"getEntries", L_ENTRIES, 0, true},
+        {"getEntriesByType", L_BY_TYPE, 1, true}, {"getEntriesByName", L_BY_NAME, 1, true},
+    };
+    for (size_t i = 0; i < sizeof(kMethods) / sizeof(kMethods[0]); i++)
+        if (d_method(dom, ctx, kMethods[i].on_list ? list->value : observer->value, kMethods[i].name,
+                     observer_member, kMethods[i].argc, kMethods[i].magic) < 0)
+            return -1;
+    if (supported_install(dom, ctx) < 0) return -1;
+    dom->navigation_queued = dom->readiness == OS64_DOM_COMPLETE;
+    JSValue observer_interface = interface_of(ctx, global, "PerformanceObserver", 1, observer_constructor,
+                                              observer->value, JS_UNDEFINED, true);
+    if (JS_IsException(observer_interface) ||
+        d_accessor(dom, ctx, observer_interface, "supportedEntryTypes", observer_member, O_SUPPORTED, false) < 0)
+        return -1;
+    return JS_IsException(interface_of(ctx, global, "PerformanceObserverEntryList", 0, NULL, list->value,
+                                       JS_UNDEFINED, true)) ? -1 : 0;
+}
+
+/* Before the engine goes: the registered observers, which the list holds. */
+void d_performance_drain(os64_dom_t *dom)
+{
+    for (uint32_t i = 0; i < dom->performance_observer_count; i++)
+        JS_FreeValueRT(dom->engine, dom->performance_observers[i]);
+    dom->performance_observer_count = 0;
+}
+
+/* After it: the list itself. */
+void d_performance_free(os64_dom_t *dom)
+{
+    d_free(dom, dom->performance_observers);
+    dom->performance_observers = NULL;
+    dom->performance_observer_cap = 0;
 }

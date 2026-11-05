@@ -228,6 +228,206 @@ static void dom_performance_cases(void)
     engine_sweep("performance", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), &options);
 }
 
+/* The host's side of a PerformanceObserver's delivery: every task due,
+ * run; how many ran, and whether each ended `status`. */
+static unsigned observer_fire(DomFixture *f, os64_js_status_t status, const char *what)
+{
+    unsigned ran = 0;
+    os64_js_outcome_t out;
+    while (os64_dom_timer_fire(f->binding, UINT64_MAX - 1, &out)) {
+        ran++;
+        if (out.status != status) fprintf(stderr, "%s: status %d %s\n", what, out.status, out.message);
+        check(out.status == status, what);
+    }
+    return ran;
+}
+
+static void dom_performance_observer_cases(void)
+{
+    view_timing = (os64_dom_timing_t){.origin_us = 1000000, .origin_epoch_us = 1700000000123456};
+    for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) view_timing.at[i] = OS64_DOM_TIMING_NOT_YET;
+    view_timing.at[OS64_DOM_TIMING_FETCH_START] = 0;
+    view_us = 1000000 + 5000;
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = "https://example.test/";
+    options.timing = view_timing_of;
+    options.now_us = view_now_us;
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "var s=PerformanceObserver.supportedEntryTypes;assert(s===PerformanceObserver.supportedEntryTypes,'one object');"
+        "assert(s.join()==='mark,measure,navigation'&&Object.isFrozen(s),s.join());"
+        "throws('TypeError',()=>new PerformanceObserver());throws('TypeError',()=>new PerformanceObserver({}));"
+        "throws('TypeError',()=>PerformanceObserver(()=>1));throws('TypeError',()=>new PerformanceObserverEntryList());"
+        "var o=new PerformanceObserver(()=>1);assert(o instanceof PerformanceObserver);"
+        "assert(Object.prototype.toString.call(o)==='[object PerformanceObserver]');"
+        "throws('TypeError',()=>o.observe());throws('TypeError',()=>o.observe({}));throws('TypeError',()=>o.observe(5));"
+        "throws('TypeError',()=>o.observe({entryTypes:['mark'],type:'mark'}));"
+        /* Beside entryTypes, buffered is ignored, as other browsers do. */
+        "new PerformanceObserver(()=>1).observe({entryTypes:['paint'],buffered:true});"
+        "throws('TypeError',()=>o.observe({entryTypes:'mark'}),'a sequence');"
+        "o.observe({entryTypes:[]});o.observe({entryTypes:['resource','Mark']});"
+        "throws('InvalidModificationError',()=>o.observe({type:'mark'}));"
+        "var p=new PerformanceObserver(()=>1);p.observe({type:'paint'});"
+        "throws('InvalidModificationError',()=>p.observe({entryTypes:['mark']}));"
+        "throws('TypeError',()=>PerformanceObserver.prototype.observe.call({},{type:'mark'}));"
+        "throws('TypeError',()=>PerformanceObserverEntryList.prototype.getEntries.call({}));"
+        "class Sub extends PerformanceObserver{};assert(new Sub(()=>1) instanceof Sub);"
+        "var order=[];new PerformanceObserver(()=>1).observe({get type(){order.push('type');return 'mark'},"
+        "get buffered(){order.push('buffered')},get entryTypes(){order.push('entryTypes')}});"
+        "assert(order.join()==='buffered,entryTypes,type',order.join());",
+        "PerformanceObserver: the interfaces, and observe's refusals");
+    dom_script(&f, STORAGE_ASSERT
+        "globalThis.calls=[];globalThis.single=new PerformanceObserver(function(list,obs,opt){"
+        "calls.push({list,obs,self:this,opt,names:list.getEntries().map(e=>e.name).join()})});"
+        "single.observe({type:'mark'});performance.mark('a');performance.measure('m');performance.mark('b');"
+        "assert(calls.length===0,'delivered in a task, not inside mark()');",
+        "PerformanceObserver: marks queued");
+    check(observer_fire(&f, OS64_JS_OK, "PerformanceObserver: the delivery task") == 1,
+          "PerformanceObserver: one task for every entry waiting");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(calls.length===1&&calls[0].names==='a,b',JSON.stringify(calls.map(c=>c.names)));"
+        "var c=calls[0];assert(c.obs===single&&c.self===single&&c.list instanceof PerformanceObserverEntryList);"
+        "assert(c.opt.droppedEntriesCount===0,'the first callback after observe() is told the count');"
+        "performance.mark('c');",
+        "PerformanceObserver: the callback's arguments");
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: a second delivery");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(calls.length===2&&calls[1].names==='c'&&!('droppedEntriesCount' in calls[1].opt),'then not');"
+        "single.observe({type:'measure'});performance.measure('n');performance.mark('d');",
+        "PerformanceObserver: a second type joins the first");
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: both types");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(calls.length===3&&calls[2].names==='n,d'&&calls[2].opt.droppedEntriesCount===0,calls[2].names);"
+        /* The list: startTime order, the queries by type and by name. */
+        "performance.mark('late',{startTime:9});performance.mark('early',{startTime:1});performance.measure('x',{start:2,end:3});",
+        "PerformanceObserver: marks made out of order");
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: the list's delivery");
+    dom_script(&f, STORAGE_ASSERT
+        "var l=calls[3].list;assert(calls[3].names==='early,x,late','startTime order: '+calls[3].names);"
+        "assert(l.getEntriesByType('mark').map(e=>e.name).join()==='early,late');"
+        "assert(l.getEntriesByType('Mark').length===0&&l.getEntriesByType('paint').length===0);"
+        "assert(l.getEntriesByName('x')[0].entryType==='measure'&&l.getEntriesByName('x','mark').length===0);"
+        "throws('TypeError',()=>l.getEntriesByType());"
+        "assert(l.getEntries()!==l.getEntries(),'a new Array each time');"
+        /* takeRecords: the buffer in the order queued, emptied. */
+        "performance.mark('t2',{startTime:8});performance.mark('t1',{startTime:7});"
+        "var r=single.takeRecords();assert(r.map(e=>e.name).join()==='t2,t1'&&single.takeRecords().length===0);",
+        "PerformanceObserver: the entry list, and takeRecords");
+    check(observer_fire(&f, OS64_JS_OK, "PerformanceObserver: an emptied buffer") == 1,
+          "PerformanceObserver: the queued task runs");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(calls.length===4,'nothing waited, so nothing was called');"
+        /* entryTypes, replaced by the next call; buffered for a type. */
+        "globalThis.multi=[];globalThis.m=new PerformanceObserver(l=>multi.push(l.getEntries().map(e=>e.entryType+':'+e.name).join()));"
+        "m.observe({entryTypes:['mark','measure']});m.observe({entryTypes:['measure','bogus']});"
+        "globalThis.buffered=[];globalThis.b=new PerformanceObserver(l=>buffered.push(l.getEntries().map(e=>e.name).join()));"
+        "b.observe({type:'mark',buffered:true});"
+        "globalThis.eb=[];new PerformanceObserver(l=>eb.push(l.getEntries().map(e=>e.name).join()))"
+        ".observe({entryTypes:['mark'],buffered:true});"
+        "globalThis.nav=[];globalThis.n=new PerformanceObserver(l=>nav.push(l.getEntries().map(e=>e.entryType)));"
+        "n.observe({type:'navigation'});"
+        "globalThis.navb=[];new PerformanceObserver(l=>navb.push(l.getEntries().map(e=>e.entryType+':'+e.name).join()))"
+        ".observe({type:'navigation',buffered:true});"
+        "performance.mark('z');performance.measure('y');",
+        "PerformanceObserver: entryTypes and buffered");
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: entryTypes and buffered");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(multi.length===1&&multi[0]==='measure:y',multi.join('|'));"
+        /* Every mark buffered and the one made after, in startTime order
+         * (the clock stands still, so a, b, c, d and z share one). */
+        "assert(buffered.length===1&&buffered[0]==='early,a,b,c,d,z,t1,t2,late',buffered.join('|'));"
+        "assert(eb.length===1&&eb[0]==='z','entryTypes takes nothing buffered: '+eb.join('|'));"
+        "assert(nav.length===0&&navb.length===0,'the navigation entry waits for the load');",
+        "PerformanceObserver: entryTypes and buffered, delivered");
+    /* The window's load queues the navigation entry to every observer of
+     * it, buffered or not; a buffered observe() after it is handed it. */
+    os64_dom_event_t loaded = {.type = "load"};
+    os64_js_outcome_t load_out;
+    check(os64_dom_dispatch(f.binding, NULL, &loaded, NULL, &load_out) == OS64_JS_OK,
+          "PerformanceObserver: the window's load");
+    check(observer_fire(&f, OS64_JS_OK, "PerformanceObserver: the navigation entry") == 1,
+          "PerformanceObserver: the navigation entry is one task after the load");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(nav.length===1&&nav[0].join()==='navigation',JSON.stringify(nav));"
+        "assert(navb.length===1&&navb[0]==='navigation:https://example.test/',navb.join('|'));"
+        "globalThis.navl=[];new PerformanceObserver(l=>navl.push(l.getEntries()[0].entryType))"
+        ".observe({type:'navigation',buffered:true});",
+        "PerformanceObserver: the navigation entry, after the load");
+    os64_dom_dispatch(f.binding, NULL, &loaded, NULL, &load_out);
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: buffered after the load");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(navl.join()==='navigation'&&nav.length===1&&navb.length===1,'once, however many loads');"
+        /* disconnect: the buffer emptied and the types forgotten; observe
+         * again with another type. */
+        "performance.mark('gone');single.disconnect();assert(single.takeRecords().length===0);"
+        "single.observe({type:'measure'});performance.mark('ignored');performance.measure('kept');",
+        "PerformanceObserver: disconnect");
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: after disconnect");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(calls.map(c=>c.names).join('|')==='a,b|c|n,d|early,x,late|y,z|kept',calls.map(c=>c.names).join('|'));"
+        "single.disconnect();m.disconnect();b.disconnect();n.disconnect();"
+        /* A callback that throws is reported, and the next is called; one
+         * that disconnects a later one, whose entries it took, skips it; one
+         * that marks queues the next task. */
+        "globalThis.errors=[];onerror=msg=>{errors.push(msg)};globalThis.heard=[];"
+        "globalThis.t1=new PerformanceObserver(()=>{heard.push(1);throw Error('first')});t1.observe({type:'mark'});"
+        "globalThis.t2=new PerformanceObserver(()=>{heard.push(2);t3.disconnect();performance.mark('again')});"
+        "t2.observe({type:'measure'});"
+        "globalThis.t3=new PerformanceObserver(()=>heard.push(3));t3.observe({type:'mark'});"
+        "performance.mark('one');performance.measure('two');",
+        "PerformanceObserver: callbacks that throw, disconnect and mark");
+    check(observer_fire(&f, OS64_JS_EXCEPTION, "PerformanceObserver: a throwing callback's task") == 2,
+          "PerformanceObserver: the mark a callback makes is a task of its own");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(heard.join()==='1,2,1',heard.join());"
+        "assert(errors.length===2&&errors[0]==='Uncaught Error: first',errors.join('|'));"
+        "t1.disconnect();t2.disconnect();"
+        /* An observer collected once nothing holds it: a cycle through its
+         * own callback, never registered. */
+        "(function(){var x=new PerformanceObserver(()=>x);})();",
+        "PerformanceObserver: what each callback heard");
+    check(observer_fire(&f, OS64_JS_OK, "PerformanceObserver: nothing left") == 0,
+          "PerformanceObserver: nothing queued once every observer is gone");
+    fixture_free(&f);
+    /* A page torn down with an observer registered and entries waiting,
+     * its callback holding the observer. */
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "var w=new PerformanceObserver(()=>w);w.observe({type:'mark'});performance.mark('w');"
+        "var v=new PerformanceObserver(()=>v);v.observe({entryTypes:['measure']});performance.measure('v');",
+        "PerformanceObserver: torn down waiting");
+    fixture_free(&f);
+    /* A page the host says is complete: its load is behind it, so the
+     * navigation entry is queued already. */
+    options.readiness = OS64_DOM_COMPLETE;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "globalThis.done=[];new PerformanceObserver(l=>done.push(l.getEntries()[0].entryType))"
+        ".observe({type:'navigation',buffered:true});",
+        "PerformanceObserver: a complete page's navigation entry");
+    observer_fire(&f, OS64_JS_OK, "PerformanceObserver: a complete page");
+    dom_script(&f, STORAGE_ASSERT "assert(done.join()==='navigation',done.join());",
+               "PerformanceObserver: a complete page hands it to a buffered observe()");
+    fixture_free(&f);
+    options.readiness = OS64_DOM_LOADING;
+    static const char *const kOperations[] = {
+        "new PerformanceObserver(()=>1).observe({type:'mark'});performance.mark('m')",
+        "performance.mark('a');new PerformanceObserver(()=>1).observe({type:'mark',buffered:true})",
+        "new PerformanceObserver(()=>1).observe({entryTypes:['mark','measure']});performance.measure('x')",
+    };
+    binding_sweep("PerformanceObserver", kOperations, sizeof(kOperations) / sizeof(kOperations[0]), &options);
+    static const char *const kEngine[] = {
+        "var o=new PerformanceObserver(()=>1);o.observe({type:'mark'});performance.mark('m');o.takeRecords().length",
+        "performance.mark('a');var o=new PerformanceObserver(()=>1);o.observe({type:'mark',buffered:true});o.disconnect()",
+        "new PerformanceObserver(()=>1).observe({entryTypes:['mark','measure']});performance.mark('x');performance.measure('y')",
+        "PerformanceObserver.supportedEntryTypes.length",
+    };
+    engine_sweep("PerformanceObserver", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), &options);
+}
+
 static void dom_url_cases(void)
 {
     DomFixture f = fixture_new(NULL);

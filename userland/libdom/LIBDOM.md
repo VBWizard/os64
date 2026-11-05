@@ -1081,9 +1081,38 @@ Timing's `mark`, `measure` (the L3 dictionary too), the entry lists and
 DataCloneError for what one refuses); the legacy `timing` and `navigation` objects
 and a `navigation` entry, which read the host's milestones whenever asked.
 The entry buffer is an engine object with no prototype that no page is
-handed, counted in C. Nothing else is recorded; there is no
-PerformanceObserver. `performance` and `screen.orientation` are plain event
-targets (§ Events).
+handed, counted in C. Nothing else is recorded. `performance` and
+`screen.orientation` are plain event targets (§ Events).
+
+**`PerformanceObserver`, `PerformanceObserverEntryList`** (`performance.c`,
+a row of its own after performance's): Performance Timeline § 5, told of
+what the file records and nothing else. `supportedEntryTypes` is one frozen
+array, `["mark", "measure", "navigation"]`, and an `observe()` for any other
+type is ignored, as the standard has a browser ignore a type it does not
+support; `observe()` keeps the standard's refusals (neither member, or
+`entryTypes` beside `type`: TypeError; mixing the two forms on one
+observer: InvalidModificationError), except that `entryTypes` beside
+`buffered` ignores `buffered`, as other browsers do, where the standard
+throws. A mark or measure that
+`mark()`/`measure()` makes is queued to each registered observer of its
+type, room made in all of them before the entry joins the buffer, so one
+that cannot be queued is refused whole (a `new PerformanceMark` is queued
+nowhere, as the standard has it). The navigation entry is queued once the
+window's load event has run (HTML's "the end"; `os64_dom_dispatch` tells
+`d_performance_loaded`, and a binding made for a page already complete
+counts it queued), to every observer of `navigation`; a buffered observe()
+is handed it from then on and not before. Delivery is ONE task, a binding timer due at once, queued when an
+observer is handed an entry and not already queued; it calls each
+registered observer with entries waiting, in registration order, with the
+list (sorted by startTime, as `performance`'s queries), itself as argument
+and `this`, and `{droppedEntriesCount: 0}` on the first call after an
+`observe()` (this browser drops no entry) and `{}` after. A callback's
+throw is reported as its script's and the next is called. The registered
+observers are held from C, which keeps each alive while registered; an
+observer's waiting entries and callback are traced by the collector, so an
+unregistered one is collected with whatever cycle it is in. The callbacks
+share the task's microtask checkpoint, and a delivery task the host drops
+unrun stops delivery for good (both DEBTS.md).
 
 **`URL`, `URLSearchParams`** (`url.c`): parsed by the page's own link rule
 (`os64_page_resolve_in` with no document), so a script and a link agree on
