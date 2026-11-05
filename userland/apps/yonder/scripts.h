@@ -306,6 +306,9 @@ void yonder_scripts_set_execution_ms(yonder_scripts_t *scripts, uint64_t ms);
 uint64_t yonder_scripts_execution_ms(const yonder_scripts_t *scripts);
 // The script heap a page's runtime is (or will be) made with, in bytes.
 size_t yonder_scripts_memory_bytes(const yonder_scripts_t *scripts);
+// The most that heap has held, in bytes: the live runtime's, or the one
+// retired's as it went; 0 before any script ran.
+size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // The whole address of the `src` script the last task ran, which a task's

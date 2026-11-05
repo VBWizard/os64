@@ -2868,6 +2868,15 @@ static void diag_observe(Page *p, const char *when)
                       (unsigned long)stats.raster.evictions, (unsigned long)p->svg_peak);
         yonder_diag_fact(d, "svg raster memory", v);
     }
+    // The script heap's high-water mark against its limit
+    // (script_memory_mb), what the limit is sized by.
+    size_t heap_peak = yonder_scripts_heap_peak(p->scripts);
+    if (heap_peak != 0) {
+        os64_snprintf(v, sizeof(v), "peak %lu.%lu MiB of %lu MiB", (unsigned long)(heap_peak >> 20),
+                      (unsigned long)((heap_peak & ((1u << 20) - 1)) * 10 >> 20),
+                      (unsigned long)(yonder_scripts_memory_bytes(p->scripts) >> 20));
+        yonder_diag_fact(d, "script heap", v);
+    }
     if (p->tree != NULL && flow_incomplete(p->tree))
         yonder_diag_failed_seen(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
     // `still coming`: asked for and not yet in, which is what a page left

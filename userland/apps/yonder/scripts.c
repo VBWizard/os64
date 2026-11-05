@@ -69,6 +69,9 @@ struct yonder_scripts {
     os64_html_document_t *doc;
     os64_page_state_t *state;
     yonder_scripts_options_t options;
+    // The retired runtime's heap high-water mark, read as it went
+    // (yonder_scripts_heap_peak answers a live runtime's own).
+    size_t heap_peak;
     char url[OS64_DOM_URL_MAX];
     // The address did not fit `url`, which holds its start: set wherever
     // `url` is copied, read by yonder_scripts_referrer.
@@ -166,6 +169,7 @@ static void retire(yonder_scripts_t *s)
     // The modules' fetches and handles go before the engine they belong to.
     yonder_modules_drop(s->modules);
     os64_dom_drain(s->dom);
+    s->heap_peak = os64_js_heap_peak(s->runtime);
     os64_js_teardown_report_t report;
     os64_js_destroy_report(s->runtime, &report);
     if (report.leaked) {
@@ -1864,6 +1868,12 @@ size_t yonder_scripts_memory_bytes(const yonder_scripts_t *s)
 {
     if (s == NULL) return 0;
     return s->options.memory_bytes != 0 ? s->options.memory_bytes : os64_js_default_limits().memory_bytes;
+}
+
+size_t yonder_scripts_heap_peak(const yonder_scripts_t *s)
+{
+    if (s == NULL) return 0;
+    return s->runtime != NULL ? os64_js_heap_peak(s->runtime) : s->heap_peak;
 }
 
 bool yonder_scripts_alive(const yonder_scripts_t *s)

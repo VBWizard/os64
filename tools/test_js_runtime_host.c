@@ -1362,6 +1362,20 @@ static void task_cases(void)
     monotonic += 100000;
     check(task_call(runtime, "ok", NULL, &outcome) == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_EXECUTION,
           "the next task is armed with the new limit");
+    check(os64_js_heap_peak(runtime) > 0 && os64_js_heap_peak(NULL) == 0,
+          "a failed runtime still answers its heap peak, and NULL answers 0");
+    os64_js_destroy(runtime);
+
+    runtime = task_fixture(&config, "globalThis.grow=()=>{globalThis.big=new Array(1<<18).fill(1)}");
+    if (!runtime) return;
+    size_t peak_before = os64_js_heap_peak(runtime);
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "grow", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "grow", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK, "a task that grows the heap runs");
+    size_t peak_grown = os64_js_heap_peak(runtime);
+    check(peak_grown >= peak_before + ((size_t)4 << 20), "the heap peak rises with what the script made");
+    check(execute_fixture(runtime, "big=null", &outcome) == OS64_JS_OK && os64_js_heap_peak(runtime) >= peak_grown,
+          "and never falls once the script lets it go");
     os64_js_destroy(runtime);
 
     runtime = task_fixture(&config, deadline_source);

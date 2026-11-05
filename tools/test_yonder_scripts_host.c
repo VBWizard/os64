@@ -1178,11 +1178,17 @@ static void script_lifecycle(void) {
     check(probe_text_is("heading","before") && !yonder_scripts_alive(g.page.scripts) &&
           strstr(g.status_text,"the script heap's 16 MiB ran out (this page runs without script)"),
           "a page that fills its heap is told by the heap's name and size");
+    check(yonder_scripts_heap_peak(g.page.scripts)>((size_t)8<<20) &&
+          yonder_scripts_heap_peak(g.page.scripts)<=((size_t)16<<20),
+          "the retired runtime's heap peak is kept, within its limit");
     probe_drop();
     probe_page("<h1 id=heading>before</h1><script>var keep=[];for(var i=0;i<2;i++)keep.push(new Array(1<<20).fill(1));"
         "document.getElementById('heading').textContent='held';</script>",true);
     script_turn();
     check(probe_text_is("heading","held"),"what passes 16 MiB fits in libjs's own heap");
+    check(yonder_scripts_heap_peak(g.page.scripts)>=((size_t)32<<20) &&
+          yonder_scripts_heap_peak(g.page.scripts)<=os64_js_default_limits().memory_bytes,
+          "a live runtime's heap peak holds what the page made");
     probe_drop();
 }
 static void native_refusals(void) {
