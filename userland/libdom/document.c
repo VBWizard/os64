@@ -48,7 +48,11 @@
  *     MM/DD/YYYY hh:mm:ss;
  *   - title, dir and rootElement read the tree as it stands, as HTML
  *     defines them; title's setter makes a title element when there is
- *     none, and clear() does nothing, as HTML defines it.
+ *     none, and clear() does nothing, as HTML defines it;
+ *   - links is the live collection of its `a` and `area` elements that
+ *     have an href, and scripts of its HTML `script` elements, each the
+ *     same object every read, as images and forms are (classic.c), and so
+ *     are a document of its own's.
  *
  * A document of its own has no browsing context: readyState "complete",
  * visibilityState "hidden" and hidden true, referrer "", currentScript
@@ -65,7 +69,7 @@
 enum {
     P_READY_STATE, P_VISIBILITY_STATE, P_HIDDEN, P_REFERRER, P_ACTIVE_ELEMENT, P_HAS_FOCUS,
     P_CURRENT_SCRIPT, P_TITLE, P_PRERENDERING, P_DOMAIN, P_URL, P_WAS_DISCARDED, P_COMPAT_MODE,
-    P_DIR, P_CHARACTER_SET, P_CONTENT_TYPE, P_LAST_MODIFIED, P_ROOT_ELEMENT, P_CLEAR
+    P_DIR, P_CHARACTER_SET, P_CONTENT_TYPE, P_LAST_MODIFIED, P_ROOT_ELEMENT, P_CLEAR, P_LINKS, P_SCRIPTS
 };
 
 static bool html_element(const os64_html_node_t *node, os64_html_tag_t tag)
@@ -328,6 +332,8 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         return svg_element(root, "svg") ? d_wrap(dom, ctx, root) : JS_NULL;
     }
     case P_CLEAR: return JS_UNDEFINED;
+    case P_LINKS: return d_classic_collection(dom, ctx, document, D_QUERY_LINKS);
+    case P_SCRIPTS: return d_classic_collection(dom, ctx, document, D_QUERY_SCRIPTS);
     default: return JS_ThrowTypeError(ctx, "Unknown Document member");
     }
 }
@@ -345,6 +351,7 @@ int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"characterSet", P_CHARACTER_SET, false}, {"charset", P_CHARACTER_SET, false},
         {"inputEncoding", P_CHARACTER_SET, false}, {"contentType", P_CONTENT_TYPE, false},
         {"lastModified", P_LAST_MODIFIED, false}, {"rootElement", P_ROOT_ELEMENT, false},
+        {"links", P_LINKS, false}, {"scripts", P_SCRIPTS, false},
     };
     JSValueConst prototype = dom->prototypes[D_PROTO_DOCUMENT]->value;
     for (size_t i = 0; i < sizeof(kAttributes) / sizeof(kAttributes[0]); i++)
