@@ -7,6 +7,8 @@
  *
  *   runner <list>     each line: id TAB path TAB async(0|1) TAB negative type or -
  *   output            id TAB PASS, or id TAB FAIL TAB why
+ *   runner --script <file>   one script, what it prints to standard output
+ *                            (tools/intl_capture_check.py's), exit 1 if it threw
  */
 #define _POSIX_C_SOURCE 200809L
 #include <stdalign.h>
@@ -53,12 +55,15 @@ int64_t os64_micros(void)
     return now.tv_sec * INT64_C(1000000) + now.tv_nsec / 1000;
 }
 
-/* What a test prints (its async verdict) is kept, not shown. */
+/* What a test prints (its async verdict) is kept, not shown; a --script
+ * run's goes to standard output. */
 static char printed[4096];
 static size_t printed_length;
+static int pass_through;
 int64_t os64_write(int32_t handle, const void *bytes, size_t size)
 {
     if (handle != 1) return (int64_t)fwrite(bytes, 1, size, stderr);
+    if (pass_through) return (int64_t)fwrite(bytes, 1, size, stdout);
     size_t room = sizeof(printed) - 1 - printed_length;
     size_t n = size < room ? size : room;
     memcpy(printed + printed_length, bytes, n);
@@ -137,9 +142,29 @@ static void run_one(const char *id, const char *path, int async, const char *neg
     free(source);
 }
 
+static int run_script(const char *path)
+{
+    size_t length = 0;
+    char *source = slurp(path, &length);
+    if (source == NULL) { fprintf(stderr, "runner: cannot read %s\n", path); return 2; }
+    os64_js_config_t config = {{512u << 20, 1u << 20, 64u << 20, 600000, 1u << 20}};
+    os64_js_runtime_t *runtime = NULL;
+    os64_js_outcome_t outcome;
+    pass_through = 1;
+    os64_js_status_t status = os64_js_create(&config, OS64_JS_ABI_ID, &runtime, &outcome);
+    if (status == OS64_JS_OK) status = os64_js_install_output(runtime, 1, OS64_JS_OUTPUT_PRINT, &outcome);
+    if (status == OS64_JS_OK) status = os64_js_install_intl(runtime, OS64_JS_LOCALE, &outcome);
+    if (status == OS64_JS_OK) status = os64_js_run(runtime, source, length, path, &outcome);
+    if (status != OS64_JS_OK) fprintf(stderr, "runner: %s: %s\n", path, outcome.message);
+    os64_js_destroy(runtime);
+    free(source);
+    return status == OS64_JS_OK ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 2) { fprintf(stderr, "usage: runner <list>\n"); return 2; }
+    if (argc == 3 && strcmp(argv[1], "--script") == 0) return run_script(argv[2]);
+    if (argc != 2) { fprintf(stderr, "usage: runner <list> | runner --script <file>\n"); return 2; }
     FILE *list = fopen(argv[1], "r");
     if (list == NULL) { fprintf(stderr, "runner: cannot read %s\n", argv[1]); return 2; }
     char line[8192];

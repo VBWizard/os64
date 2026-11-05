@@ -1,0 +1,128 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Intl capture</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; max-width: 60em; }
+  #verdict { font-weight: bold; margin-top: 16px; }
+  pre { white-space: pre-wrap; font-size: 13px; }
+</style>
+<h1>Intl capture</h1>
+<p>What this browser's <code>Intl</code> answers for en-US, captured as a file:
+the strings libjs is held to byte for byte (INTL.md § 8). It formats a fixed
+matrix of DateTimeFormat cases (option bags, zones, instants, ranges, parts),
+asks the questions other browsers answer differently (an alias zone's name),
+and lists the browser's Intl surface.</p>
+<p>Open it from <code>tools/intl_capture_server.py</code>, which serves this
+directory and saves what the page sends to the file it names; or press
+<b>Save</b> for a download.</p>
+<div id="verdict">capturing…</div>
+<p><button id="save" disabled>Save</button></p>
+<pre id="summary"></pre>
+<script>
+"use strict";
+// The cases. tools/intl_capture_check.py reads them from the capture, so
+// this page alone decides what is asked.
+const bags = [];
+const comps = {
+    weekday: ['narrow', 'short', 'long'], era: ['narrow', 'short', 'long'], year: ['2-digit', 'numeric'],
+    month: ['2-digit', 'numeric', 'narrow', 'short', 'long'], day: ['2-digit', 'numeric'],
+    hour: ['2-digit', 'numeric'], minute: ['2-digit', 'numeric'], second: ['2-digit', 'numeric'],
+    timeZoneName: ['short', 'long', 'shortOffset', 'longOffset', 'shortGeneric', 'longGeneric'],
+};
+for (const [k, vs] of Object.entries(comps)) for (const v of vs) bags.push({[k]: v});
+const combos = [
+    ['year', 'month', 'day'], ['month', 'day'], ['year', 'month'], ['weekday', 'month', 'day'],
+    ['weekday', 'year', 'month', 'day'], ['hour', 'minute'], ['hour', 'minute', 'second'], ['minute', 'second'],
+    ['month', 'day', 'hour', 'minute'], ['year', 'month', 'day', 'hour', 'minute'], ['weekday', 'hour'],
+    ['year', 'month', 'day', 'hour', 'minute', 'second', 'timeZoneName'], ['day', 'hour'], ['era', 'year'],
+    ['era', 'year', 'month', 'day'], ['weekday', 'day'], ['hour', 'timeZoneName'], ['month', 'year', 'hour'],
+];
+for (const c of combos) for (const m of ['numeric', 'short', 'long', '2-digit']) {
+    const o = {};
+    for (const k of c) {
+        if (k === 'month') o.month = m;
+        else if (k === 'weekday') o.weekday = m === 'long' ? 'long' : 'short';
+        else if (k === 'era') o.era = m === 'long' ? 'long' : 'short';
+        else if (k === 'timeZoneName') o.timeZoneName = m === 'long' ? 'long' : 'short';
+        else o[k] = m === '2-digit' ? '2-digit' : 'numeric';
+    }
+    bags.push(o);
+}
+for (const s of ['full', 'long', 'medium', 'short']) {
+    bags.push({dateStyle: s}, {timeStyle: s});
+    for (const t of ['full', 'long', 'medium', 'short']) bags.push({dateStyle: s, timeStyle: t});
+}
+for (const hc of ['h11', 'h12', 'h23', 'h24'])
+    bags.push({hour: 'numeric', hourCycle: hc}, {hour: 'numeric', minute: '2-digit', hourCycle: hc},
+              {timeStyle: 'short', hourCycle: hc}, {dateStyle: 'medium', timeStyle: 'medium', hourCycle: hc});
+bags.push({hour: 'numeric', hour12: false}, {hour: 'numeric', minute: 'numeric', hour12: true}, {timeStyle: 'short', hour12: false});
+for (const dp of ['narrow', 'short', 'long'])
+    bags.push({dayPeriod: dp}, {dayPeriod: dp, hour: 'numeric'}, {dayPeriod: dp, hour: 'numeric', minute: 'numeric'});
+for (const n of [1, 2, 3])
+    bags.push({fractionalSecondDigits: n}, {second: 'numeric', fractionalSecondDigits: n},
+              {minute: 'numeric', second: 'numeric', fractionalSecondDigits: n});
+bags.push({});
+
+const zones = ['America/New_York', 'UTC', 'Europe/London', 'Asia/Kolkata', 'Australia/Sydney', 'Pacific/Honolulu', '+05:30'];
+const instants = [Date.UTC(2026, 0, 5, 15, 30, 45, 123), Date.UTC(2026, 6, 4, 4, 5, 6, 7),
+                  Date.UTC(2026, 0, 5, 12, 0, 0), Date.UTC(2026, 0, 5, 0, 0, 0)];
+const H = 3600000, DAY = 24 * H, base = Date.UTC(2026, 0, 5, 9, 5, 7, 250);
+const ranges = [0, 30000, 90 * 60000, 5 * H, 14 * H, DAY, 40 * DAY, 400 * DAY].map(d => [base, base + d]);
+
+const capture = {
+    userAgent: navigator.userAgent, language: navigator.language, languages: navigator.languages,
+    when: new Date().toISOString(), cases: [], probes: {}, surface: {},
+};
+function attempt(f) { try { return f(); } catch (e) { return 'THROWS ' + e.name; } }
+for (const zone of zones) for (const bag of bags) {
+    const options = Object.assign({timeZone: zone}, bag);
+    const dtf = attempt(() => new Intl.DateTimeFormat('en-US', options));
+    const c = {options};
+    if (typeof dtf === 'string') { c.construct = dtf; capture.cases.push(c); continue; }
+    c.resolved = dtf.resolvedOptions();
+    c.format = instants.map(t => [t, dtf.format(t)]);
+    c.parts = [[instants[0], dtf.formatToParts(instants[0])]];
+    c.range = ranges.map(([x, y]) => [x, y, dtf.formatRange(x, y)]);
+    c.rangeParts = [[ranges[3][0], ranges[3][1], dtf.formatRangeToParts(ranges[3][0], ranges[3][1])]];
+    capture.cases.push(c);
+}
+// The questions other browsers answer differently from test262 or from
+// one another: each is what the browser said.
+const zoneOf = z => attempt(() => new Intl.DateTimeFormat('en-US', {timeZone: z}).resolvedOptions().timeZone);
+for (const z of ['Asia/Calcutta', 'Asia/Kolkata', 'Australia/Canberra', 'Etc/GMT', 'Etc/UTC', 'GMT', 'US/Eastern',
+                 'EST5EDT', 'america/new_york', 'Etc/GMT+5', 'Europe/Kiev', 'Asia/Saigon'])
+    capture.probes['timeZone ' + z] = zoneOf(z);
+capture.probes['default resolvedOptions'] = new Intl.DateTimeFormat().resolvedOptions();
+capture.probes['format(0) default'] = new Intl.DateTimeFormat().format(0);
+capture.probes['supportedLocalesOf de-DE en-GB en-US'] = Intl.DateTimeFormat.supportedLocalesOf(['de-DE', 'en-GB', 'en-US']);
+capture.probes['de-DE resolved locale'] = new Intl.DateTimeFormat('de-DE').resolvedOptions().locale;
+capture.probes['Locale und-Thai maximize'] = attempt(() => new Intl.Locale('und-Thai').maximize().toString());
+capture.probes['Locale en maximize'] = attempt(() => new Intl.Locale('en').maximize().toString());
+capture.probes['Locale cel-gaulish'] = attempt(() => new Intl.Locale('cel-gaulish').toString());
+capture.probes['Date toLocaleString 0'] = new Date(0).toLocaleString('en-US', {timeZone: 'UTC'});
+capture.probes['Date toString 0'] = new Date(0).toString();
+// The surface: Intl's own names and each constructor's prototype's.
+capture.surface.Intl = Object.getOwnPropertyNames(Intl).sort();
+for (const name of capture.surface.Intl) {
+    const value = Intl[name];
+    if (typeof value === 'function' && value.prototype)
+        capture.surface[name] = Object.getOwnPropertyNames(value.prototype).sort();
+}
+
+const text = JSON.stringify(capture);
+const summary = `${capture.cases.length} option sets, ${Object.keys(capture.probes).length} probes, ` +
+    `${text.length} bytes\n${capture.userAgent}`;
+document.getElementById('summary').textContent = summary;
+const save = document.getElementById('save');
+save.disabled = false;
+save.onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
+    a.download = 'intl-capture.json';
+    a.click();
+};
+fetch('capture', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: text})
+    .then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)))
+    .then(where => { document.getElementById('verdict').textContent = 'Saved: ' + where; })
+    .catch(e => { document.getElementById('verdict').textContent = 'Not sent (' + e.message + '): press Save'; });
+</script>
