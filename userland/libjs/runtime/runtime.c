@@ -1199,11 +1199,61 @@ static bool write_output(os64_js_runtime_t *runtime, const char *bytes, size_t s
     return !observe(runtime);
 }
 
-/* Each value by QuickJS string conversion, spaces between them. */
+/* Deeper console groups still count; their lines stop moving right. */
+#define CONSOLE_INDENT_MAX 32
+
+/* Two spaces for each of `depth` open groups, capped. */
+static bool write_indent(os64_js_runtime_t *runtime, uint32_t depth)
+{
+    static const char spaces[2 * CONSOLE_INDENT_MAX] =
+        "                                                                ";
+    return write_output(runtime, spaces, 2 * (size_t)(depth < CONSOLE_INDENT_MAX ? depth : CONSOLE_INDENT_MAX));
+}
+
+typedef struct {
+    os64_js_runtime_t *runtime;
+    uint32_t depth;
+    bool failed;
+} ErrorSink;
+
+/* QuickJS's printer writes an Error as its name and message, then its
+ * stack: each line after the first is indented as the first was. */
+static void error_sink(void *opaque, const char *bytes, size_t size)
+{
+    ErrorSink *sink = opaque;
+    while (size != 0 && !sink->failed) {
+        size_t line = 0;
+        while (line < size && bytes[line] != '\n') line++;
+        bool newline = line < size;
+        if (newline) line++;
+        if (!write_output(sink->runtime, bytes, line) || (newline && !write_indent(sink->runtime, sink->depth)))
+            sink->failed = true;
+        bytes += line;
+        size -= line;
+    }
+}
+
+/* Each value by QuickJS string conversion, spaces between them, but an
+ * Error as other browsers' consoles show one: its name and message and then
+ * its stack, through QuickJS's own printer, which reads what the Error holds
+ * and runs no page code (a getter is shown, not called). `depth` is the open
+ * console groups its later lines are indented for. */
 static bool write_values(os64_js_runtime_t *runtime, JSContext *context, int argc,
-                         JSValueConst *args, bool *thrown)
+                         JSValueConst *args, uint32_t depth, bool *thrown)
 {
     for (int i = 0; i < argc && !observe(runtime); i++) {
+        if (JS_IsError(context, args[i])) {
+            ErrorSink sink = {runtime, depth, false};
+            if (i != 0 && !write_output(runtime, " ", 1)) return false;
+            JS_PrintValue(context, error_sink, &sink, args[i], NULL);
+            /* The printer's own strings can fail to allocate. */
+            if (JS_HasException(context)) {
+                *thrown = true;
+                return false;
+            }
+            if (sink.failed) return false;
+            continue;
+        }
         size_t length;
         const char *text = JS_ToCStringLen(context, &length, args[i]);
         if (text == NULL) {
@@ -1237,7 +1287,7 @@ static JSValue output_call(JSContext *context, JSValueConst self, int argc,
     JSValue ready = output_ready(runtime, context);
     if (JS_IsException(ready)) return ready;
     bool thrown = false;
-    if (write_values(runtime, context, argc, args, &thrown) && write_output(runtime, "\n", 1))
+    if (write_values(runtime, context, argc, args, 0, &thrown) && write_output(runtime, "\n", 1))
         return JS_UNDEFINED;
     return thrown ? JS_EXCEPTION : JS_ThrowInternalError(context, "host output failed");
 }
@@ -1262,24 +1312,18 @@ static const struct { const char *name; int kind; } console_methods[] = {
     {"time", CONSOLE_TIME}, {"timeLog", CONSOLE_TIME_LOG}, {"timeEnd", CONSOLE_TIME_END},
 };
 #define CONSOLE_METHODS (sizeof(console_methods) / sizeof(console_methods[0]))
-/* Deeper groups still count; their lines stop moving right. */
-#define CONSOLE_INDENT_MAX 32
 
 /* One console line: the indent, the `head` pieces run together, then the
  * values (a space between the head and them). */
 static JSValue console_line(os64_js_runtime_t *runtime, JSContext *context,
                             const char *const *head, size_t pieces, int argc, JSValueConst *args)
 {
-    static const char spaces[2 * CONSOLE_INDENT_MAX] =
-        "                                                                ";
-    uint32_t depth = runtime->console_depth < CONSOLE_INDENT_MAX ? runtime->console_depth
-                                                                 : CONSOLE_INDENT_MAX;
     bool thrown = false;
-    bool written = write_output(runtime, spaces, 2 * (size_t)depth);
+    bool written = write_indent(runtime, runtime->console_depth);
     for (size_t i = 0; written && i < pieces; i++)
         written = write_output(runtime, head[i], os64_strlen(head[i]));
     written = written && (pieces == 0 || argc == 0 || write_output(runtime, " ", 1)) &&
-              write_values(runtime, context, argc, args, &thrown) &&
+              write_values(runtime, context, argc, args, runtime->console_depth, &thrown) &&
               write_output(runtime, "\n", 1);
     if (written) return JS_UNDEFINED;
     return thrown ? JS_EXCEPTION : JS_ThrowInternalError(context, "host output failed");

@@ -63,6 +63,9 @@ bool d_classic_match(const os64_html_node_t *root,
     switch (kind) {
     case D_QUERY_IMAGES: return node->tag == OS64_HTML_TAG_IMG;
     case D_QUERY_FORMS: return node->tag == OS64_HTML_TAG_FORM;
+    case D_QUERY_LINKS:
+        return (node->tag == OS64_HTML_TAG_A || node->tag == OS64_HTML_TAG_AREA) && os64_html_attr(node, "href") != NULL;
+    case D_QUERY_SCRIPTS: return node->tag == OS64_HTML_TAG_SCRIPT;
     case D_QUERY_DOCUMENT_NAMES:
         return node->tag == OS64_HTML_TAG_FORM || node->tag == OS64_HTML_TAG_IMG;
     case D_QUERY_CONTROLS:
@@ -79,7 +82,9 @@ JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx,
                               const os64_html_node_t *node, unsigned kind)
 {
     DValue *entry = d_find(dom, node);
-    DQuery **slot = kind == D_QUERY_IMAGES ? &entry->images : kind == D_QUERY_FORMS ? &entry->forms : &entry->elements;
+    DQuery **slot = kind == D_QUERY_IMAGES ? &entry->images : kind == D_QUERY_FORMS ? &entry->forms :
+                    kind == D_QUERY_LINKS ? &entry->links : kind == D_QUERY_SCRIPTS ? &entry->scripts :
+                    &entry->elements;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->entry->value);
     const os64_html_node_t *root = kind == D_QUERY_CONTROLS ? dom_root(node) : node;
     JSValue value = d_special_collection(dom, ctx, root, kind, NULL);

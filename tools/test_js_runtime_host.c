@@ -725,6 +725,34 @@ static void console_cases(void)
     os64_js_destroy(runtime);
 }
 
+/* An Error prints as its name and message and then its stack, the stack's
+ * lines indented with its console group, without running a getter it
+ * holds; print writes one the same way. */
+static void console_error_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    reset_io("");
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_CONSOLE | OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_OK,
+          "console and print installed");
+    check(execute_fixture(runtime,
+          "function thrower(){throw new TypeError('boom')}"
+          "let e;try{thrower()}catch(x){e=x}"
+          "Object.defineProperty(e,'trap',{get(){throw Error('getter ran')},enumerable:true});"
+          "console.group('g');console.log('x',e);console.groupEnd();print(e);",
+          &outcome) == OS64_JS_OK, "an Error printed without running its getter");
+    char text[2048] = {0};
+    memcpy(text, output, output_len < sizeof(text) - 1 ? output_len : sizeof(text) - 1);
+    char *grouped = strstr(text, "g\n  x TypeError: boom\n      at thrower (");
+    char *printed = strstr(text, "\nTypeError: boom\n    at thrower (");
+    check(grouped != NULL, "a console line's Error: name, message, and its stack indented with the group");
+    check(printed != NULL, "print's Error: name, message, and its stack");
+    check(strstr(text, "getter ran") == NULL, "the printer runs no page code");
+    os64_js_destroy(runtime);
+}
+
 static void output_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -2114,7 +2142,7 @@ int main(int argc, char **argv)
         return 1;
     }
     tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
-    file_cases(); file_boundary_cases(); output_cases(); console_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
+    file_cases(); file_boundary_cases(); output_cases(); console_cases(); console_error_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
     script_host_cases();
     module_cases();

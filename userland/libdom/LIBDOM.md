@@ -1389,6 +1389,11 @@ text, ASCII whitespace collapsed, an SVG document's own; its setter
 converts the value, then replaces that element's text, making one in the
 head (or, for SVG, first in the root) when there is none. `dir` reflects
 the html element's, `rootElement` is an SVG root, `clear()` does nothing.
+`links` is the live collection of the document's `a` and `area` elements
+that have an href, and `scripts` of its HTML `script` elements, each made
+once as `images` and `forms` are; their siblings `anchors`, `embeds` and
+`plugins` are not built, since no page in the corpus reads one (11/04
+count, 191 hosts: `scripts` 36, `links` 7, the three 0).
 `onreadystatechange`, `onvisibilitychange` and `onprerenderingchange` are
 the document's handler slots (§ Events).
 

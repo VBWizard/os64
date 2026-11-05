@@ -96,7 +96,7 @@ static char *modern_chain_shape(DomFixture *f)
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
-        "clear|getSelection|createElementNS|importNode|adoptNode)$/;"
+        "clear|getSelection|createElementNS|importNode|adoptNode|links|scripts)$/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){"
@@ -1381,6 +1381,7 @@ static void dom_modern_cases(void)
         "assert(!('onLine' in navigator)&&!('language' in navigator)&&!('plugins' in navigator)&&"
         "!('javaEnabled' in navigator)&&typeof PluginArray==='undefined'&&typeof MimeTypeArray==='undefined',"
         "'the rest of Navigator is the arc\\'s');"
+        "assert(!('links' in document)&&!('scripts' in document),'document.links and scripts are the arc\\'s');"
         /* over a level of their own, so the chains' levels match the switch's */
         "[location,history,navigator].forEach(function(o){var p=Object.getPrototypeOf(o);"
         "assert(p!==Object.prototype&&Object.getPrototypeOf(p)===Object.prototype&&"

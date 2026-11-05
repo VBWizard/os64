@@ -7967,8 +7967,6 @@ documents/dom-tree-accessors/document.getElementsByName/document.getElementsByNa
 documents/dom-tree-accessors/document.head-01.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 documents/dom-tree-accessors/document.head-02.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 documents/dom-tree-accessors/document.images.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.links.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.scripts.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 documents/dom-tree-accessors/nameditem-01.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 documents/dom-tree-accessors/nameditem-02.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 documents/dom-tree-accessors/nameditem-03.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
@@ -8183,6 +8181,8 @@ documents/dom-tree-accessors/Document.body.html	Setting document.body to a new b
 documents/dom-tree-accessors/Document.body.html	Setting document.body to a string.
 documents/dom-tree-accessors/Document.body.html	Setting document.body when there's no root element.
 documents/dom-tree-accessors/Document.body.html	existing document's body
+documents/dom-tree-accessors/document.links.html	Document.links should be a live collection
+documents/dom-tree-accessors/document.scripts.html	Document.scripts should be a live collection
 documents/dom-tree-accessors/document.title-01.html	PASS 3
 documents/dom-tree-accessors/document.title-01.html	document 2
 documents/dom-tree-accessors/document.title-01.html	document.title with head blown away
@@ -8256,6 +8256,12 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	BarProp interface: existe
 idlharness.https.html?exclude=(Document|Window|HTML.+)	BarProp interface: existence and properties of interface prototype object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	BarProp interface: existence and properties of interface prototype object's "constructor" property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	BarProp interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasGradient interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasGradient interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasGradient interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasGradient interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasGradient interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasGradient interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D includes CanvasCompositing: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D includes CanvasDrawImage: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D includes CanvasDrawPath: member names are unique
@@ -8273,8 +8279,20 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D 
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D includes CanvasTextDrawingStyles: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D includes CanvasTransform: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D includes CanvasUserInterface: member names are unique
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CanvasRenderingContext2D interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CharacterData includes ChildNode: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	CharacterData includes NonDocumentTypeChildNode: member names are unique
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CustomElementRegistry interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CustomElementRegistry interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CustomElementRegistry interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CustomElementRegistry interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CustomElementRegistry interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	CustomElementRegistry interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	DOMParser interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	DOMParser interface object name
 idlharness.https.html?exclude=(Document|Window|HTML.+)	DOMParser interface: existence and properties of interface object
@@ -8337,6 +8355,12 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	History interface: operat
 idlharness.https.html?exclude=(Document|Window|HTML.+)	History interface: operation go(optional long)
 idlharness.https.html?exclude=(Document|Window|HTML.+)	History interface: operation pushState(any, DOMString, optional USVString?)
 idlharness.https.html?exclude=(Document|Window|HTML.+)	History interface: operation replaceState(any, DOMString, optional USVString?)
+idlharness.https.html?exclude=(Document|Window|HTML.+)	ImageData interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	ImageData interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	ImageData interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	ImageData interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	ImageData interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	ImageData interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Location interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Location interface object name
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Location interface: existence and properties of interface object
@@ -8354,6 +8378,15 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	MessageEvent interface: e
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MessageEvent interface: existence and properties of interface prototype object's "constructor" property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MessageEvent interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	MessagePort includes MessageEventTarget: member names are unique
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface: attribute length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface: operation item(unsigned long)
+idlharness.https.html?exclude=(Document|Window|HTML.+)	MimeTypeArray interface: operation namedItem(DOMString)
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator includes NavigatorConcurrentHardware: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator includes NavigatorContentUtils: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator includes NavigatorCookies: member names are unique
@@ -8363,14 +8396,28 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator includes Naviga
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator includes NavigatorPlugins: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute appCodeName
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute appName
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute appVersion
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute cookieEnabled
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute hardwareConcurrency
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute language
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute languages
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute mimeTypes
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute onLine
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute pdfViewerEnabled
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute platform
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute plugins
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute product
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute productSub
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute userAgent
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute vendor
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: attribute vendorSub
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: existence and properties of interface object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: existence and properties of interface prototype object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: existence and properties of interface prototype object's "constructor" property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Navigator interface: operation javaEnabled()
 idlharness.https.html?exclude=(Document|Window|HTML.+)	OffscreenCanvasRenderingContext2D includes CanvasCompositing: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	OffscreenCanvasRenderingContext2D includes CanvasDrawImage: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	OffscreenCanvasRenderingContext2D includes CanvasDrawPath: member names are unique
@@ -8411,6 +8458,22 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	Partial interface mixin N
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Partial interface mixin NonDocumentTypeChildNode: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Partial interface mixin NonDocumentTypeChildNode: original interface mixin defined
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Path2D includes CanvasPath: member names are unique
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Path2D interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Path2D interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Path2D interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Path2D interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Path2D interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Path2D interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: attribute length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: operation item(unsigned long)
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: operation namedItem(DOMString)
+idlharness.https.html?exclude=(Document|Window|HTML.+)	PluginArray interface: operation refresh()
 idlharness.https.html?exclude=(Document|Window|HTML.+)	PopStateEvent interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	PopStateEvent interface object name
 idlharness.https.html?exclude=(Document|Window|HTML.+)	PopStateEvent interface: existence and properties of interface object
@@ -8454,6 +8517,12 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: ex
 idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object's "constructor" property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	SubmitEvent interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	TextMetrics interface: existence and properties of interface prototype object's @@unscopables property
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface object length
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface object name
 idlharness.https.html?exclude=(Document|Window|HTML.+)	ValidityState interface: existence and properties of interface object
@@ -10252,6 +10321,59 @@ reflection-embedded.html	img.className (<img class>): setAttribute() to object "
 reflection-embedded.html	img.className (<img class>): setAttribute() to true
 reflection-embedded.html	img.className (<img class>): setAttribute() to undefined
 reflection-embedded.html	img.className (<img class>): typeof IDL attribute
+reflection-embedded.html	img.crossOrigin: IDL get with DOM attribute unset
+reflection-embedded.html	img.crossOrigin: IDL set to ""
+reflection-embedded.html	img.crossOrigin: IDL set to "+100"
+reflection-embedded.html	img.crossOrigin: IDL set to ".5"
+reflection-embedded.html	img.crossOrigin: IDL set to "5%"
+reflection-embedded.html	img.crossOrigin: IDL set to "ANONYMOUS"
+reflection-embedded.html	img.crossOrigin: IDL set to "USE-CREDENTIALS"
+reflection-embedded.html	img.crossOrigin: IDL set to "anonymous"
+reflection-embedded.html	img.crossOrigin: IDL set to "anonymouſ"
+reflection-embedded.html	img.crossOrigin: IDL set to "nonymous"
+reflection-embedded.html	img.crossOrigin: IDL set to "se-credentials"
+reflection-embedded.html	img.crossOrigin: IDL set to "use-credentials"
+reflection-embedded.html	img.crossOrigin: IDL set to "uſe-credentialſ"
+reflection-embedded.html	img.crossOrigin: IDL set to "xanonymous"
+reflection-embedded.html	img.crossOrigin: IDL set to "xuse-credentials"
+reflection-embedded.html	img.crossOrigin: IDL set to -Infinity
+reflection-embedded.html	img.crossOrigin: IDL set to 1.5
+reflection-embedded.html	img.crossOrigin: IDL set to 7
+reflection-embedded.html	img.crossOrigin: IDL set to Infinity
+reflection-embedded.html	img.crossOrigin: IDL set to NaN
+reflection-embedded.html	img.crossOrigin: IDL set to false
+reflection-embedded.html	img.crossOrigin: IDL set to null
+reflection-embedded.html	img.crossOrigin: IDL set to object "[object Object]"
+reflection-embedded.html	img.crossOrigin: IDL set to object "test-toString"
+reflection-embedded.html	img.crossOrigin: IDL set to object "test-valueOf"
+reflection-embedded.html	img.crossOrigin: IDL set to true
+reflection-embedded.html	img.crossOrigin: setAttribute() to ""
+reflection-embedded.html	img.crossOrigin: setAttribute() to "+100"
+reflection-embedded.html	img.crossOrigin: setAttribute() to ".5"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "5%"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "ANONYMOUS"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "USE-CREDENTIALS"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "anonymous"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "anonymouſ"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "nonymous"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "se-credentials"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "use-credentials"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "uſe-credentialſ"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "xanonymous"
+reflection-embedded.html	img.crossOrigin: setAttribute() to "xuse-credentials"
+reflection-embedded.html	img.crossOrigin: setAttribute() to -Infinity
+reflection-embedded.html	img.crossOrigin: setAttribute() to 1.5
+reflection-embedded.html	img.crossOrigin: setAttribute() to 7
+reflection-embedded.html	img.crossOrigin: setAttribute() to Infinity
+reflection-embedded.html	img.crossOrigin: setAttribute() to NaN
+reflection-embedded.html	img.crossOrigin: setAttribute() to false
+reflection-embedded.html	img.crossOrigin: setAttribute() to null
+reflection-embedded.html	img.crossOrigin: setAttribute() to object "[object Object]"
+reflection-embedded.html	img.crossOrigin: setAttribute() to object "test-toString"
+reflection-embedded.html	img.crossOrigin: setAttribute() to object "test-valueOf"
+reflection-embedded.html	img.crossOrigin: setAttribute() to true
+reflection-embedded.html	img.crossOrigin: setAttribute() to undefined
+reflection-embedded.html	img.crossOrigin: typeof IDL attribute
 reflection-embedded.html	img.dir: IDL get with DOM attribute unset
 reflection-embedded.html	img.dir: IDL set to ""
 reflection-embedded.html	img.dir: IDL set to "+100"
