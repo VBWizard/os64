@@ -27,6 +27,9 @@ What is taken:
   hourCycles     the US's preferred and allowed hour cycles (timeData)
   likely         likely subtags for the English tags and every `und` row
                  (INTL.md § 7: other tags maximize to themselves)
+  likelyRegions  the likely region of each language or language-script
+                 that picks a retired region's replacement other than the
+                 first
   numbers        deferred (a function returning the five below, which
                  the first NumberFormat, PluralRules or RelativeTimeFormat
                  calls):
@@ -140,6 +143,26 @@ def collation(root):
     return version, singles, pairs
 
 
+def likely_regions(likely, later_choices):
+    """The likely region of each language, language-script or und-script
+    that can pick a retired region's replacement other than the first of
+    its territoryAlias choices ("hy-SU" is "hy-AM", "und-Armn-SU"
+    "und-Armn-AM"), and of each language-script whose language can, since
+    it is looked up before the language is."""
+    def region(tag):
+        return tag.split('-')[-1]
+    out = {}
+    for k, v in likely.items():
+        parts = k.split('-')
+        scripted = len(parts) == 2 and len(parts[1]) == 4 and parts[1][0].isalpha()
+        if len(parts) != 1 and not scripted:
+            continue
+        if region(v) in later_choices or (scripted and parts[0] != 'und' and parts[0] in likely
+                                          and region(likely[parts[0]]) in later_choices):
+            out[k] = region(v)
+    return out
+
+
 def main():
     root = sys.argv[1]
     version = load(root, 'cldr-core', 'package.json')['version']
@@ -150,6 +173,9 @@ def main():
     time_data = load(root, 'cldr-core', 'supplemental', 'timeData.json')['supplemental']['timeData']
     likely = load(root, 'cldr-core', 'supplemental', 'likelySubtags.json')['supplemental']['likelySubtags']
     alias = load(root, 'cldr-core', 'supplemental', 'aliases.json')['supplemental']['metadata']['alias']
+    later_choices = set()
+    for entry in alias['territoryAlias'].values():
+        later_choices.update(entry['_replacement'].split()[1:])
 
     # Each zone's current metazone: the usesMetazone entry with no `_to`.
     current = {}
@@ -346,6 +372,7 @@ def main():
         'hourCycles': {'US': time_data['US'], '001': time_data['001']},
         'likely': {k: v for k, v in likely.items()
                    if k in ('und', 'en') or k.startswith('en-') or k.startswith('und-')},
+        'likelyRegions': likely_regions(likely, later_choices),
         'uAliases': u_aliases,
         'aliases': {k: {name: entry.get('_replacement') for name, entry in alias[k].items()}
                     for k in ('languageAlias', 'scriptAlias', 'territoryAlias', 'variantAlias')},

@@ -68,12 +68,12 @@ const bigintValueOf = BigInt_.prototype.valueOf;
 // eagerly, and a realm that never constructs one never evaluates CLDR's
 // tables. Every door into them calls loadData first: the constructors and
 // supportedLocalesOf; a method has an instance, so its realm has loaded.
-let ALIASES, U_VALUE_ALIASES, LIKELY, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES, LISTS, NUMBER_DATA, COLLATION_DATA;
+let ALIASES, U_VALUE_ALIASES, LIKELY, LIKELY_REGIONS, G, Z, IV, IV_FALLBACK, DAY_PERIOD_RULES, LISTS, NUMBER_DATA, COLLATION_DATA;
 let dataLoaded = false;
 function loadData() {
     if (dataLoaded) return;
     const D = I.data();
-    ALIASES = D.aliases; U_VALUE_ALIASES = D.uAliases; LIKELY = D.likely; G = D.gregorian; Z = D.zones;
+    ALIASES = D.aliases; U_VALUE_ALIASES = D.uAliases; LIKELY = D.likely; LIKELY_REGIONS = D.likelyRegions; G = D.gregorian; Z = D.zones;
     IV = G.intervalFormats; IV_FALLBACK = own(IV, 'intervalFormatFallback'); DAY_PERIOD_RULES = D.dayPeriods;
     LISTS = D.lists; NUMBER_DATA = D.numbers; COLLATION_DATA = D.collation;
     dataLoaded = true;
@@ -384,13 +384,18 @@ function replaceAliases(t) {
             const choices = split(r, ' ');
             let pick = choices[0];
             if (choices.length > 1) {
-                // The region the language is likeliest in, when it is among
-                // the choices (UTS 35 Annex C.10), else the first.
-                const likely = own(LIKELY, t.language);
-                if (likely !== undefined) {
-                    const lr = parseTag(likely);
-                    for (let c = 0; c < choices.length; c++) if (lower(choices[c]) === lr.region) pick = choices[c];
-                }
+                // The region the language and script are likeliest in, when
+                // it is among the choices (UTS 35 Annex C.10), else the
+                // first. The data holds that region for the languages and
+                // scripts it makes a difference to: the language with its
+                // script, then alone. Likely subtags would go on to und with
+                // the script for a language CLDR does not list; the table
+                // cannot say which languages CLDR lists, so und with a
+                // script is looked up only for und itself.
+                let likely = t.script !== '' ? own(LIKELY_REGIONS, t.language + '-' + titleCase(t.script)) : undefined;
+                if (likely === undefined && t.language !== 'und') likely = own(LIKELY_REGIONS, t.language);
+                if (likely !== undefined)
+                    for (let c = 0; c < choices.length; c++) if (choices[c] === likely) pick = choices[c];
             }
             t.region = lower(pick);
         }
@@ -2440,7 +2445,10 @@ function SetNumberFormatDigitOptions(o, options, mnfdDefault, mxfdDefault, notat
     const mode = GetOption(options, 'roundingMode', 'string', ROUNDING_MODES, 'halfExpand');
     const priority = GetOption(options, 'roundingPriority', 'string', ['auto', 'morePrecision', 'lessPrecision'], 'auto');
     const trailing = GetOption(options, 'trailingZeroDisplay', 'string', ['auto', 'stripIfInteger'], 'auto');
-    if (increment !== 1) mxfdDefault = mnfdDefault;
+    // The specification lowers the maximum fraction digits' default to the
+    // minimum's when an increment is given; Chrome keeps the default, so
+    // an increment with fraction digits left to their defaults throws
+    // below, as Chrome's does (test262 is silent; INTL.md § 9.6).
     o.roundingIncrement = increment; o.roundingMode = mode; o.trailingZeroDisplay = trailing;
     const hasSd = mnsd !== undefined || mxsd !== undefined, hasFd = mnfd !== undefined || mxfd !== undefined;
     let needSd = true, needFd = true;
@@ -2595,11 +2603,14 @@ function pluralCategory(type, digits, shift) {
         if (table[i].category !== 'other' && pluralRuleHolds(table[i].rule, ops)) return table[i].category;
     return 'other';
 }
-// The categories other browsers list: alphabetical, "other" last.
+// The categories a type's rules can give, in the order ECMA-402 lists
+// them ("zero", "one", "two", "few", "many", "other"), as Chrome does.
+const PLURAL_ORDER = ['zero', 'one', 'two', 'few', 'many'];
 function pluralCategories(type) {
     const table = pluralTable(type), out = [];
-    for (let i = 0; i < table.length; i++) if (table[i].category !== 'other') push(out, table[i].category);
-    sortStrings(out);
+    for (let k = 0; k < PLURAL_ORDER.length; k++)
+        for (let i = 0; i < table.length; i++)
+            if (table[i].category === PLURAL_ORDER[k]) { push(out, PLURAL_ORDER[k]); break; }
     push(out, 'other');
     return out;
 }
@@ -2669,7 +2680,12 @@ method(PluralRulesPrototype, 'resolvedOptions', methodOf(function () {
     const o = {};
     put(o, 'locale', s.locale); put(o, 'type', s.type); put(o, 'notation', s.notation);
     if (s.notation === 'compact') put(o, 'compactDisplay', s.compactDisplay);
-    putDigitOptions(o, s);
+    // Chrome reports a plural rules' significant digits when it has any
+    // and its fraction digits only when it has none, so a rounding
+    // priority's pair reports the significant half (INTL.md § 9.6).
+    put(o, 'minimumIntegerDigits', s.minInt);
+    if (s.minSig !== undefined) { put(o, 'minimumSignificantDigits', s.minSig); put(o, 'maximumSignificantDigits', s.maxSig); }
+    else { put(o, 'minimumFractionDigits', s.minFrac); put(o, 'maximumFractionDigits', s.maxFrac); }
     put(o, 'pluralCategories', pluralCategories(s.type));
     put(o, 'roundingIncrement', s.roundingIncrement); put(o, 'roundingMode', s.roundingMode);
     put(o, 'roundingPriority', reportedRoundingPriority(s)); put(o, 'trailingZeroDisplay', s.trailingZeroDisplay);
@@ -2948,8 +2964,9 @@ function outerParts(pattern, type) {
     return out;
 }
 // One number in its layers. `forced`, when given, is the plural category
-// the outer layer takes (a collapsed range's).
-function formatLayers(s, x, forced) {
+// the outer layer takes (a collapsed range's); `single` is true when the
+// number is formatted alone rather than as a range's end.
+function formatLayers(s, x, forced, single) {
     const res = {__proto__: null, digits: [], inner: {__proto__: null, prefix: [], suffix: []},
                  middle: {__proto__: null, prefix: [], suffix: []}, outer: {__proto__: null, prefix: [], suffix: []},
                  category: 'other', middleKey: '', approximate: true, value: null};
@@ -2989,13 +3006,18 @@ function formatLayers(s, x, forced) {
     // the percent pattern's, a part typed `unit` in a unit format, except
     // that a compact one is written after the compact pattern, as the
     // outer layer, as V8 writes both (the percent unit's long name is an
-    // ordinary unit pattern).
+    // ordinary unit pattern). A percent per a unit formatted alone, short
+    // or narrow and not compact, is the percent pattern too, its
+    // denominator dropped ("2%" for percent-per-second), while its ranges
+    // and its compact forms keep it ("3–5%/s", "1.2K%/s"): Chrome writes
+    // all of them so (INTL.md § 9.6).
     const sign = signOf(s, v.neg && !v.nan, zero);
     const named = s.style === 'currency' && s.currencyDisplay === 'name';
     const currency = s.style === 'currency' && !named ? currencyText(s) : '';
     const alpha = currency !== '' && !v.nan && !v.inf && alphaNextToNumber(currency);
     const accounting = s.style === 'currency' && !named && s.currencySign === 'accounting' && sign === '-' && compactKey === null;
-    const percent = s.style === 'percent' || (s.style === 'unit' && s.unit === 'percent' && s.unitDisplay !== 'long');
+    const percent = s.style === 'percent' || (s.style === 'unit' && s.unitDisplay !== 'long' && (s.unit === 'percent' ||
+        (single === true && s.notation !== 'compact' && slice(s.unit, 0, 12) === 'percent-per-')));
     const percentType = s.style === 'percent' ? 'percentSign' : 'unit';
     let pattern;
     if (compactKey !== null) {
@@ -3064,7 +3086,7 @@ function addLayers(out, res, inner, middle, outer) {
 }
 function numberParts(s, x) {
     const out = [];
-    addLayers(out, formatLayers(s, x), true, true, true);
+    addLayers(out, formatLayers(s, x, undefined, true), true, true, true);
     return out;
 }
 const codePoints = list => { let n = 0; for (let i = 0; i < list.length; i++) n += countCodePoints(list[i].value); return n; };

@@ -1,7 +1,5 @@
 # test262 intl402/Intl, held by tools/test262/run.py (its docstring says how).
 [excluded]
-intl402/Intl/getCanonicalLocales/complex-region-subtag-replacement.js	a region alias that resolves by the language's likely region (hy-SU is hy-AM): the data holds likely subtags for en and und only (INTL.md § 7)
-intl402/Intl/getCanonicalLocales/complex-region-subtag-replacement.js (strict)	a region alias that resolves by the language's likely region (hy-SU is hy-AM): the data holds likely subtags for en and und only (INTL.md § 7)
 intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js	-u-rg/-u-sd values are not canonicalized by CLDR's subdivision aliases (DEBTS § Intl)
 intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js (strict)	-u-rg/-u-sd values are not canonicalized by CLDR's subdivision aliases (DEBTS § Intl)
 intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-subdivision.js	-u-rg/-u-sd values are not canonicalized by CLDR's subdivision aliases (DEBTS § Intl)
