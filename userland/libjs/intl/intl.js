@@ -917,6 +917,12 @@ function makeSkeleton(pattern) {
         sk.baseCh[f] = row[0]; sk.baseLen[f] = row[3];
         sk.type[f] = row[2] > 0 ? row[2] + it.len : row[2];
     }
+    // Minutes and fractional seconds with no seconds gain seconds (ICU's
+    // #20739): a fraction is of a second.
+    if (sk.ch[F_MINUTE] !== '' && sk.ch[F_FRACTION] !== '' && sk.ch[F_SECOND] === '') {
+        sk.ch[F_SECOND] = 's'; sk.len[F_SECOND] = 1; sk.baseCh[F_SECOND] = 's'; sk.baseLen[F_SECOND] = 1;
+        sk.type[F_SECOND] = DT_NUMERIC + 1;
+    }
     // A 12-hour field with no day period gains the default one; a 24-hour
     // field drops a day period (ICU's #13183 handling).
     if (sk.ch[F_HOUR] !== '') {
@@ -1081,10 +1087,15 @@ function adjustFieldTypes(pattern, specified, req, fixFraction, options, hourCha
 }
 
 function topBit(mask) { let b = -1; for (let f = 0; f < FIELD_COUNT; f++) if (mask & (1 << f)) b = f; return b; }
+// Each field's appendItems key and display name in CLDR; a field CLDR
+// gives neither keeps ICU's defaults: the template "{0} ├{2}: {1}┤" and the
+// name "F" and its field number (a fractional second is "F14", as Chrome
+// prints it).
 const APPEND_ITEM = ['Era', 'Year', 'Quarter', 'Month', 'Week', 'Week', 'Day-Of-Week', 'Day', 'Day', 'Day', '', 'Hour',
                      'Minute', 'Second', '', 'Timezone'];
 const FIELD_NAME = ['era', 'year', 'quarter', 'month', 'week', 'week', 'weekday', 'day', 'day', 'day', 'dayperiod', 'hour',
-                    'minute', 'second', 'second', 'zone'];
+                    'minute', 'second', '', 'zone'];
+const APPEND_DEFAULT = '{0} \u251c{2}: {1}\u2524';
 function simpleFormat(template, args) {
     let out = '';
     for (let i = 0; i < template.length; i++) {
@@ -1118,8 +1129,9 @@ function bestAppending(req, mask, options, hourChar) {
         const found = starting & ~temp.missing;
         const top = topBit(found);
         const item = own(G.appendItems, APPEND_ITEM[top]);
-        if (item !== undefined && item !== '')
-            result = simpleFormat(item, [result, tempPattern, "'" + own(G.fieldNames, FIELD_NAME[top]) + "'"]);
+        const name = own(G.fieldNames, FIELD_NAME[top]);
+        result = simpleFormat(item !== undefined && item !== '' ? item : APPEND_DEFAULT,
+                              [result, tempPattern, "'" + (name !== undefined ? name : 'F' + top) + "'"]);
         last = missing = temp.missing;
     }
     return result;
@@ -1361,6 +1373,14 @@ const DateTimeFormatPrototype = DateTimeFormat.prototype;
 defineProperty(DateTimeFormat, 'prototype', {__proto__: null, writable: false, enumerable: false, configurable: false});
 defineProperty(DateTimeFormat, 'length', {__proto__: null, value: 0, configurable: true});
 
+// A receiver's formatter: its own slots, or, for format and
+// resolvedOptions alone (UnwrapDateTimeFormat), a legacy wrapper's hidden
+// one; the other methods require the slots themselves.
+function thisDateTimeFormat(dtf, name) {
+    const s = slots(DTFS, dtf);
+    if (s === undefined) throw new TypeError_('Method Intl.DateTimeFormat.prototype.' + name + ' called on incompatible receiver');
+    return s;
+}
 function UnwrapDateTimeFormat(dtf, name) {
     let s = slots(DTFS, dtf);
     if (s === undefined && isObject(dtf) && hasInstance(DateTimeFormat, dtf)) s = slots(DTFS, dtf[FALLBACK_SYMBOL]);
@@ -1509,9 +1529,16 @@ function zoneName(s, f, ch, len) {
 }
 
 // ── Formatting a pattern ────────────────────────────────────────────────
+// A flexible day period: "noon" when the hour is 12 and the minutes and
+// seconds the pattern shows (its fields, not its quoted text) are 0.
 function dayPeriodFlexible(f, width, pattern) {
     const periods = own(own(G.dayPeriods, 'format'), width);
-    const hasMinute = indexOf(pattern, 'm', 0) >= 0, hasSecond = indexOf(pattern, 's', 0) >= 0;
+    let hasMinute = false, hasSecond = false;
+    const items = tokenize(pattern);
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].ch === 'm') hasMinute = true;
+        if (items[i].ch === 's') hasSecond = true;
+    }
     if (f.hour === 12 && (!hasMinute || f.minute === 0) && (!hasSecond || f.second === 0) && own(periods, 'noon') !== undefined)
         return own(periods, 'noon');
     const rules = DAY_PERIOD_RULES;
@@ -2007,43 +2034,58 @@ getter(DateTimeFormatPrototype, 'format', function () {
     return s.bound;
 });
 method(DateTimeFormatPrototype, 'formatToParts', methodOf(function (date) {
-    const s = UnwrapDateTimeFormat(this, 'formatToParts');
+    const s = thisDateTimeFormat(this, 'formatToParts');
     return partsToArray(formatParts(s, s.pattern, toInstant(date)));
 }), 1);
 method(DateTimeFormatPrototype, 'formatRange', methodOf(function (startDate, endDate) {
-    const s = UnwrapDateTimeFormat(this, 'formatRange');
+    const s = thisDateTimeFormat(this, 'formatRange');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
     const xn = ToNumber(startDate), yn = ToNumber(endDate);       // both converted, then clipped
     const x = timeClip(xn), y = timeClip(yn);
     return asciiSpaces(partsToString(formatRangeParts(s, x, y)));
 }), 2);
 method(DateTimeFormatPrototype, 'formatRangeToParts', methodOf(function (startDate, endDate) {
-    const s = UnwrapDateTimeFormat(this, 'formatRangeToParts');
+    const s = thisDateTimeFormat(this, 'formatRangeToParts');
     if (startDate === undefined || endDate === undefined) throw new TypeError_('startDate and endDate are required');
     const xn = ToNumber(startDate), yn = ToNumber(endDate);       // both converted, then clipped
     const x = timeClip(xn), y = timeClip(yn);
     return partsToArray(formatRangeParts(s, x, y));
 }), 2);
-// resolvedOptions: what the pattern holds, read back as other browsers
-// read it (a minute is "2-digit" whenever the pattern pads it).
-const RESOLVED_FROM = {__proto__: null,
-    G: ['era', len => len === 4 ? 'long' : len === 5 ? 'narrow' : 'short'],
-    y: ['year', len => len === 2 ? '2-digit' : 'numeric'],
-    M: ['month', len => len === 1 ? 'numeric' : len === 2 ? '2-digit' : len === 3 ? 'short' : len === 4 ? 'long' : 'narrow'],
-    L: ['month', len => len === 1 ? 'numeric' : len === 2 ? '2-digit' : len === 3 ? 'short' : len === 4 ? 'long' : 'narrow'],
-    d: ['day', len => len === 2 ? '2-digit' : 'numeric'],
-    E: ['weekday', len => len === 4 ? 'long' : len === 5 ? 'narrow' : 'short'],
-    c: ['weekday', len => len === 4 ? 'long' : len === 5 ? 'narrow' : 'short'],
-    B: ['dayPeriod', len => len === 4 ? 'long' : len === 5 ? 'narrow' : 'short'],
-    h: ['hour', len => len === 2 ? '2-digit' : 'numeric'], H: ['hour', len => len === 2 ? '2-digit' : 'numeric'],
-    K: ['hour', len => len === 2 ? '2-digit' : 'numeric'], k: ['hour', len => len === 2 ? '2-digit' : 'numeric'],
-    m: ['minute', len => len === 2 ? '2-digit' : 'numeric'],
-    s: ['second', len => len === 2 ? '2-digit' : 'numeric'],
-    S: ['fractionalSecondDigits', len => len],
-    z: ['timeZoneName', len => len === 4 ? 'long' : 'short'],
-    O: ['timeZoneName', len => len === 4 ? 'longOffset' : 'shortOffset'],
-    v: ['timeZoneName', len => len === 4 ? 'longGeneric' : 'shortGeneric'],
-};
+// resolvedOptions: what the pattern holds, read back as V8 reads it: each
+// option by the longest run of its letter ANYWHERE in the pattern, quoted
+// text included (V8 finds "MMM" by substring, so an appended "'AM/PM'"
+// reports a numeric month, and Chrome says so). Within one option the
+// letters are asked in V8's order: M before L, H before h, k and K.
+const RESOLVED_FROM = [
+    ['G', 'era', n => n === 4 ? 'long' : n >= 5 ? 'narrow' : 'short'],
+    ['y', 'year', n => n >= 2 ? '2-digit' : 'numeric'],
+    ['M', 'month', n => n >= 5 ? 'narrow' : n === 4 ? 'long' : n === 3 ? 'short' : n === 2 ? '2-digit' : 'numeric'],
+    ['L', 'month', n => n >= 5 ? 'narrow' : n === 4 ? 'long' : n === 3 ? 'short' : n === 2 ? '2-digit' : 'numeric'],
+    ['d', 'day', n => n >= 2 ? '2-digit' : 'numeric'],
+    ['E', 'weekday', n => n >= 5 ? 'narrow' : n === 4 ? 'long' : 'short'],
+    ['c', 'weekday', n => n >= 5 ? 'narrow' : n === 4 ? 'long' : 'short'],
+    ['B', 'dayPeriod', n => n >= 5 ? 'narrow' : n === 4 ? 'long' : 'short'],
+    ['H', 'hour', n => n >= 2 ? '2-digit' : 'numeric'], ['h', 'hour', n => n >= 2 ? '2-digit' : 'numeric'],
+    ['k', 'hour', n => n >= 2 ? '2-digit' : 'numeric'], ['K', 'hour', n => n >= 2 ? '2-digit' : 'numeric'],
+    ['m', 'minute', n => n >= 2 ? '2-digit' : 'numeric'],
+    ['s', 'second', n => n >= 2 ? '2-digit' : 'numeric'],
+    ['S', 'fractionalSecondDigits', n => n > 3 ? 3 : n],
+    ['z', 'timeZoneName', n => n >= 4 ? 'long' : 'short'],
+    ['O', 'timeZoneName', n => n >= 4 ? 'longOffset' : 'shortOffset'],
+    ['v', 'timeZoneName', n => n >= 4 ? 'longGeneric' : 'shortGeneric'],
+];
+// The longest run of each character in `text`.
+function longestRuns(text) {
+    const runs = {__proto__: null};
+    for (let i = 0; i < text.length;) {
+        let j = i + 1;
+        while (j < text.length && codeAt(text, j) === codeAt(text, i)) j++;
+        const c = fromCharCode(codeAt(text, i));
+        if ((own(runs, c) || 0) < j - i) runs[c] = j - i;
+        i = j;
+    }
+    return runs;
+}
 method(DateTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
     const s = UnwrapDateTimeFormat(this, 'resolvedOptions');
     const o = {};
@@ -2051,11 +2093,11 @@ method(DateTimeFormatPrototype, 'resolvedOptions', methodOf(function () {
     put(o, 'timeZone', s.timeZone);
     if (s.hourCycle !== undefined) { put(o, 'hourCycle', s.hourCycle); put(o, 'hour12', s.hourCycle === 'h11' || s.hourCycle === 'h12'); }
     if (s.dateStyle === undefined && s.timeStyle === undefined) {
-        const found = {__proto__: null};
-        const items = tokenize(s.pattern);
-        for (let i = 0; i < items.length; i++) {
-            const r = own(RESOLVED_FROM, items[i].ch);
-            if (r !== undefined) found[r[0]] = r[1](items[i].len);
+        const found = {__proto__: null}, runs = longestRuns(s.pattern);
+        for (let i = 0; i < RESOLVED_FROM.length; i++) {
+            const [ch, prop, value] = RESOLVED_FROM[i];
+            const n = own(runs, ch);
+            if (n !== undefined && own(found, prop) === undefined) found[prop] = value(n);
         }
         for (let i = 0; i < COMPONENTS.length; i++) {
             const prop = COMPONENTS[i][0];

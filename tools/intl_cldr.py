@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate libjs's en-US locale data (userland/libjs/intl/intl_data.js).
 
-Usage: tools/intl_cldr.py <cldr dir> > userland/libjs/intl/intl_data.js
+Usage: tools/intl_cldr.py <cldr dir> [zoneinfo dir] > userland/libjs/intl/intl_data.js
   <cldr dir> holds the cldr-json packages of one version, unpacked:
   cldr-core/, cldr-dates-full/, cldr-numbers-full/, cldr-bcp47/ and
   cldr-localenames-full/ (npm's tarballs; the last only its main/en).
@@ -15,8 +15,9 @@ What is taken:
                  appendItems, intervalFormats
   zones          the GMT and region formats, the metazones' en names, the
                  zone-specific names and exemplar cities, each zone's
-                 current metazone and its country (the first two letters
-                 of its CLDR key), the primary zones of countries with
+                 current metazone and its country (tzdata's zone.tab,
+                 where ICU's regions come from, matched to CLDR's names
+                 by their aliases), the primary zones of countries with
                  several, and the countries' en names: what the generic
                  and location names are made of
   dayPeriods     en's rules for the `dayPeriod` option
@@ -92,15 +93,26 @@ def main():
     zone_specific = {}
     zone_names(tzn['zone'], [], zone_specific)
 
-    # Each canonical zone's country: CLDR's zone keys are a UN/LOCODE, its
-    # first two letters the country (`frpar`, `ausyd`); the keys that are
-    # not one (`utc`, `est5edt`, `unk`) name no country.
+    # Each canonical zone's country, from tzdata's zone.tab (ICU's regions
+    # come from it): a zone there under any of its CLDR names is in its
+    # country; one not there (`Etc/*`, `EST5EDT`) names none.
+    zoneinfo = sys.argv[2] if len(sys.argv) > 2 else '/usr/share/zoneinfo'
+    tab = {}
+    with open(os.path.join(zoneinfo, 'zone.tab'), encoding='utf-8') as f:
+        for line in f:
+            if line.startswith('#') or not line.strip():
+                continue
+            fields = line.rstrip('\n').split('\t')
+            tab[fields[2]] = fields[0]
     bcp = load(root, 'cldr-bcp47', 'bcp47', 'timezone.json')['keyword']['u']['tz']
     country = {}
     for key, value in bcp.items():
-        if isinstance(value, dict) and '_alias' in value and len(key) == 5 and key.isalpha() \
-                and not value.get('_deprecated'):
-            country[value['_alias'].split()[0]] = key[:2].upper()
+        if not isinstance(value, dict) or '_alias' not in value or value.get('_deprecated'):
+            continue
+        names = value['_alias'].split() + ([value['_iana']] if value.get('_iana') else [])
+        found = next((tab[n] for n in names if n in tab), None)
+        if found is not None:
+            country[names[0]] = found
     primary = load(root, 'cldr-core', 'supplemental', 'primaryZones.json')['supplemental']['primaryZones']
     territories = load(root, 'cldr-localenames-full', 'main', 'en', 'territories.json')['main']['en'][
         'localeDisplayNames']['territories']
