@@ -33,8 +33,9 @@
 
 // A page's script heap, in MiB (yonder.conf's `script_memory_mb`): the
 // memory limit each page's runtime is made with. A single-page app's code
-// lives in it beside everything the app builds, and libjs's standalone
-// 64 MiB is outgrown by one whose entry graph compiles to 8 MB.
+// lives in it beside everything the app builds, and the two together pass
+// libjs's standalone 64 MiB on a large app; the record's `script heap`
+// line says what a page held.
 #define YONDER_SCRIPT_MEMORY_MB_DEFAULT 256
 #define YONDER_SCRIPT_MEMORY_MB_MIN 16
 #define YONDER_SCRIPT_MEMORY_MB_MAX 2048
