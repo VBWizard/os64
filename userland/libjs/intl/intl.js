@@ -306,8 +306,9 @@ function replaceAliases(t) {
             const key = t.language + '-' + t.variants[v];
             if (own(langAliases, key) !== undefined) { match = own(langAliases, key); matchedVariant = t.variants[v]; }
         }
-        if (match === null && t.region !== '' && own(langAliases, t.language + '-' + t.region) !== undefined)
-            match = own(langAliases, t.language + '-' + t.region), matchedVariant = '';
+        // The table writes a region in canonical case (sgn-US), the parse in lowercase.
+        if (match === null && t.region !== '' && own(langAliases, t.language + '-' + upper(t.region)) !== undefined)
+            match = own(langAliases, t.language + '-' + upper(t.region)), matchedVariant = '';
         if (match === null && own(langAliases, t.language) !== undefined) match = own(langAliases, t.language);
         if (match !== null) {
             const r = parseTag(swapChars(match, {__proto__: null, _: '-'}));
