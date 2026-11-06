@@ -4411,7 +4411,7 @@ static void motion_entries_cases(void)
             bool ok = n == kCases[i].count;
             if (ok && n == 1)
                 ok = (e[0].box != NULL) == kCases[i].box && e[0].drawn == kCases[i].drawn &&
-                     e[0].seen == kCases[i].seen && !e[0].in_place && e[0].name.len == 4 &&
+                     e[0].seen == kCases[i].seen && !e[0].in_place && e[0].counted && e[0].name.len == 4 &&
                      memcmp(e[0].name.text, "spin", 4) == 0 &&
                      (ticks ? e[0].ticks && e[0].tick_due == 100 && e[0].layout_due == FLOW_NEVER
                             : !e[0].ticks && e[0].layout_due == 100 && e[0].tick_due == FLOW_NEVER);
@@ -4423,6 +4423,20 @@ static void motion_entries_cases(void)
             expect(name, ok, detail);
             moving_close(&m);
         }
+    // In place and out of view, asked nothing; in view, asked.
+    for (int below = 0; below < 2; below++) {
+        char html[1024];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes fade{to{opacity:0}}"
+                 ".f{display:block;width:16px;height:16px;animation:fade 1s linear infinite}</style>%s"
+                 "<span class=f></span>", below ? "<div style='height:2000px'></div>" : "");
+        Moving m;
+        moving_open_for(&m, html, 100, false);
+        flow_motion_entry_t e;
+        int32_t n = flow_motion_entries(m.tree, kTickView, (flow_point_t){0, 0}, &e, 1);
+        expect(below ? "entries: in place below the view is not counted" : "entries: in place in view is counted",
+               n == 1 && e.in_place && e.seen == !below && e.counted == !below, NULL);
+        moving_close(&m);
+    }
     // More than `cap`: the count is all of them, `out` holds the first.
     Moving m;
     moving_open_for(&m, MOTION_STYLE "@keyframes spin{to{transform:rotate(360deg)}}"

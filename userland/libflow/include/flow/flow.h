@@ -1332,13 +1332,18 @@ uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flo
 // keeps a page moving (flow_motion_entries): its first box (NULL for none),
 // whether it or anything inside it has a box (`drawn`), whether `view`
 // shows it, whether its animations repaint only where it draws
-// (`in_place`) and tick (`ticks`), its first animation's name, and when it
-// is next due for a layout and for a tick, each by itself, in
-// flow_motion_due's and flow_motion_tick_due's terms (FLOW_NEVER for none).
+// (`in_place`) and tick (`ticks`), whether flow_motion_due asks its own
+// times at all (`counted`: not one in place that the view does not show,
+// unless it may own the canvas), its first animation's name, and when it
+// is next due for a layout and for a tick, each by itself and before that
+// question, in flow_motion_due's and flow_motion_tick_due's units and
+// rounding (FLOW_NEVER for none). What an element hands down to a box
+// drawn outside it that the view shows, which makes flow_motion_due ask an
+// element it otherwise passes by, is not said here.
 typedef struct {
     const os64_html_node_t *node;
     const flow_box_t *box;
-    bool drawn, seen, in_place, ticks;
+    bool drawn, seen, in_place, ticks, counted;
     flow_name_t name;
     uint64_t layout_due, tick_due;
 } flow_motion_entry_t;

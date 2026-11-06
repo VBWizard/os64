@@ -1577,9 +1577,9 @@ typedef struct {
     // `field_seen` is noted when the field is first seen (`seen`).
     FieldSelection field_seen, record_seen;
     bool seen;
-    // A dropdown's options as last synced, their nodes, labels and disabled
-    // states hashed (options_signature): a change closes its open list, whose rows are a
-    // copy of what they were.
+    // A dropdown's or a list's options as last synced, their nodes, labels
+    // and disabled states hashed (options_signature): a change marks it, and
+    // closes a dropdown's open list, whose rows are a copy of what they were.
     uint64_t options_sig;
 } FormWidget;
 
@@ -2755,11 +2755,13 @@ static struct {
     // one arrive as one (the window's doorbell is a mask) — and the
     // deadlines handed the ticker already past.
     uint64_t bells, past[PAST_COUNT];
-    // The biggest part marked, by area, in page coordinates, and what
-    // marked it — a canvas the page drew on or a form control, by name, or
-    // "the page" for any other part (mark_part; a part as big as the view
-    // is a whole view instead) — the canvases' and the controls' marks,
-    // and the biggest rectangle a paint published.
+    // The biggest part marked, by area, as much of it as the view holds,
+    // in page coordinates, and what marked it — a canvas the page drew on
+    // or a form control, by name, or "the page" for any other part
+    // (mark_part; a part as big as the view is a whole view instead) — a
+    // control shown or hidden marks the whole window, and is named so; the
+    // canvases' and the controls' marks; and the biggest rectangle a paint
+    // published, as much of it as the view holds.
     os64_gui_rect_t mark_most, paint_most;
     char mark_who[96];
     uint64_t canvas_marks, control_marks;
@@ -3098,13 +3100,14 @@ static flow_point_t scroll_now(void)
 // (flow_motion_entries): how many elements its animations run on, how many
 // of those draw nothing (no box in or under them), how many the view
 // shows, and how many are due within a second; then the first
-// MOTION_NAMED of those due, each by name. The named lines are written
-// anew each time.
+// MOTION_NAMED of those due, each by name. Only what flow_motion_due asks
+// of the element itself is counted due (`counted`). The lines are written
+// anew each time, and none for a page with no layout.
 #define MOTION_NAMED 8
 #define MOTION_ASKED 1024
 static void diag_motion(Page *p)
 {
-    yonder_diag_forget(p->diag, "animated ");
+    yonder_diag_forget(p->diag, "animated");
     if (p->tree == NULL)
         return;
     flow_motion_entry_t *e = os64_malloc(MOTION_ASKED * sizeof(*e));
@@ -3122,7 +3125,7 @@ static void diag_motion(Page *p)
         uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
         undrawn += !m->drawn;
         seen += m->seen;
-        if (next > soon)
+        if (!m->counted || next > soon)
             continue;
         due++;
         if (named == MOTION_NAMED)
@@ -6868,6 +6871,7 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
 // The main loop's work since the page was shown, or since its record was
 // last written on asking (`d`, view_key): how many paints and how much of
 // the view they painted, the ticks, schedules, layouts and script tasks,
+// the biggest part marked and painted and the canvas and control marks,
 // the ticker's bells and the deadlines handed it — every count, painted or
 // not (`t`) — and, when the span has a rate, how busy the loop was and
 // each stage in milliseconds a paint (a tick, a call, a task, a layout for
@@ -6924,11 +6928,11 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
            (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
     if (s_cost.mark_most.w > 0)
-        dt_put(t, "; the biggest part marked %dx%d at %d,%d by %s, the biggest painted %dx%d; %lu canvas marks, "
-               "%lu form control marks",
+        dt_put(t, "; the biggest part marked %dx%d at %d,%d by %s, the biggest painted %dx%d",
                (int)s_cost.mark_most.w, (int)s_cost.mark_most.h, (int)s_cost.mark_most.x,
-               (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h,
-               (unsigned long)s_cost.canvas_marks, (unsigned long)s_cost.control_marks);
+               (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
+    dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
+           (unsigned long)s_cost.control_marks);
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -7194,8 +7198,10 @@ static void mark_part(os64_gui_rect_t r)
         return;
     }
     s_parts_reach = os64_rect_union(s_parts_reach, part.bounds);
-    if ((uint64_t)r.w * (uint64_t)r.h > (uint64_t)s_cost.mark_most.w * (uint64_t)s_cost.mark_most.h) {
-        s_cost.mark_most = r;
+    os64_gui_rect_t in;
+    if (os64_rect_intersect(part.bounds, v, &in) &&
+        (uint64_t)in.w * (uint64_t)in.h > (uint64_t)s_cost.mark_most.w * (uint64_t)s_cost.mark_most.h) {
+        s_cost.mark_most = (os64_gui_rect_t){in.x - v.x + g.sx, in.y - v.y + g.sy, in.w, in.h};
         if (s_marking_canvas != NULL)
             element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "the canvas ", s_marking_canvas);
         else
@@ -8366,7 +8372,8 @@ static void forms_sync_from_model(bool text)
                 if (c->options[k].selected)
                     selected = k;
             // Marked only when its rows or its choice changed (a dropdown's
-            // setters mark it themselves): a sync runs whenever the page's
+            // setters mark it themselves, and a list's are called only
+            // then): a sync runs whenever the page's
             // state moved, which a script can make happen every frame, and
             // a page of controls each marked every frame is a page repainted.
             uint64_t sig = options_signature(c);
@@ -8377,10 +8384,14 @@ static void forms_sync_from_model(bool text)
                     os64_ui_dropdown_rows_changed(&g.ui, &fw->u.drop);
                 os64_ui_dropdown_set(&g.ui, &fw->u.drop, (size_t)c->noptions, selected);
             } else {
+                // listbox_set marks the list and scrolls it to its choice,
+                // so it is called only for a change: one a person scrolled
+                // away from its choice stays where they put it.
                 bool same = !rows && fw->u.list.count == (size_t)c->noptions && fw->u.list.selected == selected;
-                os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
-                if (!same)
+                if (!same) {
+                    os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
                     control_mark(fw);
+                }
             }
             break;
         }

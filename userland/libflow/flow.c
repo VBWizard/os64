@@ -2516,6 +2516,7 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
             e.in_place = m->in_place;
             e.ticks = m->ticks;
             e.seen = motion_seen(tree, n, view, scroll, m->text_reach);
+            e.counted = !m->in_place || may_own_canvas(tree, n) || e.seen;
             if (st->style.animations.nname > 0)
                 e.name = st->style.animations.name[0];
             e.layout_due = due_ms(element_due(tree, m, NULL, false), tree->now_ms);
