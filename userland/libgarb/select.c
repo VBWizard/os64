@@ -1196,8 +1196,8 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
     case P_IS:
     case P_WHERE: return match_list(sel, s->list, el, scope);
     case P_HAS: return has_matches(sel, s->list, el);
-    // Only a featureless host matches :host (compound_matches), and every
-    // element reaching here has features.
+    // Only a featureless host matches :host (featureless_matches), and
+    // every element reaching here has features.
     case P_HOST: return false;
     // The slot ::slotted() follows; its argument is matched against the
     // slotted element, by garb_selector_matches_slotted alone.

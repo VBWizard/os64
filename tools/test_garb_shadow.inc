@@ -259,10 +259,21 @@ static void shadow_updates(void)
     sh_expect(c, f.doc, "added", "z-index", "2", "the added element takes the tree's sheet");
     sh_same_as_fresh(c, &f, "after an addition inside the tree");
 
-    // A slot removed from the tree: its child is no longer slotted.
+    // A slot removed from the tree: its child is no longer slotted. A slot
+    // leaving asks for a fresh cascade (the tree it left may be gone by the
+    // time the log is read).
     os64_html_remove(f.doc, sl);
-    shadow_check(garb_cascade_update(c), "a slot removed updates incrementally");
-    sh_same_as_fresh(c, &f, "after the slot's removal");
+    shadow_check(!garb_cascade_update(c), "a slot leaving asks for a fresh cascade");
+    garb_cascade_free(c);
+    c = sh_cascade(&f);
+    sh_expect(c, f.doc, "lt", "opacity", "0.75", "with its slot gone the element is not slotted");
+    // A slot arriving assigns the element again, incrementally.
+    os64_html_node_t *again = os64_html_create_element(f.doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_set_attr(f.doc, again, "name", "other", 5);
+    os64_html_insert(f.doc, f.root, again, NULL);
+    shadow_check(garb_cascade_update(c), "a slot arriving updates incrementally");
+    sh_expect(c, f.doc, "lt", "opacity", "0.25", "a slot arriving takes its element");
+    sh_same_as_fresh(c, &f, "after a slot's arrival");
 
     // A second host attached after the build: an update or a fresh cascade,
     // either way the same winners.
@@ -296,12 +307,88 @@ static void shadow_first_root(void)
     os64_html_document_free(doc);
 }
 
+// The context step follows the trees' roots in shadow-including order, not
+// their depth: a slotted host's slot tree and its own shadow tree stand at
+// one depth, and the slot tree comes first.
+static void shadow_contexts(void)
+{
+    garb_env_t env = {.width = 800, .height = 600};
+    // A slotted host: ::slotted() from its parent host's tree, :host from its own.
+    os64_html_document_t *doc = update_doc("<!doctype html><body><div id=outer><span id=inner></span></div>");
+    os64_html_node_t *outer = sh_attach(doc, "outer", "<slot></slot>");
+    os64_html_node_t *inner = sh_attach(doc, "inner", "<p></p>");
+    garb_parsed_t sheets[2];
+    const char *slotted = "::slotted(*){z-index:1;order:1 !important}";
+    const char *host = ":host{z-index:2;order:2 !important}";
+    garb_parse_sheet_text(slotted, strlen(slotted), &sheets[0]);
+    garb_parse_sheet_text(host, strlen(host), &sheets[1]);
+    garb_sheet_in_t in[2] = {{.sheet = &sheets[0], .parent = -1}, {.sheet = &sheets[1], .parent = -1}};
+    int32_t zero = 0, one = 1;
+    garb_scope_in_t scopes[2] = {{outer, &zero, 1}, {inner, &one, 1}};
+    garb_cascade_t *c = outer && inner ? garb_cascade_scoped(in, 2, scopes, 2, doc, env, NULL) : NULL;
+    sh_expect(c, doc, "inner", "z-index", "1", "a slot's tree's normal rule beats the host's own tree's");
+    sh_expect(c, doc, "inner", "order", "2", "the host's own tree's important rule beats a slot's tree's");
+    garb_cascade_free(c);
+    garb_free(&sheets[0]);
+    garb_free(&sheets[1]);
+    os64_html_document_free(doc);
+
+    // A forwarding chain, one sheet applying in both trees on it: counted in
+    // each, so its important rule from the inner tree wins.
+    doc = update_doc("<!doctype html><body><div id=outer><b id=x></b></div>");
+    outer = sh_attach(doc, "outer", "<div id=mid><slot></slot></div>");
+    os64_html_node_t *mid = outer ? sh_attach(doc, "mid", "<slot></slot>") : NULL;
+    const char *both = "::slotted(*){z-index:1 !important;order:5}";
+    const char *first = "::slotted(*){z-index:2 !important;order:6}";
+    garb_parse_sheet_text(both, strlen(both), &sheets[0]);
+    garb_parse_sheet_text(first, strlen(first), &sheets[1]);
+    in[0] = (garb_sheet_in_t){.sheet = &sheets[0], .parent = -1};
+    in[1] = (garb_sheet_in_t){.sheet = &sheets[1], .parent = -1};
+    int32_t outer_list[2] = {0, 1};
+    scopes[0] = (garb_scope_in_t){outer, outer_list, 2};
+    scopes[1] = (garb_scope_in_t){mid, &zero, 1};
+    c = mid ? garb_cascade_scoped(in, 2, scopes, 2, doc, env, NULL) : NULL;
+    sh_expect(c, doc, "x", "z-index", "1", "a shared sheet's important rule counts in the inner tree too");
+    sh_expect(c, doc, "x", "order", "6", "along a chain the outer slot's tree's normal rules win");
+    garb_cascade_free(c);
+    garb_free(&sheets[0]);
+    garb_free(&sheets[1]);
+    os64_html_document_free(doc);
+}
+
+// One batch removes a slot from its wrapper and then the wrapper: by the
+// time the log is read the tree the slot left is past finding.
+static void shadow_batch_removal(void)
+{
+    ShadowFixture f;
+    if (!sh_open(&f)) { shadow_check(false, "fixture"); return; }
+    os64_html_node_t *w = os64_html_create_element(f.doc, OS64_HTML_NS_HTML, "div", NULL);
+    os64_html_insert(f.doc, f.root, w, NULL);
+    os64_html_node_t *sl = sh_find(f.doc, "sl");
+    os64_html_insert(f.doc, w, sl, NULL);
+    garb_cascade_t *c = sh_cascade(&f);
+    sh_expect(c, f.doc, "lt", "opacity", "0.25", "the wrapped slot takes the element");
+    os64_html_remove(f.doc, sl);
+    os64_html_remove(f.doc, w);
+    bool updated = garb_cascade_update(c);
+    shadow_check(!updated, "a slot that left a removed wrapper asks for a fresh cascade");
+    if (!updated) {
+        garb_cascade_free(c);
+        c = sh_cascade(&f);
+    }
+    sh_same_as_fresh(c, &f, "after a slot and its wrapper leave in one batch");
+    garb_cascade_free(c);
+    sh_close(&f);
+}
+
 static int cascade_shadow(void)
 {
     shadow_scoping();
     shadow_imports();
     shadow_updates();
     shadow_first_root();
+    shadow_contexts();
+    shadow_batch_removal();
     printf("libgarb shadow: %u checks, %u failed\n", shadow_checks, shadow_failures);
     return shadow_failures != 0;
 }

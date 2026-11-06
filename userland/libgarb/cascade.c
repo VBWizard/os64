@@ -56,12 +56,13 @@ typedef struct {
     int32_t ndecls;
     uint32_t order;
     int32_t sheet;              // which input sheet it came from
-    // The element and target this rule last matched for, and where in the
-    // match list — so one rule matched through two selectors is counted
-    // once, for an element and for its pseudo-element apart.
+    // The element and consultation (Consult: its target and context) this
+    // rule last matched for, and where in the match list — so one rule
+    // matched through two selectors is counted once, for an element and
+    // for its pseudo-element apart, and once in each tree that styles it.
     const os64_html_node_t *seen;
     uint64_t seen_update;
-    int32_t seen_target;
+    int32_t seen_pass;
     int32_t slot;
 } Rule;
 
@@ -161,10 +162,8 @@ typedef struct {
     OwnFrames *frames;
     int32_t nframes;
     // The tree it is in, as the cascade sees it (tree_place): the scope
-    // whose sheets apply there, -1 for none, and how many shadow roots
-    // stand above it, which is its declarations' context. `placed` once
-    // they are set.
-    int32_t scope, depth;
+    // whose sheets apply there, -1 for none. `placed` once it is set.
+    int32_t scope;
     bool placed, needs_substitution, dirty, dirty_suffix;
     uint64_t changed, removed_children;
 } Slot;
@@ -2099,24 +2098,24 @@ static const garb_val_t *animation_names(const garb_cascade_t *c, const os64_htm
 
 // ── Per element ─────────────────────────────────────────────────────────
 
-// A rule that matched, at its heaviest selector, and the depth of the tree
-// whose sheets it came through (Slot.depth): its context.
+// A rule that matched, at its heaviest selector, and the context it came
+// through (Consult.context).
 typedef struct {
     Rule *rule;
     uint32_t spec;
-    int32_t depth;
+    int32_t context;
 } Match;
 
 // One declaration's place in the cascade: importance, then context (CSS
-// Cascade 5 § 6.1: between trees, the outer tree's normal declaration and
-// the inner tree's important one win), then (inline above every rule)
-// specificity, then order.
+// Cascade 5 § 6.1: between trees, the normal declaration from the tree
+// earlier in shadow-including order wins, and the important one from the
+// later), then (inline above every rule) specificity, then order.
 typedef struct {
     const Decl *d;
     bool important, inline_;
     uint32_t spec, order;
     int32_t sheet;              // -1 for the style attribute
-    int32_t depth;
+    int32_t context;
 } Applied;
 
 // Declaration ordering is temporary. Reuse its storage within one build
@@ -2134,8 +2133,8 @@ static bool before(const Applied *a, const Applied *b)
 {
     if (a->important != b->important)
         return !a->important;
-    if (a->depth != b->depth)
-        return a->important ? a->depth < b->depth : a->depth > b->depth;
+    if (a->context != b->context)
+        return a->important ? a->context < b->context : a->context > b->context;
     if (a->inline_ != b->inline_)
         return !a->inline_;
     if (a->spec != b->spec)
@@ -2144,11 +2143,14 @@ static bool before(const Applied *a, const Applied *b)
 }
 
 // One consultation of an index for the element being styled: which target,
-// under which scope's sheets, at which context depth, and the element the
-// rules' subject compound is matched against — the styled element, or for
-// `::slotted()` the slot it is assigned to.
+// under which scope's sheets, in which context, and the element the rules'
+// subject compound is matched against — the styled element, or for
+// `::slotted()` the slot it is assigned to. The context is the tree's place
+// in shadow-including order among the trees that style the element
+// (cascade_element): its own tree 0, each slot's tree on its forwarding
+// chain 1, 2, …, outward to inward, and a host's own shadow tree last.
 typedef struct {
-    int32_t target, scope, depth;
+    int32_t target, scope, context;
     const os64_html_node_t *styled, *keyed;
 } Consult;
 
@@ -2156,7 +2158,8 @@ static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rul
                      uint32_t spec, const Consult *q)
 {
     uint64_t update = c->updates + (c->updating ? 1 : 0);
-    if (r->seen == q->styled && r->seen_update == update && r->seen_target == q->target) {
+    int32_t pass = q->target + TARGETS * q->context;
+    if (r->seen == q->styled && r->seen_update == update && r->seen_pass == pass) {
         if (spec > (*m)[r->slot].spec)
             (*m)[r->slot].spec = spec;
         return;
@@ -2164,9 +2167,9 @@ static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rul
     if (!grow(c, (void **)m, *n, cap, sizeof(Match)))
         return;
     r->seen = q->styled; r->seen_update = update;
-    r->seen_target = q->target;
+    r->seen_pass = pass;
     r->slot = *n;
-    (*m)[(*n)++] = (Match){r, spec, q->depth};
+    (*m)[(*n)++] = (Match){r, spec, q->context};
 }
 
 static void try_bucket(garb_cascade_t *c, int32_t head, const Consult *q, Match **m,
@@ -2250,27 +2253,17 @@ static int32_t scope_of_root(const garb_cascade_t *c, const os64_html_node_t *ro
     return -1;
 }
 
-// Which tree element `x` is in, as Slot.scope and Slot.depth say it: its
-// parent's, when that is an element already placed, or else found by
-// climbing.
-static void tree_place(const garb_cascade_t *c, const os64_html_node_t *x, int32_t *scope,
-                       int32_t *depth)
+// The scope of the tree element `x` is in (Slot.scope): its parent's, when
+// that is an element already placed, or else found by climbing to its root.
+static int32_t tree_place(const garb_cascade_t *c, const os64_html_node_t *x)
 {
     const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
-    if (up != NULL && up->placed) {
-        *scope = up->scope;
-        *depth = up->depth;
-        return;
-    }
+    if (up != NULL && up->placed)
+        return up->scope;
     const os64_html_node_t *root = x;
     while (root->parent != NULL)
         root = root->parent;
-    *scope = scope_of_root(c, root);
-    int32_t d = 0;
-    for (const os64_html_node_t *r = root, *host; (host = os64_html_shadow_host(r)) != NULL; d++)
-        for (r = host; r->parent != NULL;)
-            r = r->parent;
-    *depth = d;
+    return scope_of_root(c, root);
 }
 
 // The `style` attribute's declarations, read into a Decl list.
@@ -2424,7 +2417,13 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
 // tree's `::slotted()` rules; or one of its pseudo-element's, from that
 // pseudo-element's rules alone, its custom properties inherited from `el`
 // and its own kept for its own reading. Its own comes first: it places
-// the element (Slot.scope, Slot.depth), which its pseudo-elements read.
+// the element (Slot.scope), which its pseudo-elements read.
+//
+// The contexts (Consult.context) follow the trees' roots in shadow-including
+// order: the element's own tree; then the tree of each slot it is assigned
+// to, outward to inward along the forwarding chain, each slot's host lying
+// inside the tree before it; and last a host's own shadow tree, whose root
+// follows the host and so everything above it.
 static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32_t target,
                             const CustomMap *inherited, Match **m, int32_t *mcap, AppliedScratch *scratch)
 {
@@ -2434,29 +2433,26 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
     bool own = target == TARGET_ELEMENT;
     if (own) {
         slot->customs = inherited;
-        tree_place(c, el, &slot->scope, &slot->depth);
+        slot->scope = tree_place(c, el);
         slot->placed = true;
     }
-    Consult q = {target, slot->scope, slot->depth, el, el};
+    Consult q = {target, slot->scope, 0, el, el};
     int32_t nm = matching(c, &q, m, 0, mcap);
     if (own && c->shadowed) {
-        if (el->shadow_root != NULL && targeted(c, TARGET_HOST)) {
-            Consult host = {TARGET_HOST, scope_of_root(c, el->shadow_root), slot->depth + 1, el, el};
-            nm = matching(c, &host, m, nm, mcap);
-        }
+        int32_t context = 0;
         if (targeted(c, TARGET_SLOTTED))
             for (const os64_html_node_t *s = os64_html_assigned_slot(c->doc, el); s != NULL;
                  s = os64_html_assigned_slot(c->doc, s)) {
-                Consult slotted = {TARGET_SLOTTED, -1, 0, el, s};
                 const Slot *placed = slot_for(c, s, false);
-                if (placed != NULL && placed->placed) {
-                    slotted.scope = placed->scope;
-                    slotted.depth = placed->depth;
-                } else {
-                    tree_place(c, s, &slotted.scope, &slotted.depth);
-                }
+                Consult slotted = {TARGET_SLOTTED,
+                                   placed != NULL && placed->placed ? placed->scope : tree_place(c, s),
+                                   ++context, el, s};
                 nm = matching(c, &slotted, m, nm, mcap);
             }
+        if (el->shadow_root != NULL && targeted(c, TARGET_HOST)) {
+            Consult host = {TARGET_HOST, scope_of_root(c, el->shadow_root), context + 1, el, el};
+            nm = matching(c, &host, m, nm, mcap);
+        }
     }
     Decl *inl = NULL;
     int32_t ninl = own ? inline_decls(c, el, &inl) : 0;
@@ -2480,15 +2476,15 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
     Applied *ap = scratch->items ? scratch->items : scratch->local;
     int32_t na = 0;
     for (int32_t j = 0; j < nattrs; ++j)
-        ap[na++] = (Applied){&attrs[j], false, false, 0, 0, -1, slot->depth};
+        ap[na++] = (Applied){&attrs[j], false, false, 0, 0, -1, 0};
     for (int32_t k = 0; k < nm; k++)
         for (int32_t j = 0; j < (*m)[k].rule->ndecls; j++) {
             const Decl *d = &(*m)[k].rule->decls[j];
             ap[na++] = (Applied){d, d->important, false, (*m)[k].spec, (*m)[k].rule->order,
-                                 (*m)[k].rule->sheet, (*m)[k].depth};
+                                 (*m)[k].rule->sheet, (*m)[k].context};
         }
     for (int32_t j = 0; j < ninl; j++)
-        ap[na++] = (Applied){&inl[j], inl[j].important, true, 0, (uint32_t)j, -1, slot->depth};
+        ap[na++] = (Applied){&inl[j], inl[j].important, true, 0, (uint32_t)j, -1, 0};
     // Insertion sort into ascending precedence; the last write wins.
     for (int32_t i = 1; i < na; i++) {
         Applied x = ap[i];
@@ -3001,6 +2997,12 @@ static bool body_hint(const os64_html_change_entry_t *e, const os64_html_documen
 static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 {
     const os64_html_node_t *parent = e->target;
+    // A slot leaving a tree moves its host's children, and by the time the
+    // log is read the tree it left may be past finding — its parent removed
+    // or moved since, in the same batch: a fresh cascade instead.
+    if (c->shadowed)
+        for (size_t i = 0; i < e->nremoved; ++i)
+            if (holds_slot(e->removed[i])) return false;
     if (!connected(c, parent)) return true;
     // :empty can change inherited winners and a following sibling's match.
     // The UA first-summary/first-legend rules also depend on child order.
@@ -3015,10 +3017,9 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
         // now inherits from a slot, or from nothing.
         if (parent->shadow_root && !e->nadded && !e->nremoved && !mark_subtree(c, parent))
             return false;
-        // A slot arriving in or leaving a shadow tree moves assignments.
+        // A slot arriving in a shadow tree moves assignments.
         bool slots = false;
         for (size_t i = 0; i < e->nadded && !slots; ++i) slots = holds_slot(e->added[i]);
-        for (size_t i = 0; i < e->nremoved && !slots; ++i) slots = holds_slot(e->removed[i]);
         if (slots && !mark_host_children(c, parent)) return false;
     }
     if (c->dependencies.position_back || c->dependencies.filtered)

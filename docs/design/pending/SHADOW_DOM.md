@@ -326,15 +326,14 @@ too, which is the cascade's share of the flat-tree change.
   rank in tree order). D4b's `adoptedStyleSheets` order is yonder's to
   express through the array.
 - *The walk.* Matching, slot sizing, the removed-subtree reaping and the
-  added-subtree slots all go in shadow-including order
-  (`os64_html_shadow_including_next`: a host, then its shadow tree, then
-  its children). That order puts every element after its flat parent
-  (its parent, its host, or the slot it is assigned to), which is what
-  lets an element take its custom properties from its flat parent in one
-  pass. Each element's slot keeps its tree's scope (-1 when no sheet
-  applies there) and its depth (0 in the document, one more per shadow
-  root on the way up), taken from its parent's slot, or looked up once
-  per shadow root.
+  added-subtree slots all go in shadow-including order (the cascade's
+  own `si_next`: a host, then its shadow tree, then its children, with a
+  way to skip a subtree that marking needs). That order puts every element
+  after its flat parent (its parent, its host, or the slot it is assigned
+  to), which is what lets an element take its custom properties from its
+  flat parent in one pass. Each element's slot keeps its tree's scope (-1
+  when no sheet applies there), taken from its parent's slot, or looked up
+  once per shadow root.
 - *The filter.* A bucket entry whose rule's sheet does not apply in the
   element's scope is passed over before its selector is tried: one bit
   per (scope, sheet).
@@ -355,12 +354,19 @@ too, which is the cascade's share of the flat-tree change.
   `:host()` weigh as a pseudo-class plus their argument, `::slotted()` as
   a pseudo-element plus its argument (CSS Scoping 1). `:host::before` and
   the like are not filed: a DEBTS row.
-- *The context step.* Every declaration carries its context's depth: an
-  element's own rules, `style` attribute and SVG presentation attributes
-  its tree's depth, a host's `:host` rules one more, a slotted element's
-  `::slotted()` rules the depth of each slot's tree. `before()` compares
-  depth after importance and before the `style` attribute: for normal
-  declarations the shallower wins, for important ones the deeper.
+- *The context step.* Every declaration carries its context: where its
+  tree's root falls, in shadow-including order, among the trees that
+  style the element. Those trees always fall in one order — the
+  element's own (its rules, `style` attribute and SVG presentation
+  attributes) first; then each slot's tree along its forwarding chain,
+  outward to inward, since each slot's host lies inside the tree before;
+  and a host's own shadow tree last, its root following the host — so
+  the context is a count along that list, not a nesting depth (two trees
+  can stand at one depth: a slotted host's slot tree and its own).
+  `before()` compares it after importance and before the `style`
+  attribute: for normal declarations the earlier wins, for important ones
+  the later. A rule from a sheet that applies in two of the trees counts
+  in each.
 - *Inheritance.* `custom_value`'s chain and `animation_names`' climb take
   the flat parent, falling back to the parent for an element in no flat
   tree (a host's unassigned child, a slot's fallback while it has
@@ -369,7 +375,9 @@ too, which is the cascade's share of the flat-tree change.
   subtree marks its shadow trees too, and marking a slot marks the nodes
   assigned to it; a host's attachment (a CHILDREN change with nothing
   added or removed) marks the host's whole subtree, and a slot's `name`
-  changing marks its host's children. A cascade over a tree with shadow
+  changing or a slot arriving marks its host's children. A slot leaving
+  asks for a fresh cascade: the same batch may have removed or moved the
+  tree it left before the log is read. A cascade over a tree with shadow
   roots recomputes its dirty elements in one shadow-including walk rather
   than from its minimal dirty roots, because a dirty slotted element's
   flat parent can lie outside its own dirty root.
@@ -651,7 +659,7 @@ Each entry is ruled one of three ways:
 | libpage core.c `walk_sheets`; yonder.c's sheet list | the page's sheets | CROSSES, each sheet carrying its scope (§ 6; D4a) |
 | libpage state.c `tree_next`, `os64_page_node_checked`, `os64_page_node_set_checked`, `p_radio_group_missing`, `select_assign`, `option_index`, `os64_page_node_selected_index`, `os64_page_node_value`, `p_state_set_value`, `attr_owner`, `attr_select_baseline`, `attr_selection`, `os64_page_node_set_attr`, `tree_plan_*`, `tree_radio_same`, `textarea_value_equal`, `tree_change`, `os64_page_node_clone` | control state: radio peers, selection, normalization after a tree change | STOPS, because each is per tree; a host inserted with a shadow tree brings controls whose groups are already their root's |
 | libpage submit.c `text_blank`, `option_value_empty`, `contained_direction`; value.c `p_child_text_into`; core.c `gather` (under `p_subtree_text_into`), `p_subtree_text_into`, `first_legend`, `read_options` | an element's own text and children | STOPS: its own descendants |
-| libgarb cascade.c `garb_cascade_limited`'s match walk, `subtree_next` in `mark_subtree` and `mark_children`, `garb_cascade_dump` | which elements the cascade matches and re-matches | CROSSES: every connected shadow tree is matched, by its scopes (§ 6; D4a) |
+| libgarb cascade.c's match walk (`build`), `mark_subtree`, `garb_cascade_dump` | which elements the cascade matches and re-matches | CROSSES: every connected shadow tree is matched, by its scopes (§ 6; D4a, through `si_next`: A.7) |
 | libgarb select.c `next_el`, `position`, `pseudo_matches`, `subtree_has`, `has_matches` | `:nth-*`, `:empty`, `:has()` | STOPS, because structural selectors are per tree |
 | libgarb cascade.c `garb_parse_style_element` | a `style` element's text | STOPS: its own children |
 | libflow boxes.c `after_of`, `kids`, `sib`, `count_items`, `element_box`, `table_part`; style.c `blank`, `next_element`, `f_style_build_reusing`; flow.c `motion_seen`, `motion_drawn`, `draws_none`; reuse_snapshot.inc `reuse_next`, `reuse_snapshot_new`; dump.c `f_style_dump` | box building, style order, list counting, table parts, the reuse snapshot; pictures are fetched for the boxes this builds | FLAT (D3) |
@@ -769,7 +777,8 @@ reads one row more finely than A.3 wrote it.
 |---|---|---|
 | libgarb cascade.c `si_next` (the build's match walk and slot sizing, `garb_cascade_dump`, the shadowed update's recompute, the removed- and added-subtree loops, `mark_subtree`) | which elements the cascade matches, and re-matches | CROSSES, in shadow-including order, so an element follows the element it inherits from |
 | libgarb cascade.c `inherit_from` (the customs chain through `cascade_whole`, `animation_names`) | inheritance of a cascaded value | FLAT, the parent where the element is in no flat tree |
-| libgarb cascade.c `tree_place` | which tree an element is in (its scope) and how deep | STOPS at the element's own root for the scope, CROSSES host by host for the depth |
+| libgarb cascade.c `tree_place` | which tree an element is in (its scope) | STOPS at the element's own root |
+| libgarb cascade.c `cascade_element`'s slot chain (`os64_html_assigned_slot` repeated) | the trees whose `::slotted()` rules style an element, and their order (the context step) | FLAT: each slot it is assigned to, outward to inward along the forwarding chain |
 | libgarb cascade.c `connected` | is a changed node in what the cascade matched | CROSSES (`os64_html_shadow_including_root`) |
 | libgarb cascade.c `holds_slot`, `mark_host_children` | did a change move assignments in this tree; the host whose children it may have moved | STOPS: a slot assigns its own host's children, so a nested tree's slots are not this tree's |
 | libgarb select.c `match_from` | what a combinator climbs to | STOPS, but for the shadow root's host, featureless, past which nothing climbs |
