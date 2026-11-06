@@ -88,7 +88,8 @@ static char *modern_chain_shape(DomFixture *f)
         "|^(setPointerCapture|releasePointerCapture|hasPointerCapture)$"
         "|^(scrollWidth|scrollHeight|scroll|scrollTo|scrollBy)$"
         "|^onerror$|^getRootNode$|^normalize$|^isSameNode$|^isEqualNode$|^compareDocumentPosition$"
-        "|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
+        "|^wholeText$|^splitText$|^(length|substringData|appendData|insertData|deleteData|replaceData)$"
+        "|^selectionStart$|^selectionEnd$|^selectionDirection$"
         "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
         "|formNoValidate|formTarget|height|indeterminate|max|maxLength|min|minLength|multiple|pattern|placeholder"
@@ -207,9 +208,37 @@ static void dom_modern_cases(void)
         "bad=false;try{lone.splitText(3)}catch(e){bad=e.name==='IndexSizeError'}assert(bad,'past the end');"
         "var wide=new Text('a\\u{1F600}bc');assert(wide.splitText(4).data==='c'&&wide.data==='a\\u{1F600}b','a pair is two code units');"
         "var acute=new Text('\\u00e9xb');assert(acute.splitText(2).data==='b'&&acute.data==='\\u00e9x','two bytes are one code unit');"
+        "var half=new Text('a\\u{1F600}b');assert(half.splitText(2).data==='\\u{1F600}b'&&half.data==='a',"
+        "'an offset inside a pair snaps down to its start');"
         "bad=false;try{Text.prototype.splitText.call(document.createComment('c'),0)}catch(e){bad=e instanceof TypeError}"
         "assert(bad,'a Text member on a comment');",
         "modern-on-node-row");
+    /* CharacterData's members (RANGE.md § 4): UTF-16 offsets and counts, a
+     * count past the end reaching it, an offset past it IndexSizeError, an
+     * offset inside a pair snapped down, and a characterData record each. */
+    dom_script(&f, MODERN_ASSERT
+        "function index(f){try{f()}catch(e){return e.name==='IndexSizeError'}return false}"
+        "var t=new Text('a\\u{1F600}bc');assert(t.length===5,'a pair is two units');"
+        "assert(t.substringData(1,2)==='\\u{1F600}'&&t.substringData(3,99)==='bc'&&t.substringData(5,1)==='');"
+        "assert(index(()=>t.substringData(6,0)),'substringData past the end');"
+        "t.appendData('d');assert(t.data==='a\\u{1F600}bcd');"
+        "t.insertData(0,'<');assert(t.data==='<a\\u{1F600}bcd');"
+        "t.deleteData(1,1);assert(t.data==='<\\u{1F600}bcd');"
+        "t.replaceData(3,99,'!');assert(t.data==='<\\u{1F600}!','a count past the end reaches it');"
+        "t.insertData(2,'x');assert(t.data==='<x\\u{1F600}!','an offset inside a pair snaps down');"
+        "assert(index(()=>t.insertData(99,'z'))&&index(()=>t.deleteData(99,0)),'offsets past the end');"
+        "var c=document.createComment('ab');c.replaceData(1,1,'Z');assert(c.data==='aZ'&&c.length===2,'a comment');"
+        "var bad=false;try{Text.prototype.appendData.call(document.body,'x')}catch(e){bad=e instanceof TypeError}"
+        "assert(bad,'not character data');"
+        "var p=document.createElement('p');p.appendChild(new Text('one'));document.body.appendChild(p);"
+        "globalThis.records=[];new MutationObserver(function(r){records.push.apply(records,r)})"
+        ".observe(p,{characterData:true,characterDataOldValue:true,subtree:true});"
+        "p.firstChild.appendData('!');p.firstChild.deleteData(0,1);",
+        "modern-on-character-data");
+    dom_script(&f, MODERN_ASSERT
+        "assert(records.length===2&&records[0].type==='characterData'&&records[0].oldValue==='one'"
+        "&&records[1].oldValue==='one!','a characterData record each');",
+        "modern-on-character-data-records");
     /* Node's comparisons (compare.c) and normalize, each with an Attr on
      * either side. */
     dom_script(&f, MODERN_ASSERT

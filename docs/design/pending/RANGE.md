@@ -167,9 +167,11 @@ and is the standard's "replace data(0, length, data)", so it carries its
 range steps too (positive offsets collapse to 0). Three verbs join it:
 - `os64_html_replace_data(doc, node, offset16, count16, utf8, len)`: the
   spec's replace data, offsets in UTF-16 units, the string converted at
-  the edges with the UTF-16/UTF-8 helpers libdom already has
-  (`d_utf16_length`, `byte_of_unit`), which move to libhtml where both
-  sides can use them.
+  the edges with libhtml's UTF-16/UTF-8 helpers (`os64_html_utf16_length`,
+  `os64_html_utf16_byte`), which libdom's CharacterData members use too.
+  A form control's value is not tree text: its `byte_of_unit`
+  (selection.c) rounds an offset inside a pair up, past the character,
+  and stays as it is.
 - `os64_html_split_text(doc, node, offset16, *out)` and
   `os64_html_normalize(doc, node)`, which do what libdom's `splitText` and
   `normalize` do today (mixin.c) but in the standard's order — today's
@@ -257,7 +259,7 @@ half exists (the geometry provider). The text half needs a map.
 
 **Three coordinate systems** meet at a text boundary:
 1. the boundary's offset, in UTF-16 units into the node's data;
-2. the node's data as stored, in UTF-8 bytes — `byte_of_unit` is that hop;
+2. the node's data as stored, in UTF-8 bytes — `os64_html_utf16_byte` is that hop;
 3. the PROCESSED text libflow laid out, after white-space collapse
    (`f_collapse_white`); a TEXT box's `begin` is already an offset into it
    (flow.h: what a selection maps a pixel back through).

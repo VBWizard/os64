@@ -59,6 +59,16 @@ size_t h_utf16_byte(const char *s, size_t n, uint32_t unit)
     return n;
 }
 
+uint32_t os64_html_utf16_length(const char *utf8, size_t len)
+{
+    return h_utf16_length(utf8, len);
+}
+
+size_t os64_html_utf16_byte(const char *utf8, size_t len, uint32_t unit)
+{
+    return h_utf16_byte(utf8, len, unit);
+}
+
 /* `unit` snapped down to a code point's start in `s`. */
 static uint32_t snap(const char *s, size_t n, uint32_t unit)
 {

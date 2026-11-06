@@ -680,6 +680,10 @@ const char *os64_html_status_name(int64_t s)
         return "OS64_HTML_BAD_ARGUMENT";
     case OS64_HTML_NOT_SUPPORTED:
         return "OS64_HTML_NOT_SUPPORTED";
+    case OS64_HTML_INVALID_NODE_TYPE:
+        return "OS64_HTML_INVALID_NODE_TYPE";
+    case OS64_HTML_INDEX_SIZE:
+        return "OS64_HTML_INDEX_SIZE";
     default:
         return "OS64_HTML_UNKNOWN_STATUS";
     }

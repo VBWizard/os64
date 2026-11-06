@@ -2120,6 +2120,17 @@ static void tree_plan_textarea(const PReserve *reserve, const os64_html_node_t *
     }
 }
 
+/* A text edit of `node`: its whole data (set_text), or `count` UTF-16 units
+ * at `offset` (replace_data). */
+typedef struct {
+    bool whole;
+    uint32_t offset, count;
+    const char *bytes;
+    size_t len;
+} PTextEdit;
+
+static int64_t text_edit(os64_page_state_t *state, os64_html_node_t *node, const PTextEdit *e);
+
 int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node,
                                 const char *bytes, size_t len)
 {
@@ -2128,6 +2139,36 @@ int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node
     if ((node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT) &&
         (bytes != NULL || len == 0) && same_bytes(node->text, node->text_len, bytes, len))
         return os64_html_set_text(state->doc, node, bytes, len);
+    PTextEdit e = {.whole = true, .bytes = bytes, .len = len};
+    return text_edit(state, node, &e);
+}
+
+int64_t os64_page_node_replace_data(os64_page_state_t *state, os64_html_node_t *node, uint32_t offset,
+                                    uint32_t count, const char *bytes, size_t len)
+{
+    if (state == NULL || !os64_html_owns_node(state->doc, node))
+        return OS64_HTML_BAD_ARGUMENT;
+    PTextEdit e = {.offset = offset, .count = count, .bytes = bytes, .len = len};
+    return text_edit(state, node, &e);
+}
+
+int64_t os64_page_node_split_text(os64_page_state_t *state, os64_html_node_t *node, uint32_t offset,
+                                  os64_html_node_t **out)
+{
+    if (state == NULL || !os64_html_owns_node(state->doc, node))
+        return OS64_HTML_BAD_ARGUMENT;
+    return os64_html_split_text(state->doc, node, offset, out);
+}
+
+int64_t os64_page_node_normalize(os64_page_state_t *state, os64_html_node_t *node)
+{
+    if (state == NULL || !os64_html_owns_node(state->doc, node))
+        return OS64_HTML_BAD_ARGUMENT;
+    return os64_html_normalize(state->doc, node);
+}
+
+static int64_t text_edit(os64_page_state_t *state, os64_html_node_t *node, const PTextEdit *e)
+{
     PReserve reserve = {.state = state};
     PAttrStage *stages = NULL;
     if (node->parent != NULL) {
@@ -2140,7 +2181,8 @@ int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node
     }
     tree_plan_textarea(&reserve, node->parent);
     uint64_t version = os64_html_version(state->doc);
-    int64_t status = os64_html_set_text(state->doc, node, bytes, len);
+    int64_t status = e->whole ? os64_html_set_text(state->doc, node, e->bytes, e->len)
+                              : os64_html_replace_data(state->doc, node, e->offset, e->count, e->bytes, e->len);
     if (status == OS64_HTML_OK && version != os64_html_version(state->doc)) {
         p_reserve_commit(&reserve);
         tree_plan_publish(state, stages);

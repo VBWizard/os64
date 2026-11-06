@@ -169,10 +169,7 @@ static size_t byte_of_unit(const char *text, size_t len, uint32_t units)
 /* `len` bytes of UTF-8 in UTF-16 code units. */
 uint32_t d_utf16_length(const char *text, size_t len)
 {
-    uint32_t units = 0;
-    for (size_t i = 0; i < len; i++)
-        if (((unsigned char)text[i] & 0xC0) != 0x80) units += (unsigned char)text[i] >= 0xF0 ? 2 : 1;
-    return units;
+    return os64_html_utf16_length(text, len);
 }
 
 enum { M_SELECT, M_START, M_END, M_PRESERVE };

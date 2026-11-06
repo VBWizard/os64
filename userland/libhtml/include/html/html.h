@@ -607,6 +607,12 @@ int64_t os64_html_range_set(os64_html_range_t *range, int which, os64_html_node_
 void os64_html_range_get(const os64_html_range_t *range, int which, const os64_html_node_t **node,
                          uint32_t *offset);
 uint32_t os64_html_node_length(const os64_html_node_t *node);
+/* UTF-16 units over UTF-8 text, as the data verbs count them: a string's
+ * length in units, and the byte where unit `unit` starts — snapped down to
+ * its code point's start, so a surrogate pair is never split; `len` for a
+ * unit at or past the end. */
+uint32_t os64_html_utf16_length(const char *utf8, size_t len);
+size_t os64_html_utf16_byte(const char *utf8, size_t len, uint32_t unit);
 int64_t os64_html_replace_data(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
                                uint32_t count, const char *utf8, size_t len);
 int64_t os64_html_split_text(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
