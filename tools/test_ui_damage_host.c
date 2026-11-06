@@ -285,6 +285,25 @@ static void panel_cut(void)
     CHECK(litter(list, 1) == 0);
 }
 
+/* A state set to what it is marks nothing: an app that sets every
+ * widget's state on each pass repaints only what changed. */
+static void enabled_unchanged(void)
+{
+    current = "enabled set to what it is";
+    widget(&kids[0], &kWhole, (os64_gui_rect_t){10, 10, 10, 10});
+    window(1);
+    os64_ui_set_enabled(&ui, &kids[0], true);
+    CHECK(!ui.any_dirty && os64_ui_widget_enabled(&kids[0]));
+    os64_ui_set_enabled(&ui, &kids[0], false);
+    CHECK(ui.any_dirty && ui.damage_count == 1 && same(ui.damage[0], kids[0].bounds));
+    os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+    (void)os64_ui_render_list(&ui, list);
+    os64_ui_set_enabled(&ui, &kids[0], false);
+    CHECK(!ui.any_dirty && !os64_ui_widget_enabled(&kids[0]));
+    os64_ui_set_enabled(&ui, &kids[0], true);
+    CHECK(ui.any_dirty && os64_ui_widget_enabled(&kids[0]));
+}
+
 static void hand_clear(void)
 {
     current = "any_dirty cleared by hand";
@@ -470,6 +489,7 @@ int main(void)
     per_rectangle();
     panel_cut();
     hand_clear();
+    enabled_unchanged();
     box_and_covers();
     printf("test_ui_damage_host: %lu checks, %d failures\n", checks, failures);
     return failures != 0;
