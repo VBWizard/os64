@@ -63,7 +63,8 @@ static const DModernRow kModern[] = {
      d_window_objects_install},
     {(const char *const[]){"localStorage", "sessionStorage", "Storage", NULL}, d_storage_install},
     {(const char *const[]){"performance", "Performance", "PerformanceEntry", "PerformanceMark",
-                           "PerformanceMeasure", "PerformanceTiming", "PerformanceNavigation", NULL},
+                           "PerformanceMeasure", "PerformanceResourceTiming", "PerformanceNavigationTiming",
+                           "PerformanceTiming", "PerformanceNavigation", NULL},
      d_performance_install},
     /* After the performance row, whose entries it is told of. */
     {(const char *const[]){"PerformanceObserver", "PerformanceObserverEntryList", NULL},

@@ -1035,21 +1035,19 @@ static DValue *prototype_new(os64_dom_t *dom, JSContext *ctx, JSValueConst paren
     return d_retain(dom, ctx, prototype);
 }
 
-/* An interface object for `prototype`, named on window when `exposed`.
- * Answers the object, borrowed from the prototype's `constructor`, or
- * JS_EXCEPTION. */
+/* An interface object for `prototype`, named on window. Answers the
+ * object, borrowed from the prototype's `constructor`, or JS_EXCEPTION. */
 static JSValue interface_of(JSContext *ctx, JSValueConst global, const char *name, int length,
-                            JSCFunction *constructor, JSValueConst prototype, JSValueConst parent, bool exposed)
+                            JSCFunction *constructor, JSValueConst prototype, JSValueConst parent)
 {
     JSValue f = d_interface_new(ctx, name, length, constructor, prototype, parent);
     if (JS_IsException(f)) return f;
     JSValue borrowed = f;
     JSValue held = JS_DupValue(ctx, f);
-    if (exposed && JS_DefinePropertyValueStr(ctx, global, name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
+    if (JS_DefinePropertyValueStr(ctx, global, name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
         JS_FreeValue(ctx, held);
         return JS_EXCEPTION;
     }
-    if (!exposed) JS_FreeValue(ctx, f);
     /* The prototype's `constructor` holds it from here. */
     JS_FreeValue(ctx, held);
     return borrowed;
@@ -1163,25 +1161,27 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         return -1;
     static const char *const kNavigationConstants[] = {"TYPE_NAVIGATE", "TYPE_RELOAD", "TYPE_BACK_FORWARD"};
 
-    /* The interface objects; PerformanceResourceTiming and
-     * PerformanceNavigationTiming name the navigation entry's chain but are
-     * not on window, since this browser records no resource. */
-    JSValue entry_interface = interface_of(ctx, global, "PerformanceEntry", 0, NULL, entry, JS_UNDEFINED, true);
+    /* The interface objects. PerformanceResourceTiming and
+     * PerformanceNavigationTiming are the navigation entry's chain, on
+     * window as in other browsers (a page asks the entry `instanceof
+     * PerformanceNavigationTiming`); that no resource entry is recorded is
+     * supportedEntryTypes' to say. */
+    JSValue entry_interface = interface_of(ctx, global, "PerformanceEntry", 0, NULL, entry, JS_UNDEFINED);
     if (JS_IsException(entry_interface)) return -1;
     JSValue resource_interface = interface_of(ctx, global, "PerformanceResourceTiming", 0, NULL, resource,
-                                              entry_interface, false);
+                                              entry_interface);
     if (JS_IsException(resource_interface) ||
         JS_IsException(interface_of(ctx, global, "PerformanceMark", 1, mark_constructor,
-                                    dom->entry_prototypes[P_MARK]->value, entry_interface, true)) ||
+                                    dom->entry_prototypes[P_MARK]->value, entry_interface)) ||
         JS_IsException(interface_of(ctx, global, "PerformanceMeasure", 0, NULL,
-                                    dom->entry_prototypes[P_MEASURE]->value, entry_interface, true)) ||
+                                    dom->entry_prototypes[P_MEASURE]->value, entry_interface)) ||
         JS_IsException(interface_of(ctx, global, "PerformanceNavigationTiming", 0, NULL, nav,
-                                    resource_interface, false)) ||
-        JS_IsException(interface_of(ctx, global, "Performance", 0, NULL, on, JS_UNDEFINED, true)) ||
-        JS_IsException(interface_of(ctx, global, "PerformanceTiming", 0, NULL, timing->value, JS_UNDEFINED, true)))
+                                    resource_interface)) ||
+        JS_IsException(interface_of(ctx, global, "Performance", 0, NULL, on, JS_UNDEFINED)) ||
+        JS_IsException(interface_of(ctx, global, "PerformanceTiming", 0, NULL, timing->value, JS_UNDEFINED)))
         return -1;
     JSValue navigation_interface = interface_of(ctx, global, "PerformanceNavigation", 0, NULL, navigation->value,
-                                                JS_UNDEFINED, true);
+                                                JS_UNDEFINED);
     if (JS_IsException(navigation_interface)) return -1;
     for (int i = 0; i < 3; i++)
         if (JS_DefinePropertyValueStr(ctx, navigation_interface, kNavigationConstants[i], JS_NewInt32(ctx, i),
@@ -1501,12 +1501,12 @@ int d_performance_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueCons
     if (supported_install(dom, ctx) < 0) return -1;
     dom->navigation_queued = dom->readiness == OS64_DOM_COMPLETE;
     JSValue observer_interface = interface_of(ctx, global, "PerformanceObserver", 1, observer_constructor,
-                                              observer->value, JS_UNDEFINED, true);
+                                              observer->value, JS_UNDEFINED);
     if (JS_IsException(observer_interface) ||
         d_accessor(dom, ctx, observer_interface, "supportedEntryTypes", observer_member, O_SUPPORTED, false) < 0)
         return -1;
     return JS_IsException(interface_of(ctx, global, "PerformanceObserverEntryList", 0, NULL, list->value,
-                                       JS_UNDEFINED, true)) ? -1 : 0;
+                                       JS_UNDEFINED)) ? -1 : 0;
 }
 
 /* Before the engine goes: the registered observers, which the list holds. */
