@@ -1,10 +1,11 @@
 # SHADOW_DOM.md — shadow trees, slots and scoped style (GITHUB_WALLS Slice D)
 
-*Opus, 2026-11-05. For Fable's review and Chris's rulings (§ 12).
-GITHUB_WALLS.md § 4 asked two things of this doc: answer the cut question
-with corpus numbers before anyone writes `attachShadow`, and keep
-ElementInternals out of Shadow DOM's way. § 1 and § 2 answer the first,
-§ 9 the second.*
+*Opus, 2026-11-05. Reviewed by Fable the same day (SHADOW_DOM_REVIEW.md,
+untracked: build toward it, ten findings, all folded in below); Chris
+ruled § 12's three questions with Fable's leans. GITHUB_WALLS.md § 4
+asked two things of this doc: answer the cut question with corpus numbers
+before anyone writes `attachShadow`, and keep ElementInternals out of
+Shadow DOM's way. § 1 and § 2 answer the first, § 9 the second.*
 
 ## 1. What pages ask for
 
@@ -49,6 +50,19 @@ construct. Most of the 53 hosts survive today because their scripts test
 for the API first. That is a reason the work is safe to land, not a
 reason it is unneeded: a test that fails takes the page's fallback, and
 the fallback is what the person sees.
+
+**The census is a floor.** The pulls it read kept classic scripts only;
+module chunks have been kept since 2026-11-04 (#466), so a site whose
+components ship as modules counts for nothing above. The first record
+with its chunks kept (the P5's, 2026-11-05) is a social news site's
+community page built entirely of Lit elements. It dies at Lit's
+`createRenderRoot` calling `attachShadow`, so its feed element never
+defines and never asks for more posts. Its four chunks carry about 300
+`<slot`, 440 `:host`, 57 `::part`, 46 `slotchange` and 57
+`assignedElements`/`assignedNodes`; its server markup puts `slot=` on
+every part of every post, and the "more posts" loader sits in a slot.
+§ 10's counts are re-run after the next pull, before anything there is
+booked as waiting.
 
 ## 2. The cut question: a minimal ShadowRoot is a trap
 
@@ -112,19 +126,38 @@ the same arrangement with three differences:
   libdom, libpage's state, libhtml's tree and yonder's geometry. Each one
   either moves to the shadow-including root or says why its question
   stops at the tree's own root (a form owner, a label, an ID lookup all
-  stop at the tree's root, per the standard). The list is the first
-  commit of D2 and the reviewer's checklist for it.
+  stop at the tree's root, per the standard).
+- **And every descent that means "everything under here" decides too.**
+  The climbs are half of the shadow-including tree; the other half is
+  every walk DOWN, and a shadow root is on no child list, so today's
+  descents never enter one. In libdom they run on `d_walk_next`: an
+  insertion's walk that queues `connectedCallback` and tries upgrades
+  (custom.c), `customElements.define`'s walk of the document (a lazily
+  defined element whose instances already sit inside other components'
+  shadow trees must upgrade), `d_custom_cloned`, and the removal walk that
+  queues `disconnectedCallback`. Outside libdom: whatever enumerates a
+  page — pictures and frames to fetch, scripts to run, the sheet list
+  (§ 6), form controls, Tab order, find, selection. Some descents must
+  NOT cross: a mutation observer's `subtree`, `querySelector`,
+  `contains`, `getElementsBy*`, live collections. libhtml offers the
+  crossing descent once, in the standard's shadow-including tree order
+  (a host's shadow root before its children:
+  `os64_html_shadow_including_next`), so nobody writes it by hand.
+
+**D2's first commit is two lists, climbs and descents** (Appendix A),
+every entry ruled "crosses" or "stops, because …". It is the reviewer's
+checklist for D2 and the commit Fable reads first.
 
 Mutations inside a shadow tree are ordinary verbs on ordinary nodes, so
 they enter the change log, mutation observers and the bounded readers
 (cascade updates, layout reuse) exactly as light-tree mutations do, with
 a target whose shadow-including root is the document. A reader that
 decides "is this change in the document" by climbing to the document is
-on the list above.
+on the climbs list.
 
 Clone: `cloneNode` copies a shadow root only when it is `clonable` (DOM's
-"clone a node"), which is off unless asked for. Adopt and import move the host's
-root with it. Serialization: a host's `innerHTML` and `outerHTML` never
+"clone a node"), which is off unless asked for. Adopt moves the host's
+root with it; `importNode` is a clone and follows `clonable`. Serialization: a host's `innerHTML` and `outerHTML` never
 include its shadow tree; a ShadowRoot's own `innerHTML` reads and writes
 its children, through the fragment parser with the host as context.
 `getHTML({serializableShadowRoots})` waits for its own row.
@@ -151,8 +184,16 @@ HTML's UA sheet, so it makes no box of its own.
 
 **`slotchange`** fires at a slot whose assigned nodes changed, once per
 microtask checkpoint per slot, the way the standard's signal-slots list
-queues it. libdom keeps that list and fills it when an assignment
-recomputation finds a slot's list different.
+queues it. It cannot ride the lazy cache: a recomputation happens when
+somebody asks, and a page that changes a host's children and reads
+nothing before the checkpoint must still hear it. So the slot-affecting
+records § 5 lists mark their shadow root dirty AT THE MUTATION; the
+microtask checkpoint recomputes every dirty root before it notifies
+mutation observers, and signals each slot whose assigned list moved,
+a slot's first assignment included. A read of assignment between the
+mutation and the checkpoint recomputes too and keeps the before-list
+for the checkpoint's comparison, so a read neither fires nor swallows
+the event.
 
 ## 5. Rendering: box building and inheritance walk the flat tree
 
@@ -177,22 +218,56 @@ may be inside a shadow tree; § 8 says what a script outside sees.
 
 ## 6. Scoped style
 
-**Where a sheet applies.** Every sheet in the cascade's input gains a
-scope: the document, or one shadow root. yonder's sheet list (yonder.c's
-`Sheet`) is collected from the document's `style` and `link` elements in
-tree order; it becomes the shadow-including tree order, and a sheet found
-inside a shadow tree carries that root as its scope. A shadow root's
-`adoptedStyleSheets` follow its own sheets; `document.adoptedStyleSheets`
-follow the document's (CSSOM's "final CSS style sheets").
+**Where a sheet applies.** A sheet applies in one or more SCOPES: the
+document, or a shadow root. yonder's sheet list (yonder.c's `Sheet`) is
+collected from the document's `style` and `link` elements in tree order;
+it becomes the shadow-including tree order, and a sheet found inside a
+shadow tree applies in that root. A shadow root's `adoptedStyleSheets`
+follow its own sheets; `document.adoptedStyleSheets` follow the
+document's (CSSOM's "final CSS style sheets").
+
+**One read per sheet, however many scopes adopt it.** Lit shares one
+constructed sheet across every instance of a component (a `CSSResult`'s
+`styleSheet`), and the record in § 1 builds ONE sheet of its whole
+utility CSS and adopts it on the document and in every component root.
+The cascade copies what it reads of each input sheet into its read arena
+under a cap (cascade.h, `GARB_CASCADE_READ_MAX`), so one
+`garb_sheet_in_t` per (sheet, scope) would read that sheet once per root
+and come up short on exactly the pages this slice is for. So the shape
+is: `garb_sheet_in_t` stays one per distinct sheet, read once and filed
+once into the per-target index (`c->index[target]`, buckets keyed by the
+rightmost compound); the cascade's input gains a list of scopes, each a
+root node and the indices of the sheets it applies, in order; and a
+bucket's entries are filtered at match time by whether the entry's sheet
+applies in the element's tree, a bit per (scope, sheet) the cascade
+builds once. A sheet adopted by a hundred roots costs one read and a
+hundred bits.
+
+**UA rules and presentational hints apply in every tree.** The UA origin
+(`slot { display: contents }` among it) and an element's presentational
+hints are not author sheets with a scope; they match every element
+wherever it lives, as they do today, so they belong to no scope's list
+and the filter above never applies to them.
 
 **What a scoped rule matches** (CSS Scoping 1 § 3):
 - an element in the scope's own tree, matched within that tree: a
   combinator never crosses a shadow boundary, so `.a .b` in a component
   cannot reach out to the page's `.a`;
-- the scope's host, but only through `:host`, `:host(<compound>)` and
-  `:host-context(<compound>)`, the host being featureless otherwise;
+- the scope's host, but only through `:host` and `:host(<compound>)`, the
+  host being featureless otherwise (`:host-context()` is one engine's and
+  no host in § 1 uses it, so it is left out);
 - an element slotted into one of the scope's slots, but only through
   `::slotted(<compound>)`.
+
+Rules whose subject is `:host` and rules ending in `::slotted()` are
+filed in two more index targets beside the element's and the
+pseudo-elements', consulted when matching a host (for each root it hosts)
+and a slotted element (for its slot's tree).
+
+**Tree-scoped names are global in this cut.** `@keyframes` and
+`@font-face` names written in a shadow sheet should resolve in that tree
+first (CSS Scoping § 3.5); here they join the document's one namespace,
+the last definition winning as it does today. A DEBTS row with the slice.
 
 **Who wins** (CSS Cascade 5 § 6.1, context): between declarations from
 different trees, a normal declaration from the outer tree beats one from
@@ -211,9 +286,9 @@ reaches the text it wraps.
 `adoptedStyleSheets` is an observable array: assigning or editing it
 reorders the scope's sheets and requests a cascade.
 
-libgarb's part: a scope per sheet, the three pseudo-classes and the
-pseudo-element in the selector parser, matching from a host and from a
-slot, and the context step in the cascade's comparison. The cascade
+libgarb's part: the scopes list and its filter, `:host`, `:host()` and
+`::slotted()` in the selector parser and their two index targets, and the
+context step in the cascade's comparison. The cascade
 already walks the document to match; it walks every connected shadow tree
 too, which is the cascade's share of the flat-tree change.
 
@@ -239,8 +314,18 @@ HTMLSlotElement: `name`, `assignedNodes({flatten})`, `assignedElements`.
 CSSStyleSheet's constructor and the members above; Document's
 `adoptedStyleSheets`.
 
-Everything sits behind the Modern Web switch, as every surface since
-Slice 1 does.
+**One switch covers every name a page can test.** Lit decides once, at
+load: `window.ShadowRoot && ('adoptedStyleSheets' in Document.prototype)
+&& ('replace' in CSSStyleSheet.prototype)`, and the 96 `MISSING global
+ShadowRoot` records are guards that flip the day the global exists. So
+the names come and go together, behind one libdom switch, off until D4
+turns it on: `attachShadow`, `shadowRoot`, `slot`, `assignedSlot` (on
+Element and Text), `getRootNode`'s `composed` member, `ShadowRoot`,
+`HTMLSlotElement`, `CSSStyleSheet`'s constructor, both
+`adoptedStyleSheets`, and `Event.composed`. A `yonder.conf` developer key
+sets it before D4 does, so D3 can load real pages in QEMU, and the host
+suites set it for their own cases. All of it is also behind the Modern
+Web switch, as every surface since Slice 1 is.
 
 ## 8. Events
 
@@ -249,6 +334,12 @@ Slice 1 does.
 trees bring the parts of DOM's dispatch algorithm that were vacuous
 without them:
 
+- **A slotted node's parent in the path is its slot.** DOM's "get the
+  parent" sends a node assigned to a slot to that slot, so an event on a
+  light child passes through the slot and the shadow tree around it, then
+  the root, then the host. Components listen on their own shadow content
+  for clicks on what they wrap; without this a click on slotted content
+  is never heard inside the component. Its own host-suite case.
 - **The path crosses a shadow root to its host** only when the event is
   `composed`. `Event.composed` and the `composed` init member arrive with
   this slice; UA-dispatched UI events (pointer, mouse, keyboard, focus,
@@ -266,12 +357,39 @@ The pointer dispatch (pointer.c) and the click synthesis take their
 target from hit testing, which now returns flat-tree nodes, and retarget
 like any other dispatch.
 
-## 9. ElementInternals lands first and small (D1)
+## 9. ElementInternals (D1): measured, and what the measurement leaves
 
-GITHUB_WALLS § 4: GitHub's polyfill needs `attachInternals` to exist on
-HTMLElement's prototype; it wraps it and reads `internals.shadowRoot`.
-No kept script in the corpus calls `attachInternals` for anything else
-(0 hosts), and nobody touches `setFormValue` or `states`. So D1 is:
+Fable's finding 5: an `attachInternals` that appears flips feature tests
+as `attachShadow` does, and a page that leaves its hidden-input fallback
+for `setFormValue` loses the field from its submission, silently, while
+form association is unbuilt. Chris ruled: if carrying `setFormValue` into
+libpage's form data set is an S, D1 carries it and lands first; if more,
+D1 lands with D4.
+
+**Measured: M.** libpage models a control as one of four element kinds
+chosen by tag (`os64_page_element_t`: input, button, select, textarea).
+A form-associated custom element needs a fifth kind, which libpage, below
+libdom, can only learn from libdom's definitions; its submission value
+stored in libpage's state and turned into entries (`submit.c`'s entry
+list, a FormData value being several); its form owner, which libdom's
+`window.c` also decides by tag (`form_associated`); `form.elements`; and
+the disabled and reset callbacks. Four layers. So by the ruling D1 lands
+with D4.
+
+**What the measurement leaves, for Chris at D4.** Re-reading the corpus
+for every `attachInternals(` call: three sites, none GitHub's. GitHub's
+polyfill installs its wrapper only when the method exists (`r &&
+Object.defineProperties(...)`) or calls the saved one only when the page
+calls `attachInternals`, so GitHub needs `attachShadow` alone; Fable's
+reading agrees (`relative-time` calls `attachShadow`). The three sites
+are an ARIA observer behind `typeof ElementInternals`, a framework's own
+`attachInternals` method, and a lazy getter. So nothing in the corpus is
+waiting on a bare ElementInternals, and the one guarded caller would
+leave a working path for it. My lean for D4: leave ElementInternals out
+of the slice and build it with form association, as its own row says,
+rather than land it bare. If it does land with D4, it is what follows,
+and a `formAssociated` definition's `setFormValue` throws
+NotSupportedError naming form association, so the loss is loud.
 
 - `HTMLElement.prototype.attachInternals()`: the standard's checks (a
   custom element, or one being defined, whose definition does not
@@ -279,21 +397,27 @@ No kept script in the corpus calls `attachInternals` for anything else
   ElementInternals bound to the element;
 - `ElementInternals.prototype.shadowRoot`: the host's root when its
   `available to element internals` flag is set (an `attachShadow` made in
-  the constructor), else null, which before D2 is always null;
+  the constructor), else null;
 - `form`, `labels`, `willValidate` and the rest of the form members
   answer for a non-form-associated element (null, empty, false) and
   `setFormValue`/`setValidity` throw NotSupportedError for an element
   whose definition is not `formAssociated`, as the standard says, so a
   page feature-testing them learns the truth.
 
-Form association itself stays DEBTS' existing ElementInternals row (M).
-D1 needs nothing from D2 and lands on its own, as § 4 asked.
+Form association itself stays DEBTS' existing ElementInternals row (M,
+measured above).
 
 ## 10. What waits, and where it is booked
+
+The host counts are § 1's floor (classic scripts only); each is re-run
+after the next corpus pull, which keeps module chunks, before its row is
+booked. The record in § 1 alone carries about 57 `::part`.
 
 | Waits | Hosts | Where |
 |---|---|---|
 | `::part` and `exportparts` | 7 | a DEBTS row with this slice; a selector and a cascade step on top of § 6 |
+| Tree-scoped `@keyframes` and `@font-face` names | — | a DEBTS row with this slice (§ 6) |
+| `:host-context()` | 0 | not booked: one engine's |
 | `delegatesFocus` | 3 | DEBTS; needs the focus navigation yonder has (Tab order) to learn shadow trees |
 | Declarative shadow roots (`<template shadowrootmode>`) | 1 | DEBTS' template row (line "A template has none of declarative shadow DOM's members"); a libhtml parser step |
 | Manual slot assignment | 0 | DEBTS |
@@ -316,37 +440,44 @@ D1 needs nothing from D2 and lands on its own, as § 4 asked.
   failures should be gone, and any new failure on those 53 hosts is a
   finding.
 - **On the machine.** GitHub's pull-request and repository pages in
-  QEMU, then on the P5: `relative-time` writes "3 hours ago"; and the
-  site whose header and footer were missing draws them.
+  QEMU, then on the P5: `relative-time` writes "3 hours ago"; the site
+  whose header and footer were missing draws them; and § 1's community
+  page draws its feed and loads more posts, which exercises slots,
+  `slotchange` and the shared sheet together, as `relative-time` does
+  not.
 
 ## 12. Slices, and what Chris rules
 
-Four PRs, stacked, merged in order:
+Four PRs, stacked, merged in order, the switch (§ 7) off until the last:
 
-- **D1 ElementInternals** (§ 9), alone. S.
-- **D2 The tree and its script surface**: the node, the verb, the
-  shadow-including root and the thirty-five climbs, assignment and the
-  flat-tree walk in libhtml; the surface of § 7 and the events of § 8 in
-  libdom. Renders nothing new yet, so `attachShadow` stays off the
-  prototype (the switch is libdom's, set by the host suites) until D4. M.
+- **D2a The tree, in libhtml**: its first commit is Appendix A's two
+  lists; then the node, the verb, the shadow-including root and descent,
+  every climb and descent ruled "crosses" moved onto them, assignment with
+  its dirty-root marking, and the flat-tree walk. M.
+- **D2b The surface and the events, in libdom**: § 7 behind the switch,
+  § 8 whole (the slot half of the path, retargeting, closed trees,
+  `composed`), `slotchange` at the checkpoint (§ 4), and libdom's
+  descents. M.
 - **D3 Rendering**: libflow's walks onto the flat tree, the slot rule in
   the change readers, the UA sheet's `slot { display: contents }`. Tested
-  with the switch on. M, and it touches RELAYOUT's reuse, so Quinn reads
-  it.
-- **D4 Scoped style, and the switch on**: libgarb's scope and selectors,
-  the context step, yonder's sheet list in shadow-including order,
-  constructed sheets and `adoptedStyleSheets`; then `attachShadow` goes on
-  HTMLElement's prototype. M.
+  with the switch on, and in QEMU through the `yonder.conf` key. M, and it
+  touches RELAYOUT's reuse, so Quinn reads it.
+- **D4 Scoped style, and the switch on**: libgarb's scopes and their
+  filter, `:host`, `:host()`, `::slotted()`, the context step, yonder's
+  sheet list in shadow-including order, constructed sheets and both
+  `adoptedStyleSheets`; then the switch goes on. M. ElementInternals
+  (§ 9) lands here or not at all, Chris's call at D4.
 
-Holding `attachShadow` back until D4 is the answer to § 2 applied to the
+Holding the switch off until D4 is the answer to § 2 applied to the
 stack: until style is scoped, a page that feature-tests is better served
 by its fallback than by shadow content drawn wrong.
 
-Rulings wanted:
+**Ruled** (Chris, 2026-11-05, with Fable's leans): the whole model, the
+surface trimmed by the census; D2 to D4 stacked and hidden behind one
+switch, D2 split in two; D1 by size, which § 9 measures at M, so it
+lands with D4; Fable reads D2a's two lists, Quinn reads D3, Codex reads
+each PR.
 
-1. **The cut** (§ 2): the whole model, the surface trimmed by the census,
-   rather than the minimal ShadowRoot. My lean: yes.
-2. **The order** (§ 12): D1 first and on its own, then D2–D4 stacked with
-   `attachShadow` exposed only in D4. My lean: yes.
-3. **Reviews**: Fable on this doc; Quinn on D3 (her reuse code); Codex on
-   each PR. My lean: yes, and D3 is the one that needs the most care.
+## Appendix A. The climbs and the descents
+
+*Written as D2a's first commit.*
