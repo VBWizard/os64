@@ -34,15 +34,15 @@ static void reuse_bind(FReuseMatch *m, const void *old, void *fresh)
     m->pointers[at] = (FReusePointer){old, fresh};
 }
 
-static const os64_html_node_t *reuse_element(const os64_html_node_t *node)
+static const os64_html_node_t *reuse_element(const os64_html_document_t *doc, const os64_html_node_t *node)
 {
-    while (node && node->kind != OS64_HTML_ELEMENT) node = node->parent;
+    while (node && node->kind != OS64_HTML_ELEMENT) node = f_flat_parent(doc, node);
     return node;
 }
 
 static bool reuse_derived_equal(FReuseMatch *m, const os64_html_node_t *node)
 {
-    node = reuse_element(node);
+    node = reuse_element(m->tree->doc, node);
     const FStyled *a = f_style_of(m->tree->styles, node);
     const FStyled *b = f_style_of(m->previous->styles, node);
     if (!a || !b) return a == b;

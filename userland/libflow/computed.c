@@ -59,9 +59,9 @@ flow_computed_t *flow_computed_new(const flow_tree_t *tree, const flow_env_t *en
         own = f_style_beyond(styles, c->extra, flow_model(tree), element);
         // An element whose ancestors reach a styled one and still came back
         // without a style ran out of memory on the way.
-        const os64_html_node_t *up = element->parent;
+        const os64_html_node_t *up = f_flat_parent(styles->doc, element);
         while (up != NULL && up->kind == OS64_HTML_ELEMENT && f_style_of(styles, up) == NULL)
-            up = up->parent;
+            up = f_flat_parent(styles->doc, up);
         if (own == NULL && up != NULL && up->kind == OS64_HTML_ELEMENT) {
             flow_computed_free(c);
             return NULL;
@@ -1007,7 +1007,11 @@ static Declared declaration(const flow_computed_t *c, int32_t prop)
     if (cascade == NULL)
         return (Declared){0};
     bool inherited = garb_prop_inherited((garb_prop_t)prop);
-    for (const os64_html_node_t *n = c->element; n != NULL && n->kind == OS64_HTML_ELEMENT; n = n->parent) {
+    // An inherited value comes down the flat tree (internal.h).
+    const FStyles *styles = f_tree_styles(c->tree);
+    const os64_html_document_t *doc = styles != NULL ? styles->doc : NULL;
+    for (const os64_html_node_t *n = c->element; n != NULL && n->kind == OS64_HTML_ELEMENT;
+         n = f_flat_parent(doc, n)) {
         garb_style_t st = garb_style_for(cascade, n);
         const garb_val_t *won = NULL;
         int32_t sheet = -1;

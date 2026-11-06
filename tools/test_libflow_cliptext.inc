@@ -29,10 +29,10 @@ static void clip_text_visit(void *ctx, const flow_box_t *b)
     t->text[t->len] = '\0';
 }
 
-static ClipTexts clip_texts(const flow_box_t *box)
+static ClipTexts clip_texts(const flow_tree_t *tree, const flow_box_t *box)
 {
     ClipTexts t = {{0}, 0};
-    flow_visit_text_clip(box, clip_text_visit, &t);
+    flow_visit_text_clip(tree, box, clip_text_visit, &t);
     return t;
 }
 
@@ -88,7 +88,7 @@ static void cliptext_cases(void)
                      "<div>blk</div><div style=position:relative;z-index:1>zi</div></div>",
                  800, 600);
     flow_tree_t *t = flow_layout(q.doc, q.page, 800, &q.env);
-    ClipTexts held = clip_texts(box_with_id(t, q.doc->document, "g"));
+    ClipTexts held = clip_texts(t, box_with_id(t, q.doc->document, "g"));
     expect("text clip: a block's clip holds its in-flow and floated text, Chrome's rows",
            clip_holds(&held, "own") && clip_holds(&held, "rel") && clip_holds(&held, "ib") &&
                clip_holds(&held, "fl") && clip_holds(&held, "op") && clip_holds(&held, "blk") &&
@@ -104,7 +104,7 @@ static void cliptext_cases(void)
     // their numbers.
     sheeted_open(&q, CLIP_STYLE "</style><ol id=o><li>one<li>two</ol>", 800, 600);
     t = flow_layout(q.doc, q.page, 800, &q.env);
-    held = clip_texts(box_with_id(t, q.doc->document, "o"));
+    held = clip_texts(t, box_with_id(t, q.doc->document, "o"));
     expect("text clip: a marker is not held, its item's text is",
            clip_holds(&held, "one") && clip_holds(&held, "two") && strstr(held.text, "1") == NULL &&
                strstr(held.text, "2") == NULL,
@@ -124,7 +124,7 @@ static void cliptext_cases(void)
     const flow_box_t *first = first_of_kind(w, FLOW_BOX_SPAN);
     const flow_box_t *line2 = first != NULL && first->parent != NULL ? first->parent->next : NULL;
     const flow_box_t *second = first_of_kind(line2, FLOW_BOX_SPAN);
-    ClipTexts one = clip_texts(first), two = clip_texts(second);
+    ClipTexts one = clip_texts(t, first), two = clip_texts(t, second);
     expect("text clip: a span's piece holds the span's text on its own line",
            first != NULL && second != NULL && clip_holds(&one, "bb") && !clip_holds(&one, "aa") &&
                !clip_holds(&one, "cc") && clip_holds(&two, "cc") && clip_holds(&two, "dd") &&

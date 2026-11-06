@@ -113,6 +113,26 @@ struct flow_tree {
     uint64_t tick_ms;
 };
 
+// The document a tree's boxes were built from, whose flat tree
+// (internal.h) its walks follow.
+static const os64_html_document_t *tree_doc(const flow_tree_t *t)
+{
+    return t != NULL ? t->doc : NULL;
+}
+
+// The node after `c` in a pre-order walk of the flat tree inside `n`,
+// going into `c` when `down`; NULL past the last.
+static const os64_html_node_t *flat_after(const os64_html_document_t *doc, const os64_html_node_t *n,
+                                          const os64_html_node_t *c, bool down)
+{
+    const os64_html_node_t *k = down ? os64_html_flat_first_child(doc, c) : NULL;
+    if (k != NULL)
+        return k;
+    while (c != NULL && c != n && os64_html_flat_next_sibling(doc, c) == NULL)
+        c = f_flat_parent(doc, c);
+    return c != NULL && c != n ? os64_html_flat_next_sibling(doc, c) : NULL;
+}
+
 #include "reuse_snapshot.inc"
 #include "reuse_match.inc"
 
@@ -257,7 +277,7 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
     // with no element of its own is as its parent is.
     const os64_html_node_t *e = styled_by;
     while (e != NULL && e->kind != OS64_HTML_ELEMENT)
-        e = e->parent;
+        e = f_flat_parent(tree_doc(bd->t), e);
     const FStyled *st = e != NULL ? f_style_of(bd->t->styles, e) : NULL;
     b->unpainted = st != NULL ? st->transparent : parent != NULL && parent->unpainted;
     b->fixed = parent != NULL && parent->fixed;
@@ -1070,17 +1090,19 @@ static void visit_clip_subtree(const flow_box_t *top, void (*visit)(void *, cons
     }
 }
 
-// Whether `n` is `element` or inside it.
-static bool node_within(const os64_html_node_t *n, const os64_html_node_t *element)
+// Whether `n` is `element` or inside it in the flat tree, which is where
+// its box was built.
+static bool node_within(const os64_html_document_t *doc, const os64_html_node_t *n,
+                        const os64_html_node_t *element)
 {
-    for (; n != NULL; n = n->parent)
+    for (; n != NULL; n = f_flat_parent(doc, n))
         if (n == element)
             return true;
     return false;
 }
 
-void flow_visit_text_clip(const flow_box_t *box, void (*visit)(void *ctx, const flow_box_t *text),
-                          void *ctx)
+void flow_visit_text_clip(const flow_tree_t *tree, const flow_box_t *box,
+                          void (*visit)(void *ctx, const flow_box_t *text), void *ctx)
 {
     if (box == NULL || visit == NULL)
         return;
@@ -1094,8 +1116,9 @@ void flow_visit_text_clip(const flow_box_t *box, void (*visit)(void *ctx, const 
     // generated.
     if (box->parent == NULL || box->node == NULL)
         return;
+    const os64_html_document_t *doc = tree_doc(tree);
     for (const flow_box_t *c = box->parent->first; c != NULL; c = c->next) {
-        if (!node_within(c->node, box->node) || (box->pseudo != 0 && c->pseudo != box->pseudo) ||
+        if (!node_within(doc, c->node, box->node) || (box->pseudo != 0 && c->pseudo != box->pseudo) ||
             leaves_text_clip(c))
             continue;
         if (c->kind == FLOW_BOX_TEXT)
@@ -2253,17 +2276,12 @@ static bool motion_seen(const flow_tree_t *tree, const os64_html_node_t *n, os64
     const flow_box_t *b = f_map_get(&tree->first, n);
     if (b != NULL)
         return pieces_seen(b, view, scroll, reach);
-    for (const os64_html_node_t *c = n->first_child; c != NULL;) {
+    const os64_html_document_t *doc = tree_doc(tree);
+    for (const os64_html_node_t *c = os64_html_flat_first_child(doc, n); c != NULL;) {
         b = f_map_get(&tree->first, c);
         if (b != NULL && pieces_seen(b, view, scroll, reach))
             return true;
-        if (b == NULL && c->first_child != NULL) {
-            c = c->first_child;
-            continue;
-        }
-        while (c != n && c->next == NULL)
-            c = c->parent;
-        c = c != n ? c->next : NULL;
+        c = flat_after(doc, n, c, b == NULL);
     }
     return false;
 }
@@ -2347,7 +2365,7 @@ static void stacked_from(const flow_tree_t *tree, const flow_box_t *b,
         if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
             f_props_add(&handed, (garb_prop_t)p);
     const FStyled *own = f_style_of(tree->styles, b->node);
-    const os64_html_node_t *up = b->node->parent;
+    const os64_html_node_t *up = f_flat_parent(tree_doc(tree), b->node);
     // A pseudo-element's box names its originating element
     // (flow_box_t.pseudo): what it takes is its own record's, and the
     // first element it takes from is that one.
@@ -2360,7 +2378,7 @@ static void stacked_from(const flow_tree_t *tree, const flow_box_t *b,
     for (int w = 0; w < F_PROP_WORDS; w++)
         took.w[w] = own != NULL ? own->taken.w[w] : ~(uint64_t)0;
     bool in_clip = !leaves_text_clip(b);
-    for (const os64_html_node_t *a = up; a != NULL; a = a->parent) {
+    for (const os64_html_node_t *a = up; a != NULL; a = f_flat_parent(tree_doc(tree), a)) {
         const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
         if (st != NULL) {
             FProps ask;
@@ -2474,17 +2492,10 @@ static bool motion_drawn(const flow_tree_t *tree, const os64_html_node_t *n)
 {
     if (f_map_get(&tree->first, n) != NULL)
         return true;
-    for (const os64_html_node_t *c = n->first_child; c != NULL;) {
+    const os64_html_document_t *doc = tree_doc(tree);
+    for (const os64_html_node_t *c = os64_html_flat_first_child(doc, n); c != NULL; c = flat_after(doc, n, c, true))
         if (f_map_get(&tree->first, c) != NULL)
             return true;
-        if (c->first_child != NULL) {
-            c = c->first_child;
-            continue;
-        }
-        while (c != n && c->next == NULL)
-            c = c->parent;
-        c = c != n ? c->next : NULL;
-    }
     return false;
 }
 
@@ -3788,9 +3799,9 @@ const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_htm
     if (tree == NULL || node == NULL || node->kind != OS64_HTML_ELEMENT)
         return NULL;
     const FStyled *st = f_style_of(tree->styles, node);
-    const os64_html_node_t *parent = node->parent;
+    const os64_html_node_t *parent = f_flat_parent(tree_doc(tree), node);
     while (parent != NULL && parent->kind != OS64_HTML_ELEMENT)
-        parent = parent->kind == OS64_HTML_DOCUMENT ? NULL : parent->parent;
+        parent = parent->kind == OS64_HTML_DOCUMENT ? NULL : f_flat_parent(tree_doc(tree), parent);
     if (st == NULL || parent == NULL)
         return NULL;
     flow_position_t position = st->style.position;
@@ -4313,17 +4324,10 @@ static bool draws_none(const flow_tree_t *tree, const os64_html_node_t *n)
 {
     if (f_map_get(&tree->first, n) != NULL)
         return false;
-    for (const os64_html_node_t *c = n->first_child; c != NULL;) {
+    const os64_html_document_t *doc = tree_doc(tree);
+    for (const os64_html_node_t *c = os64_html_flat_first_child(doc, n); c != NULL; c = flat_after(doc, n, c, true))
         if (f_map_get(&tree->first, c) != NULL)
             return false;
-        if (c->first_child != NULL) {
-            c = c->first_child;
-            continue;
-        }
-        while (c != n && c->next == NULL)
-            c = c->parent;
-        c = c != n ? c->next : NULL;
-    }
     return true;
 }
 

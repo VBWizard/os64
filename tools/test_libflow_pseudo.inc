@@ -225,8 +225,8 @@ static void pseudo_layout_cases(void)
             if (k->kind == FLOW_BOX_SPAN && k->node == span && k->pseudo == GARB_PSEUDO_BEFORE)
                 gen = k;
     int seen[2] = {0, 0};
-    flow_visit_text_clip(gen, pseudo_count_text, &seen[0]);
-    flow_visit_text_clip(own, pseudo_count_text, &seen[1]);
+    flow_visit_text_clip(tree, gen, pseudo_count_text, &seen[0]);
+    flow_visit_text_clip(tree, own, pseudo_count_text, &seen[1]);
     expect("pseudo: a pseudo-element's text clip is its own text", gen != NULL && seen[0] == 1, NULL);
     expect("pseudo: its element's holds its own and the pseudo-element's", own != NULL && seen[1] == 3, NULL);
     flow_free(tree);

@@ -381,6 +381,12 @@ static bool report_root(HDoc *d, const HNode *root, void (*changed)(void *, cons
     return true;
 }
 
+bool os64_html_has_shadow_roots(const os64_html_document_t *doc)
+{
+    const HDoc *d = (const HDoc *)doc;
+    return d != NULL && d->shadows;
+}
+
 bool os64_html_slot_changes_pending(const os64_html_document_t *doc)
 {
     const HDoc *d = (const HDoc *)doc;

@@ -826,14 +826,14 @@ static Paint paint_for(const L *l, const FStyles *styles, const os64_html_node_t
 {
     const os64_html_node_t *e = n;
     while (e != NULL && e->kind != OS64_HTML_ELEMENT)
-        e = e->parent;
+        e = f_flat_parent(styles->doc, e);
     const FStyled *st = e != NULL ? f_style_of(styles, e) : NULL;
     if (st == NULL)
         return (Paint){0, {0, 0}, -1};
     Paint p = {st->decoration, st->decoration_colors, st->link};
     bool quirks_table = l->quirks && e->ns == OS64_HTML_NS_HTML && e->tag == OS64_HTML_TAG_TABLE;
     if (e == atom && !quirks_table) {
-        const FStyled *up = f_style_of(styles, e->parent);
+        const FStyled *up = f_style_of(styles, f_flat_parent(styles->doc, e));
         if (up != NULL)
             f_decoration_inherit(&p.decoration, &p.colors, up->decoration,
                                  up->decoration_colors);
