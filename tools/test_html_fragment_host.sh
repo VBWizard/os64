@@ -7,5 +7,5 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-
     -Iuserland/libhtml/include -Iuserland/libos64/include -Iabi/include \
     userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c \
     userland/libhtml/tree.c userland/libhtml/dom.c userland/libhtml/fragment.c \
-    userland/libhtml/serialize.c tools/test_html_driver.c -o "$work/html_driver"
+    userland/libhtml/serialize.c userland/libhtml/shadow.c tools/test_html_driver.c -o "$work/html_driver"
 "$work/html_driver" --fragments

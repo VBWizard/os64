@@ -158,9 +158,12 @@ static int canonical_font(DValue *e,JSContext *ctx,const char *s,size_t n,canvas
     double base=16,root=16;
     unsigned relative=font_relative(f.size);
     if((relative&1)&&computed_size(e,ctx,e->node,&base)<0){garb_free(&f.parsed);return -1;}
-    /* Root-relative units use the document element, independently of the canvas. */
+    /* Root-relative units use the document element, independently of the
+     * canvas: the climb crosses from a shadow root to its host. */
     const os64_html_node_t *element=e->node;
-    while(element&&element->parent&&element->parent->kind==OS64_HTML_ELEMENT)element=element->parent;
+    for(const os64_html_node_t *up=element?os64_html_shadow_including_parent(element):NULL;
+        up&&(up->kind==OS64_HTML_ELEMENT||os64_html_shadow_host(up));up=os64_html_shadow_including_parent(up))
+        if(up->kind==OS64_HTML_ELEMENT)element=up;
     if((relative&2)&&computed_size(e,ctx,element,&root)<0){garb_free(&f.parsed);return -1;}
     double px=font_size(f.size,base,root,0);
     if(!isfinite(px)||px<0){garb_free(&f.parsed);return 0;}
@@ -258,8 +261,9 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     bool rtl=style.direction==2;
     if(!style.direction) {
         /* HTML direction inheritance supplies alignment while the shared text
-         * engine retains its Western shaping profile. */
-        for(const os64_html_node_t *node=e->node;node;node=node->parent) {
+         * engine retains its Western shaping profile. A shadow root inherits
+         * its host's direction. */
+        for(const os64_html_node_t *node=e->node;node;node=os64_html_shadow_including_parent(node)) {
             const os64_html_attr_t *dir=os64_html_attr(node,"dir");
             if(dir&&(os64_streq_nocase(dir->value,"rtl")||os64_streq_nocase(dir->value,"ltr"))) {
                 rtl=os64_streq_nocase(dir->value,"rtl");break;

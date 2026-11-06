@@ -44,8 +44,8 @@ const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t 
 {
     if (node->kind == OS64_HTML_DOCUMENT) return node;
     if (dom->documents == 0) return window_document(dom);
-    const os64_html_node_t *root = node;
-    while (root->parent != NULL) root = root->parent;
+    /* A shadow tree's document is its host's: the climb crosses. */
+    const os64_html_node_t *root = os64_html_shadow_including_root(node);
     if (root->kind == OS64_HTML_DOCUMENT) return root;
     DValue *entry = d_find(dom, root);
     return entry != NULL && entry->document != NULL ? entry->document : window_document(dom);

@@ -791,10 +791,11 @@ static bool auto_uses_value(const os64_page_control_t *c)
 
 // Values come from the current model, including when an ancestor control
 // supplies the inherited direction. Ordinary auto containers use scoped text.
+// A shadow root's directionality is its host's, so the climb crosses.
 static const char *directionality(const os64_page_t *page, const os64_page_control_t *c,
                                   PEntries *entries)
 {
-    for (const os64_html_node_t *up = c->node; up != NULL; up = up->parent) {
+    for (const os64_html_node_t *up = c->node; up != NULL; up = os64_html_shadow_including_parent(up)) {
         int dir = dir_state(up);
         if (dir == 1) return "ltr";
         if (dir == 2) return "rtl";

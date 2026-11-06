@@ -26,15 +26,12 @@ static void sheet_finalizer(JSRuntime *rt, JSValue value)
     JS_SetOpaque(value, NULL);
 }
 
-/* Whether `node` has a sheet now: it names one by libpage's rule and is in
- * a document. A sheet whose node does not keeps its object, and says it
- * has no owner. */
+/* Whether `node` has a sheet now: it names one by libpage's rule and is
+ * connected, a shadow tree's own `style` included. A sheet whose node does
+ * not keeps its object, and says it has no owner. */
 static bool associated(const os64_html_node_t *node)
 {
-    if (!os64_page_names_sheet(node)) return false;
-    const os64_html_node_t *root = node;
-    while (root->parent != NULL) root = root->parent;
-    return root->kind == OS64_HTML_DOCUMENT;
+    return os64_page_names_sheet(node) && d_connected(node);
 }
 
 JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)

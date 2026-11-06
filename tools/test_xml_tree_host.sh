@@ -14,7 +14,7 @@ host_flags=(-std=c11 -g -O2 -Wall -Wextra -Werror -fsanitize=address,undefined
     -Iuserland/libos64/include -Iabi/include)
 host_sources=(tools/test_xml_tree_host.c userland/libxml/xml.c userland/libhtml/xml.c
     userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c
-    userland/libhtml/tree.c userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c
+    userland/libhtml/tree.c userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c
     userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c
     userland/libgarb/dump.c userland/libgarb/select.c userland/libgarb/values.c
     userland/libgarb/props.c userland/libgarb/media.c userland/libgarb/cascade.c

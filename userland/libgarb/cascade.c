@@ -2663,6 +2663,11 @@ static const os64_html_node_t *subtree_next(const os64_html_node_t *x,
     while (x != root && !x->next) x = x->parent;
     return x == root ? NULL : x->next;
 }
+// In the tree the cascade matches: the document's own, which is all its
+// match walk visits, so a change inside a shadow tree is outside it. This
+// question crosses together with the scoped match walk (SHADOW_DOM.md § 6,
+// § 12): crossed alone, every such change would find no slot and refuse
+// the update.
 static bool connected(const garb_cascade_t *c, const os64_html_node_t *x)
 {
     if (!x) return false;

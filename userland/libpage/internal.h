@@ -253,6 +253,12 @@ bool p_has_attr(const os64_html_node_t *n, const char *name);
 bool p_is(const os64_html_node_t *n, os64_html_tag_t tag);
 // An HTML-namespace element of this tag anywhere up the tree, or NULL.
 const os64_html_node_t *p_ancestor(const os64_html_node_t *n, os64_html_tag_t tag);
+// A control's form owner, HTML's one rule (§ 4.10.17.3, core.c): with
+// `form=` and connected, the first element in its own tree with that id
+// when it is a form, else none; otherwise the parser's association, else
+// the nearest ancestor form. `document_ids` answers the document tree's
+// ids when the caller holds them (the model's id map); NULL walks.
+const os64_html_node_t *p_form_owner(const os64_html_node_t *n, const PStrMap *document_ids);
 // A subtree's text in tree order, into the page's arena. `collapse` applies the
 // standard's "strip and collapse ASCII whitespace", which is what an
 // option's text is defined in terms of — so a list written across several

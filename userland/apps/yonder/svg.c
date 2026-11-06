@@ -2166,9 +2166,15 @@ svg_status_t yonder_svg_contains(const os64_html_document_t *doc,const garb_casc
     Adapter a={.doc=doc,.cascade=cascade,.memory=*memory,.width=300,.height=150,
         .cancelled=cancelled,.cancel_context=cancel_context};
     const os64_html_node_t *chain[SVG_DEPTH_MAX];size_t count=0;
-    for(const os64_html_node_t *n=node;n&&n->kind==OS64_HTML_ELEMENT;n=n->parent) {
+    /* The chain climbs from a shadow tree's top element to its host, so an
+     * svg inside a shadow tree inherits through the host and reaches the
+     * document. A slotted svg's chain is its tree's, not the flat tree's
+     * through its slot (SHADOW_DOM.md A.3, D3's). */
+    for(const os64_html_node_t *n=node;n&&n->kind==OS64_HTML_ELEMENT;) {
         if(count==SVG_DEPTH_MAX)return SVG_LIMIT;
         chain[count++]=n;
+        const os64_html_node_t *host=n->parent?os64_html_shadow_host(n->parent):NULL;
+        n=host?host:n->parent;
     }
     /* The cascade contains connected document nodes. A detached node has no
      * resolved style here; absence of a winner cannot mean an initial value. */

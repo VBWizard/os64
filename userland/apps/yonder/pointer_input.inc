@@ -46,9 +46,8 @@ static bool pointer_default(void *opaque, const os64_html_node_t *node,
         return true;
     }
     if (event->button > 0 && !os64_streq(event->type, "mousemove")) return true;
-    const os64_html_node_t *root = node;
-    while (root && root->parent) root = root->parent;
-    if (node && root != page_doc(&g.page)->document) return true;
+    // A press inside a component is in the page: the test is connectedness.
+    if (node && os64_html_shadow_including_root(node) != page_doc(&g.page)->document) return true;
     if (os64_streq(event->type, "mousedown")) {
         // A listener may remove the hit or capture a chord to another node.
         // Do not focus an unrelated native control under the physical cursor.

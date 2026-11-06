@@ -342,21 +342,11 @@ static const os64_html_node_t *tree_next(const os64_html_node_t *root,
     return node != root ? node->next : NULL;
 }
 
+// A control's form owner as the page model settles it (p_form_owner),
+// walking for the id: state is asked without a model.
 static const os64_html_node_t *node_owner(const os64_html_node_t *node)
 {
-    const char *form = p_attr(node, "form");
-    const os64_html_node_t *root = tree_root(node);
-    // Explicit association is an ID lookup in the document tree, and an ID
-    // is never empty; a control in no document has its ancestor form.
-    if (form != NULL && root->kind == OS64_HTML_DOCUMENT) {
-        for (const os64_html_node_t *at = root; at != NULL && form[0] != '\0'; at = tree_next(root, at)) {
-            const char *id = p_attr(at, "id");
-            if (id != NULL && os64_streq(id, form))
-                return p_is(at, OS64_HTML_TAG_FORM) ? at : NULL;
-        }
-        return NULL;
-    }
-    return node->form_owner != NULL ? node->form_owner : p_ancestor(node, OS64_HTML_TAG_FORM);
+    return p_form_owner(node, NULL);
 }
 
 static bool radio_group_member(const os64_html_node_t *target, const os64_html_node_t *node)
@@ -1922,6 +1912,27 @@ static const os64_html_node_t *tree_option_destination(const os64_html_node_t *o
     return NULL;
 }
 
+// A moving host's shadow trees move with it, and a radio there may change
+// owner (form= resolves only while connected, p_form_owner), so each is
+// staged, its name with it; its peers are in the same tree, which moves
+// whole, so they are all among these. None is marked moving: its tree is
+// not inserted anywhere, so it is an owner change that makes one win
+// (tree_radio_trigger), as HTML's group rules say. Its selects and
+// options keep their own trees' answers.
+static bool tree_plan_shadow_radios(PReserve *reserve, PArena *scratch, PAttrStage **stages,
+                                    PTreeNames *names, const os64_html_node_t *host)
+{
+    const os64_html_node_t *root = host->shadow_root;
+    for (const os64_html_node_t *at = root; at != NULL; at = os64_html_shadow_including_next(root, at))
+        if (p_is(at, OS64_HTML_TAG_INPUT) && p_input_type(at) == OS64_PAGE_INPUT_RADIO) {
+            PAttrStage *stage = attr_stage(reserve, stages, at);
+            if (stage == NULL || !tree_name_add(scratch, names, p_attr(at, "name"))) return false;
+            stage->value.on = stage->before_on;
+            stage->value.on_attr = p_has_attr(at, "checked");
+        }
+    return true;
+}
+
 static bool tree_plan_collect(PReserve *reserve, PArena *scratch,
                                PTreeRoot *roots, PAttrStage **stages,
                                PTreeNames *names, PTreeNames *ids)
@@ -1931,9 +1942,14 @@ static bool tree_plan_collect(PReserve *reserve, PArena *scratch,
         for (const os64_html_node_t *top = root->node; top != NULL;
              top = root->siblings ? top->next : NULL)
             for (const os64_html_node_t *at = top; at != NULL; at = tree_next(top, at)) {
-                if (explicit_owners && (tree_root(at) == reserve->state->doc->document ||
-                    (root->parent != NULL && tree_root(root->parent) == reserve->state->doc->document)) &&
+                // HTML resolves form= for a connected element only, a shadow
+                // tree's included: the test is connectedness, which crosses.
+                if (explicit_owners && (os64_html_shadow_including_root(at) == reserve->state->doc->document ||
+                    (root->parent != NULL &&
+                     os64_html_shadow_including_root(root->parent) == reserve->state->doc->document)) &&
                     !tree_name_add(scratch, ids, p_attr(at, "id"))) return false;
+                if (at->shadow_root != NULL && !tree_plan_shadow_radios(reserve, scratch, stages, names, at))
+                    return false;
                 if (p_is(at, OS64_HTML_TAG_INPUT) && p_input_type(at) == OS64_PAGE_INPUT_RADIO) {
                     PAttrStage *stage = attr_stage(reserve, stages, at);
                     if (stage == NULL || !tree_name_add(scratch, names, p_attr(at, "name"))) return false;
@@ -2261,18 +2277,22 @@ int64_t os64_page_node_replace_children(os64_page_state_t *state,
 }
 
 // Pairing the detached copies with their originals also visits template content
-// fragments, which are separate trees rather than ordinary element children.
+// fragments and clonable shadow roots, which are separate trees rather than
+// ordinary element children. `deep` says the pair's children were copied:
+// a deep clone's are, and a clonable shadow tree's always are, shallow
+// clone or not (DOM's "clone a node").
 typedef struct PClonePair {
     struct PClonePair *next;
     const os64_html_node_t *source, *copy;
+    bool deep;
 } PClonePair;
 
 static bool clone_pair(PArena *scratch, PClonePair ***tail,
-                        const os64_html_node_t *source, const os64_html_node_t *copy)
+                        const os64_html_node_t *source, const os64_html_node_t *copy, bool deep)
 {
     PClonePair *pair = p_arena_alloc(scratch, sizeof(*pair));
     if (pair == NULL) return false;
-    *pair = (PClonePair){.source = source, .copy = copy};
+    *pair = (PClonePair){.source = source, .copy = copy, .deep = deep};
     **tail = pair;
     *tail = &pair->next;
     return true;
@@ -2292,7 +2312,7 @@ os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
     PReserve reserve = {.state = state};
     PArena scratch = {.budget = state};
     PClonePair *pairs = NULL, **tail = &pairs;
-    if (!clone_pair(&scratch, &tail, node, copy)) goto no_memory;
+    if (!clone_pair(&scratch, &tail, node, copy, deep)) goto no_memory;
     for (PClonePair *pair = pairs; pair != NULL; pair = pair->next) {
         const os64_html_node_t *source = pair->source, *target = pair->copy;
         bool input = p_is(source, OS64_HTML_TAG_INPUT);
@@ -2345,14 +2365,19 @@ os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
                 }
             }
         }
-        if (deep) {
+        if (pair->deep) {
             const os64_html_node_t *a = source->first_child, *b = target->first_child;
             for (; a != NULL && b != NULL; a = a->next, b = b->next)
-                if (!clone_pair(&scratch, &tail, a, b)) goto no_memory;
+                if (!clone_pair(&scratch, &tail, a, b, true)) goto no_memory;
             if (source->template_contents != NULL && target->template_contents != NULL &&
-                !clone_pair(&scratch, &tail, source->template_contents, target->template_contents))
+                !clone_pair(&scratch, &tail, source->template_contents, target->template_contents, true))
                 goto no_memory;
         }
+        // The copy has a root only when the source's was clonable, and then
+        // its whole tree was copied.
+        if (source->shadow_root != NULL && target->shadow_root != NULL &&
+            !clone_pair(&scratch, &tail, source->shadow_root, target->shadow_root, true))
+            goto no_memory;
     }
     p_reserve_commit(&reserve);
     p_arena_free(&scratch);

@@ -22,7 +22,8 @@ typedef enum {
     OS64_HTML_NOT_FOUND = -7,      /* the reference child is not the parent's child */
     OS64_HTML_BAD_TEXT = -8,       /* not UTF-8, or it holds a NUL */
     OS64_HTML_ROOT_REQUIRED = -9,  /* the document would lose its html element */
-    OS64_HTML_BAD_ARGUMENT = -10
+    OS64_HTML_BAD_ARGUMENT = -10,
+    OS64_HTML_NOT_SUPPORTED = -11  /* what the DOM Standard refuses as NotSupportedError */
 } os64_html_status_t;
 
 /* Exit badge for a broken node-hold or snapshot-pin lifetime contract,
@@ -77,11 +78,17 @@ typedef struct os64_html_node {
     /* An element's custom state, an os64_html_ce_t (below). Only
      * os64_html_set_ce changes it. */
     uint8_t ce;
+    /* A shadow root's OS64_HTML_SHADOW_* options (SHADOW TREES, below);
+     * zero on every other node. Set once, by os64_html_attach_shadow. */
+    uint8_t shadow;
     const char *public_id, *system_id;
     const char *text;
     size_t text_len;
     os64_html_attr_t *attrs;
     struct os64_html_node *template_contents;
+    /* An element's shadow root, or NULL. Like a template's contents it is
+     * no child of the element and on no child list (SHADOW TREES, below). */
+    struct os64_html_node *shadow_root;
     struct os64_html_node *parent, *first_child, *last_child, *prev, *next;
     /* Parser association at insertion, or NULL; document-owned, possibly
      * non-ancestor. Consumers resolve form= and ancestry separately. */
@@ -546,6 +553,97 @@ typedef enum {
 } os64_html_ce_t;
 int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
 bool os64_html_custom_name(const char *name);
+
+/* ── SHADOW TREES (docs/design/pending/SHADOW_DOM.md § 3) ──────────────
+ *
+ * A shadow root is a FRAGMENT its host element owns through
+ * `shadow_root`, as a template owns its contents: on no child list, so no
+ * walk of children enters it, and it lives and is reclaimed with its host.
+ * Its `shadow` field holds the options it was attached with.
+ *
+ * `attach_shadow` is DOM's "attach a shadow root" for what libhtml can
+ * judge: `host` must be an HTML element of `doc` that is a valid shadow
+ * host (`valid_shadow_host`) and has no root yet, else
+ * OS64_HTML_NOT_SUPPORTED; whether a custom element definition disables
+ * shadows is its caller's to know. `options` is OS64_HTML_SHADOW_OPEN or
+ * OS64_HTML_SHADOW_CLOSED with any of the flags; anything else is
+ * OS64_HTML_BAD_ARGUMENT. Attaching moves the version and logs a CHILDREN
+ * change of the host with nothing added or removed, since what the host
+ * renders changed; like `set_ce` it tells no listener, as DOM queues no
+ * mutation record for it.
+ *
+ * `shadow_host` is a shadow root's host, and NULL for any other node.
+ * `shadow_including_parent` is a node's parent, or for a shadow root its
+ * host: one step of the climb a question about inheritance through hosts
+ * (directionality, language) takes. `shadow_including_root` climbs it to
+ * the top: a node is connected when that is a document.
+ * `shadow_including_next` is preorder over `root`'s shadow-including
+ * descendants, a host's shadow root (and its tree) before the host's
+ * children, NULL after the last: the standard's shadow-including tree
+ * order. A template's contents are no part of it, as they are no part of
+ * the tree. */
+enum {
+    OS64_HTML_SHADOW_OPEN = 1,
+    OS64_HTML_SHADOW_CLOSED = 2,
+    OS64_HTML_SHADOW_DELEGATES_FOCUS = 4,
+    OS64_HTML_SHADOW_CLONABLE = 8,
+    OS64_HTML_SHADOW_SERIALIZABLE = 16
+};
+bool os64_html_valid_shadow_host(const os64_html_node_t *element);
+os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_node_t *host,
+                                          uint8_t options, int64_t *status);
+const os64_html_node_t *os64_html_shadow_host(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_parent(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *root,
+                                                        const os64_html_node_t *node);
+
+/* SLOTS AND THE FLAT TREE (SHADOW_DOM.md § 4). Named assignment: each
+ * element or text child of a host is assigned to the first `slot` in the
+ * host's shadow tree, in tree order, whose `name` equals the child's `slot`
+ * attribute (the empty name for none). It is computed per shadow root and
+ * kept until a change that can move it (SLOTCHANGE, below) or the
+ * document's version moving; a refused allocation answers the same by
+ * walking the trees, more slowly.
+ *
+ * `assigned_slot` is a node's slot, NULL when it has none (its parent is
+ * no host, or no slot takes its name). `slot_assigned_count` and
+ * `slot_assigned` are a slot's assigned nodes in tree order; a slot in no
+ * shadow tree has none.
+ *
+ * The flat tree: a host's flat children are its shadow root's children, a
+ * slot's are its assigned nodes or, with none, its own children, every
+ * other node's its own. A slot is a node of it. `flat_parent` of a host's
+ * child is its slot, NULL when it has none, and of a slot's own child NULL
+ * while the slot has nodes assigned: neither is in the flat tree, and
+ * neither renders. These take a const document though they may refresh
+ * its cache; a document is read on one thread. */
+const os64_html_node_t *os64_html_assigned_slot(const os64_html_document_t *doc,
+                                                const os64_html_node_t *node);
+size_t os64_html_slot_assigned_count(const os64_html_document_t *doc, const os64_html_node_t *slot);
+const os64_html_node_t *os64_html_slot_assigned(const os64_html_document_t *doc,
+                                                const os64_html_node_t *slot, size_t index);
+const os64_html_node_t *os64_html_flat_first_child(const os64_html_document_t *doc,
+                                                   const os64_html_node_t *node);
+const os64_html_node_t *os64_html_flat_next_sibling(const os64_html_document_t *doc,
+                                                    const os64_html_node_t *node);
+const os64_html_node_t *os64_html_flat_parent(const os64_html_document_t *doc,
+                                              const os64_html_node_t *node);
+
+/* SLOTCHANGE (SHADOW_DOM.md § 4). A change that can move an assignment
+ * (a host's children, anything inside a shadow tree, a host child's `slot`
+ * attribute, a slot's `name`, a root attached) marks its shadow root as it
+ * is made, whether or not anything reads assignment afterwards.
+ * `slot_changes` compares each marked root's assignment now with the one
+ * it last reported and hands `changed` each slot whose assigned nodes
+ * differ, a slot's first assignment included, in the order the roots were
+ * marked and each root's slots in tree order; then it keeps the new
+ * assignment as reported. `changed` must not change the document. A root
+ * there is no memory for is left marked, reported by a later call, and
+ * the call answers OS64_HTML_NO_MEMORY. A slot removed from its shadow
+ * tree is not reported: its list may name nodes since reclaimed. */
+int64_t os64_html_slot_changes(os64_html_document_t *doc,
+                               void (*changed)(void *opaque, const os64_html_node_t *slot), void *opaque);
 
 /* Parse a complete UTF-8 string in an owned ELEMENT context.
  * This HTML fragment entry point refuses XML documents and unknown/no-namespace
