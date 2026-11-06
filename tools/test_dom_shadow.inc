@@ -117,7 +117,13 @@ static void dom_shadow_surface_cases(void)
         "assert(globalThis.later===1,'define upgrades an instance inside a shadow tree');"
         "var moved=document.createElement('x-later');var h2=document.createElement('div');h2.attachShadow({mode:'open'}).appendChild(moved);"
         "assert(globalThis.later===1,'not connected yet');document.body.appendChild(h2);"
-        "assert(globalThis.later===2,'connected with its host');",
+        "assert(globalThis.later===2,'connected with its host');"
+        /* A definition that disables shadow, defined after its element got a root: the upgrade fails. */
+        "var errs=[];addEventListener('error',function(e){errs.push(e.error&&e.error.name)});"
+        "var early=document.createElement('x-late-shut');early.attachShadow({mode:'open'});document.body.appendChild(early);"
+        "var built=0;class Shut extends HTMLElement{static get disabledFeatures(){return ['shadow']}"
+        "constructor(){super();built++}}customElements.define('x-late-shut',Shut);"
+        "assert(built===0&&!(early instanceof Shut)&&errs.join()==='NotSupportedError','a late definition: '+built+' '+errs.join());",
         "shadow-custom");
     fixture_free(&f);
 }
@@ -336,8 +342,28 @@ static void dom_shadow_pointer_cases(void)
         shadow_pointer(&f, light, OS64_DOM_POINTER_UP, 0, 0);
         dom_script(&f, SHADOW_ASSERT
             "assert(enters===1,'the host hears its own mouseenter once: '+enters);"
-            "assert(rootClick===0&&clicks.join()==='h','a click across trees goes to the host: '+clicks.join());",
+            "assert(rootClick===0&&clicks.join()==='h','a click across trees goes to the host: '+clicks.join());"
+            /* Pointer capture's events are composed: the document hears them, retargeted. */
+            "globalThis.got=[];var sp=r.querySelector('span');"
+            "sp.addEventListener('pointerdown',function(e){sp.setPointerCapture(e.pointerId)});"
+            "document.addEventListener('gotpointercapture',function(e){got.push(e.composed+':'+(e.target===h))});"
+            "document.addEventListener('lostpointercapture',function(e){got.push('lost:'+(e.target===h))});",
             "shadow-pointer");
+        shadow_pointer(&f, span, OS64_DOM_POINTER_DOWN, 0, 1);
+        shadow_pointer(&f, span, OS64_DOM_POINTER_UP, 0, 0);
+        /* A pointer resting on a root's own child that is removed falls back
+         * to the host, never the root. */
+        shadow_pointer(&f, italic, OS64_DOM_POINTER_MOVE, -1, 0);
+        dom_script(&f, SHADOW_ASSERT
+            "assert(got.join()==='true:true,lost:true','capture events cross the root: '+got.join());"
+            "var h=document.getElementById('ph'),r=h.shadowRoot;globalThis.rootOut=0;"
+            "['pointerout','mouseout','pointerover','mouseover'].forEach(function(n){"
+            "r.addEventListener(n,function(e){if(e.target===r||e.relatedTarget===r)rootOut++})});"
+            "r.firstChild.remove();",
+            "shadow-pointer-remove");
+        shadow_pointer(&f, light, OS64_DOM_POINTER_MOVE, -1, 0);
+        dom_script(&f, SHADOW_ASSERT "assert(rootOut===0,'no boundary event at the root: '+rootOut);",
+                   "shadow-pointer-fallback");
     }
     fixture_free(&f);
 }

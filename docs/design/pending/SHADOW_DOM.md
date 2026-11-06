@@ -362,10 +362,9 @@ without them:
 - **The path crosses a shadow root to its host** only when the event is
   `composed`. `Event.composed` and the `composed` init member arrive with
   this slice; UA-dispatched UI events (pointer, mouse, keyboard, focus,
-  input) are composed, as the UI Events and Pointer Events tables say,
-  except the four enter and leave events and pointer capture's two, which
-  those tables make not composed; HTML's checkbox and radio `input` is
-  composed too, and `change` is not.
+  input) are composed, as UI Events and Pointer Events say, except the
+  four enter and leave events, which they make not composed; HTML's
+  checkbox and radio `input` is composed too, and `change` is not.
 - **Retargeting.** A listener outside a shadow tree sees `target` (and
   `relatedTarget`) as the host, never the node inside. The path holds
   each step's retargeted target, computed once per dispatch.

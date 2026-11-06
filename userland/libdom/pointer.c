@@ -16,9 +16,12 @@ static void changed(os64_dom_t *dom, const os64_html_change_t *record)
     DPointer *p = &dom->pointer;
     // A removed previous target falls back along its old event ancestry.
     // CHILDREN supplies the old parent while the detached subtree is alive.
+    // A shadow root it was removed from is no pointer's node (up, below):
+    // the fallback is its host.
     if (record->kind == OS64_HTML_CHANGE_CHILDREN && record->nremoved) {
         const os64_html_node_t *parent = record->target;
         while (parent && !connected(dom, parent)) parent = os64_html_shadow_including_parent(parent);
+        if (os64_html_shadow_host(parent) != NULL) parent = os64_html_shadow_host(parent);
         if (p->effective && !connected(dom, p->effective)) {
             hold(dom, &p->effective, parent); p->over_owed = true;
         }

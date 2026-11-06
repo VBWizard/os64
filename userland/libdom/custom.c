@@ -49,8 +49,8 @@ typedef struct DDefinition {
     uint32_t constructor_script, scripts[CB_COUNT];
     char **observed;
     size_t observed_count;
-    /* disabledFeatures named "shadow": attachShadow refuses its elements
-     * (SHADOW_DOM.md § 7). */
+    /* disabledFeatures named "shadow": attachShadow refuses its elements,
+     * and an upgrade fails one that already has a root (SHADOW_DOM.md § 7). */
     bool disable_shadow;
     /* The construction stack: the elements being upgraded, innermost
      * last; NULL is the "already constructed" marker. Each is held by its
@@ -495,9 +495,17 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r)
     if (d_connected(element)) enqueue_callback(dom, element, CB_CONNECTED, NULL, NULL);
     d->stack[d->depth++] = element;
     r->constructing = true;
-    DScripts before = d_script_enter(dom, d->constructor_script);
-    JSValue result = JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
-    d_script_leave(dom, &before, false);
+    /* HTML's upgrade, first inside its try: a definition that disables
+     * shadow cannot take an element already given a root, however its
+     * definition came late. It fails as a throwing constructor does. */
+    JSValue result;
+    if (d->disable_shadow && element->shadow_root != NULL) {
+        result = d_error(ctx, "NotSupportedError", "The custom element's definition disables shadow, and it has a shadow root");
+    } else {
+        DScripts before = d_script_enter(dom, d->constructor_script);
+        result = JS_CallConstructor(ctx, d->constructor->value, 0, NULL);
+        d_script_leave(dom, &before, false);
+    }
     d->depth--;
     r->constructing = false;
     bool same = !JS_IsException(result) && JS_IsObject(result) &&
@@ -994,8 +1002,8 @@ static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constru
         if (status < 0) return -1;
     }
     /* disabledFeatures and formAssociated are read as the standard reads
-     * them. A disabled "shadow" is kept, for attachShadow; the rest is kept
-     * by nothing: there is no ElementInternals (DEBTS.md). */
+     * them. A disabled "shadow" is kept, for attachShadow and the upgrade;
+     * the rest is kept by nothing: there is no ElementInternals (DEBTS.md). */
     JSValue disabled = JS_GetPropertyStr(ctx, constructor, "disabledFeatures");
     if (JS_IsException(disabled)) return -1;
     if (!JS_IsUndefined(disabled)) {

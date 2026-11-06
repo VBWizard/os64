@@ -1271,16 +1271,14 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
 static int ui_kind_of(os64_dom_event_kind_t kind);
 static JSValue ui_host_event(os64_dom_t *dom, JSContext *ctx, const os64_dom_event_t *ev, int kind);
 
-/* Whether a host event is composed, as its standard's table says: a UI
- * event is (UI Events, Pointer Events), so it reaches the page through
- * shadow roots, except the boundary events that go to each element
- * entered or left on their own (mouseenter, mouseleave, pointerenter,
- * pointerleave) and pointer capture's two; a form's submit is not. */
+/* Whether a host event is composed, as its standard says: a UI event is
+ * (UI Events, Pointer Events), so it reaches the page through shadow
+ * roots, except the boundary events that go to each element entered or
+ * left on their own (mouseenter, mouseleave, pointerenter, pointerleave);
+ * a form's submit is not. */
 static bool host_composed(int kind, const char *type)
 {
-    static const char *const kUncomposed[] = {
-        "mouseenter", "mouseleave", "pointerenter", "pointerleave", "gotpointercapture", "lostpointercapture"
-    };
+    static const char *const kUncomposed[] = {"mouseenter", "mouseleave", "pointerenter", "pointerleave"};
     if (kind == D_UI_NONE || kind == D_UI_SUBMIT) return false;
     for (size_t i = 0; i < sizeof(kUncomposed) / sizeof(kUncomposed[0]); i++)
         if (os64_streq(type, kUncomposed[i])) return false;
