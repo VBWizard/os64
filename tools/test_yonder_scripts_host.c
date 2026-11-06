@@ -8425,7 +8425,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 canvas marks, 0 form control marks; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0, frames 0, downloads 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
@@ -8433,6 +8433,17 @@ static void paint_cost_cases(void) {
           strstr(rec,", laid 1.0 (0.0), publish")!=NULL &&
           strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
           "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
+    /* The biggest part marked and by what, the biggest painted, and the
+     * marks of the canvases and the form controls (YONDER_DIAGNOSTICS.md §
+     * What paints cost). */
+    s_cost.mark_most=(os64_gui_rect_t){1,2,30,40}; s_cost.paint_most=(os64_gui_rect_t){0,0,800,600};
+    os64_strcopy(s_cost.mark_who,sizeof(s_cost.mark_who),"the control button.go");
+    s_cost.canvas_marks=3; s_cost.control_marks=4;
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"0 events; the biggest part marked 30x40 at 1,2 by the control button.go, the biggest painted "
+                     "800x600; 3 canvas marks, 4 form control marks; 0 bells taken")!=NULL,
+          "paint counts: the biggest part marked, by what, and the marks by source");
     /* The paint cache's counts beside them (YONDER_PERF.md § perf-2), which
      * start again with the paint counts while what it holds stays. */
     g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);

@@ -1195,10 +1195,35 @@ static struct {
 
 static void mark_part(os64_gui_rect_t r);
 
+// An element as a selector would name it, after `before`: its tag, id and
+// classes, cut to `cap`. Its length.
+static size_t element_named(char *out, size_t cap, const char *before, const os64_html_node_t *n)
+{
+    size_t at = (size_t)os64_snprintf(out, cap, "%s%s", before, n->name != NULL ? n->name : "?");
+    if (at >= cap)
+        return cap - 1;
+    const os64_html_attr_t *id = os64_html_attr(n, "id"), *cls = os64_html_attr(n, "class");
+    if (id != NULL && id->value != NULL && id->value[0] != '\0')
+        at += (size_t)os64_snprintf(out + at, cap - at, "#%s", id->value);
+    if (at >= cap)
+        return cap - 1;
+    for (const char *c = cls != NULL ? cls->value : NULL; c != NULL && *c != '\0' && at + 1 < cap;) {
+        while (*c == ' ' || *c == '\t' || *c == '\n')
+            c++;
+        if (*c == '\0')
+            break;
+        out[at++] = '.';
+        while (*c != '\0' && *c != ' ' && *c != '\t' && *c != '\n' && at + 1 < cap)
+            out[at++] = *c++;
+        out[at] = '\0';
+    }
+    return at;
+}
+
 // What refused a layout's parts, as the record says it (`out`, empty for
-// none named): the element as a selector would name it — its tag, id and
-// classes, the element holding it for a text — and the property a layout
-// places, when that was the reason.
+// none named): the element as a selector would name it (element_named),
+// the element holding it for a text — and the property a layout places,
+// when that was the reason.
 static void parts_what(char *out, size_t cap, const flow_parts_said_t *said)
 {
     const os64_html_node_t *n = said->node;
@@ -1209,22 +1234,8 @@ static void parts_what(char *out, size_t cap, const flow_parts_said_t *said)
     }
     size_t at = 0;
     out[0] = '\0';
-    if (n != NULL && n->kind == OS64_HTML_ELEMENT) {
-        const os64_html_attr_t *id = os64_html_attr(n, "id"), *cls = os64_html_attr(n, "class");
-        at = (size_t)os64_snprintf(out, cap, "%s%s", text, n->name != NULL ? n->name : "?");
-        if (at < cap && id != NULL && id->value != NULL && id->value[0] != '\0')
-            at += (size_t)os64_snprintf(out + at, cap - at, "#%s", id->value);
-        for (const char *c = cls != NULL ? cls->value : NULL; c != NULL && *c != '\0' && at + 1 < cap;) {
-            while (*c == ' ' || *c == '\t' || *c == '\n')
-                c++;
-            if (*c == '\0')
-                break;
-            out[at++] = '.';
-            while (*c != '\0' && *c != ' ' && *c != '\t' && *c != '\n' && at + 1 < cap)
-                out[at++] = *c++;
-            out[at] = '\0';
-        }
-    }
+    if (n != NULL && n->kind == OS64_HTML_ELEMENT)
+        at = element_named(out, cap, text, n);
     if (said->why == FLOW_PARTS_PLACED && said->prop >= 0 && at < cap)
         os64_snprintf(out + at, cap - at, "%s%s", at > 0 ? ", " : "", garb_prop_name((garb_prop_t)said->prop));
 }
@@ -1565,9 +1576,9 @@ typedef struct {
     // `field_seen` is noted when the field is first seen (`seen`).
     FieldSelection field_seen, record_seen;
     bool seen;
-    // A dropdown's options as last synced, their nodes, labels and disabled
-    // states hashed (options_signature): a change closes its open list, whose rows are a
-    // copy of what they were.
+    // A dropdown's or a list's options as last synced, their nodes, labels
+    // and disabled states hashed (options_signature): a change marks it, and
+    // closes a dropdown's open list, whose rows are a copy of what they were.
     uint64_t options_sig;
 } FormWidget;
 
@@ -2736,9 +2747,23 @@ static struct {
     // one arrive as one (the window's doorbell is a mask) — and the
     // deadlines handed the ticker already past.
     uint64_t bells, past[PAST_COUNT];
+    // The biggest part marked, by area, as much of it as the view holds,
+    // in page coordinates, and what marked it — a canvas the page drew on
+    // or a form control, by name, or "the page" for any other part
+    // (mark_part; a part as big as the view is a whole view instead) — a
+    // control shown or hidden marks the whole window, and is named so; the
+    // canvases' and the controls' marks; and the biggest rectangle a paint
+    // published, as much of it as the view holds.
+    os64_gui_rect_t mark_most, paint_most;
+    char mark_who[96];
+    uint64_t canvas_marks, control_marks;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
+
+// The canvas whose drawing is being marked (canvas_damage_mark), for the
+// counts' biggest part; NULL for every other mark.
+static const os64_html_node_t *s_marking_canvas;
 // The readings the shown page's record keeps (`d`): numbered from 1 for
 // each page shown.
 static uint32_t s_cost_readings;
@@ -2840,6 +2865,7 @@ static void cost_painter(yonder_paint_stage_t stage, bool begin)
 // The page's facts as they stand, and what its tree and cascade show now.
 static void diag_fonts(Page *p);
 static void diag_paint(Page *p);
+static void diag_motion(Page *p);
 
 static void diag_observe(Page *p, const char *when)
 {
@@ -2919,8 +2945,10 @@ static void diag_observe(Page *p, const char *when)
         yonder_diag_fact(d, "held bytes", v);
     }
     diag_fonts(p);
-    if (p == &g.page)
+    if (p == &g.page) {
         diag_paint(p);
+        diag_motion(p);
+    }
 }
 
 // Where an arrival's time went, from performance.timing's milestones,
@@ -3058,6 +3086,70 @@ static int32_t page_width(void)
 static flow_point_t scroll_now(void)
 {
     return (flow_point_t){g.sx, g.sy};
+}
+
+// What keeps the shown page moving, on its record at each write
+// (flow_motion_entries): how many elements its animations run on, how many
+// of those draw nothing (no box in or under them), how many the view
+// shows, and how many are due within a second; then the first
+// MOTION_NAMED of those due, each by name. Only what flow_motion_due asks
+// of the element itself is counted due (`counted`). The lines are written
+// anew each time, and none for a page with no layout.
+#define MOTION_NAMED 8
+#define MOTION_ASKED 1024
+static void diag_motion(Page *p)
+{
+    yonder_diag_forget(p->diag, "animated");
+    if (p->tree == NULL)
+        return;
+    flow_motion_entry_t *e = os64_malloc(MOTION_ASKED * sizeof(*e));
+    if (e == NULL) {
+        yonder_diag_fact(p->diag, "animated", "no memory to look");
+        return;
+    }
+    os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
+    int32_t total = flow_motion_entries(p->tree, view, scroll_now(), e, MOTION_ASKED);
+    int32_t looked = total < MOTION_ASKED ? total : MOTION_ASKED;
+    uint64_t now = yonder_now_ms(), soon = now + 1000;
+    int32_t undrawn = 0, seen = 0, due = 0, named = 0;
+    for (int32_t i = 0; i < looked; i++) {
+        const flow_motion_entry_t *m = &e[i];
+        uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
+        undrawn += !m->drawn;
+        seen += m->seen;
+        if (!m->counted || next > soon)
+            continue;
+        due++;
+        if (named == MOTION_NAMED)
+            continue;
+        char key[24], v[256];
+        size_t at = element_named(v, sizeof(v), "", m->node);
+        if (m->name.text != NULL && at < sizeof(v))
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " (%.*s)", (int)m->name.len, m->name.text);
+        if (at < sizeof(v)) {
+            const flow_box_t *b = m->box;
+            if (b != NULL)
+                at += (size_t)os64_snprintf(v + at, sizeof(v) - at, ": box %d,%d %dx%d", (int)b->rect.x,
+                                            (int)b->rect.y, (int)b->rect.w, (int)b->rect.h);
+            else
+                at += (size_t)os64_snprintf(v + at, sizeof(v) - at, m->drawn ? ": no box, some inside"
+                                                                             : ": draws nothing");
+        }
+        if (at < sizeof(v))
+            os64_snprintf(v + at, sizeof(v) - at, ", %s, %s, %s, due %s", m->seen ? "in view" : "out of view",
+                          m->in_place ? "in place" : "not in place", m->ticks ? "ticks" : "by layouts",
+                          next <= now ? "now" : "within a second");
+        os64_snprintf(key, sizeof(key), "animated %d", (int)++named);
+        yonder_diag_fact(p->diag, key, v);
+    }
+    char v[160];
+    char first[48] = "";
+    if (total > looked)
+        os64_snprintf(first, sizeof(first), " (the first %d looked at)", (int)MOTION_ASKED);
+    os64_snprintf(v, sizeof(v), "%d elements%s: %d draw nothing, %d in view, %d due within a second", (int)total,
+                  first, (int)undrawn, (int)seen, (int)due);
+    yonder_diag_fact(p->diag, "animated", v);
+    os64_free(e);
 }
 
 static void clamp_scroll(void)
@@ -6771,6 +6863,7 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
 // The main loop's work since the page was shown, or since its record was
 // last written on asking (`d`, view_key): how many paints and how much of
 // the view they painted, the ticks, schedules, layouts and script tasks,
+// the biggest part marked and painted and the canvas and control marks,
 // the ticker's bells and the deadlines handed it — every count, painted or
 // not (`t`) — and, when the span has a rate, how busy the loop was and
 // each stage in milliseconds a paint (a tick, a call, a task, a layout for
@@ -6826,6 +6919,12 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers, %lu events",
            (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
            (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
+    if (s_cost.mark_most.w > 0)
+        dt_put(t, "; the biggest part marked %dx%d at %d,%d by %s, the biggest painted %dx%d",
+               (int)s_cost.mark_most.w, (int)s_cost.mark_most.h, (int)s_cost.mark_most.x,
+               (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
+    dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
+           (unsigned long)s_cost.control_marks);
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -7091,7 +7190,44 @@ static void mark_part(os64_gui_rect_t r)
         return;
     }
     s_parts_reach = os64_rect_union(s_parts_reach, part.bounds);
+    os64_gui_rect_t in;
+    if (os64_rect_intersect(part.bounds, v, &in) &&
+        (uint64_t)in.w * (uint64_t)in.h > (uint64_t)s_cost.mark_most.w * (uint64_t)s_cost.mark_most.h) {
+        s_cost.mark_most = (os64_gui_rect_t){in.x - v.x + g.sx, in.y - v.y + g.sy, in.w, in.h};
+        if (s_marking_canvas != NULL)
+            element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "the canvas ", s_marking_canvas);
+        else
+            os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "the page");
+    }
     os64_ui_mark_dirty(&g.ui, &part);
+}
+
+// A form control's widget marked, `r` in the window (control_mark), or
+// shown or hidden, which marks the window (`hiding`): into the counts'
+// biggest part, by the control's name.
+static void control_counted(const FormWidget *fw, os64_gui_rect_t r, bool hiding)
+{
+    s_cost.control_marks++;
+    os64_gui_rect_t in;
+    if (!os64_rect_intersect(r, g.view.bounds, &in))
+        return;
+    if ((uint64_t)in.w * (uint64_t)in.h <= (uint64_t)s_cost.mark_most.w * (uint64_t)s_cost.mark_most.h)
+        return;
+    s_cost.mark_most = (os64_gui_rect_t){in.x - g.view.bounds.x + g.sx, in.y - g.view.bounds.y + g.sy, in.w, in.h};
+    element_named(s_cost.mark_who, sizeof(s_cost.mark_who), hiding ? "showing or hiding the control " : "the control ",
+                  fw->node);
+}
+
+static void control_mark(FormWidget *fw)
+{
+    control_counted(fw, fw->w->bounds, false);
+    os64_ui_mark_dirty(&g.ui, fw->w);
+}
+
+static void control_hidden(FormWidget *fw, bool hidden)
+{
+    control_counted(fw, g.root.bounds, true);
+    os64_ui_set_hidden(&g.ui, fw->w, hidden);
 }
 
 typedef struct {
@@ -7833,6 +7969,8 @@ static void paint_counted(const os64_gui_rect_t *damage, uint32_t count, WholeBy
         if (!os64_rect_intersect(damage[i], g.view.bounds, &meet))
             continue;
         s_cost.pixels += (uint64_t)meet.w * (uint64_t)meet.h;
+        if ((uint64_t)meet.w * meet.h > (uint64_t)s_cost.paint_most.w * (uint64_t)s_cost.paint_most.h)
+            s_cost.paint_most = meet;
         whole = whole || (meet.w == g.view.bounds.w && meet.h == g.view.bounds.h);
     }
     if (whole) {
@@ -8225,22 +8363,40 @@ static void forms_sync_from_model(bool text)
             for (int32_t k = 0; k < c->noptions && selected < 0; k++)
                 if (c->options[k].selected)
                     selected = k;
+            // Marked only when its rows or its choice changed (a dropdown's
+            // setters mark it themselves, and a list's are called only
+            // then): a sync runs whenever the page's
+            // state moved, which a script can make happen every frame, and
+            // a page of controls each marked every frame is a page repainted.
+            uint64_t sig = options_signature(c);
+            bool rows = sig != fw->options_sig;
+            fw->options_sig = sig;
             if (fw->kind == FW_DROPDOWN) {
-                uint64_t sig = options_signature(c);
-                if (sig != fw->options_sig)
+                if (rows)
                     os64_ui_dropdown_rows_changed(&g.ui, &fw->u.drop);
-                fw->options_sig = sig;
                 os64_ui_dropdown_set(&g.ui, &fw->u.drop, (size_t)c->noptions, selected);
-            } else
-                os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
-            os64_ui_mark_dirty(&g.ui, fw->w);
+            } else {
+                // listbox_set marks the list and scrolls it to its choice,
+                // so it is called only for a change: one a person scrolled
+                // away from its choice stays where they put it.
+                bool same = !rows && fw->u.list.count == (size_t)c->noptions && fw->u.list.selected == selected;
+                if (!same) {
+                    os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
+                    control_mark(fw);
+                }
+            }
             break;
         }
         case FW_BUTTON:
-        case FW_FILE:
-            button_caption(c, fw->text, sizeof(fw->text));
-            os64_ui_mark_dirty(&g.ui, fw->w);
+        case FW_FILE: {
+            char caption[sizeof(fw->text)];
+            button_caption(c, caption, sizeof(caption));
+            if (!os64_streq(caption, fw->text)) {
+                os64_strcopy(fw->text, sizeof(fw->text), caption);
+                control_mark(fw);
+            }
             break;
+        }
         }
     }
 }
@@ -8744,7 +8900,7 @@ static void forms_place(void)
         const flow_box_t *b = flow_box_for(g.page.tree, fw->node);
         if (b == NULL || b->control < 0 || widget_control(fw) < 0) {
             if (!fw->w->hidden)
-                os64_ui_set_hidden(&g.ui, fw->w, true);
+                control_hidden(fw, true);
             continue;
         }
         // The page's edges add in 64 bits (a box near INT32_MAX would wrap
@@ -8762,24 +8918,24 @@ static void forms_place(void)
         fw->w->clip = v;
         if (cls != NULL && cls != fw->w->cls) {
             fw->w->cls = cls;
-            os64_ui_mark_dirty(&g.ui, fw->w);
+            control_mark(fw);
         }
         os64_gui_rect_t r = {clamp32(x), clamp32(y), at.w, at.h};
         if (!shown) {
             if (!fw->w->hidden)
-                os64_ui_set_hidden(&g.ui, fw->w, true);
+                control_hidden(fw, true);
             fw->w->bounds = r;          // a field scrolls its text by its width
             continue;
         }
         bool moved = r.x != fw->w->bounds.x || r.y != fw->w->bounds.y ||
                      r.w != fw->w->bounds.w || r.h != fw->w->bounds.h;
         if (moved && !fw->w->hidden)
-            os64_ui_mark_dirty(&g.ui, fw->w);
+            control_mark(fw);
         fw->w->bounds = r;
         if (fw->w->hidden)
-            os64_ui_set_hidden(&g.ui, fw->w, false);
+            control_hidden(fw, false);
         else if (moved)
-            os64_ui_mark_dirty(&g.ui, fw->w);
+            control_mark(fw);
     }
 }
 
@@ -8854,12 +9010,27 @@ static void sheets_restage(Page *p)
     p->reuse_sheets = NULL;
 }
 
+static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint32_t height,
+                               const draw2d_damage_t *damage);
+
 static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage)
 {
     Page *p=opaque;
     const flow_box_t *box=p->tree?flow_box_for(p->tree,node):NULL;
     if(!box || !box->replaced || box->style->visibility!=FLOW_VISIBLE)return;
+    s_cost.canvas_marks++;
+    s_marking_canvas=node;
+    canvas_damage_part(p,box,width,height,damage);
+    s_marking_canvas=NULL;
+}
+
+// canvas_damage_mark's part: the canvas's changed texels where the
+// painter draws them, or the whole view when an ancestor's effect keeps
+// them from being bounded so.
+static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint32_t height,
+                               const draw2d_damage_t *damage)
+{
     os64_gui_rect_t view={g.sx,g.sy,g.view.bounds.w,g.view.bounds.h};
     if(!damage || !width || !height){mark_part(view);return;}
     // Groups and transformed ancestors retain conservative invalidation.

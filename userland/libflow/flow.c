@@ -2468,6 +2468,65 @@ bool flow_motion_pending_in(const flow_tree_t *tree, bool ticks)
     return false;
 }
 
+// Whether `n` or anything inside it has a box: what no box stands for
+// draws nothing, wherever the view is.
+static bool motion_drawn(const flow_tree_t *tree, const os64_html_node_t *n)
+{
+    if (f_map_get(&tree->first, n) != NULL)
+        return true;
+    for (const os64_html_node_t *c = n->first_child; c != NULL;) {
+        if (f_map_get(&tree->first, c) != NULL)
+            return true;
+        if (c->first_child != NULL) {
+            c = c->first_child;
+            continue;
+        }
+        while (c != n && c->next == NULL)
+            c = c->parent;
+        c = c != n ? c->next : NULL;
+    }
+    return false;
+}
+
+// A due time as motion_due answers it: `at` for one already gone.
+static uint64_t due_ms(double next, uint64_t at)
+{
+    if (!(next < INFINITY))
+        return FLOW_NEVER;
+    if (next <= (double)at)
+        return at;
+    double up = ceil(next);
+    return up >= (double)UINT64_MAX ? FLOW_NEVER : (uint64_t)up;
+}
+
+int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll,
+                            flow_motion_entry_t *out, int32_t cap)
+{
+    if (tree == NULL || tree->styles == NULL)
+        return 0;
+    const FStyles *styles = tree->styles;
+    for (int32_t i = 0; i < styles->nanimated && i < cap; i++) {
+        const os64_html_node_t *n = styles->animated[i];
+        const FStyled *st = f_style_of(styles, n);
+        flow_motion_entry_t e = {.node = n, .box = f_map_get(&tree->first, n), .layout_due = FLOW_NEVER,
+                                 .tick_due = FLOW_NEVER};
+        e.drawn = motion_drawn(tree, n);
+        if (st != NULL && st->motion != NULL) {
+            const FMotion *m = st->motion;
+            e.in_place = m->in_place;
+            e.ticks = m->ticks;
+            e.seen = motion_seen(tree, n, view, scroll, m->text_reach);
+            e.counted = !m->in_place || may_own_canvas(tree, n) || e.seen;
+            if (st->style.animations.nname > 0)
+                e.name = st->style.animations.name[0];
+            e.layout_due = due_ms(element_due(tree, m, NULL, false), tree->now_ms);
+            e.tick_due = due_ms(element_due(tree, m, NULL, true), tree->tick_ms);
+        }
+        out[i] = e;
+    }
+    return styles->nanimated;
+}
+
 uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     return motion_due(tree, view, scroll, true);

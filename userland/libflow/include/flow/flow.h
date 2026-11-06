@@ -1328,6 +1328,29 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
 // flow_motion_due's, but their phase edges are, which a tick never
 // crosses: one waits for the layout. A time already gone is due at once.
 uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
+// One element the page's animations run on, for a record that says what
+// keeps a page moving (flow_motion_entries): its first box (NULL for none),
+// whether it or anything inside it has a box (`drawn`), whether `view`
+// shows it, whether its animations repaint only where it draws
+// (`in_place`) and tick (`ticks`), whether flow_motion_due asks its own
+// times at all (`counted`: not one in place that the view does not show,
+// unless it may own the canvas), its first animation's name, and when it
+// is next due for a layout and for a tick, each by itself and before that
+// question, in flow_motion_due's and flow_motion_tick_due's units and
+// rounding (FLOW_NEVER for none). What an element hands down to a box
+// drawn outside it that the view shows, which makes flow_motion_due ask an
+// element it otherwise passes by, is not said here.
+typedef struct {
+    const os64_html_node_t *node;
+    const flow_box_t *box;
+    bool drawn, seen, in_place, ticks, counted;
+    flow_name_t name;
+    uint64_t layout_due, tick_due;
+} flow_motion_entry_t;
+// The tree's animated elements, the first `cap` into `out`: how many there
+// are.
+int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll,
+                            flow_motion_entry_t *out, int32_t cap);
 // The page's ticking animations moved to `now`, which is no earlier than
 // the tree's last tick or its layout (PILE3.md § Animations in place, A
 // tick): each element's style rewritten, its transform frames remade and
