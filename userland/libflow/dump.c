@@ -594,8 +594,9 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap)
                 cur = NULL;
                 break;
             }
-            if (os64_html_flat_next_sibling(doc, cur) != NULL) {
-                cur = os64_html_flat_next_sibling(doc, cur);
+            const os64_html_node_t *next = os64_html_flat_next_sibling(doc, cur);
+            if (next != NULL) {
+                cur = next;
                 break;
             }
             cur = f_flat_parent(doc, cur);

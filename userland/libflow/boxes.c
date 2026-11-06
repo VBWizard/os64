@@ -816,9 +816,10 @@ static int32_t count_items(const B *b, const os64_html_node_t *list)
             cur = down;
             continue;
         }
-        while (cur != NULL && cur != list && next_of(b, cur) == NULL)
+        const os64_html_node_t *next = NULL;
+        while (cur != NULL && cur != list && (next = next_of(b, cur)) == NULL)
             cur = up_of(b, cur);
-        cur = cur != NULL && cur != list ? next_of(b, cur) : NULL;
+        cur = cur != NULL && cur != list ? next : NULL;
     }
     return count;
 }

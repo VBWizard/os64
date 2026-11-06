@@ -5789,9 +5789,10 @@ static void webfonts_chars(const Page *p)
             n = down;
             continue;
         }
-        while (n != NULL && os64_html_flat_next_sibling(doc, n) == NULL)
+        const os64_html_node_t *next = NULL;
+        while (n != NULL && (next = os64_html_flat_next_sibling(doc, n)) == NULL)
             n = os64_html_flat_parent(doc, n);
-        n = n != NULL ? os64_html_flat_next_sibling(doc, n) : NULL;
+        n = n != NULL ? next : NULL;
     }
     uint16_t upto = 0;
     for (uint32_t w = 0; w < 0x110000 / 64; w++) {

@@ -128,9 +128,13 @@ static const os64_html_node_t *flat_after(const os64_html_document_t *doc, const
     const os64_html_node_t *k = down ? os64_html_flat_first_child(doc, c) : NULL;
     if (k != NULL)
         return k;
-    while (c != NULL && c != n && os64_html_flat_next_sibling(doc, c) == NULL)
-        c = f_flat_parent(doc, c);
-    return c != NULL && c != n ? os64_html_flat_next_sibling(doc, c) : NULL;
+    // Each sibling asked for once: an answer is kept, not asked again.
+    for (; c != NULL && c != n; c = f_flat_parent(doc, c)) {
+        const os64_html_node_t *next = os64_html_flat_next_sibling(doc, c);
+        if (next != NULL)
+            return next;
+    }
+    return NULL;
 }
 
 #include "reuse_snapshot.inc"
