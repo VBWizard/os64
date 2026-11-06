@@ -74,6 +74,7 @@ JSValue d_html_error(JSContext *ctx, int64_t status)
     if (status == OS64_HTML_HIERARCHY || status == OS64_HTML_ROOT_REQUIRED)
         name = "HierarchyRequestError";
     else if (status == OS64_HTML_NOT_FOUND) name = "NotFoundError";
+    else if (status == OS64_HTML_NOT_SUPPORTED) name = "NotSupportedError";
     else if (status <= OS64_HTML_TOO_LARGE && status >= OS64_HTML_WORK_EXHAUSTED)
         name = "QuotaExceededError";
     return d_error(ctx, name, os64_html_status_name(status));

@@ -343,7 +343,7 @@ int d_root_options(JSContext *ctx, int argc, JSValueConst *argv)
     if (JS_IsException(composed)) return -1;
     int truth = JS_ToBool(ctx, composed);
     JS_FreeValue(ctx, composed);
-    return truth < 0 ? -1 : 0;
+    return truth;
 }
 
 /* normalize() (DOM § 4.4): among the node's descendants, an empty text
@@ -411,10 +411,13 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
         return d_attribute_collection(dom, ctx, self, argv[0], magic == D_BY_NAME);
     case D_ROOT_NODE: {
         /* getRootNode(options) (DOM § 4.4): the root of the tree the node
-         * is in, read after the options are converted. */
-        if (d_root_options(ctx, argc, argv) < 0) return JS_EXCEPTION;
+         * is in, read after the options are converted; with `composed` and
+         * shadow trees on, the shadow-including root. */
+        int composed = d_root_options(ctx, argc, argv);
+        if (composed < 0) return JS_EXCEPTION;
         const os64_html_node_t *root = d_node(dom, ctx, this_value);
         if (root == NULL) return JS_EXCEPTION;
+        if (composed && dom->options.shadow_trees) return d_wrap(dom, ctx, os64_html_shadow_including_root(root));
         while (root->parent != NULL) root = root->parent;
         return d_wrap(dom, ctx, root);
     }

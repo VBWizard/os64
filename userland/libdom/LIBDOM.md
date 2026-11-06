@@ -323,7 +323,17 @@ dispatch ends.
 then window past the document (except for `load`), and a plain target,
 which is in no tree, alone; capture listeners top
 down, then the target's capture listeners and its others, then bubbling up
-when the event bubbles. A list is cut where it ended when its target was
+when the event bubbles. With shadow trees (§ Shadow trees) the ancestors are
+DOM's "get the parent": a slotted node's slot, and a shadow root's host when
+the event is `composed` or the root is not the target's own. Each step shows
+its target retargeted, so a listener outside a shadow tree sees the host; a
+step whose target a host is runs at its target, capture and bubble, whether
+or not the event bubbles; a relatedTarget is retargeted at each step, and an
+event whose relatedTarget, being some other node, retargets to its own
+target is not dispatched.
+Afterwards the event keeps the last step's target, or none when that is
+inside a shadow tree. A click's activation is found on this path, so a
+button around a host is activated by a click inside it. A list is cut where it ended when its target was
 reached, so a listener added during the dispatch waits for the next one; a
 listener removed during it does not run (its record is swept when the last
 dispatch leaves). `once` listeners are removed before they run. A listener
@@ -335,8 +345,10 @@ innermost first: the nodes as the dispatch found them, whatever a listener
 moves meanwhile, so the dispatch holds each one while it runs (an ancestor
 no script has a wrapper for would otherwise be reclaimed when a listener
 takes it out of the tree) and wraps them only when asked. Outside a
-dispatch it is empty. There are no shadow trees (DEBTS.md), so no listener
-has nodes hidden from it, and every listener reads the whole path.
+dispatch it is empty. A closed shadow tree's nodes are left out for a
+listener outside that tree, by § 2.9's hidden levels: a closed root between
+a step and the current target is one level deeper, and a slot in a closed
+tree that an assigned node on the path climbed to is one level back.
 
 Two callers, two shapes. **The host** (`os64_dom_dispatch`) opens a libjs
 task, runs each listener as one `os64_js_call` followed by a checkpoint, and
@@ -793,7 +805,7 @@ whose entries could not be made). An observer is held while it observes.
 `NodeIterator` and `NodeFilter` (`walker.c`; DOM § 6), are a Modern Web
 row. The moves are the standard's steps over libhtml's links, and a walker
 traverses one node tree: a template's contents are no element's children,
-and a shadow root would be no child of its host. A walker's record holds
+and a shadow root is no child of its host. A walker's record holds
 its root and its current node (an iterator's reference) with libhtml's
 hold, and a traversal holds the node it stands on, since the filter is
 page code that may take that node out of the tree, whose subtree libhtml
@@ -817,6 +829,30 @@ filter the same node for ever. Lifetime is the observers': a finalizer
 marks its record dead, and the dead are swept when the next walker is made
 and at teardown, which releases the holds. An Attr root is a TypeError
 (DEBTS.md).
+
+## Shadow trees
+
+`shadow.c` (docs/design/pending/SHADOW_DOM.md § 7) is what a page reaches
+of libhtml's shadow trees, all behind `options.shadow_trees` and the Modern
+Web switch, as one switch: Element's `attachShadow`, `shadowRoot` (an open
+root's only), `slot` and `assignedSlot` (a slot in a closed tree is not
+handed out), Text's `assignedSlot`, `Event.composed`, the `ShadowRoot`
+and `HTMLSlotElement` interfaces with their members, and `onslotchange` on
+window, elements, the document and a root, with its content attribute (an
+event kind of its own, a handler only with the switch on). A root and a slot keep
+their kinds' prototypes refined (`d_node_prototype`), so every member and
+receiver check of DocumentFragment and HTMLElement applies to them.
+`slotAssignment: "manual"` and `assign()` are NotSupportedError, and so is
+attaching to a custom element whose definition disables `shadow`.
+
+A root's `activeElement`, and the document's, is the focused element
+retargeted against it, so the document sees the outermost host. `slotchange`
+fires at the mutation observers' notify (observer.c), after their
+callbacks: the slots whose assigned nodes changed since they last reported
+(`os64_html_slot_changes`) are taken first, so a change a callback makes
+waits for the next notify. A clone queues the notify too, since its slots'
+first assignment comes from no change the dispatcher saw. The event path is
+§ Events'.
 
 ## The CSS namespace
 
@@ -1590,8 +1626,9 @@ interfaces row's, above; two rows of their own carry the members.
 
 **The node row** (`mixin.c` `d_nodes_install`, naming nothing on window):
 `getRootNode(options)` on Node's prototype, the root of the node's tree
-(no shadow trees, so `composed` changes nothing, though the options are
-converted as WebIDL converts a dictionary), and on Attr's, whose shadow
+(with shadow trees on and `composed` true, the shadow-including root;
+otherwise `composed` changes nothing, though the options are converted as
+WebIDL converts a dictionary), and on Attr's, whose shadow
 answers it with the Attr itself; Text's `wholeText` (the data of the run
 of text siblings it is in) and `splitText(offset)` (the offset in UTF-16
 code units; the tail a new text node, the next sibling when there is a

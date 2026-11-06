@@ -81,7 +81,8 @@ int d_node_kind(const os64_html_node_t *node)
 }
 
 /* A wrapper for a node of `node`'s kind, not yet attached: its prototype is
- * the kind's, or `prototype` when that is an object (a constructor's
+ * the kind's as d_node_prototype refines it (a shadow root's, a slot's,
+ * SVG's), or `prototype` when that is an object (a constructor's
  * new.target's, d_wrap_constructed). */
 static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
                                 const os64_html_node_t *node, JSValueConst prototype)
@@ -89,7 +90,7 @@ static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
     DValue *entry = d_alloc(dom, sizeof(*entry));
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
     JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
-        d_svg_prototype(dom, node), dom->node_class);
+        d_node_prototype(dom, node), dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
     entry->value = value;
     entry->next = dom->values;
@@ -128,6 +129,9 @@ JSValue d_node_clone(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
             JS_FreeValue(ctx, made);
             return JS_EXCEPTION;
         }
+        /* A clonable host's copy has its own slots' first assignment to
+         * report, and no change the dispatcher saw made them. */
+        d_slots_changed(dom);
         return made;
     }
     if (copy != NULL) status = OS64_HTML_NO_MEMORY;
@@ -731,5 +735,6 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
                 d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
     }
     if(d_svg_geometry_prototypes(dom,ctx)<0)return -1;
+    if (d_shadow_prototypes(dom, ctx) < 0) return -1;
     return d_geometry_install(dom, ctx);
 }

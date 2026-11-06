@@ -106,7 +106,9 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     if (property == D_INNER_HTML || property == D_OUTER_HTML) {
-        if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "HTML requires an element");
+        /* A ShadowRoot's innerHTML is its children's, as an element's is. */
+        bool root = property == D_INNER_HTML && os64_html_shadow_host(node) != NULL;
+        if (node->kind != OS64_HTML_ELEMENT && !root) return JS_ThrowTypeError(ctx, "HTML requires an element");
         bool scripting = d_scripting(dom, node);
         size_t length = os64_html_serialize(node, property == D_INNER_HTML, scripting, NULL, 0);
         char *buffer = length == SIZE_MAX ? NULL : d_alloc(dom, length + 1);
@@ -160,7 +162,10 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     if (property == D_DATA && node->kind != OS64_HTML_TEXT && node->kind != OS64_HTML_COMMENT)
         return JS_ThrowTypeError(ctx, "data requires a character-data node");
-    if (property == D_INNER_HTML && node->kind != OS64_HTML_ELEMENT)
+    /* A ShadowRoot's innerHTML parses with its host as the context. */
+    const os64_html_node_t *context = property == D_INNER_HTML && os64_html_shadow_host(node) != NULL
+        ? os64_html_shadow_host(node) : node;
+    if (property == D_INNER_HTML && context->kind != OS64_HTML_ELEMENT)
         return JS_ThrowTypeError(ctx, "innerHTML requires an element");
     DString string = {0};
     JSValue empty = JS_UNDEFINED;
@@ -179,8 +184,8 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
         return JS_UNDEFINED;
     }
     if (property == D_INNER_HTML) {
-        os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, node, string.data,
-                                               string.length, d_scripting(dom, node), &status);
+        os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, context, string.data,
+                                               string.length, d_scripting(dom, context), &status);
         /* A script innerHTML inserts never runs: it is born started. */
         if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;
         else if (fragment != NULL) status = d_replace_content(dom, node->template_contents != NULL ?

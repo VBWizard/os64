@@ -260,9 +260,16 @@ static bool add_transients(os64_dom_t *dom, const os64_html_change_t *c)
     return added;
 }
 
+void d_slots_changed(os64_dom_t *dom)
+{
+    if (dom->options.shadow_trees && dom->observers != NULL && os64_html_slot_changes_pending(dom->document))
+        request_notify(dom);
+}
+
 void d_observers_changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
     struct DObservers *s = dom->observers;
+    d_slots_changed(dom);
     if (s == NULL || s->count == 0) return;
     int type = c->kind == OS64_HTML_CHANGE_ATTR ? T_ATTRIBUTES : c->kind == OS64_HTML_CHANGE_TEXT
         ? T_CHARACTER_DATA : c->kind == OS64_HTML_CHANGE_CHILDREN ? T_CHILD_LIST : -1;
@@ -467,17 +474,62 @@ static void report_lost(os64_dom_t *dom, JSContext *ctx)
     }
 }
 
-/* DOM's "notify mutation observers": every observer, in the order the page
- * made them (those made by a callback meanwhile wait for the next notify),
- * handed its records if it has any; its transient registrations go either
- * way.
- * -1 when the runtime must stop. */
+/* The slots os64_html_slot_changes reports, each held until its slotchange
+ * has fired. */
+typedef struct {
+    os64_dom_t *dom;
+    const os64_html_node_t **slots;
+    size_t n, cap;
+    bool lost;
+} DSlotSignals;
+
+static void slot_signal(void *opaque, const os64_html_node_t *slot)
+{
+    DSlotSignals *signals = opaque;
+    if (signals->n == signals->cap) {
+        size_t cap = signals->cap != 0 ? signals->cap * 2 : 8;
+        const os64_html_node_t **grown = d_alloc(signals->dom, cap * sizeof(*grown));
+        if (grown == NULL) {
+            signals->lost = true;
+            return;
+        }
+        if (signals->n != 0) os64_memcpy(grown, signals->slots, signals->n * sizeof(*grown));
+        d_free(signals->dom, signals->slots);
+        signals->slots = grown;
+        signals->cap = cap;
+    }
+    os64_html_hold(signals->dom->document, slot);
+    signals->slots[signals->n++] = slot;
+}
+
+/* An exception the binding left while firing slotchange: the runtime's to
+ * stop on, else reported. -1 when the runtime must stop. */
+static int signal_failed(os64_dom_t *dom, JSContext *ctx)
+{
+    if (!d_exception_catchable(ctx)) return -1;
+    JSValue error = JS_GetException(ctx);
+    d_report(dom, ctx, error);
+    JS_FreeValue(ctx, error);
+    return 0;
+}
+
+/* DOM's "notify mutation observers": the slots whose assignment changed
+ * are taken first (its signal slots); then every observer, in the order
+ * the page made them (those made by a callback meanwhile wait for the next
+ * notify), is handed its records if it has any, its transient
+ * registrations going either way; then a slotchange fires at each slot
+ * taken, so one an observer's callback causes waits for the next notify.
+ * A root left marked for want of memory is reported by a later one; a
+ * slot that could not be listed loses its event, and says so. -1 when the
+ * runtime must stop. */
 static int notify(os64_dom_t *dom, JSContext *ctx)
 {
     struct DObservers *s = dom->observers;
     s->queued = false;
     s->owed = false;
     report_lost(dom, ctx);
+    DSlotSignals signals = {dom, NULL, 0, 0, false};
+    if (dom->options.shadow_trees) (void)os64_html_slot_changes(dom->document, slot_signal, &signals);
     DObserver *last = s->observers_last;
     int status = 0;
     for (DObserver *o = s->observers; o != NULL && status == 0;) {
@@ -510,6 +562,20 @@ static int notify(os64_dom_t *dom, JSContext *ctx)
         JS_FreeValue(ctx, records);
         o = next;
     }
+    if (signals.lost && status == 0) {
+        d_error(ctx, "QuotaExceededError", "A slotchange event was lost: the DOM quota was exceeded");
+        status = signal_failed(dom, ctx);
+    }
+    for (size_t i = 0; i < signals.n; i++) {
+        if (status == 0) {
+            JSValue event = d_event_new(dom, ctx, "slotchange", true, false, true);
+            if (JS_IsException(event) || d_dispatch(dom, ctx, event, signals.slots[i]) < 0)
+                status = signal_failed(dom, ctx);
+            JS_FreeValue(ctx, event);
+        }
+        os64_html_release(dom->document, signals.slots[i]);
+    }
+    d_free(dom, signals.slots);
     return status;
 }
 

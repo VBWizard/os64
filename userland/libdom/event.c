@@ -17,13 +17,16 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "languagechange", "error", "unhandledrejection", "rejectionhandled", "readystatechange",
     "visibilitychange", "prerenderingchange", "DOMContentLoaded", "message", "messageerror", "invalid",
     "pointerdown", "pointerup", "pointermove", "pointerover", "pointerout", "pointerenter", "pointerleave",
-    "pointercancel", "gotpointercapture", "lostpointercapture", "mouseenter", "mouseleave", "auxclick"
+    "pointercancel", "gotpointercapture", "lostpointercapture", "mouseenter", "mouseleave", "auxclick", "slotchange"
 };
 /* A page's handler attributes are a bit per kind in a uint64_t
  * (os64_dom_handler_attributes, attribute_mask). */
 _Static_assert(D_EVENT_COUNT <= 64, "the handler-attribute mask holds a bit per event kind");
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
+
+/* Where a UI event keeps its values in the record's detail[]. */
+enum { U_VIEW, U_RELATED, U_TEXT, U_TEXT2 };
 
 /* The most values an Event interface keeps in its record (a MessageEvent's
  * five). */
@@ -48,6 +51,15 @@ typedef struct {
     const os64_html_node_t **path_nodes;
     uint32_t path_count;
     bool path_window;
+    /* Shadow trees (SHADOW_DOM.md § 8): whether the path may leave a
+     * shadow root for its host (EventInit's composed; for a trusted event,
+     * as its standard says, host_event), and, while dispatching, which
+     * step of the path is being invoked and, for each of path_nodes, DOM's
+     * slot-in-closed-tree (NULL with no nodes), which composedPath reads.
+     * The flags are in the path's block, as the nodes are. */
+    bool composed;
+    uint32_t path_at;
+    const bool *path_closed_slots;
     /* A ProgressEvent's (XHR § 4): its three attributes. */
     bool progress, length_computable;
     double loaded, total;
@@ -113,10 +125,12 @@ static bool content_attribute(int kind)
 
 /* Whether on<type> is a handler on this page: the arc's types (SCROLL on)
  * only with the Modern Web switch on, so a content attribute for one is
- * an ordinary attribute with it off, as it was before the arc. */
+ * an ordinary attribute with it off, as it was before the arc; slotchange
+ * only with shadow trees' too. */
 static bool handler_on(const os64_dom_t *dom, int kind)
 {
-    return has_handler_name(kind) && (kind < D_EVENT_SCROLL || dom->options.modern);
+    return has_handler_name(kind) && (kind < D_EVENT_SCROLL || dom->options.modern) &&
+        (kind != D_EVENT_SLOTCHANGE || dom->options.shadow_trees);
 }
 
 /* HTML's "window-reflecting body element event handler set" and the body's
@@ -188,6 +202,12 @@ JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototyp
                       .custom_detail = JS_NULL};
     JS_SetOpaque(object, event);
     return object;
+}
+
+void d_event_set_composed(os64_dom_t *dom, JSValueConst event)
+{
+    DEvent *state = JS_GetOpaque(event, dom->event_class);
+    if (state != NULL) state->composed = true;
 }
 
 static DEvent *event_of(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
@@ -675,6 +695,16 @@ typedef struct {
     bool document_target;
     /* A plain target (d_event_target): the path is the target alone. */
     DValue *plain;
+    /* A node's path, while it is dispatched (DOM § 2.9's structs): the
+     * target each step shows (its shadow-adjusted target, or the nearest
+     * one before it), and, for an event with a relatedTarget that is a
+     * node, each step's relatedTarget retargeted against it (NULL
+     * otherwise); and which of its `depth` node steps have a
+     * shadow-adjusted target of their own (`adjusted`, non-NULL there).
+     * NULL for a path of one, whose target is the one it began with. */
+    JSValue *targets, *related;
+    const os64_html_node_t *const *adjusted;
+    size_t depth;
 } Dispatch;
 
 /* One step of the path: the target's records whose capture flag fits the
@@ -780,14 +810,26 @@ static int path_entry(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *a
     return 0;
 }
 
-/* invoke_target at path[i]. A node that had no wrapper when the path was
- * built is looked at again as the dispatch reaches it: a listener before it
- * may have reached it (composedPath, parentNode) and given it a listener,
- * which DOM runs. A wrapper that cannot be made then is reported and the
- * node passed, as a handler attribute that will not compile is. */
+/* invoke_target at path[i], DOM's "invoke": first the event's target
+ * becomes the one the step shows and its relatedTarget the step's,
+ * whether or not propagation has stopped. A node that had no wrapper when the path was built is looked at
+ * again as the dispatch reaches it: a listener before it may have reached
+ * it (composedPath, parentNode) and given it a listener, which DOM runs. A
+ * wrapper that cannot be made then is reported and the node passed, as a
+ * handler attribute that will not compile is. */
 static int invoke_at(Dispatch *d, DValue **path, const os64_html_node_t *const *nodes, size_t depth, size_t i,
                      uint8_t phase, bool capture)
 {
+    DEvent *event = d->event;
+    event->path_at = (uint32_t)i;
+    if (d->targets != NULL) {
+        JS_FreeValue(d->ctx, event->target);
+        event->target = JS_DupValue(d->ctx, d->targets[i]);
+    }
+    if (d->related != NULL) {
+        JS_FreeValue(d->ctx, event->detail[U_RELATED]);
+        event->detail[U_RELATED] = JS_DupValue(d->ctx, d->related[i]);
+    }
     if (path[i] == NULL && i < depth &&
         path_entry(d->dom, d->ctx, nodes[i], d_event_kind(d->event->type), &path[i]) < 0) {
         report_pending(d->dom, d->ctx);
@@ -796,60 +838,263 @@ static int invoke_at(Dispatch *d, DValue **path, const os64_html_node_t *const *
     return invoke_target(d, path[i], phase, capture);
 }
 
-/* MouseEvent and PointerEvent clicks run DOM activation at the target or
- * its nearest activating ancestor. Native pointer packets opt in here;
- * legacy host clicks still perform their defaults in the browser. */
-static const os64_html_node_t *activation_target(const Dispatch *d, const os64_html_node_t *node)
+/* MouseEvent and PointerEvent clicks run DOM activation, at a step of the
+ * path path_walk chooses. Native pointer packets opt in here; legacy host
+ * clicks still perform their defaults in the browser. */
+static bool activates(const Dispatch *d)
 {
-    if ((d->host != NULL && !d->event->native_activation) || node == NULL ||
-        (d->event->ui != D_UI_MOUSE && d->event->ui != D_UI_POINTER) || os64_strcmp(d->event->type, "click") != 0)
-        return NULL;
-    if (d_activation_has(node)) return node;
-    for (const os64_html_node_t *at = node->parent; d->event->bubbles && at != NULL; at = at->parent)
-        if (d_activation_has(at)) return at;
-    return NULL;
+    return !(d->host != NULL && !d->event->native_activation) &&
+        (d->event->ui == D_UI_MOUSE || d->event->ui == D_UI_POINTER) && os64_strcmp(d->event->type, "click") == 0;
 }
 
-/* The DOM Standard's dispatch, for one event at one target: the path is the
- * target's ancestors and, past the document, window (except for load);
- * capture down, the target, then bubble up when the event bubbles. A plain
- * target is a path of one. A click's activation (activation_target) runs
- * its first half before the listeners and its second once the dispatch is
- * over, the event's phase, current target and flags already reset, as
- * DOM's steps order them. */
+/* The events whose detail[U_RELATED] is a relatedTarget, which retargets
+ * (a SubmitEvent's submitter there does not). */
+static bool has_related(const DEvent *event)
+{
+    return event->ui == D_UI_MOUSE || event->ui == D_UI_POINTER || event->ui == D_UI_FOCUS;
+}
+
+static const os64_html_node_t *tree_root(const os64_html_node_t *node)
+{
+    while (node != NULL && node->parent != NULL) node = node->parent;
+    return node;
+}
+
+static bool in_shadow_tree(const os64_html_node_t *node)
+{
+    return os64_html_shadow_host(tree_root(node)) != NULL;
+}
+
+static bool shadow_including_inclusive_ancestor(const os64_html_node_t *a, const os64_html_node_t *b)
+{
+    for (const os64_html_node_t *at = b; at != NULL; at = os64_html_shadow_including_parent(at))
+        if (at == a) return true;
+    return false;
+}
+
+const os64_html_node_t *d_retarget(const os64_html_node_t *a, const os64_html_node_t *b)
+{
+    for (;;) {
+        const os64_html_node_t *root = tree_root(a), *host = os64_html_shadow_host(root);
+        if (host == NULL || shadow_including_inclusive_ancestor(root, b)) return a;
+        a = host;
+    }
+}
+
+const os64_html_node_t *d_event_parent(const os64_dom_t *dom, const os64_html_node_t *node, bool composed,
+                                       const os64_html_node_t *first)
+{
+    if (node->parent != NULL && node->parent->shadow_root != NULL) {
+        const os64_html_node_t *slot = os64_html_assigned_slot(dom->document, node);
+        if (slot != NULL) return slot;
+    }
+    const os64_html_node_t *host = os64_html_shadow_host(node);
+    if (host != NULL) return composed || node != first ? host : NULL;
+    return node->parent;
+}
+
+/* The nodes of the path DOM's dispatch builds (§ 2.9) from the node an
+ * event is dispatched at, walked once to count them and once, with arrays
+ * of `count` to hold them, to fill them: each step's node, its
+ * shadow-adjusted target (NULL where it has none), the event's
+ * relatedTarget retargeted against it, and DOM's slot-in-closed-tree: the
+ * step is the slot an assigned node on the path climbed to, in a closed
+ * tree, which composedPath hides by. A step whose node the retargeted
+ * relatedTarget is ends the path before it, and an event whose
+ * relatedTarget retargets to its target, being some other node, has no
+ * path at all. The walk also finds the click's activation target, and
+ * DOM's clearTargets: whether the last adjusted target or its
+ * relatedTarget is in a shadow tree, when the dispatch leaves neither
+ * showing. */
+typedef struct {
+    const os64_html_node_t **nodes, **adjusted, **related;
+    bool *closed_slots;
+    size_t count, last_adjusted;
+    const os64_html_node_t *top, *activation;
+    bool clear;
+} DPath;
+
+static void path_step(DPath *p, const os64_html_node_t *node, const os64_html_node_t *adjusted,
+                      const os64_html_node_t *related, bool closed_slot)
+{
+    p->top = node;
+    if (p->nodes != NULL) {
+        p->nodes[p->count] = node;
+        p->adjusted[p->count] = adjusted;
+        p->related[p->count] = related;
+        p->closed_slots[p->count] = closed_slot;
+    }
+    if (adjusted != NULL) {
+        p->last_adjusted = p->count;
+        p->clear = in_shadow_tree(adjusted) || (related != NULL && in_shadow_tree(related));
+    }
+    p->count++;
+}
+
+static bool assigned(const os64_dom_t *dom, const os64_html_node_t *node)
+{
+    return node->parent != NULL && node->parent->shadow_root != NULL &&
+        os64_html_assigned_slot(dom->document, node) != NULL;
+}
+
+static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os64_html_node_t *related, DPath *p)
+{
+    const os64_dom_t *dom = d->dom;
+    bool composed = d->event->composed, activation = activates(d);
+    /* `home` is the target's root. Every step is in its shadow-including
+     * subtree (a slot it detours through included) until the path leaves
+     * it for its host, which is the one step DOM's test (target's root a
+     * shadow-including inclusive ancestor of parent) fails, so the walk
+     * asks that and climbs to a root only when the target moves. A
+     * relatedTarget in no shadow tree retargets to itself against
+     * anything. So a page with no shadow trees walks its path once. */
+    const os64_html_node_t *target = node, *first = tree_root(node), *home = first, *previous = node;
+    bool plain = related == NULL || !in_shadow_tree(related);
+    const os64_html_node_t *now = plain ? related : d_retarget(related, target);
+    p->count = p->last_adjusted = 0;
+    p->activation = NULL;
+    p->clear = false;
+    if (now == target && related != target) return;
+    path_step(p, target, target, now, false);
+    if (activation && d_activation_has(target)) p->activation = target;
+    /* DOM's slottable: the assigned node the path last climbed from, whose
+     * parent on the path is its slot. */
+    const os64_html_node_t *slottable = assigned(dom, target) ? target : NULL;
+    for (const os64_html_node_t *parent = d_event_parent(dom, target, composed, first); parent != NULL;
+         parent = d_event_parent(dom, parent, composed, first)) {
+        bool closed_slot = false;
+        if (slottable != NULL) {
+            const os64_html_node_t *root = tree_root(parent);
+            closed_slot = os64_html_shadow_host(root) != NULL && (root->shadow & OS64_HTML_SHADOW_CLOSED) != 0;
+            slottable = NULL;
+        }
+        if (assigned(dom, parent)) slottable = parent;
+        now = plain ? related : d_retarget(related, parent);
+        bool inside = !(previous == home && os64_html_shadow_host(home) == parent);
+        if (inside) {
+            if (activation && d->event->bubbles && p->activation == NULL && d_activation_has(parent))
+                p->activation = parent;
+            path_step(p, parent, NULL, now, closed_slot);
+        } else if (parent == now) {
+            break;
+        } else {
+            target = parent;
+            home = tree_root(target);
+            if (activation && p->activation == NULL && d_activation_has(target)) p->activation = target;
+            path_step(p, parent, parent, now, closed_slot);
+        }
+        previous = parent;
+    }
+}
+
+/* A step of a node's path is at its target when it has a shadow-adjusted
+ * target (a host, for the listeners outside its tree); the first step of
+ * any path is. */
+static bool at_target(const Dispatch *d, size_t i)
+{
+    return i == 0 || (d->adjusted != NULL && i < d->depth && d->adjusted[i] != NULL);
+}
+
+static void steps_free(Dispatch *d, JSValue *steps, size_t values)
+{
+    for (size_t i = 0; i < values; i++) JS_FreeValue(d->ctx, steps[i]);
+    d->targets = d->related = NULL;
+    d->adjusted = NULL;
+}
+
+/* The DOM Standard's dispatch, for one event at one target. A node's path
+ * is path_walk's: its ancestors, through the slot a slotted node is
+ * assigned to and out of a shadow root to its host (always, unless the
+ * event is not composed and the root is its target's own), then, past the
+ * document, window (except for load). Capture runs
+ * from the outside in, then each step's own listeners from the inside out,
+ * a step at its target (at_target) for both and the rest capturing, then
+ * bubbling when the event bubbles. A plain target, and the window's own
+ * events, are a path of one. Once it is over the event shows the target
+ * and relatedTarget of the last step invoked (the window's for a bubbling
+ * event, else the last at its target), or neither when they are in a
+ * shadow tree. A click's activation runs its first half before the listeners and
+ * its second once the dispatch is over, the event's phase, current target
+ * and flags already reset, as DOM's steps order them. */
 static int dispatch(Dispatch *d, const os64_html_node_t *node)
 {
     os64_dom_t *dom = d->dom;
     JSContext *ctx = d->ctx;
     DEvent *event = d->event;
     int kind = d_event_kind(event->type);
-    size_t length = d->plain != NULL ? 1 : 0, depth = 0;
-    const os64_html_node_t *top = node;
     if (d->plain != NULL) node = NULL;
-    for (const os64_html_node_t *at = node; at != NULL; at = at->parent) { depth++; top = at; }
-    length += depth;
-    bool to_window = d->plain == NULL && (node == NULL || (top == document_node(dom) && kind != D_EVENT_LOAD));
+    const os64_html_node_t *related = NULL;
+    if (node != NULL && has_related(event)) {
+        DValue *entry = JS_GetOpaque(event->detail[U_RELATED], dom->node_class);
+        if (entry != NULL && entry->node != NULL && os64_html_owns_node(dom->document, entry->node))
+            related = entry->node;
+    }
+    DPath walk = {0};
+    if (node != NULL) {
+        path_walk(d, node, related, &walk);
+        /* No path: no listener runs, and the dispatch ends as one does. */
+        if (walk.count == 0) {
+            event->stop = event->stop_now = false;
+            return event->canceled ? 0 : 1;
+        }
+    }
+    size_t depth = walk.count, length = d->plain != NULL ? 1 : depth;
+    bool to_window = d->plain == NULL && (node == NULL || (walk.top == document_node(dom) && kind != D_EVENT_LOAD));
     if (to_window) length++;
-    /* The wrappers the listeners are invoked on, then the path's nodes for
-     * composedPath, which an ancestor with no wrapper is in too. */
-    DValue **path = d_alloc(dom, length * sizeof(*path) + depth * sizeof(const os64_html_node_t *));
-    const os64_html_node_t **nodes = path != NULL ? (const os64_html_node_t **)(path + length) : NULL;
-    if (path == NULL) {
+    /* One block: for a node's path, each step's target and relatedTarget as
+     * wrapped; the wrappers the listeners are invoked on; then the path's
+     * nodes for composedPath, which a node with no wrapper is in too, each
+     * step's target and relatedTarget as walked, and its slot-in-closed-tree. */
+    size_t values = node != NULL ? length * (related != NULL ? 2 : 1) : 0;
+    JSValue *steps = d_alloc(dom, values * sizeof(JSValue) + length * sizeof(DValue *) +
+                                  depth * 3 * sizeof(const os64_html_node_t *) + depth * sizeof(bool));
+    if (steps == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM event path quota exceeded");
         return -1;
     }
+    DValue **path = (DValue **)(steps + values);
+    const os64_html_node_t **nodes = (const os64_html_node_t **)(path + length);
+    bool failed = false;
+    if (node != NULL) {
+        walk.nodes = nodes;
+        walk.adjusted = nodes + depth;
+        walk.related = nodes + 2 * depth;
+        walk.closed_slots = (bool *)(nodes + 3 * depth);
+        path_walk(d, node, related, &walk);
+        for (size_t i = 0; i < values; i++) steps[i] = JS_UNDEFINED;
+        d->targets = steps;
+        d->related = related != NULL ? steps + length : NULL;
+        d->adjusted = walk.adjusted;
+        d->depth = depth;
+        for (size_t i = 0; !failed && i < length; i++) {
+            bool window = i == depth;
+            if (!window && walk.adjusted[i] != NULL) {
+                steps[i] = d_wrap(dom, ctx, walk.adjusted[i]);
+                failed = JS_IsException(steps[i]);
+            } else steps[i] = JS_DupValue(ctx, steps[i - 1]);
+            if (!failed && d->related != NULL) {
+                d->related[i] = d_wrap(dom, ctx, window ? d_retarget(related, NULL) : walk.related[i]);
+                failed = JS_IsException(d->related[i]);
+            }
+        }
+    }
     JSValue target;
-    if (d->plain != NULL) target = JS_DupValue(ctx, d->plain->value);
+    if (failed) target = JS_EXCEPTION;
+    else if (d->plain != NULL) target = JS_DupValue(ctx, d->plain->value);
     else if (node == NULL)
         target = d->document_target ? d_wrap(dom, ctx, document_node(dom)) : JS_DupValue(ctx, dom->window->value);
-    else target = d_wrap(dom, ctx, node);
-    if (JS_IsException(target)) { d_free(dom, path); return -1; }
+    else target = JS_DupValue(ctx, steps[0]);
+    if (JS_IsException(target)) { steps_free(d, steps, values); d_free(dom, steps); return -1; }
     size_t count = 0;
     if (d->plain != NULL) path[count++] = d->plain;
-    for (const os64_html_node_t *at = node; at != NULL; at = at->parent) {
+    for (size_t i = 0; i < depth; i++) {
         DValue *entry;
-        if (path_entry(dom, ctx, at, kind, &entry) < 0) { JS_FreeValue(ctx, target); d_free(dom, path); return -1; }
-        nodes[count - (d->plain != NULL)] = at;
+        if (path_entry(dom, ctx, nodes[i], kind, &entry) < 0) {
+            JS_FreeValue(ctx, target);
+            steps_free(d, steps, values);
+            d_free(dom, steps);
+            return -1;
+        }
         path[count++] = entry;
     }
     if (to_window) path[count++] = dom->window;
@@ -859,6 +1104,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_nodes = nodes;
     event->path_count = (uint32_t)depth;
     event->path_window = to_window;
+    event->path_at = 0;
+    event->path_closed_slots = walk.closed_slots;
     JS_FreeValue(ctx, event->target);
     event->target = target;
     DActiveEvent active = {dom->current_event, JS_DupValue(ctx,d->object)};
@@ -867,17 +1114,27 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     dom->dispatching++;
     /* Held until its second half: an ancestor has no wrapper to hold it,
      * and a listener may take its subtree out of the tree. */
-    const os64_html_node_t *activation = activation_target(d, node);
+    const os64_html_node_t *activation = walk.activation;
     if (activation != NULL) os64_html_hold(dom->document, activation);
     DActivation saved = {0};
     int result = activation != NULL && d_activation_before(dom, ctx, activation, &saved) < 0 ? -1 : 0;
     saved.native = event->native_activation && event->trusted && d->host != NULL;
-    for (size_t i = count; result == 0 && i > 1; i--)
-        result = invoke_at(d, path, nodes, depth, i - 1, PHASE_CAPTURING, true);
-    if (result == 0) result = invoke_at(d, path, nodes, depth, 0, PHASE_AT_TARGET, true);
-    if (result == 0) result = invoke_at(d, path, nodes, depth, 0, PHASE_AT_TARGET, false);
-    for (size_t i = 1; result == 0 && event->bubbles && i < count; i++)
-        result = invoke_at(d, path, nodes, depth, i, PHASE_BUBBLING, false);
+    for (size_t i = count; result == 0 && i > 0; i--)
+        result = invoke_at(d, path, nodes, depth, i - 1, at_target(d, i - 1) ? PHASE_AT_TARGET : PHASE_CAPTURING,
+                           true);
+    for (size_t i = 0; result == 0 && i < count; i++)
+        if (at_target(d, i) || event->bubbles)
+            result = invoke_at(d, path, nodes, depth, i, at_target(d, i) ? PHASE_AT_TARGET : PHASE_BUBBLING, false);
+    if (d->targets != NULL) {
+        size_t last = event->bubbles ? count - 1 : walk.last_adjusted;
+        JS_FreeValue(ctx, event->target);
+        event->target = walk.clear ? JS_NULL : JS_DupValue(ctx, steps[last]);
+        if (has_related(event) && (walk.clear || d->related != NULL)) {
+            JS_FreeValue(ctx, event->detail[U_RELATED]);
+            event->detail[U_RELATED] = walk.clear ? JS_NULL : JS_DupValue(ctx, d->related[last]);
+        }
+    }
+    steps_free(d, steps, values);
     dom->current_event = active.previous;
     JS_FreeValue(ctx,active.value);
     dom->dispatching--;
@@ -890,7 +1147,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_nodes = NULL;
     event->path_count = 0;
     event->path_window = false;
-    d_free(dom, path);
+    event->path_closed_slots = NULL;
+    d_free(dom, steps);
     sweep(dom);
     /* sweep walks the registry; a collectable target is not on it. */
     if (d->plain != NULL && d->plain->engine_held && dom->dispatching == 0) unlink_removed(dom, d->plain);
@@ -903,14 +1161,14 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
 
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_html_node_t *node)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, NULL};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, NULL, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, node);
 }
 
 int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *target)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, target};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, target, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
 }
@@ -918,14 +1176,14 @@ int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValu
 int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *target,
                           os64_js_outcome_t *outcome)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, target};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, target, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
 }
 
 int d_dispatch_window_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, os64_js_outcome_t *outcome)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, NULL};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, NULL, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
 }
@@ -1011,7 +1269,7 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     JSValue object = make(dom, ctx, arg);
     if (JS_IsException(object)) { discard(ctx); return d_task_finish(dom, outcome); }
     Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), outcome,
-                  plain == NULL && node == NULL && d_event_kind(type) == D_EVENT_LOAD, plain};
+                  plain == NULL && node == NULL && d_event_kind(type) == D_EVENT_LOAD, plain, NULL, NULL, NULL, 0};
     /* Engine refusals between the wrapper's calls are latched by libjs and
      * reported by task_end; the binding's own refusal is reported here. */
     if (dispatch(&d, node) < 0 && JS_HasException(ctx)) {
@@ -1029,18 +1287,38 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
 static int ui_kind_of(os64_dom_event_kind_t kind);
 static JSValue ui_host_event(os64_dom_t *dom, JSContext *ctx, const os64_dom_event_t *ev, int kind);
 
+/* Whether a host event is composed, as its standard says: a UI event is
+ * (UI Events, Pointer Events), so it reaches the page through shadow
+ * roots, except the boundary events that go to each element entered or
+ * left on their own (mouseenter, mouseleave, pointerenter, pointerleave);
+ * a form's submit is not. */
+static bool host_composed(int kind, const char *type)
+{
+    static const char *const kUncomposed[] = {"mouseenter", "mouseleave", "pointerenter", "pointerleave"};
+    if (kind == D_UI_NONE || kind == D_UI_SUBMIT) return false;
+    for (size_t i = 0; i < sizeof(kUncomposed) / sizeof(kUncomposed[0]); i++)
+        if (os64_streq(type, kUncomposed[i])) return false;
+    return true;
+}
+
 /* A host event as os64_dom_event_t describes it: the UI event its kind
- * names, with the switch on; else an Event with its mouse or key fields. */
+ * names, with the switch on; else an Event with its mouse or key fields;
+ * composed as host_composed says. */
 static JSValue host_event(os64_dom_t *dom, JSContext *ctx, void *arg)
 {
     const os64_dom_event_t *ev = arg;
     int kind = ui_kind_of(ev->kind);
-    if (kind != D_UI_NONE && dom->ui_prototypes[kind] != NULL) return ui_host_event(dom, ctx, ev, kind);
-    JSValue object = d_event_new(dom, ctx, ev->type, ev->bubbles, ev->cancelable, true);
-    if (!JS_IsException(object) && !event_fields(dom, ctx, object, ev)) {
-        JS_FreeValue(ctx, object);
-        return JS_EXCEPTION;
+    JSValue object;
+    if (kind != D_UI_NONE && dom->ui_prototypes[kind] != NULL) object = ui_host_event(dom, ctx, ev, kind);
+    else {
+        object = d_event_new(dom, ctx, ev->type, ev->bubbles, ev->cancelable, true);
+        if (!JS_IsException(object) && !event_fields(dom, ctx, object, ev)) {
+            JS_FreeValue(ctx, object);
+            return JS_EXCEPTION;
+        }
     }
+    DEvent *event = JS_IsException(object) ? NULL : JS_GetOpaque(object, dom->event_class);
+    if (event != NULL) event->composed = host_composed(kind, ev->type);
     return object;
 }
 
@@ -1053,7 +1331,7 @@ int d_event_in_task(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *nod
     if (!activate && !os64_dom_listens(dom, ev->type)) return 0;
     JSValue object = host_event(dom, ctx, (void *)ev);
     if (JS_IsException(object)) return -1;
-    Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), out, false, NULL};
+    Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), out, false, NULL, NULL, NULL, NULL, 0};
     d.event->native_activation = activate;
     int result = dispatch(&d, node);
     *prevented = d.event->canceled;
@@ -1349,7 +1627,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
 
 enum {
     E_TYPE, E_TARGET, E_CURRENT, E_PHASE, E_BUBBLES, E_CANCELABLE, E_PREVENTED,
-    E_RETURN_VALUE, E_CANCEL_BUBBLE, E_TIME, E_TRUSTED,
+    E_RETURN_VALUE, E_CANCEL_BUBBLE, E_TIME, E_TRUSTED, E_COMPOSED,
     E_PREVENT, E_STOP, E_STOP_NOW, E_INIT,
     /* CustomEvent's own. */
     E_DETAIL, E_INIT_CUSTOM
@@ -1436,6 +1714,7 @@ static JSValue event_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     case E_CANCEL_BUBBLE: return JS_NewBool(ctx, event->stop);
     case E_TIME: return JS_NewFloat64(ctx, event->time);
     case E_TRUSTED: return JS_NewBool(ctx, event->trusted);
+    case E_COMPOSED: return JS_NewBool(ctx, event->composed);
     case E_PREVENT: cancel(event); return JS_UNDEFINED;
     case E_STOP: event->stop = true; return JS_UNDEFINED;
     case E_STOP_NOW: event->stop = event->stop_now = true; return JS_UNDEFINED;
@@ -1472,10 +1751,13 @@ JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
      * own reads them after. */
     const char *type = JS_ToCString(ctx, argv[0]);
     if (type == NULL) return JS_EXCEPTION;
-    bool flags[2] = {false, false};
+    bool flags[3] = {false, false, false};
     int init = d_dictionary(ctx, argc, argv, 1);
-    for (int i = 0; init > 0 && i < 2; i++) {
-        static const char *const names[] = {"bubbles", "cancelable"};
+    /* `composed` is read only where shadow trees are, which are what it
+     * means anything to (SHADOW_DOM.md § 8). */
+    int members = dom->options.shadow_trees ? 3 : 2;
+    for (int i = 0; init > 0 && i < members; i++) {
+        static const char *const names[] = {"bubbles", "cancelable", "composed"};
         JSValue value = JS_GetPropertyStr(ctx, argv[1], names[i]);
         int flag = JS_IsException(value) ? -1 : JS_ToBool(ctx, value);
         JS_FreeValue(ctx, value);
@@ -1488,6 +1770,8 @@ JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
     }
     JSValue object = d_event_new_proto(dom, ctx, prototype, type, flags[0], flags[1], false);
     JS_FreeCString(ctx, type);
+    DEvent *event = JS_IsException(object) ? NULL : JS_GetOpaque(object, dom->event_class);
+    if (event != NULL) event->composed = flags[2];
     return object;
 }
 
@@ -1731,13 +2015,28 @@ int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     return JS_DefinePropertyValueStr(ctx, global, "CustomEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+/* Whether step i of the event's path is a closed shadow root, DOM's
+ * root-of-closed-tree. */
+static bool closed_root_step(const DEvent *event, uint32_t i)
+{
+    const os64_html_node_t *node = i < event->path_count ? event->path_nodes[i] : NULL;
+    return os64_html_shadow_host(node) != NULL && (node->shadow & OS64_HTML_SHADOW_CLOSED) != 0;
+}
+
+/* Whether step i is DOM's slot-in-closed-tree (path_walk). */
+static bool closed_slot_step(const DEvent *event, uint32_t i)
+{
+    return i < event->path_count && event->path_closed_slots != NULL && event->path_closed_slots[i];
+}
+
 /* composedPath() (DOM § 2.9): the path the dispatch walks, innermost first,
  * the window last when the path ends there; a new empty array outside a
  * dispatch. The path's nodes are as the dispatch found them, whatever its
- * listeners have moved since. § 2.9 hides from a listener the nodes inside
- * a closed shadow tree it is outside of; with no shadow trees here
- * (DEBTS.md) nothing is hidden, so this is the whole path, and shadow roots
- * must change it when they come. */
+ * listeners have moved since. A closed shadow tree's nodes are left out
+ * for a listener outside it, as § 2.9 counts it: a level for each closed
+ * root between a step and the current one, less one for each slot in a
+ * closed tree that an assigned node on the path climbed to, a step kept
+ * only at the current one's level or shallower. */
 static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                              JSValue *data)
 {
@@ -1752,13 +2051,46 @@ static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValu
     int status = 0;
     /* A target that is no node is its path alone. */
     if (event->path_count == 0 && !event->path_window)
-        status = JS_DefinePropertyValueUint32(ctx, array, at++, JS_DupValue(ctx, event->target), JS_PROP_C_W_E);
-    for (uint32_t i = 0; status >= 0 && i < event->path_count; i++) {
-        JSValue node = d_wrap(dom, ctx, event->path_nodes[i]);
-        status = JS_IsException(node) ? -1 : JS_DefinePropertyValueUint32(ctx, array, at++, node, JS_PROP_C_W_E);
+        return JS_DefinePropertyValueUint32(ctx, array, at, JS_DupValue(ctx, event->target), JS_PROP_C_W_E) < 0
+            ? JS_EXCEPTION : array;
+    uint32_t steps = event->path_count + (event->path_window ? 1 : 0), current = event->path_at;
+    int64_t level = 0;
+    for (uint32_t i = steps; i > current; i--) {
+        if (closed_root_step(event, i - 1)) level++;
+        if (closed_slot_step(event, i - 1)) level--;
     }
-    if (status >= 0 && event->path_window)
-        status = JS_DefinePropertyValueUint32(ctx, array, at++, JS_DupValue(ctx, dom->window->value), JS_PROP_C_W_E);
+    if (closed_root_step(event, current)) level++;
+    bool *keep = d_alloc(dom, steps * sizeof(bool));
+    if (keep == NULL) {
+        JS_FreeValue(ctx, array);
+        return d_error(ctx, "QuotaExceededError", "DOM event path quota exceeded");
+    }
+    keep[current] = true;
+    int64_t now = level, most = level;
+    for (uint32_t i = current; i > 0; i--) {
+        if (closed_root_step(event, i - 1)) now++;
+        keep[i - 1] = now <= most;
+        if (closed_slot_step(event, i - 1)) {
+            now--;
+            if (now < most) most = now;
+        }
+    }
+    now = most = level;
+    for (uint32_t i = current + 1; i < steps; i++) {
+        if (closed_slot_step(event, i)) now++;
+        keep[i] = now <= most;
+        if (closed_root_step(event, i)) {
+            now--;
+            if (now < most) most = now;
+        }
+    }
+    for (uint32_t i = 0; status >= 0 && i < steps; i++) {
+        if (!keep[i]) continue;
+        JSValue value = i < event->path_count ? d_wrap(dom, ctx, event->path_nodes[i])
+                                              : JS_DupValue(ctx, dom->window->value);
+        status = JS_IsException(value) ? -1 : JS_DefinePropertyValueUint32(ctx, array, at++, value, JS_PROP_C_W_E);
+    }
+    d_free(dom, keep);
     if (status < 0) {
         JS_FreeValue(ctx, array);
         return JS_EXCEPTION;
@@ -1768,6 +2100,14 @@ static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValu
 
 /* The Modern Web table's row for Event's own members (modern.c); a member
  * of Event's prototype and none of window's. */
+int d_event_composed_install(os64_dom_t *dom, JSContext *ctx)
+{
+    JSValue prototype = JS_GetClassProto(ctx, dom->event_class);
+    int status = d_accessor(dom, ctx, prototype, "composed", event_member, E_COMPOSED, false);
+    JS_FreeValue(ctx, prototype);
+    return status;
+}
+
 int d_event_path_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     (void)global;
@@ -2050,6 +2390,7 @@ static JSValue progress_constructor(JSContext *ctx, JSValueConst new_target, int
     if (JS_IsException(object)) return object;
     DEvent *event = JS_GetOpaque(object, dom->event_class);
     event->progress = true;
+    event->composed = flags[2];
     event->length_computable = flags[3];
     event->loaded = numbers[0];
     event->total = numbers[1];
@@ -2479,9 +2820,6 @@ int d_message_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
  * fields as data (event_fields). PointerEvent inherits MouseEvent and shares
  * its coordinate/modifier record. Native dispatch and capture are provided
  * by pointer.c; WheelEvent, DragEvent and TextEvent remain absent. */
-
-/* Where a UI event keeps its values in the record's detail[]. */
-enum { U_VIEW, U_RELATED, U_TEXT, U_TEXT2 };
 
 static const char *const kUINames[D_UI_KINDS] = {
     "", "UIEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "InputEvent", "CompositionEvent", "SubmitEvent", "PointerEvent"
@@ -3083,6 +3421,8 @@ JSValue d_click_event_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
         return JS_EXCEPTION;
     }
     event->pointer_id = -1;
+    /* HTML's synthetic pointer event is composed. */
+    event->composed = true;
     if (d_window_document(dom, node)) ui_set(ctx, event, U_VIEW, JS_DupValue(ctx, dom->window->value));
     return object;
 }

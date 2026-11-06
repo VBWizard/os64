@@ -16,9 +16,12 @@ static void changed(os64_dom_t *dom, const os64_html_change_t *record)
     DPointer *p = &dom->pointer;
     // A removed previous target falls back along its old event ancestry.
     // CHILDREN supplies the old parent while the detached subtree is alive.
+    // A shadow root it was removed from is no pointer's node (up, below):
+    // the fallback is its host.
     if (record->kind == OS64_HTML_CHANGE_CHILDREN && record->nremoved) {
         const os64_html_node_t *parent = record->target;
         while (parent && !connected(dom, parent)) parent = os64_html_shadow_including_parent(parent);
+        if (os64_html_shadow_host(parent) != NULL) parent = os64_html_shadow_host(parent);
         if (p->effective && !connected(dom, p->effective)) {
             hold(dom, &p->effective, parent); p->over_owed = true;
         }
@@ -117,16 +120,29 @@ static bool emit(Packet *q, const char *type, const os64_html_node_t *node,
     return !q->failed && !dom->closed && dom->navigation.kind == OS64_DOM_NAVIGATE_NONE &&
            (!dom->pointer.cancel_owed || dom->pointer.canceling);
 }
+/* A pointer's ancestor: as a composed event's path climbs (d_event_parent),
+ * a slotted node's slot, but past a shadow root to its host. A root is no
+ * element and nothing a pointer is over, so no boundary chain, kept
+ * fallback or click's common ancestor may land on one (the flat tree's
+ * parent, as other browsers take it). */
+static const os64_html_node_t *up(const os64_dom_t *dom, const os64_html_node_t *node)
+{
+    const os64_html_node_t *parent = d_event_parent(dom, node, true, NULL);
+    const os64_html_node_t *host = os64_html_shadow_host(parent);
+    return host != NULL ? host : parent;
+}
+
 /* Snapshot ancestor paths before boundary listeners can detach or reparent
- * them. These holds are independent of capture and event-object lifetimes. */
+ * them. These holds are independent of capture and event-object lifetimes.
+ * An ancestor is up's. */
 typedef struct { const os64_html_node_t **nodes; size_t count; } Path;
 static bool path_make(os64_dom_t *dom, const os64_html_node_t *node, Path *path)
 {
     size_t n = 0;
-    for (const os64_html_node_t *at = node; at; at = at->parent) n++;
+    for (const os64_html_node_t *at = node; at; at = up(dom, at)) n++;
     path->count = 0; path->nodes = n ? d_alloc(dom, n * sizeof(*path->nodes)) : NULL;
     if (n && !path->nodes) return false;
-    for (; node; node = node->parent) {
+    for (; node; node = up(dom, node)) {
         os64_html_hold(dom->document, node);
         path->nodes[path->count++] = node;
     }
@@ -206,10 +222,11 @@ static void cancel(Packet *q)
     d_pointer_drain(q->dom);
     p->canceling = false;
 }
-static const os64_html_node_t *common(const os64_html_node_t *a, const os64_html_node_t *b)
+/* The nearest node both climb through, by up. */
+static const os64_html_node_t *common(os64_dom_t *dom, const os64_html_node_t *a, const os64_html_node_t *b)
 {
-    for (; a; a = a->parent)
-        for (const os64_html_node_t *n = b; n; n = n->parent)
+    for (; a; a = up(dom, a))
+        for (const os64_html_node_t *n = b; n; n = up(dom, n))
             if (a == n) return a;
     return NULL;
 }
@@ -295,7 +312,7 @@ os64_js_status_t os64_dom_pointer_dispatch(os64_dom_t *dom, const os64_dom_point
         }
         if (up && button >= 0 && button < 3 && p->down[button] && connected(dom, target)) {
             /* Capture was in force for this release, even after implicit release. */
-            const os64_html_node_t *activate = captured ? target : common(p->down[button], target);
+            const os64_html_node_t *activate = captured ? target : common(dom, p->down[button], target);
             if (activate && connected(dom, activate))
                 emit(&q, button == 0 ? "click" : "auxclick", activate, NULL, true, true, true, true, NULL);
             hold(dom, &p->down[button], NULL);
@@ -323,7 +340,7 @@ int d_pointer_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     for (int i = 0; i < 3; i++)
         if (d_method(dom, ctx, dom->prototypes[D_PROTO_ELEMENT]->value, names[i], capture_method, 1, i) < 0) return -1;
     JSValue holders[] = {global, dom->prototypes[D_PROTO_ELEMENT]->value, dom->prototypes[D_PROTO_DOCUMENT]->value};
-    for (int kind = D_EVENT_POINTERDOWN; kind < D_EVENT_COUNT; kind++)
+    for (int kind = D_EVENT_POINTERDOWN; kind <= D_EVENT_AUXCLICK; kind++)
         for (size_t i = 0; i < sizeof(holders) / sizeof(holders[0]); i++)
             if (d_event_handler(dom, ctx, holders[i], kind) < 0) return -1;
     d_mutation_register(dom, &dom->pointer.mutations, changed);

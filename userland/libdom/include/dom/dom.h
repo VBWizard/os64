@@ -112,6 +112,14 @@ typedef struct {
      * which the arc corrected (HTMLElement's prototype between Element's
      * and the HTML elements'), are the same either way. */
     bool modern;
+    /* Shadow trees (docs/design/pending/SHADOW_DOM.md § 7), with `modern`:
+     * set, Element's attachShadow, shadowRoot, slot and assignedSlot,
+     * Text's assignedSlot, ShadowRoot and HTMLSlotElement on window,
+     * getRootNode's `composed` and Event's `composed` exist; clear, none of
+     * them does, so a page that tests for one takes its fallback. One
+     * switch, because a page decides once from several names together.
+     * Clear in the defaults. */
+    bool shadow_trees;
     /* The UTF-8 message is borrowed during this owner-thread call. The host
      * copies it if needed and must not enter JS or a nested event loop here. */
     void (*alert)(void *opaque, const char *utf8, size_t length);

@@ -641,9 +641,12 @@ const os64_html_node_t *os64_html_flat_parent(const os64_html_document_t *doc,
  * assignment as reported. `changed` must not change the document. A root
  * there is no memory for is left marked, reported by a later call, and
  * the call answers OS64_HTML_NO_MEMORY. A slot removed from its shadow
- * tree is not reported: its list may name nodes since reclaimed. */
+ * tree is not reported: its list may name nodes since reclaimed.
+ * `slot_changes_pending` says whether any root is marked, so a caller
+ * knows a report is waiting without making one. */
 int64_t os64_html_slot_changes(os64_html_document_t *doc,
                                void (*changed)(void *opaque, const os64_html_node_t *slot), void *opaque);
+bool os64_html_slot_changes_pending(const os64_html_document_t *doc);
 
 /* Parse a complete UTF-8 string in an owned ELEMENT context.
  * This HTML fragment entry point refuses XML documents and unknown/no-namespace
