@@ -1,0 +1,318 @@
+#include "internal.h"
+
+/* CONSTRUCTED STYLE SHEETS AND ADOPTION (CSSOM § 6.1.2 and
+ * DocumentOrShadowRoot's adoptedStyleSheets; SHADOW_DOM.md § 12, D4b).
+ *
+ * A constructed sheet is a CSSStyleSheet with no owner node and a record
+ * of its own (DSheetText): the text replace or replaceSync last gave it, a
+ * generation that moves with each, and a key the host knows it by. libdom
+ * keeps the text and nothing parsed: the host's cascade reads it, as it
+ * reads a `style` element's.
+ *
+ * A root's adoptedStyleSheets — the document node's or a shadow root's — is
+ * one array object for the root's life, a Proxy over a plain array that an
+ * embedded factory makes. Its traps hand every value about to go in to
+ * `check` (a constructed sheet, or a TypeError or NotAllowedError, as CSSOM
+ * says) and every change to `changed`, which keeps the root's list here
+ * (DAdopted) for the host and touches the root (os64_html_touch), since the
+ * host restyles when the document's version moves and an adoption moves no
+ * node. Assigning to adoptedStyleSheets replaces the array's contents.
+ *
+ * Installed with the shadow surface (shadow.c): a page decides from these
+ * names and ShadowRoot together. */
+
+struct DSheetText {
+    uint64_t key, generation;
+    char *text;
+    size_t length;
+};
+
+struct DAdopted {
+    const os64_html_node_t *root;
+    DValue *array, *assign;     /* the Proxy, and the function assignment calls */
+    DValue **sheets;            /* the constructed sheets' entries, in order */
+    size_t n, cap;
+    struct DAdopted *next;
+};
+
+bool d_sheet_constructed(const DValue *entry)
+{
+    return entry != NULL && entry->constructed != NULL;
+}
+
+void d_adopted_free(os64_dom_t *dom, DValue *entry)
+{
+    if (entry->constructed != NULL) {
+        d_free(dom, entry->constructed->text);
+        d_free(dom, entry->constructed);
+        entry->constructed = NULL;
+    }
+    if (entry->adopted != NULL) {
+        d_free(dom, entry->adopted->sheets);
+        d_free(dom, entry->adopted);
+        entry->adopted = NULL;
+    }
+}
+
+/* The constructed sheet `value` is, or NULL with an exception pending:
+ * a TypeError for anything not a CSSStyleSheet, a NotAllowedError for one
+ * a node owns. */
+static DValue *constructed_of(JSContext *ctx, JSValueConst value)
+{
+    DValue *entry = JS_IsObject(value) ? JS_GetOpaque(value, d_sheet_class()) : NULL;
+    if (entry == NULL) {
+        JS_ThrowTypeError(ctx, "Expected a CSSStyleSheet");
+        return NULL;
+    }
+    if (entry->constructed == NULL) {
+        d_error(ctx, "NotAllowedError", "Only a constructed CSSStyleSheet can be adopted or replaced");
+        return NULL;
+    }
+    return entry;
+}
+
+JSValue d_sheet_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSClassID id = d_sheet_class();
+    JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(object)) return object;
+    struct DSheetText *text = d_alloc(dom, sizeof(*text));
+    DValue *entry = text != NULL ? d_retain(dom, ctx, JS_DupValue(ctx, object)) : NULL;
+    if (entry == NULL) {
+        d_free(dom, text);
+        JS_FreeValue(ctx, object);
+        return text == NULL ? d_error(ctx, "QuotaExceededError", "DOM sheet quota exceeded") : JS_EXCEPTION;
+    }
+    os64_memset(text, 0, sizeof(*text));
+    text->key = ++dom->sheet_keys;
+    entry->dom = dom;
+    entry->constructed = text;
+    JS_SetOpaque(object, entry);
+    return object;
+}
+
+/* Whether `list` holds `sheet`. */
+static bool holds(const struct DAdopted *list, const DValue *sheet)
+{
+    for (size_t i = 0; i < list->n; i++)
+        if (list->sheets[i] == sheet) return true;
+    return false;
+}
+
+enum { A_REPLACE_SYNC, A_REPLACE };
+
+/* replaceSync(text) and replace(text): the sheet's text becomes `text`, and
+ * every root adopting it is touched; replace answers a Promise of the
+ * sheet, already resolved, as nothing here is fetched. */
+static JSValue sheet_replace(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    DValue *entry = constructed_of(ctx, self);
+    if (entry == NULL) return JS_EXCEPTION;
+    size_t length = 0;
+    const char *given = JS_ToCStringLen(ctx, &length, argc > 0 ? argv[0] : JS_UNDEFINED);
+    if (given == NULL) return JS_EXCEPTION;
+    char *copy = d_alloc(dom, length + 1);
+    if (copy == NULL) {
+        JS_FreeCString(ctx, given);
+        return d_error(ctx, "QuotaExceededError", "DOM sheet quota exceeded");
+    }
+    os64_memcpy(copy, given, length);
+    copy[length] = '\0';
+    JS_FreeCString(ctx, given);
+    struct DSheetText *text = entry->constructed;
+    d_free(dom, text->text);
+    text->text = copy;
+    text->length = length;
+    text->generation++;
+    for (struct DAdopted *a = dom->adoptions; a != NULL; a = a->next)
+        if (holds(a, entry)) (void)os64_html_touch(dom->document, (os64_html_node_t *)a->root);
+    if (magic == A_REPLACE_SYNC) return JS_UNDEFINED;
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+    JSValue done = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &self);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    if (JS_IsException(done)) {
+        JS_FreeValue(ctx, promise);
+        return done;
+    }
+    JS_FreeValue(ctx, done);
+    return promise;
+}
+
+/* check(value): the factory's traps ask before a value goes into an array. */
+static JSValue adopt_check(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    return constructed_of(ctx, argc > 0 ? argv[0] : JS_UNDEFINED) != NULL ? JS_UNDEFINED : JS_EXCEPTION;
+}
+
+/* changed(root, array): the array behind a root's Proxy changed; its list
+ * here is read again and the root touched. */
+static JSValue adopt_changed(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL || argc < 2) return JS_EXCEPTION;
+    const os64_html_node_t *root = d_node(dom, ctx, argv[0]);
+    if (root == NULL) return JS_EXCEPTION;
+    DValue *owner = d_find(dom, root);
+    struct DAdopted *list = owner != NULL ? owner->adopted : NULL;
+    if (list == NULL) return JS_ThrowTypeError(ctx, "Missing adoptedStyleSheets");
+    int64_t length = 0;
+    JSValue count = JS_GetPropertyStr(ctx, argv[1], "length");
+    int status = JS_IsException(count) ? -1 : JS_ToInt64(ctx, &length, count);
+    JS_FreeValue(ctx, count);
+    if (status < 0) return JS_EXCEPTION;
+    if (length > UINT32_MAX) length = UINT32_MAX;
+    list->n = 0;
+    for (int64_t i = 0; i < length; i++) {
+        JSValue one = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        if (JS_IsException(one)) return one;
+        DValue *sheet = JS_IsObject(one) ? JS_GetOpaque(one, d_sheet_class()) : NULL;
+        JS_FreeValue(ctx, one);
+        if (sheet == NULL || sheet->constructed == NULL) continue;      /* a hole */
+        if (list->n == list->cap) {
+            size_t cap = list->cap != 0 ? list->cap * 2 : 8;
+            DValue **more = d_alloc(dom, cap * sizeof(*more));
+            if (more == NULL) return d_error(ctx, "QuotaExceededError", "DOM sheet quota exceeded");
+            if (list->n != 0) os64_memcpy(more, list->sheets, list->n * sizeof(*more));
+            d_free(dom, list->sheets);
+            list->sheets = more;
+            list->cap = cap;
+        }
+        list->sheets[list->n++] = sheet;
+    }
+    (void)os64_html_touch(dom->document, (os64_html_node_t *)root);
+    return JS_UNDEFINED;
+}
+
+/* The factory: given check and changed, a function of a root wrapper that
+ * answers [the Proxy, assign]. An index set or defined is checked first;
+ * any change is reported after. assign(list) takes an iterable, checks
+ * every value, then replaces the contents in one report. */
+static const char kFactory[] =
+    "(function(check, changed){ return function(root){"
+    "var a = [];"
+    "function index(k){ return typeof k === 'string' && k !== 'length' && String(k >>> 0) === k; }"
+    "var p = new Proxy(a, {"
+    " set: function(t, k, v){ if (index(k)) check(v); var ok = Reflect.set(t, k, v); changed(root, t); return ok; },"
+    " defineProperty: function(t, k, d){ if (index(k) && 'value' in d) check(d.value);"
+    "  var ok = Reflect.defineProperty(t, k, d); changed(root, t); return ok; },"
+    " deleteProperty: function(t, k){ var ok = Reflect.deleteProperty(t, k); changed(root, t); return ok; }"
+    "});"
+    "return [p, function(list){"
+    " if (list == null || typeof list[Symbol.iterator] !== 'function')"
+    "  throw new TypeError('adoptedStyleSheets takes a sequence of CSSStyleSheet');"
+    " var v = Array.from(list); for (var i = 0; i < v.length; i++) check(v[i]);"
+    " a.length = 0; for (var j = 0; j < v.length; j++) a[j] = v[j]; changed(root, a); }];"
+    "}; })";
+
+/* The root's record, made when first asked for. */
+static struct DAdopted *adopted_of(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root)
+{
+    JSValue wrapper = d_wrap(dom, ctx, root);
+    if (JS_IsException(wrapper)) return NULL;
+    DValue *owner = d_find(dom, root);
+    if (owner == NULL) {
+        JS_FreeValue(ctx, wrapper);
+        JS_ThrowTypeError(ctx, "Missing node wrapper");
+        return NULL;
+    }
+    if (owner->adopted != NULL) {
+        JS_FreeValue(ctx, wrapper);
+        return owner->adopted;
+    }
+    struct DAdopted *list = d_alloc(dom, sizeof(*list));
+    if (list == NULL) {
+        JS_FreeValue(ctx, wrapper);
+        d_error(ctx, "QuotaExceededError", "DOM sheet quota exceeded");
+        return NULL;
+    }
+    os64_memset(list, 0, sizeof(*list));
+    list->root = root;
+    JSValue made = JS_Call(ctx, dom->adopt_factory->value, JS_UNDEFINED, 1, (JSValueConst *)&wrapper);
+    JS_FreeValue(ctx, wrapper);
+    JSValue array = JS_IsException(made) ? JS_EXCEPTION : JS_GetPropertyUint32(ctx, made, 0);
+    JSValue assign = JS_IsException(made) ? JS_EXCEPTION : JS_GetPropertyUint32(ctx, made, 1);
+    JS_FreeValue(ctx, made);
+    list->array = !JS_IsException(array) ? d_retain(dom, ctx, array) : NULL;
+    list->assign = !JS_IsException(assign) ? d_retain(dom, ctx, assign) : NULL;
+    if (list->array == NULL || list->assign == NULL) {
+        d_free(dom, list);
+        return NULL;
+    }
+    owner->adopted = list;
+    list->next = dom->adoptions;
+    dom->adoptions = list;
+    return list;
+}
+
+/* adoptedStyleSheets on a document or a shadow root: the root's array, and
+ * assigning replaces its contents. */
+static JSValue adopted_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                              JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *root = d_node(dom, ctx, self);
+    if (root == NULL) return JS_EXCEPTION;
+    if (root->kind != OS64_HTML_DOCUMENT && os64_html_shadow_host(root) == NULL)
+        return JS_ThrowTypeError(ctx, "Illegal invocation");
+    struct DAdopted *list = adopted_of(dom, ctx, root);
+    if (list == NULL) return JS_EXCEPTION;
+    if ((magic & D_SET) == 0) return JS_DupValue(ctx, list->array->value);
+    JSValue done = JS_Call(ctx, list->assign->value, JS_UNDEFINED, 1, argc > 0 ? argv : (JSValueConst[]){JS_UNDEFINED});
+    if (JS_IsException(done)) return done;
+    JS_FreeValue(ctx, done);
+    return JS_UNDEFINED;
+}
+
+int d_adopted_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSValueConst sheet_prototype,
+                      JSValueConst root_prototype)
+{
+    (void)global;
+    JSValue factory = JS_Eval(ctx, kFactory, sizeof(kFactory) - 1, "adoptedStyleSheets", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(factory)) return -1;
+    JSValue hooks[2] = {JS_NewCFunction(ctx, adopt_check, "check", 1),
+                        JS_NewCFunction(ctx, adopt_changed, "changed", 2)};
+    JSValue made = JS_IsException(hooks[0]) || JS_IsException(hooks[1])
+        ? JS_EXCEPTION : JS_Call(ctx, factory, JS_UNDEFINED, 2, (JSValueConst *)hooks);
+    JS_FreeValue(ctx, factory);
+    JS_FreeValue(ctx, hooks[0]);
+    JS_FreeValue(ctx, hooks[1]);
+    if (JS_IsException(made)) return -1;
+    dom->adopt_factory = d_retain(dom, ctx, made);
+    if (dom->adopt_factory == NULL ||
+        d_method_named(dom, ctx, sheet_prototype, "replaceSync", sheet_replace, 1, A_REPLACE_SYNC) < 0 ||
+        d_method_named(dom, ctx, sheet_prototype, "replace", sheet_replace, 1, A_REPLACE) < 0 ||
+        d_accessor(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "adoptedStyleSheets", adopted_member, 0,
+                   true) < 0 ||
+        d_accessor(dom, ctx, root_prototype, "adoptedStyleSheets", adopted_member, 0, true) < 0)
+        return -1;
+    return 0;
+}
+
+size_t os64_dom_adopted(const os64_dom_t *dom, const os64_html_node_t *root, os64_dom_adopted_sheet_t *out,
+                        size_t cap)
+{
+    const DValue *owner = dom != NULL && root != NULL ? d_find((os64_dom_t *)dom, root) : NULL;
+    const struct DAdopted *list = owner != NULL ? owner->adopted : NULL;
+    if (list == NULL) return 0;
+    for (size_t i = 0; i < list->n && i < cap; i++) {
+        const struct DSheetText *text = list->sheets[i]->constructed;
+        out[i] = (os64_dom_adopted_sheet_t){text->key, text->generation, text->text != NULL ? text->text : "",
+                                            text->length};
+    }
+    return list->n;
+}

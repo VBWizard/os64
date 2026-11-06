@@ -12,6 +12,8 @@
  * no media list, and `disabled` cannot be set. A page that loads late CSS
  * counts document.styleSheets to see its sheet arrive and finds it by its
  * ownerNode, and that is what this row is for. DEBTS.md lists the rest.
+ * With the shadow surface on, CSSStyleSheet also constructs: a constructed
+ * sheet, its replace and replaceSync, and adoption are adopted.c's.
  *
  * One row of the Modern Web table, naming StyleSheetList, StyleSheet and
  * CSSStyleSheet on window. */
@@ -24,6 +26,11 @@ static void sheet_finalizer(JSRuntime *rt, JSValue value)
 {
     (void)rt;
     JS_SetOpaque(value, NULL);
+}
+
+JSClassID d_sheet_class(void)
+{
+    return os64_js_class_id(&sheet_slot);
 }
 
 /* Whether `node` has a sheet now: it names one by libpage's rule and is
@@ -97,6 +104,11 @@ static JSValue sheet_member(JSContext *ctx, JSValueConst this_value, int argc, J
         return associated(node) ? d_sheet(dom, ctx, node) : JS_NULL;
     }
     DValue *entry = JS_GetOpaque(this_value, os64_js_class_id(&sheet_slot));
+    if (d_sheet_constructed(entry)) {
+        /* A constructed sheet (adopted.c): no owner, no address, no title. */
+        if (magic == S_TYPE) return JS_NewString(ctx, "text/css");
+        return magic == S_DISABLED ? JS_FALSE : JS_NULL;
+    }
     if (entry == NULL || entry->target == NULL) return JS_ThrowTypeError(ctx, "Expected a CSSStyleSheet");
     const os64_html_node_t *node = entry->target;
     switch (magic) {
@@ -136,7 +148,9 @@ int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_SetClassProto(ctx, id, JS_DupValue(ctx, sheet));
     JSValue parent = d_interface_new(ctx, "StyleSheet", 0, NULL, base, JS_UNDEFINED);
     if (JS_IsException(parent)) return -1;
-    JSValue child = d_interface_new(ctx, "CSSStyleSheet", 0, NULL, sheet, parent);
+    /* Constructible with the shadow surface, which adoption belongs to. */
+    JSValue child = d_interface_new(ctx, "CSSStyleSheet", 0,
+                                    dom->options.shadow_trees ? d_sheet_constructor : NULL, sheet, parent);
     if (JS_IsException(child)) {
         JS_FreeValue(ctx, parent);
         return -1;

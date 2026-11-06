@@ -5382,6 +5382,38 @@ static void shadow_style_cases(void)
     s_shadow_dom = had;
 }
 
+/* SHADOW_DOM.md § 12 (D4b): adopted constructed sheets, as Lit uses them —
+ * one sheet adopted in every instance's root, styling that tree and its
+ * host, another adopted by the document; replaceSync restyles in place; a
+ * root's own <style> ranks before its adopted sheets. */
+static void adopted_style_cases(void)
+{
+    bool had = s_shadow_dom;
+    s_shadow_dom = true;
+    probe_page("<!doctype html><style>body{margin:0}p{display:block;width:10px}</style>"
+        "<x-a id=a></x-a><x-a id=b></x-a><p id=out>o</p><script>"
+        "function eq(a,b,w){if(a!==b)throw Error(w+': '+a+' != '+b)};"
+        "var shared=new CSSStyleSheet();shared.replaceSync(':host{display:block;width:120px}p{width:30px}');"
+        "var page=new CSSStyleSheet();page.replaceSync('#out{width:44px}');"
+        "document.adoptedStyleSheets=[page];"
+        "var roots=['a','b'].map(function(id){var r=document.getElementById(id).attachShadow({mode:'open'});"
+        "r.innerHTML='<style>p{width:99px}</style><p id=in>i</p>';r.adoptedStyleSheets=[shared];return r;});"
+        "eq(roots[1].querySelector('#in').offsetWidth,30,'an adopted sheet after the root\\'s own');"
+        "eq(document.getElementById('b').offsetWidth,120,'the host through :host');"
+        "eq(document.getElementById('out').offsetWidth,44,'the document\\'s adopted sheet');"
+        "shared.replaceSync(':host{display:block;width:150px}');"
+        "eq(document.getElementById('a').offsetWidth,150,'replaceSync restyles every adopter');"
+        "eq(roots[0].querySelector('#in').offsetWidth,99,'the root\\'s own <style> once the sheet stops');"
+        "document.body.setAttribute('data-adopted','yes');"
+        "</script>",true);
+    check(script_turn(), "adopted style script task completes");
+    const os64_html_attr_t *passed=os64_html_attr(g.page.way.doc->body,"data-adopted");
+    check(passed!=NULL && os64_streq(passed->value,"yes"),
+          "adopted style: constructed sheets style the trees that adopt them, and replaceSync restyles");
+    probe_drop();
+    s_shadow_dom = had;
+}
+
 static void geometry_publish_cases(void)
 {
     probe_page("<!doctype html><style>html,body{margin:0;padding:0}</style>"
@@ -11549,6 +11581,7 @@ int main(void)
     geometry_body_cases();
     geometry_shadow_cases();
     shadow_style_cases();
+    adopted_style_cases();
     geometry_publish_cases();
     geometry_scroll_cases();
     geometry_fragment_cases();

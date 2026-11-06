@@ -654,6 +654,10 @@ typedef struct Sheet {
     garb_import_t *imports;         // once ready: its @imports, and each one's entry or -1
     int32_t *child;
     int32_t nimports;
+    // A constructed sheet a tree has adopted (os64_dom_adopted): its key and
+    // the generation of the text it was parsed from; key 0 for any other.
+    // It has no node, and no @imports are fetched for it (CSSOM drops them).
+    uint64_t key, generation;
 } Sheet;
 
 // Where a person scrolled a box, by its element: a layout starts every box
@@ -1021,7 +1025,17 @@ static void page_clear(Page *p)
 static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
 {
     for (int32_t e = 0; e < p->nsheets; e++)
-        if (p->sheets[e].node == node && p->sheets[e].importer < 0)
+        if (p->sheets[e].node == node && p->sheets[e].importer < 0 && p->sheets[e].key == 0)
+            return e;
+    return -1;
+}
+
+// The table's entry for constructed sheet `key` as parsed at `generation`,
+// -1 when it has none.
+static int32_t sheet_constructed(const Page *p, uint64_t key, uint64_t generation)
+{
+    for (int32_t e = 0; e < p->nsheets; e++)
+        if (p->sheets[e].key == key && p->sheets[e].generation == generation)
             return e;
     return -1;
 }
@@ -1325,28 +1339,98 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
     return tree;
 }
 
-// The cascade's scopes (SHADOW_DOM.md § 6): the `m` sheets the model lists
-// that went in — `at[i]` the cascade input of one, `roots[i]` the tree it
-// is in — grouped by tree, in the order each tree's first sheet is listed,
-// their indices kept in `list`. How many scopes.
-static int32_t page_scopes(const os64_html_node_t *const *roots, const int32_t *at, int32_t m,
-                           garb_scope_in_t *scopes, int32_t *list)
+static yonder_scripts_t *page_scripts(const Page *p);
+static yonder_scripts_t *scripts_for(uint64_t serial);
+static const yonder_scripts_t *adoptions_host(const Page *p);
+static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, const os64_html_node_t *x);
+static int32_t sheet_constructed(const Page *p, uint64_t key, uint64_t generation);
+
+// The cascade's scopes (SHADOW_DOM.md § 6): every (cascade input, tree)
+// pair, in the order the inputs go in — a sheet the model lists in the tree
+// it is in, a constructed sheet in each tree that adopted it, so one sheet
+// may be in hundreds — then grouped by tree, in the order each tree's first
+// sheet came, each tree's inputs in `list`. Held for one layout's cascade,
+// which copies what it keeps.
+typedef struct {
+    int32_t *at;
+    const os64_html_node_t **roots;
+    int32_t m, cap;
+    garb_scope_in_t *scopes;
+    int32_t *list;
+    int32_t nscopes;
+} PageScopes;
+
+static void page_scopes_free(PageScopes *s)
 {
-    int32_t nscopes = 0, used = 0;
-    for (int32_t i = 0; i < m; i++) {
-        bool seen = false;
-        for (int32_t k = 0; k < nscopes && !seen; k++)
-            seen = scopes[k].root == roots[i];
-        if (seen)
-            continue;
-        garb_scope_in_t *s = &scopes[nscopes++];
-        *s = (garb_scope_in_t){roots[i], list + used, 0};
-        for (int32_t j = i; j < m; j++)
-            if (roots[j] == roots[i])
-                list[used + s->n++] = at[j];
-        used += s->n;
+    os64_free(s->at);
+    os64_free(s->roots);
+    os64_free(s->scopes);
+    os64_free(s->list);
+    os64_memset(s, 0, sizeof(*s));
+}
+
+static bool page_scopes_add(PageScopes *s, int32_t at, const os64_html_node_t *root)
+{
+    if (s->m == s->cap) {
+        int32_t cap = s->cap != 0 ? s->cap * 2 : 64;
+        int32_t *more_at = os64_realloc(s->at, (size_t)cap * sizeof(*more_at));
+        if (more_at == NULL)
+            return false;
+        s->at = more_at;
+        const os64_html_node_t **more_roots = os64_realloc(s->roots, (size_t)cap * sizeof(*more_roots));
+        if (more_roots == NULL)
+            return false;
+        s->roots = more_roots;
+        s->cap = cap;
     }
-    return nscopes;
+    s->at[s->m] = at;
+    s->roots[s->m++] = root;
+    return true;
+}
+
+// Groups the pairs by tree in one pass over them, a tree's index found by
+// hashing its root. False when there was no memory.
+static bool page_scopes_group(PageScopes *s)
+{
+    if (s->m == 0)
+        return true;
+    uint32_t slots = 16;
+    while (slots < (uint32_t)s->m * 2)
+        slots *= 2;
+    int32_t *table = os64_malloc(slots * sizeof(*table)), *of = os64_malloc((size_t)s->m * sizeof(*of));
+    s->scopes = os64_calloc((size_t)s->m, sizeof(*s->scopes));
+    s->list = os64_malloc((size_t)s->m * sizeof(*s->list));
+    if (table == NULL || of == NULL || s->scopes == NULL || s->list == NULL) {
+        os64_free(table);
+        os64_free(of);
+        return false;
+    }
+    for (uint32_t i = 0; i < slots; i++)
+        table[i] = -1;
+    for (int32_t i = 0; i < s->m; i++) {
+        uint32_t h = (uint32_t)(((uintptr_t)s->roots[i] >> 4) * 2654435761u) & (slots - 1);
+        while (table[h] >= 0 && s->scopes[table[h]].root != s->roots[i])
+            h = (h + 1) & (slots - 1);
+        if (table[h] < 0) {
+            table[h] = s->nscopes;
+            s->scopes[s->nscopes++].root = s->roots[i];
+        }
+        of[i] = table[h];
+        s->scopes[of[i]].n++;
+    }
+    int32_t used = 0;
+    for (int32_t k = 0; k < s->nscopes; k++) {
+        s->scopes[k].sheets = s->list + used;
+        used += s->scopes[k].n;
+        s->scopes[k].n = 0;
+    }
+    for (int32_t i = 0; i < s->m; i++) {
+        garb_scope_in_t *scope = &s->scopes[of[i]];
+        s->list[(scope->sheets - s->list) + scope->n++] = s->at[i];
+    }
+    os64_free(table);
+    os64_free(of);
+    return true;
 }
 
 static void measured_fallback(Page *p);
@@ -1361,30 +1445,54 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     view.scripting = p->scripting;
     int64_t began = s_layout_profile && layout_profile_diag(p) ? os64_micros() : -1;
     garb_sheet_in_t in[SHEETS_MAX];
-    int32_t n = 0, m = 0, at[SHEETS_MAX], list[SHEETS_MAX];
-    const os64_html_node_t *roots[SHEETS_MAX];
-    garb_scope_in_t scopes[SHEETS_MAX];
+    int32_t n = 0;
+    PageScopes ps = {0};
+    bool paired = true;
     const os64_page_t *model = page_model(p);
     for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
         const os64_page_sheet_t *one = os64_page_sheet(model, i);
         int32_t e = sheet_of(p, one->node);
         int32_t emitted = e >= 0 ? sheet_emit(p, e, in, entry, &n) : -1;
-        if (emitted >= 0 && m < SHEETS_MAX) {
-            at[m] = emitted;
-            roots[m++] = one->scope;
+        if (emitted >= 0)
+            paired = paired && page_scopes_add(&ps, emitted, one->scope);
+    }
+    // Each tree's adopted sheets after every sheet the model lists, each
+    // input once however many trees adopt it (CSSOM's final style sheets:
+    // a tree's own, then its adopted ones).
+    const os64_html_document_t *doc = page_doc(p);
+    const yonder_scripts_t *scripts = adoptions_host(p);
+    int32_t input_of[SHEETS_MAX];
+    for (int32_t e = 0; e < SHEETS_MAX; e++)
+        input_of[e] = -1;
+    os64_dom_adopted_sheet_t adopted[SHEETS_MAX];
+    for (const os64_html_node_t *root = doc != NULL && doc->document != NULL && scripts != NULL
+             ? adopting_root(doc, NULL) : NULL; root; root = adopting_root(doc, root)) {
+        size_t count = yonder_scripts_adopted(scripts, root, adopted, SHEETS_MAX);
+        for (size_t i = 0; i < count && i < SHEETS_MAX; i++) {
+            int32_t e = sheet_constructed(p, adopted[i].key, adopted[i].generation);
+            if (e < 0)
+                continue;
+            if (input_of[e] < 0)
+                input_of[e] = sheet_emit(p, e, in, entry, &n);
+            if (input_of[e] >= 0)
+                paired = paired && page_scopes_add(&ps, input_of[e], root);
         }
     }
-    int32_t nscopes = page_scopes(roots, at, m, scopes, list);
+    // With no memory for the scopes there is no cascade, as with no memory
+    // for the cascade itself: given none, it would style the document with
+    // every tree's sheets.
+    bool scoped = paired && page_scopes_group(&ps);
     uint64_t prior_updates = garb_cascade_updates(cascade);
     // A live page can explicitly invalidate its sheets. A staged table
     // instead proves that its immutable inputs still match the source.
-    bool updated = (!p->sheets_changed || p->reuse_sheets) &&
-                   garb_cascade_matches_scoped(cascade, in, n, scopes, nscopes, view) &&
+    bool updated = scoped && (!p->sheets_changed || p->reuse_sheets) &&
+                   garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view) &&
                    garb_cascade_update(cascade);
     if (!updated) {
         measured_fallback(p);
-        cascade = garb_cascade_scoped(in, n, scopes, nscopes, page_doc(p), view, NULL);
+        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view, NULL) : NULL;
     }
+    page_scopes_free(&ps);
     if (s_layout_profile && layout_profile_diag(p)) {
         yonder_layout_stats_t sample = {.refusals = cascade == NULL,
             .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates};
@@ -4904,7 +5012,7 @@ static void sheet_ready(Page *p, int32_t e)
     int32_t n = garb_sheet_imports(&sh->source->parsed, NULL, 0);
     if (n > SHEET_IMPORTS_MAX)
         n = SHEET_IMPORTS_MAX;
-    if (n == 0)
+    if (n == 0 || sh->key != 0)
         return;
     // A `style` element's against the page's base: the model's, or for the
     // stream's page, which has no model, the one a model would have. With
@@ -5011,13 +5119,86 @@ static bool sheet_add(void *page, const os64_page_sheet_t *one)
     return true;
 }
 
-// The rest of the page's sheets, from its own model.
+// The script host whose binding holds `p`'s adoptions: its own (page_scripts),
+// or for a copy of a page laid out beside it (a measurement), the host its
+// serial names. NULL with none.
+static const yonder_scripts_t *adoptions_host(const Page *p)
+{
+    const yonder_scripts_t *own = page_scripts(p);
+    return own != NULL ? own : scripts_for(p->serial);
+}
+
+// The roots whose adoptions count, in shadow-including order: the document
+// node and every connected shadow root. `x` NULL starts; NULL after the last.
+static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, const os64_html_node_t *x)
+{
+    if (x == NULL)
+        return doc->document;
+    if (!os64_html_has_shadow_roots(doc))
+        return NULL;
+    do
+        x = os64_html_shadow_including_next(doc->document, x);
+    while (x != NULL && os64_html_shadow_host(x) == NULL);
+    return x;
+}
+
+// A constructed sheet a tree adopted (SHADOW_DOM.md § 12, D4b), if the
+// table has no entry for it at this generation: parsed from its text, or
+// the replaced table's parse while the generation holds. False once the
+// table is full.
+static bool sheet_adopt(Page *p, const os64_dom_adopted_sheet_t *one)
+{
+    if (sheet_constructed(p, one->key, one->generation) >= 0)
+        return true;
+    Sheet *sh = sheet_new(p, NULL, NULL, -1, -1);
+    if (sh == NULL)
+        return false;
+    sh->key = one->key;
+    sh->generation = one->generation;
+    int32_t e = (int32_t)(sh - p->sheets);
+    int32_t old = p->reuse_sheets ? sheet_constructed(p->reuse_sheets, one->key, one->generation) : -1;
+    Sheet *from = old >= 0 ? &p->reuse_sheets->sheets[old] : NULL;
+    if (from != NULL && from->ready && from->source->refs < UINT32_MAX) {
+        sh->source = from->source;
+        ++sh->source->refs;
+        sheet_ready(p, e);
+        return true;
+    }
+    SheetParse *source = os64_calloc(1, sizeof(*source));
+    if (source == NULL)
+        return true;
+    source->refs = 1;
+    sh->source = source;
+    if (garb_parse_sheet_text(one->text, one->length, &source->parsed) == GARB_OK)
+        sheet_ready(p, e);
+    return true;
+}
+
+// The constructed sheets the page's trees adopted, after the sheets its
+// model lists. A sheet that will not parse is left out, as a `style`'s is.
+static void sheets_adopted(Page *p)
+{
+    const os64_html_document_t *doc = page_doc(p);
+    const yonder_scripts_t *scripts = adoptions_host(p);
+    if (doc == NULL || doc->document == NULL || scripts == NULL)
+        return;
+    os64_dom_adopted_sheet_t list[SHEETS_MAX];
+    for (const os64_html_node_t *root = adopting_root(doc, NULL); root; root = adopting_root(doc, root)) {
+        size_t n = yonder_scripts_adopted(scripts, root, list, SHEETS_MAX);
+        for (size_t i = 0; i < n && i < SHEETS_MAX; i++)
+            if (!sheet_adopt(p, &list[i]))
+                return;
+    }
+}
+
+// The rest of the page's sheets: its model's, then its trees' adopted ones.
 static void sheets_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
     for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++)
         if (!sheet_add(p, os64_page_sheet(model, i)))
-            break;
+            return;
+    sheets_adopted(p);
 }
 
 // The page is going: what it is still waiting for is not wanted.
@@ -12856,8 +13037,10 @@ static Page *stream_page(void)
 // entry for, by libpage's own rule and order (os64_page_sheets_in, a walk
 // of the tree, which costs a fraction of a model). A `style` element is
 // parsed now; a `link` is fetched under the stream's serial. A walk that
-// had no memory leaves them to the next look. The same looks find the
-// module preloads, once the page has a script host to hold their modules.
+// had no memory leaves them to the next look. The constructed sheets its
+// scripts have adopted so far are taken too (sheets_adopted). The same
+// looks find the module preloads, once the page has a script host to hold
+// their modules.
 static void stream_sheets(void)
 {
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
@@ -12866,6 +13049,7 @@ static void stream_sheets(void)
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
     int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, stream_sheet_add, p);
+    sheets_adopted(p);
     yonder_scripts_preload(g.stream.scripts);
     if (s_script_audit) {
         char line[128];

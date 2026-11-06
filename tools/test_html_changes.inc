@@ -35,6 +35,15 @@ static void t_change_log(void)
     check(os64_html_changes(one,&entries)==1 && entries->kind==OS64_HTML_CHANGE_STATE,
           "log: selector-visible custom state invalidates");
     (void)os64_html_changes(two,&entries);
+    /* touch: the version moves and a STATE change of the node is logged,
+     * every time, a document node included; a foreign node is refused. */
+    uint64_t touched=os64_html_version(d);
+    check(os64_html_touch(d,(HNode *)d->document)==0 && os64_html_touch(d,(HNode *)d->document)==0 &&
+          os64_html_version(d)==touched+2,"log: touch moves the version each time");
+    check(os64_html_changes(one,&entries)==2 && entries->kind==OS64_HTML_CHANGE_STATE &&
+          entries->target==d->document,"log: touch logs a STATE change of its node");
+    (void)os64_html_changes(two,&entries);
+    check(os64_html_touch(d,NULL)==OS64_HTML_BAD_ARGUMENT,"log: touch refuses no node");
     int64_t why=0;
     HNode *fragment=os64_html_create_fragment(d,&why);
     HNode *x=os64_html_create_element(d,OS64_HTML_NS_HTML,"i",&why), *y=os64_html_create_element(d,OS64_HTML_NS_HTML,"u",&why);

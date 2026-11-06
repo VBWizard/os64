@@ -175,8 +175,8 @@ bool yonder_settings_saved_modern(const char **refused)
 bool yonder_settings_saved_shadow_dom(void)
 {
     char value[8];
-    return os64_conf_get(CONF_NAME, CONF_SHADOW_DOM, value, sizeof(value)) == 0 &&
-           os64_streq_nocase(value, "on");
+    return os64_conf_get(CONF_NAME, CONF_SHADOW_DOM, value, sizeof(value)) != 0 ||
+           !os64_streq_nocase(value, "off");
 }
 
 bool yonder_settings_saved_scripts(void)

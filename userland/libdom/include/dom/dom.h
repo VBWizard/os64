@@ -817,6 +817,22 @@ bool os64_dom_reactions_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * that name has no definition or its constructor has not failed. For the
  * host's census of FAILED elements. */
 bool os64_dom_custom_failure(const os64_dom_t *dom, const char *name, char *out, size_t cap);
+
+/* A constructed sheet a tree has adopted (SHADOW_DOM.md § 12, D4b): its key,
+ * the same for the sheet's life and never another sheet's; its generation,
+ * which moves each time replace or replaceSync gives it new text; and that
+ * text, valid until the sheet's next replace or the binding's free. */
+typedef struct {
+    uint64_t key, generation;
+    const char *text;
+    size_t length;
+} os64_dom_adopted_sheet_t;
+/* The sheets `root` — the document node or a shadow root — has adopted, in
+ * the order its adoptedStyleSheets holds them: writes at most `cap` and
+ * answers how many there are. A change to any of them moves the document's
+ * version (os64_html_touch at the root), which is when to ask again. */
+size_t os64_dom_adopted(const os64_dom_t *dom, const os64_html_node_t *root, os64_dom_adopted_sheet_t *out,
+                        size_t cap);
 /* How many nodes define's searches for elements to upgrade have visited,
  * so the page's record says what defining cost. */
 uint64_t os64_dom_custom_visits(const os64_dom_t *dom);

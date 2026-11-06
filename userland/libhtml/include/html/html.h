@@ -457,11 +457,13 @@ typedef enum {
     OS64_HTML_CHANGE_CHILDREN = 1, /* target's children changed */
     OS64_HTML_CHANGE_ATTR,         /* an attribute of target was set or removed */
     OS64_HTML_CHANGE_TEXT,         /* target's text was replaced or appended to */
-    /* An element's custom state changed (os64_html_set_ce). The standard
-     * records no mutation for it, so no listener is told. The kind is for a
-     * log of the document's changes (RELAYOUT.md), whose every entry stands
-     * for a move of the version: this change moves it because `:defined`
-     * reads the state. */
+    /* Something the cascade reads changed at target though no node did: an
+     * element's custom state (os64_html_set_ce, which `:defined` reads), or
+     * a tree's adopted style sheets (os64_html_touch, target the document
+     * node or a shadow root). The standard records no mutation for either,
+     * so no listener is told. The kind is for a log of the document's
+     * changes (RELAYOUT.md), whose every entry stands for a move of the
+     * version. */
     OS64_HTML_CHANGE_STATE
 } os64_html_change_kind_t;
 
@@ -553,6 +555,14 @@ typedef enum {
 } os64_html_ce_t;
 int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
 bool os64_html_custom_name(const char *name);
+
+/* `touch` says something a reader of the document's version depends on
+ * changed at `node` though no node did: it moves the version and logs a
+ * STATE change of `node`, telling no listener, as `set_ce` does. The
+ * consumer is a tree's adopted style sheets (SHADOW_DOM.md § 12, D4b):
+ * `node` is the document node or a shadow root whose sheets changed. A node
+ * of `doc` only; anything else is OS64_HTML_BAD_ARGUMENT. */
+int64_t os64_html_touch(os64_html_document_t *doc, os64_html_node_t *node);
 
 /* ── SHADOW TREES (docs/design/pending/SHADOW_DOM.md § 3) ──────────────
  *

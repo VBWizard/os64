@@ -205,6 +205,10 @@ struct DValue {
      * `link`'s CSSStyleSheet, made once (sheets.c). */
     DQuery *style_sheets;
     DValue *sheet;
+    /* A constructed CSSStyleSheet's own entry: its text (adopted.c). */
+    struct DSheetText *constructed;
+    /* A document node's or shadow root's adoptedStyleSheets (adopted.c). */
+    struct DAdopted *adopted;
     /* A control's, fieldset's or output's ValidityState, made once
      * ([SameObject], validity.c). */
     DValue *validity;
@@ -377,6 +381,12 @@ struct os64_dom {
     /* StyleSheetList's prototype (collection.c) and CSSStyleSheet's
      * (sheets.c); NULL with the modern switch off. */
     DValue *sheet_list_prototype, *sheet_prototype;
+    /* Adoption (adopted.c): every root that has an adoptedStyleSheets
+     * array, the factory that makes one, and the next constructed sheet's
+     * key. */
+    struct DAdopted *adoptions;
+    DValue *adopt_factory;
+    uint64_t sheet_keys;
     /* Constraint validation (validity.c): ValidityState's prototype; the
      * RegExp constructor and RegExp.prototype.exec, taken before any page
      * ran, which judge a control's pattern; the native function a person's
@@ -1533,6 +1543,19 @@ JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* document.styleSheets, StyleSheet, CSSStyleSheet and LinkStyle's `sheet`
  * (sheets.c): one row of the Modern Web table. */
 int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* Constructed sheets and adoption (adopted.c, SHADOW_DOM.md § 12 D4b):
+ * CSSStyleSheet's constructor, replace and replaceSync, and both
+ * adoptedStyleSheets, installed with the shadow surface. `d_sheet_constructed`
+ * answers a constructed sheet's members sheets.c asks about, true when
+ * `entry` is one. `d_adopted_free` lets go of an entry's records at
+ * teardown. */
+int d_adopted_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSValueConst sheet_prototype,
+                      JSValueConst root_prototype);
+JSValue d_sheet_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);
+/* CSSStyleSheet's class (sheets.c), whose opaque is the sheet's entry. */
+JSClassID d_sheet_class(void);
+bool d_sheet_constructed(const DValue *entry);
+void d_adopted_free(os64_dom_t *dom, DValue *entry);
 /* The CSS namespace (css.c): CSS.escape and CSS.supports; one row of the
  * Modern Web table. */
 int d_css_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

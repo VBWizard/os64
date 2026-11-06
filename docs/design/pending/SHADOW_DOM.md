@@ -416,14 +416,16 @@ CSSStyleSheet's constructor and the members above; Document's
 load: `window.ShadowRoot && ('adoptedStyleSheets' in Document.prototype)
 && ('replace' in CSSStyleSheet.prototype)`, and the 96 `MISSING global
 ShadowRoot` records are guards that flip the day the global exists. So
-the names come and go together, behind one libdom switch, off until D4
-turns it on: `attachShadow`, `shadowRoot`, `slot`, `assignedSlot` (on
-Element and Text), `getRootNode`'s `composed` member, `ShadowRoot`,
-`HTMLSlotElement`, `CSSStyleSheet`'s constructor, both
-`adoptedStyleSheets`, and `Event.composed`. A `yonder.conf` developer key
-sets it before D4 does, so D3 can load real pages in QEMU, and the host
-suites set it for their own cases. All of it is also behind the Modern
-Web switch, as every surface since Slice 1 is.
+the names come and go together, behind one libdom switch: `attachShadow`,
+`shadowRoot`, `slot`, `assignedSlot` (on Element and Text),
+`getRootNode`'s `composed` member, `ShadowRoot`, `HTMLSlotElement`,
+`CSSStyleSheet`'s constructor with `replace` and `replaceSync`, both
+`adoptedStyleSheets`, and `Event.composed`. libdom's default leaves it
+off, so a host opts in; yonder turns it on (D4b), and its `yonder.conf`
+developer key `shadow_dom = off` turns it off again, to compare a page
+without shadow trees. The host suites set it for their own cases. All of
+it is also behind the Modern Web switch, as every surface since Slice 1
+is.
 
 ## 8. Events
 
@@ -578,7 +580,39 @@ Four PRs, stacked, merged in order, the switch (§ 7) off until the last:
   it"). The switch stays off. M.
 - **D4b Constructed sheets, and the switch on**: `new CSSStyleSheet()`,
   `replace` and `replaceSync`, both `adoptedStyleSheets`; then the switch
-  goes on and the census runs again. S–M.
+  goes on and the census runs again. M. The plan:
+  - *libdom keeps the text.* A constructed sheet is a CSSStyleSheet with
+    no owner node and a record of its own: the text `replace`/`replaceSync`
+    last gave it and a generation that moves with each. Both refuse a
+    sheet a node owns (NotAllowedError); `replace` answers a Promise of the
+    sheet. CSSOM drops `@import` from a constructed sheet, so yonder never
+    fetches one's imports. The constructor's options (`media`, `disabled`,
+    `baseURL`) are a DEBTS row until something reads them.
+  - *`adoptedStyleSheets` is an observable array* on `Document.prototype`
+    and `ShadowRoot.prototype`: one array object per root (the same one
+    each read), a Proxy over a plain array made by a small embedded
+    factory (event.c's precedent), whose traps hand every change to a
+    native hook. The hook refuses anything but a constructed sheet of the
+    same document (TypeError / NotAllowedError, as CSSOM says) and keeps
+    the root's list. Assigning an array replaces the contents.
+  - *The change signal is the document's version.* yonder restyles when the
+    version moves, and an adoption or a `replaceSync` moves no node. A new
+    libhtml verb, `os64_html_touch`, moves the version and logs a STATE
+    change on the root with no listener told — `set_ce`'s shape, for the
+    same reason (the cascade reads it). libdom touches a root when its
+    list changes, and every connected root adopting a sheet whose text
+    changes.
+  - *yonder reads the adoptions* when it builds its sheet table: after the
+    model's sheets, for the document and each connected shadow root in
+    shadow-including order, libdom's list for that root (a key, the text,
+    its generation). One table entry per (key, generation), parsed from the
+    text and reused across rebuilds while the generation holds; the
+    entries go after every sheet the model lists, each in the order first
+    met, and each scope lists its adopted ones after its own — CSSOM's
+    final style sheets. Two roots adopting shared sheets in opposite
+    orders get the first one's: a DEBTS row.
+  - *The switch goes on*: `shadow_trees` in yonder's libdom options
+    defaults on, and the yonder.conf key stays to turn it off.
 
 Holding the switch off until D4 is the answer to § 2 applied to the
 stack: until style is scoped, a page that feature-tests is better served

@@ -854,6 +854,17 @@ waits for the next notify. A clone queues the notify too, since its slots'
 first assignment comes from no change the dispatcher saw. The event path is
 § Events'.
 
+Constructed sheets and adoption (`adopted.c`, SHADOW_DOM.md § 12, D4b) come
+with the same switch: `new CSSStyleSheet()`, `replace` (a Promise of the
+sheet) and `replaceSync`, which keep the text and a generation for the host
+and refuse a sheet a node owns; and `adoptedStyleSheets` on the document and
+a shadow root — one array per root, a Proxy over a plain array from an
+embedded factory, whose traps check each value going in (a constructed sheet,
+else TypeError or NotAllowedError) and report each change. A change moves the
+document's version (`os64_html_touch` at the root, and at every root adopting
+a replaced sheet), since an adoption moves no node and the host restyles on
+the version; the host reads a root's sheets with `os64_dom_adopted`.
+
 ## The CSS namespace
 
 `CSS` (`css.c`) is a WebIDL namespace object with `escape` and `supports`.
