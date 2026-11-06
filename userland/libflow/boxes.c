@@ -1223,13 +1223,26 @@ static bool loose(const B *b, Level level, const os64_html_node_t *n)
     if (n->kind == OS64_HTML_TEXT)
         return !foreign_text(n) && text_significant(b, n);
     flow_display_t d = display_of(b, n);
-    return d != FLOW_DISPLAY_NONE && !structural(level, n, d);
+    // A `display: contents` element is no loose content: its children are
+    // (contents_of).
+    return d != FLOW_DISPLAY_NONE && d != FLOW_DISPLAY_CONTENTS && !structural(level, n, d);
+}
+
+// An element that makes no box of its own and whose children are its
+// parent's (CSS Display 3 § 2.5): a slot, by the UA sheet. Inside table
+// structure its flat children are walked in its place, so a slot's
+// assigned rows are the surrounding table's rows and its cells the row's.
+// A run of loose cells sharing an anonymous row does not continue across
+// it, which a page putting bare cells on both sides would see.
+static bool contents_of(const B *b, const os64_html_node_t *n)
+{
+    return display_of(b, n) == FLOW_DISPLAY_CONTENTS;
 }
 
 static const os64_html_node_t *loose_end(const B *b, Level level, const os64_html_node_t *n,
                                          const os64_html_node_t *stop)
 {
-    while (n != NULL && n != stop && !structural(level, n, display_of(b, n)))
+    while (n != NULL && n != stop && !structural(level, n, display_of(b, n)) && !contents_of(b, n))
         n = next_of(b, n);
     return n;
 }
@@ -1253,6 +1266,9 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
             position_box(b, cell, c, true);
             if (cell != NULL)
                 build_container(b, cell, kids(b, c), NULL, scope, NULL, 0);
+            c = next_of(b, c);
+        } else if (contents_of(b, c)) {
+            row_range(b, row, first_of(b, c), NULL, scope);
             c = next_of(b, c);
         } else if (loose(b, AT_ROW, c)) {
             const os64_html_node_t *end = loose_end(b, AT_ROW, c, stop);
@@ -1325,6 +1341,12 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
         if (structural(level, c, d) && d != FLOW_DISPLAY_TABLE_CELL) {
             anon_row = NULL;
             table_part(b, parent, c, d, scope);
+            c = next_of(b, c);
+            continue;
+        }
+        if (d == FLOW_DISPLAY_CONTENTS) {
+            anon_row = NULL;
+            rows_range(b, parent, level, first_of(b, c), NULL, scope);
             c = next_of(b, c);
             continue;
         }

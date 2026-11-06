@@ -140,6 +140,29 @@ static void shadow_flow_cases(void)
     }
     sheeted_close(&p);
 
+    // A table host whose shadow tree holds a header row and a slot taking
+    // light-DOM rows: the slot's rows are the table's own, so their columns
+    // line up with the header's (Codex #486).
+    snapshot_open(&p, "<!doctype html><body><div id=tbl></div>");
+    host = (os64_html_node_t *)computed_find(p.doc->document, "tbl");
+    root = host != NULL ? os64_html_attach_shadow(p.doc, host, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+    if (root != NULL) {
+        os64_html_node_t *table = shadow_el(p.doc, root, "table", NULL, NULL);
+        os64_html_node_t *head = shadow_el(p.doc, table, "tr", NULL, NULL);
+        shadow_el(p.doc, head, "td", NULL, "wide-header-cell");
+        os64_html_node_t *h2 = shadow_el(p.doc, head, "td", NULL, "h");
+        shadow_el(p.doc, table, "slot", NULL, NULL);
+        os64_html_node_t *row = shadow_el(p.doc, host, "tr", NULL, NULL);
+        shadow_el(p.doc, row, "td", NULL, "a");
+        os64_html_node_t *r2 = shadow_el(p.doc, row, "td", NULL, "b");
+        flow_tree_t *t = snapshot_layout(&p, NULL, &input);
+        const flow_box_t *hb2 = t != NULL ? flow_box_for(t, h2) : NULL, *rb2 = t != NULL ? flow_box_for(t, r2) : NULL;
+        expect("shadow: a slot's rows share the table's columns", hb2 != NULL && rb2 != NULL && hb2->rect.x == rb2->rect.x,
+               NULL);
+        flow_free(t);
+    }
+    sheeted_close(&p);
+
     // The chapter's descendant selectors match within one tree: a list in a
     // component inside a list is a first-level list (a disc), not `ul ul`.
     snapshot_open(&p, "<!doctype html><body><ul><li><div id=nav></div></li></ul>");
