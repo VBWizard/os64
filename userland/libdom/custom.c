@@ -383,7 +383,7 @@ static void children_changed(os64_dom_t *dom, const os64_html_change_t *c)
         if (d_connected(c->target)) {
             const os64_html_node_t *n = c->removed;
             for (size_t i = 0; i < c->nremoved && n != NULL; i++, n = n->next)
-                for (const os64_html_node_t *at = n; at != NULL; at = d_walk_next(n, at))
+                for (const os64_html_node_t *at = n; at != NULL; at = os64_html_shadow_including_next(n, at))
                     if (at->kind == OS64_HTML_ELEMENT && at->ce == OS64_HTML_CE_CUSTOM)
                         enqueue_callback(dom, at, CB_DISCONNECTED, NULL, NULL);
         }
@@ -406,12 +406,12 @@ static void children_changed(os64_dom_t *dom, const os64_html_change_t *c)
         const os64_html_node_t *from = document != NULL ? came_from(dom, c, n) : NULL;
         if (from != NULL && from != document) {
             const os64_html_node_t *documents[2] = {from, document};
-            for (const os64_html_node_t *at = n; at != NULL; at = d_walk_next(n, at))
+            for (const os64_html_node_t *at = n; at != NULL; at = os64_html_shadow_including_next(n, at))
                 if (at->kind == OS64_HTML_ELEMENT && at->ce == OS64_HTML_CE_CUSTOM)
                     enqueue_callback(dom, at, CB_ADOPTED, NULL, documents);
         }
         if (!connected) continue;
-        for (const os64_html_node_t *at = n; at != NULL; at = d_walk_next(n, at)) {
+        for (const os64_html_node_t *at = n; at != NULL; at = os64_html_shadow_including_next(n, at)) {
             if (at->kind != OS64_HTML_ELEMENT) continue;
             if (at->ce == OS64_HTML_CE_CUSTOM) enqueue_callback(dom, at, CB_CONNECTED, NULL, NULL);
             else try_upgrade(dom, at);
@@ -803,7 +803,7 @@ int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *cop
 {
     if (dom->custom == NULL || dom->custom->definitions == NULL || !d_window_document(dom, copy)) return 0;
     if (d_reactions_push(dom, ctx) < 0) return -1;
-    for (const os64_html_node_t *at = copy; at != NULL; at = d_walk_next(copy, at))
+    for (const os64_html_node_t *at = copy; at != NULL; at = os64_html_shadow_including_next(copy, at))
         if (at->kind == OS64_HTML_ELEMENT) try_upgrade(dom, at);
     return d_reactions_pop(dom, ctx);
 }
@@ -815,7 +815,7 @@ void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_
 {
     if (dom->custom == NULL || dom->custom->definitions == NULL) return;
     const os64_html_node_t *documents[2] = {from, to};
-    for (const os64_html_node_t *at = root; at != NULL; at = d_walk_next(root, at))
+    for (const os64_html_node_t *at = root; at != NULL; at = os64_html_shadow_including_next(root, at))
         if (at->kind == OS64_HTML_ELEMENT && at->ce == OS64_HTML_CE_CUSTOM)
             enqueue_callback(dom, at, CB_ADOPTED, NULL, documents);
 }
@@ -1116,12 +1116,14 @@ static JSValue define(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *a
     DDefinition *d = read < 0 ? NULL : record_definition(dom, ctx, name.data, argv[1], &reading);
     reading_free(dom, ctx, &reading);
     if (d == NULL) goto done;
-    /* The window's document's elements of that name, in tree order, each
+    /* The window's document's elements of that name, in shadow-including
+     * tree order (an instance inside another component's shadow tree
+     * upgrades too), each
      * queued for an upgrade on define's own element queue (its caller's
      * [CEReactions]), which runs them as define returns: after the promise
      * below is resolved, as the standard orders the two. */
     const os64_html_node_t *document = window_document(dom);
-    for (const os64_html_node_t *at = document; at != NULL; at = d_walk_next(document, at)) {
+    for (const os64_html_node_t *at = document; at != NULL; at = os64_html_shadow_including_next(document, at)) {
         s->visits++;
         if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML && os64_streq(at->name, d->name))
             try_upgrade(dom, at);
@@ -1246,7 +1248,7 @@ static JSValue registry_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         const os64_html_node_t *root = d_node(dom, ctx, argv[0]);
         if (root == NULL) return JS_EXCEPTION;
         if (d_reactions_push(dom, ctx) < 0) return JS_EXCEPTION;
-        for (const os64_html_node_t *at = root; at != NULL; at = d_walk_next(root, at))
+        for (const os64_html_node_t *at = root; at != NULL; at = os64_html_shadow_including_next(root, at))
             if (at->kind == OS64_HTML_ELEMENT) try_upgrade(dom, at);
         return d_reactions_pop(dom, ctx) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }

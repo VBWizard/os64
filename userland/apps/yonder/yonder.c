@@ -1463,11 +1463,10 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     return true;
 }
 
+// Connected to `doc`: a node in a shadow tree is when its host is.
 static bool node_in_document(const os64_html_document_t *doc, const os64_html_node_t *node)
 {
-    while (node->parent != NULL)
-        node = node->parent;
-    return doc != NULL && node == doc->document;
+    return doc != NULL && os64_html_shadow_including_root(node) == doc->document;
 }
 
 // Remembers where a box was scrolled to, for the layouts after this one.
@@ -2577,8 +2576,9 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
     uint32_t nothing[NOTHING] = {0}, canvases = 0;
     struct { const char *name; uint32_t n; bool failed; } custom[DIAG_CUSTOM_MAX];
     int32_t ncustom = 0;
-    const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
-    while (n != NULL) {
+    // The record counts what the page has, its shadow trees' elements too.
+    const os64_html_node_t *top = doc != NULL ? doc->document : NULL;
+    for (const os64_html_node_t *n = top; n != NULL; n = os64_html_shadow_including_next(top, n)) {
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
             for (int k = 0; k < NOTHING; k++)
                 nothing[k] +=
@@ -2599,14 +2599,6 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, con
                 }
             }
         }
-        if (n->first_child != NULL) {
-            n = n->first_child;
-            continue;
-        }
-        while (n != NULL && n->next == NULL)
-            n = n->parent;
-        if (n != NULL)
-            n = n->next;
     }
     for (int k = 0; k < NOTHING; k++)
         if (nothing[k] != 0)
@@ -10256,9 +10248,7 @@ static void asks_perform_with_fallback(yonder_scripts_t *host, const os64_html_d
         if (fallback) os64_html_release(doc, fallback);
     } else {
         if (!fallback) return;
-        const os64_html_node_t *root = fallback;
-        while (root->parent) root = root->parent;
-        if (!shown || doc != page_doc(&g.page) || root != doc->document) {
+        if (!shown || doc != page_doc(&g.page) || !node_in_document(doc, fallback)) {
             os64_html_release(doc, fallback);
             return;
         }

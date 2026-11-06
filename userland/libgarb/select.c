@@ -1038,11 +1038,21 @@ static bool text_input(const os64_html_node_t *el)
     return false;
 }
 
+// The element a language or a direction is inherited from: the parent
+// element, or for a shadow tree's top element its host. HTML hands a shadow
+// root its host's language and directionality; a combinator does not cross
+// (parent_el).
+static const os64_html_node_t *inheriting_parent_el(const os64_html_node_t *n)
+{
+    const os64_html_node_t *up = n->parent ? os64_html_shadow_host(n->parent) : NULL;
+    return up != NULL ? up : parent_el(n);
+}
+
 // :lang(): the nearest `lang` wins, matched as a prefix ending at a hyphen.
 static bool lang_matches(const Simple *s, const os64_html_node_t *el)
 {
     const char *lang = NULL;
-    for (const os64_html_node_t *up = el; up != NULL; up = parent_el(up)) {
+    for (const os64_html_node_t *up = el; up != NULL; up = inheriting_parent_el(up)) {
         lang = attr(up, "lang");
         if (lang == NULL)
             lang = attr(up, "xml:lang");
@@ -1067,7 +1077,7 @@ static bool lang_matches(const Simple *s, const os64_html_node_t *el)
 static bool dir_matches(const Simple *s, const os64_html_node_t *el)
 {
     bool rtl = false;
-    for (const os64_html_node_t *up = el; up != NULL; up = parent_el(up)) {
+    for (const os64_html_node_t *up = el; up != NULL; up = inheriting_parent_el(up)) {
         const char *d = attr(up, "dir");
         if (d != NULL && (ascii_ieq(d, os64_strlen(d), "rtl") || ascii_ieq(d, os64_strlen(d), "ltr"))) {
             rtl = ascii_ieq(d, os64_strlen(d), "rtl");

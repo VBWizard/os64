@@ -2663,11 +2663,10 @@ static const os64_html_node_t *subtree_next(const os64_html_node_t *x,
     while (x != root && !x->next) x = x->parent;
     return x == root ? NULL : x->next;
 }
+// DOM's connected: a node in a shadow tree is connected when its host is.
 static bool connected(const garb_cascade_t *c, const os64_html_node_t *x)
 {
-    if (!x) return false;
-    while (x->parent) x = x->parent;
-    return x == c->doc->document;
+    return x != NULL && os64_html_shadow_including_root(x) == c->doc->document;
 }
 static bool mark_subtree(garb_cascade_t *c, const os64_html_node_t *root)
 {

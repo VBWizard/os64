@@ -1931,8 +1931,11 @@ static bool tree_plan_collect(PReserve *reserve, PArena *scratch,
         for (const os64_html_node_t *top = root->node; top != NULL;
              top = root->siblings ? top->next : NULL)
             for (const os64_html_node_t *at = top; at != NULL; at = tree_next(top, at)) {
-                if (explicit_owners && (tree_root(at) == reserve->state->doc->document ||
-                    (root->parent != NULL && tree_root(root->parent) == reserve->state->doc->document)) &&
+                // HTML resolves form= for a connected element only, a shadow
+                // tree's included: the test is connectedness, which crosses.
+                if (explicit_owners && (os64_html_shadow_including_root(at) == reserve->state->doc->document ||
+                    (root->parent != NULL &&
+                     os64_html_shadow_including_root(root->parent) == reserve->state->doc->document)) &&
                     !tree_name_add(scratch, ids, p_attr(at, "id"))) return false;
                 if (p_is(at, OS64_HTML_TAG_INPUT) && p_input_type(at) == OS64_PAGE_INPUT_RADIO) {
                     PAttrStage *stage = attr_stage(reserve, stages, at);

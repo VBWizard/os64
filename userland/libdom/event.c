@@ -1111,22 +1111,19 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
     return outcome->status;
 }
 
-/* Attributes are counted once per tree version: a walk of the connected tree
- * for on<type> names. Listener and property counts are kept as they change. */
+/* Attributes are counted once per tree version: a walk of the connected
+ * tree, shadow trees included, for on<type> names. Listener and property
+ * counts are kept as they change. */
 uint64_t os64_dom_handler_attributes(const os64_html_document_t *doc)
 {
     uint64_t mask = 0;
     const os64_html_node_t *root = doc != NULL ? doc->document : NULL;
-    for (const os64_html_node_t *at = root; at != NULL;) {
+    for (const os64_html_node_t *at = root; at != NULL; at = os64_html_shadow_including_next(root, at))
         if (at->kind == OS64_HTML_ELEMENT)
             for (const os64_html_attr_t *attr = at->attrs; attr != NULL; attr = attr->next) {
                 int kind = handler_kind(attr->name);
                 if (kind >= 0) mask |= UINT64_C(1) << kind;
             }
-        if (at->first_child != NULL) { at = at->first_child; continue; }
-        while (at != NULL && at != root && at->next == NULL) at = at->parent;
-        at = at != NULL && at != root ? at->next : NULL;
-    }
     return mask;
 }
 

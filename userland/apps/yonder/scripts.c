@@ -1209,10 +1209,9 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     s->written = 0;
     Item *it = &s->items[index];
     // A link's script has no element to be connected or typed: it is the
-    // page's own code, and runs while the page does.
-    const os64_html_node_t *root = it->node;
-    while (root != NULL && root->parent != NULL)
-        root = root->parent;
+    // page's own code, and runs while the page does. An element's is
+    // connected when its shadow-including root is the page's document.
+    const os64_html_node_t *root = it->node != NULL ? os64_html_shadow_including_root(it->node) : NULL;
     os64_dom_script_kind_t kind = it->importmap ? OS64_DOM_SCRIPT_IMPORTMAP
                                 : it->module ? OS64_DOM_SCRIPT_MODULE : OS64_DOM_SCRIPT_CLASSIC;
     bool runs = it->state == STATE_READY &&

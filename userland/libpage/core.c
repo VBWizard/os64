@@ -454,11 +454,37 @@ static bool element_kind(const os64_html_node_t *n, os64_page_element_t *out)
 // nothing leaves it in no form as well, and NOT in the nearest ancestor.
 // Without form=, the parser's insertion association precedes ancestry: table
 // parsing can leave a form empty while its controls still belong to it.
+// The first element in tree order in the tree `root` is the root of whose
+// id is `id`. The document's ids are in the id map; a shadow tree's are its
+// own (ids are per tree), so a control there resolves form= by this walk.
+static const os64_html_node_t *tree_id(const os64_html_node_t *root, const char *id)
+{
+    for (const os64_html_node_t *n = root->first_child; n != NULL;) {
+        if (n->kind == OS64_HTML_ELEMENT) {
+            const char *own = p_attr(n, "id");
+            if (own != NULL && os64_streq(own, id))
+                return n;
+        }
+        if (n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != root && n->next == NULL)
+            n = n->parent;
+        n = n != root ? n->next : NULL;
+    }
+    return NULL;
+}
+
 static int32_t form_owner(const os64_page_t *page, const os64_html_node_t *n)
 {
     const char *named = p_attr(n, "form");
     if (named != NULL) {
-        const void *node = p_strmap_get(&page->id_map, named);
+        const os64_html_node_t *root = n;
+        while (root->parent != NULL)
+            root = root->parent;
+        const void *node = os64_html_shadow_host(root) != NULL ? tree_id(root, named)
+                                                                : p_strmap_get(&page->id_map, named);
         return node != NULL ? p_ptrmap_get(&page->form_map, node) : -1;
     }
     const os64_html_node_t *owner = n->form_owner ? n->form_owner : p_ancestor(n, OS64_HTML_TAG_FORM);
@@ -984,6 +1010,10 @@ static void collect_forms(os64_page_t *page, const os64_html_node_t *n)
                 page->incomplete = true;
             page->nforms++;
         }
+        // A form in a host's shadow tree is one of the page's, met in
+        // shadow-including order.
+        if (n->shadow_root != NULL)
+            collect_forms(page, n->shadow_root->first_child);
         collect_forms(page, n->first_child);
     }
 }
@@ -1000,11 +1030,16 @@ static void collect_ids(os64_page_t *page, const os64_html_node_t *n)
     }
 }
 
-static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off);
+static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off, bool shadow);
 
-// One node and everything under it. `off` says a disabled fieldset above has
-// taken this subtree away.
-static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
+// One node and everything under it, a host's shadow tree before its
+// children (shadow-including order: a control or a link inside a component
+// is one a person uses). `off` says a disabled fieldset above has taken
+// this subtree away, which HTML scopes to one tree, so a shadow tree starts
+// with it clear. `shadow` says the node is in a shadow tree, whose sheets
+// apply in a scope of their own that the page's sheet list does not carry
+// (SHADOW_DOM.md § 6), so they are left out of it.
+static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off, bool shadow)
 {
     // A foreign element is not an HTML link or control however it is
     // spelled, but HTML nested INSIDE one still is — so the test is per
@@ -1034,23 +1069,26 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
         if (element_kind(n, &element))
             add_control(page, n, element, off);
     }
-    add_sheet(page, n);
+    if (!shadow)
+        add_sheet(page, n);
     // `template` contents are a separate fragment and belong to no form, so
     // the walk never follows them: they hang off their own pointer rather
     // than off first_child, which is what makes that free.
+    if (n->shadow_root != NULL)
+        collect_model(page, n->shadow_root->first_child, false, true);
     if (p_is(n, OS64_HTML_TAG_FIELDSET) && p_has_attr(n, "disabled")) {
         const os64_html_node_t *legend = first_legend(n);
         for (const os64_html_node_t *c = n->first_child; c != NULL; c = c->next)
-            collect_node(page, c, off || c != legend);
+            collect_node(page, c, off || c != legend, shadow);
         return;
     }
-    collect_model(page, n->first_child, off);
+    collect_model(page, n->first_child, off, shadow);
 }
 
-static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off)
+static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off, bool shadow)
 {
     for (; n != NULL; n = n->next)
-        collect_node(page, n, off);
+        collect_node(page, n, off, shadow);
 }
 
 // Chain every radio sharing a name, so the rest of a group can be found from
@@ -1228,7 +1266,7 @@ os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *docume
     // because a control's owner is settled as it is met, and the model last.
     collect_ids(page, root);
     collect_forms(page, root);
-    collect_model(page, root, false);
+    collect_model(page, root, false, false);
     if (!chain_radios(page))
         page->incomplete = true;
     if (!page->incomplete) {

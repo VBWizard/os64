@@ -384,14 +384,16 @@ static const os64_html_node_t *tree_root(const os64_html_node_t *node)
     return node;
 }
 
+/* DOM's connected: the shadow-including root is a document, so a node in
+ * a shadow tree is connected when its host is. */
 bool d_connected(const os64_html_node_t *node)
 {
-    return tree_root(node)->kind == OS64_HTML_DOCUMENT;
+    return os64_html_shadow_including_root(node)->kind == OS64_HTML_DOCUMENT;
 }
 
 bool d_in_window_tree(const os64_dom_t *dom, const os64_html_node_t *node)
 {
-    return tree_root(node) == dom->document->document;
+    return os64_html_shadow_including_root(node) == dom->document->document;
 }
 
 static bool form_associated(const os64_html_node_t *node)
@@ -1648,17 +1650,29 @@ int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node)
     return d_script_mark(dom, node);
 }
 
-static const os64_html_node_t *subtree_next(const os64_html_node_t *root, const os64_html_node_t *at)
+/* Shadow-including preorder over `root`'s subtree, a script in a shadow
+ * tree being one a verb connects with its host. With `clonable_only` it
+ * enters only the shadow roots a clone copies, so it walks an original
+ * and its clone in step. */
+static const os64_html_node_t *subtree_next(const os64_html_node_t *root, const os64_html_node_t *at,
+                                            bool clonable_only)
 {
+    if (at->shadow_root != NULL && (!clonable_only || (at->shadow_root->shadow & OS64_HTML_SHADOW_CLONABLE)))
+        return at->shadow_root;
     if (at->first_child != NULL) return at->first_child;
-    while (at != root && at->next == NULL) at = at->parent;
-    return at != root ? at->next : NULL;
+    while (at != root) {
+        if (at->next != NULL) return at->next;
+        const os64_html_node_t *host = os64_html_shadow_host(at);
+        if (host != NULL && host->first_child != NULL) return host->first_child;
+        at = host != NULL ? host : at->parent;
+    }
+    return NULL;
 }
 
 /* A script parsed for innerHTML never runs: it is born started. */
 int d_script_mark_tree(os64_dom_t *dom, const os64_html_node_t *root)
 {
-    for (const os64_html_node_t *at = root; at != NULL; at = subtree_next(root, at))
+    for (const os64_html_node_t *at = root; at != NULL; at = subtree_next(root, at, false))
         if (html_element(at, OS64_HTML_TAG_SCRIPT) && d_script_mark(dom, at) < 0) return -1;
     return 0;
 }
@@ -1671,8 +1685,8 @@ int d_script_copy_marks(os64_dom_t *dom, const os64_html_node_t *from, const os6
     while (a != NULL && b != NULL) {
         if (html_element(a, OS64_HTML_TAG_SCRIPT) && script_marked(dom, a) && d_script_mark(dom, b) < 0)
             return -1;
-        const os64_html_node_t *next_a = subtree_next(from, a);
-        const os64_html_node_t *next_b = subtree_next(to, b);
+        const os64_html_node_t *next_a = subtree_next(from, a, true);
+        const os64_html_node_t *next_b = subtree_next(to, b, true);
         if ((next_a == NULL) != (next_b == NULL)) break;
         a = next_a;
         b = next_b;
@@ -1681,9 +1695,10 @@ int d_script_copy_marks(os64_dom_t *dom, const os64_html_node_t *from, const os6
 }
 
 /* The scripts of a kind that runs (classic, module, import map) a verb is
- * about to move, in tree order: a fragment's children, or the node's own
- * subtree. Answers how many there are; at most cap are stored. Whether one
- * has started is asked once it is connected. */
+ * about to move, in shadow-including tree order: a fragment's children, or
+ * the node's own subtree, a host's shadow tree included. Answers how many
+ * there are; at most cap are stored. Whether one has started is asked once
+ * it is connected. */
 size_t d_script_collect(const os64_html_node_t *node,
                         const os64_html_node_t **out, size_t cap)
 {
@@ -1691,7 +1706,7 @@ size_t d_script_collect(const os64_html_node_t *node,
     const os64_html_node_t *first = node->kind == OS64_HTML_FRAGMENT ? node->first_child : node;
     for (const os64_html_node_t *top = first; top != NULL;
          top = node->kind == OS64_HTML_FRAGMENT ? top->next : NULL)
-        for (const os64_html_node_t *at = top; at != NULL; at = subtree_next(top, at))
+        for (const os64_html_node_t *at = top; at != NULL; at = subtree_next(top, at, false))
             if (os64_dom_script_kind(at) != OS64_DOM_SCRIPT_NONE) {
                 if (count < cap) out[count] = at;
                 count++;

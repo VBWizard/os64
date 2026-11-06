@@ -85,9 +85,7 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     if (document == NULL || node == NULL || tree == NULL ||
         flow_incomplete(tree) || !os64_html_owns_node(document, node)) return false;
     zoom = zoom != 0 ? zoom : 1000;
-    const os64_html_node_t *root = node;
-    while (root->parent != NULL) root = root->parent;
-    if (root != document->document) return true;
+    if (os64_html_shadow_including_root(node) != document->document) return true;
     const flow_box_t *first = NULL;
     const flow_box_t *principal = flow_box_for(tree, node);
     Bounds raw = {0}, visual = {0};
@@ -312,11 +310,10 @@ static Bounds padding_bounds(const flow_box_t *box, flow_point_t scroll)
     return (Bounds){true, r.x, r.y, (int64_t)r.x + r.w, (int64_t)r.y + r.h};
 }
 
+// DOM's connected: a node in a shadow tree is connected when its host is.
 static bool connected(const os64_html_document_t *document, const os64_html_node_t *node)
 {
-    if (!os64_html_owns_node(document, node)) return false;
-    while (node->parent != NULL) node = node->parent;
-    return node == document->document;
+    return os64_html_owns_node(document, node) && os64_html_shadow_including_root(node) == document->document;
 }
 
 bool yonder_intersections(const os64_html_document_t *document, const flow_tree_t *tree,
