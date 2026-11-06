@@ -89,10 +89,28 @@ static const FStyled *styled(const B *b, const os64_html_node_t *n)
     return f_style_of(b->styles, n);
 }
 
+// The flat tree's links (internal.h), which box generation walks: a node's
+// first child, its next sibling, its parent.
+static const os64_html_node_t *first_of(const B *b, const os64_html_node_t *n)
+{
+    return os64_html_flat_first_child(b->doc, n);
+}
+
+static const os64_html_node_t *next_of(const B *b, const os64_html_node_t *n)
+{
+    return os64_html_flat_next_sibling(b->doc, n);
+}
+
+static const os64_html_node_t *up_of(const B *b, const os64_html_node_t *n)
+{
+    return f_flat_parent(b->doc, n);
+}
+
 // An element's children as box generation walks them: its ::before first,
-// then its own, then its ::after (GENERATED_CONTENT.md § 4). `kids` is the
-// first of them; `sib` the one after `c`, which past an element's last own
-// child is its ::after. A pseudo-element's own children are its text.
+// then its flat children, then its ::after (GENERATED_CONTENT.md § 4).
+// `kids` is the first of them; `sib` the one after `c`, which past an
+// element's last flat child is its ::after. A pseudo-element's own
+// children are its text.
 static const os64_html_node_t *after_of(const B *b, const os64_html_node_t *el)
 {
     const FStyled *s = el != NULL && el->kind == OS64_HTML_ELEMENT ? styled(b, el) : NULL;
@@ -104,7 +122,8 @@ static const os64_html_node_t *kids(const B *b, const os64_html_node_t *el)
     const FStyled *s = styled(b, el);
     if (s != NULL && s->pseudo[0] != NULL)
         return s->pseudo[0];
-    return el->first_child != NULL ? el->first_child : after_of(b, el);
+    const os64_html_node_t *first = first_of(b, el);
+    return first != NULL ? first : after_of(b, el);
 }
 
 static const os64_html_node_t *sib(const B *b, const os64_html_node_t *c)
@@ -112,9 +131,14 @@ static const os64_html_node_t *sib(const B *b, const os64_html_node_t *c)
     garb_pseudo_t p = c->kind == OS64_HTML_ELEMENT ? f_pseudo_of(c) : GARB_PSEUDO_NONE;
     if (p == GARB_PSEUDO_AFTER)
         return NULL;
-    if (p == GARB_PSEUDO_BEFORE)
-        return c->parent->first_child != NULL ? c->parent->first_child : after_of(b, c->parent);
-    return c->next != NULL ? c->next : after_of(b, c->parent);
+    // A ::before's element is its parent; it is first among the element's
+    // children, so its flat children come next.
+    if (p == GARB_PSEUDO_BEFORE) {
+        const os64_html_node_t *first = first_of(b, c->parent);
+        return first != NULL ? first : after_of(b, c->parent);
+    }
+    const os64_html_node_t *next = next_of(b, c);
+    return next != NULL ? next : after_of(b, up_of(b, c));
 }
 
 static bool css_space(char c)
@@ -224,11 +248,12 @@ static bool hidden_by_details(const os64_html_node_t *n)
            os64_html_attr(n->parent, "open") == NULL;
 }
 
-// The style text is drawn in: its parent element's. NULL when the parent
-// has none, and then the text makes nothing.
+// The style text is drawn in: its flat parent element's (a slot's, for
+// text assigned to one; the host's, for text directly in a shadow root).
+// NULL when the parent has none, and then the text makes nothing.
 static const flow_style_t *text_style(const B *b, const os64_html_node_t *text)
 {
-    const FStyled *s = styled(b, text->parent);
+    const FStyled *s = styled(b, up_of(b, text));
     return s != NULL ? &s->style : NULL;
 }
 
@@ -258,9 +283,9 @@ static bool text_blank(const os64_html_node_t *n)
 // are no break in it) is all white space: in a flex or grid container such
 // a run makes no anonymous item (Flexbox 1 § 4, Grid 2 § 6), whatever
 // `white-space` says.
-static bool blank_run(const os64_html_node_t *n)
+static bool blank_run(const B *b, const os64_html_node_t *n)
 {
-    for (; n != NULL && (n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT); n = n->next)
+    for (; n != NULL && (n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT); n = next_of(b, n))
         if (n->kind == OS64_HTML_TEXT && !text_blank(n))
             return false;
     return true;
@@ -410,7 +435,7 @@ static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block
     // A fixed box's containing block is the viewport unless a transformed
     // or filtered element is round it (FStyled.fixed_anchor): it is filed
     // with the initial containing block's, whose rect is the viewport's too.
-    const FStyled *up = styled(b, el->parent);
+    const FStyled *up = styled(b, up_of(b, el));
     bool fixed = box->style->position == FLOW_POSITION_FIXED;
     const os64_html_node_t *anchor = up == NULL ? NULL : fixed ? up->fixed_anchor : up->anchor;
     p->cb = anchor != NULL ? f_map_get(&b->pos_of, anchor) : NULL;
@@ -571,14 +596,14 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     if (s == NULL || n->text_len == 0)
         return;
     if (f->target == NULL && (f->container->flex || f->container->grid)) {
-        bool blank = n == f->run_next ? f->run_blank : blank_run(n);
+        bool blank = n == f->run_next ? f->run_blank : blank_run(f->b, n);
         // A node that is all white space leaves the rest of its run the
         // verdict the run had, so the next text node inherits it.
         f->run_next = NULL;
         if (text_blank(n)) {
-            const os64_html_node_t *m = n->next;
+            const os64_html_node_t *m = next_of(f->b, n);
             while (m != NULL && m->kind == OS64_HTML_COMMENT)
-                m = m->next;
+                m = next_of(f->b, m);
             f->run_next = m != NULL && m->kind == OS64_HTML_TEXT ? m : NULL;
             f->run_blank = blank;
         }
@@ -775,7 +800,7 @@ static const char *marker_text(B *b, flow_list_style_type_t type, int32_t value,
 static int32_t count_items(const B *b, const os64_html_node_t *list)
 {
     int32_t count = 0;
-    const os64_html_node_t *cur = list->first_child;
+    const os64_html_node_t *cur = first_of(b, list);
     while (cur != NULL) {
         const os64_html_node_t *down = NULL;
         if (cur->kind == OS64_HTML_ELEMENT) {
@@ -785,15 +810,15 @@ static int32_t count_items(const B *b, const os64_html_node_t *list)
             bool nested = is(cur, OS64_HTML_TAG_OL) || is(cur, OS64_HTML_TAG_UL) ||
                           is(cur, OS64_HTML_TAG_MENU);
             if (s != NULL && s->style.display != FLOW_DISPLAY_NONE && !nested)
-                down = cur->first_child;
+                down = first_of(b, cur);
         }
         if (down != NULL) {
             cur = down;
             continue;
         }
-        while (cur != NULL && cur != list && cur->next == NULL)
-            cur = cur->parent;
-        cur = cur != NULL && cur != list ? cur->next : NULL;
+        while (cur != NULL && cur != list && next_of(b, cur) == NULL)
+            cur = up_of(b, cur);
+        cur = cur != NULL && cur != list ? next_of(b, cur) : NULL;
     }
     return count;
 }
@@ -893,7 +918,7 @@ static FBox *element_box(B *b, FBox *parent, const os64_html_node_t *el, const F
         FBox *table = new_box(b, parent, FB_TABLE, el, &s->style);
         position_box(b, table, el, true);
         if (table != NULL) {
-            table_range(b, table, el->first_child, NULL, scope);
+            table_range(b, table, first_of(b, el), NULL, scope);
             mark_cut(b, table);
         }
         return table;
@@ -1078,8 +1103,8 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
     // quadratic on a ruby of many annotations. (A `q`'s marks are its
     // pseudo-elements, GENERATED_CONTENT.md § 8.)
     const char *before = NULL, *after = NULL;
-    const FStyled *holder = styled(b, el->parent);
-    if (is(el, OS64_HTML_TAG_RT) && el->parent != NULL) {
+    const FStyled *holder = styled(b, up_of(b, el));
+    if (is(el, OS64_HTML_TAG_RT) && up_of(b, el) != NULL) {
         if (holder == NULL || !holder->has_rp) {
             before = "(";
             after = ")";
@@ -1205,7 +1230,7 @@ static const os64_html_node_t *loose_end(const B *b, Level level, const os64_htm
                                          const os64_html_node_t *stop)
 {
     while (n != stop && !structural(level, n, display_of(b, n)))
-        n = n->next;
+        n = next_of(b, n);
     return n;
 }
 
@@ -1228,7 +1253,7 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
             position_box(b, cell, c, true);
             if (cell != NULL)
                 build_container(b, cell, kids(b, c), NULL, scope, NULL, 0);
-            c = c->next;
+            c = next_of(b, c);
         } else if (loose(b, AT_ROW, c)) {
             const os64_html_node_t *end = loose_end(b, AT_ROW, c, stop);
             FBox *cell = anon_part(b, row, FB_CELL, FLOW_DISPLAY_TABLE_CELL);
@@ -1236,7 +1261,7 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
                 build_container(b, cell, c, end, scope, NULL, 0);
             c = end;
         } else {
-            c = c->next;
+            c = next_of(b, c);
         }
     }
     ascend(b);
@@ -1262,7 +1287,7 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
     case FLOW_DISPLAY_TABLE_COLUMN_GROUP: {
         // A column group holds columns, and nothing else in it counts.
         FBox *group = new_box(b, table, FB_COLUMN_GROUP, c, s);
-        for (const os64_html_node_t *k = c->first_child; k != NULL && group != NULL; k = k->next)
+        for (const os64_html_node_t *k = first_of(b, c); k != NULL && group != NULL; k = next_of(b, k))
             if (display_of(b, k) == FLOW_DISPLAY_TABLE_COLUMN)
                 new_box(b, group, FB_COLUMN, k, &styled(b, k)->style);
         break;
@@ -1273,14 +1298,14 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
     case FLOW_DISPLAY_TABLE_ROW: {
         FBox *row = new_box(b, table, FB_ROW, c, s);
         if (row != NULL)
-            row_range(b, row, c->first_child, NULL, scope);
+            row_range(b, row, first_of(b, c), NULL, scope);
         mark_cut(b, row);
         break;
     }
     default: {
         FBox *group = new_box(b, table, FB_ROW_GROUP, c, s);
         if (group != NULL)
-            rows_range(b, group, AT_GROUP, c->first_child, NULL, scope);
+            rows_range(b, group, AT_GROUP, first_of(b, c), NULL, scope);
         mark_cut(b, group);
         break;
     }
@@ -1300,7 +1325,7 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
         if (structural(level, c, d) && d != FLOW_DISPLAY_TABLE_CELL) {
             anon_row = NULL;
             table_part(b, parent, c, d, scope);
-            c = c->next;
+            c = next_of(b, c);
             continue;
         }
         if (d == FLOW_DISPLAY_TABLE_CELL || loose(b, level, c)) {
@@ -1309,13 +1334,13 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
             if (anon_row == NULL)
                 break;
             const os64_html_node_t *end = d == FLOW_DISPLAY_TABLE_CELL
-                                              ? c->next : loose_end(b, level, c, stop);
+                                              ? next_of(b, c) : loose_end(b, level, c, stop);
             row_range(b, anon_row, c, end, scope);
             mark_cut(b, anon_row);
             c = end;
             continue;
         }
-        c = c->next;
+        c = next_of(b, c);
     }
     ascend(b);
 }
