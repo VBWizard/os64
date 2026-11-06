@@ -424,9 +424,28 @@ static void dom_shadow_adopted_cases(void)
         "var t=new CSSStyleSheet();t.replaceSync('i{}');a.push(t);assert(a.length===2,'push adopts');"
         "var h=document.createElement('div');document.body.appendChild(h);var r=h.attachShadow({mode:'open'});"
         "r.adoptedStyleSheets=[t,s];assert(r.adoptedStyleSheets.length===2&&r.adoptedStyleSheets[0]===t,'a root\\'s own');"
-        "globalThis.replaced=null;s.replace('b{}').then(function(v){globalThis.replaced=v});",
+        "globalThis.replaced=null;s.replace('b{}').then(function(v){globalThis.replaced=v});"
+        /* replace does not throw: it rejects. */
+        "globalThis.rejected=null;var pr=st.sheet.replace('x');assert(pr instanceof Promise,'a refused replace is a Promise');"
+        "pr.catch(function(e){globalThis.rejected=e.name});"
+        /* An observable array: no holes, no accessors, never frozen. */
+        "var o=r.adoptedStyleSheets;'use strict';"
+        "assert(!Reflect.set(o,5,s)&&o.length===2,'no index past the length');"
+        "assert(!Reflect.set(o,'length',9)&&o.length===2,'length does not grow');"
+        "assert(!Reflect.deleteProperty(o,0)&&o.length===2,'only the last index deletes');"
+        "assert(Reflect.deleteProperty(o,1)&&o.length===1&&o[0]===t,'the last index deletes');"
+        "assert(!Reflect.defineProperty(o,0,{get:function(){return s}}),'no accessor at an index');"
+        "assert(throwsName(function(){Object.freeze(o)},'TypeError')&&Object.isExtensible(o),'never frozen');"
+        "assert(Reflect.set(o,'length',0)&&o.length===0,'length shrinks');"
+        /* Only the document a sheet was made for adopts it. */
+        "var other=document.implementation.createHTMLDocument('');"
+        "assert(throwsName(function(){other.adoptedStyleSheets=[s]},'NotAllowedError'),'another document refuses');"
+        /* The array's intrinsics are its own: a page's replacements change nothing. */
+        "var keep=Array.from;Array.from=function(){throw Error('page')};"
+        "r.adoptedStyleSheets=[s];Array.from=keep;assert(r.adoptedStyleSheets[0]===s,'Array.from replaced');",
         "adopted-script");
-    dom_script(&f, SHADOW_ASSERT "assert(globalThis.replaced!==null,'replace resolves with the sheet');",
+    dom_script(&f, SHADOW_ASSERT "assert(globalThis.replaced!==null,'replace resolves with the sheet');"
+               "assert(globalThis.rejected==='NotAllowedError','a refused replace rejects with NotAllowedError');",
                "adopted-replace");
     /* The host's view: each root's sheets in order, their text and
      * generation; an adoption and a replace each move the version. */
@@ -438,8 +457,8 @@ static void dom_shadow_adopted_cases(void)
           "adopted: the document's sheets, their text and generation");
     const os64_html_node_t *host = f.document->body->last_child;
     size_t nr = host != NULL && host->shadow_root != NULL ? os64_dom_adopted(f.binding, host->shadow_root, got, 4) : 0;
-    check(nr == 2 && memcmp(got[0].text, "i{}", 3) == 0 && memcmp(got[1].text, "b{}", 3) == 0,
-          "adopted: a shadow root's sheets in its own order");
+    check(nr == 1 && got[0].length == 3 && memcmp(got[0].text, "b{}", 3) == 0,
+          "adopted: a shadow root's sheets, as its array last left them");
     uint64_t before = os64_html_version(f.document);
     dom_script(&f, "document.adoptedStyleSheets[0].replaceSync('q{}');", "adopted-touch-text");
     uint64_t after_text = os64_html_version(f.document);

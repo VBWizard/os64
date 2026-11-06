@@ -115,8 +115,11 @@ typedef struct {
     /* Shadow trees (docs/design/pending/SHADOW_DOM.md § 7), with `modern`:
      * set, Element's attachShadow, shadowRoot, slot and assignedSlot,
      * Text's assignedSlot, ShadowRoot and HTMLSlotElement on window,
-     * getRootNode's `composed` and Event's `composed` exist; clear, none of
-     * them does, so a page that tests for one takes its fallback. One
+     * getRootNode's `composed`, Event's `composed`, CSSStyleSheet's
+     * constructor with replace and replaceSync, and adoptedStyleSheets on
+     * the document and a shadow root exist (SHADOW_DOM.md § 12, D4b);
+     * clear, none of them does, so a page that tests for one takes its
+     * fallback. One
      * switch, because a page decides once from several names together.
      * Clear in the defaults. */
     bool shadow_trees;

@@ -585,32 +585,38 @@ Four PRs, stacked, merged in order, the switch (§ 7) off until the last:
     no owner node and a record of its own: the text `replace`/`replaceSync`
     last gave it and a generation that moves with each. Both refuse a
     sheet a node owns (NotAllowedError); `replace` answers a Promise of the
-    sheet. CSSOM drops `@import` from a constructed sheet, so yonder never
+    sheet, rejected rather than thrown when it refuses (WebIDL). CSSOM
+    drops `@import` from a constructed sheet, so yonder never
     fetches one's imports. The constructor's options (`media`, `disabled`,
     `baseURL`) are a DEBTS row until something reads them.
   - *`adoptedStyleSheets` is an observable array* on `Document.prototype`
     and `ShadowRoot.prototype`: one array object per root (the same one
     each read), a Proxy over a plain array made by a small embedded
-    factory (event.c's precedent), whose traps hand every change to a
-    native hook. The hook refuses anything but a constructed sheet of the
-    same document (TypeError / NotAllowedError, as CSSOM says) and keeps
-    the root's list. Assigning an array replaces the contents.
+    factory (event.c's precedent), run at install so it holds the engine's
+    own Proxy, Reflect and Array.from whatever a page replaces later. Its
+    traps keep WebIDL observable array's shape — no holes, no accessor at
+    an index, never non-extensible — and hand every value going in and
+    every change to native hooks, which refuse anything but a constructed
+    sheet of the root's document (TypeError / NotAllowedError, as CSSOM
+    says) and keep the root's list. Assigning an array replaces the
+    contents.
   - *The change signal is the document's version.* yonder restyles when the
     version moves, and an adoption or a `replaceSync` moves no node. A new
     libhtml verb, `os64_html_touch`, moves the version and logs a STATE
     change on the root with no listener told — `set_ce`'s shape, for the
     same reason (the cascade reads it). libdom touches a root when its
-    list changes, and every connected root adopting a sheet whose text
-    changes.
+    list changes, and every root adopting a sheet whose text changes.
   - *yonder reads the adoptions* when it builds its sheet table: after the
     model's sheets, for the document and each connected shadow root in
     shadow-including order, libdom's list for that root (a key, the text,
-    its generation). One table entry per (key, generation), parsed from the
-    text and reused across rebuilds while the generation holds; the
-    entries go after every sheet the model lists, each in the order first
-    met, and each scope lists its adopted ones after its own — CSSOM's
-    final style sheets. Two roots adopting shared sheets in opposite
-    orders get the first one's: a DEBTS row.
+    its generation). One table entry per distinct TEXT, parsed once and
+    reused across rebuilds — so a component that makes its own sheet in
+    every instance costs one entry, not one an instance; the entries go
+    after every sheet the model lists, each in the order first met, and
+    each scope lists its adopted ones after its own — CSSOM's final style
+    sheets. Two roots adopting shared sheets in opposite orders get the
+    first one's: a DEBTS row. The cascade finds each root's scope by
+    hashing it, since such a page has thousands of roots.
   - *The switch goes on*: `shadow_trees` in yonder's libdom options
     defaults on, and the yonder.conf key stays to turn it off.
 

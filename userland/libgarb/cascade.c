@@ -239,6 +239,13 @@ struct garb_cascade {
     const os64_html_node_t **roots;
     int32_t nroots;
     uint8_t *applies;
+    // Each root's scope found by hashing it (scope_of_root): open
+    // addressing over `root_slotcap` slots, a power of two at least twice
+    // the roots, each the index in `roots` or -1. A page can have
+    // thousands of component roots, and every host and every shadow
+    // root's child asks.
+    int32_t *root_slots;
+    uint32_t root_slotcap;
     // Whether the document has had a shadow root: the walks cross into
     // shadow trees and an update recomputes in one ordered walk.
     bool shadowed;
@@ -2247,10 +2254,23 @@ static bool targeted(const garb_cascade_t *c, int32_t target)
 // The scope whose root is `root`, -1 when no scope names it.
 static int32_t scope_of_root(const garb_cascade_t *c, const os64_html_node_t *root)
 {
-    for (int32_t i = 0; i < c->nroots; i++)
-        if (c->roots[i] == root)
-            return i;
+    if (c->root_slotcap == 0)
+        return -1;
+    for (uint32_t h = hash_ptr(root) & (c->root_slotcap - 1); c->root_slots[h] >= 0;
+         h = (h + 1) & (c->root_slotcap - 1))
+        if (c->roots[c->root_slots[h]] == root)
+            return c->root_slots[h];
     return -1;
+}
+
+// Adds `root` as scope `index` (scopes_take, which sized the slots).
+static void scope_add_root(garb_cascade_t *c, const os64_html_node_t *root, int32_t index)
+{
+    uint32_t h = hash_ptr(root) & (c->root_slotcap - 1);
+    while (c->root_slots[h] >= 0)
+        h = (h + 1) & (c->root_slotcap - 1);
+    c->root_slots[h] = index;
+    c->roots[index] = root;
 }
 
 // The scope of the tree element `x` is in (Slot.scope): its parent's, when
@@ -2707,12 +2727,20 @@ static bool scopes_take(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
         c->ngiven = nscopes;
     }
     int32_t most = nscopes > 0 ? nscopes : 1;
+    c->root_slotcap = 4;
+    while (c->root_slotcap < (uint32_t)most * 2)
+        c->root_slotcap *= 2;
     c->roots = alloc(c, (size_t)most * sizeof(*c->roots));
+    c->root_slots = alloc(c, (size_t)c->root_slotcap * sizeof(*c->root_slots));
     c->applies = alloc(c, ((size_t)most * (size_t)(n > 0 ? n : 1) + 7) / 8);
-    if (c->roots == NULL || c->applies == NULL)
+    if (c->roots == NULL || c->root_slots == NULL || c->applies == NULL) {
+        c->root_slotcap = 0;
         return false;
+    }
+    for (uint32_t h = 0; h < c->root_slotcap; h++)
+        c->root_slots[h] = -1;
     if (nscopes == 0) {
-        c->roots[c->nroots++] = c->doc->document;
+        scope_add_root(c, c->doc->document, c->nroots++);
         for (int32_t s = 0; s < n; s++)
             set_applies(c, 0, s);
         return true;
@@ -2723,7 +2751,7 @@ static bool scopes_take(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_
         int32_t r = scope_of_root(c, c->given[i].root);
         if (r < 0) {
             r = c->nroots++;
-            c->roots[r] = c->given[i].root;
+            scope_add_root(c, c->given[i].root, r);
         }
         for (int32_t k = 0; k < c->given[i].n; k++)
             if (c->given[i].sheets[k] >= 0 && c->given[i].sheets[k] < n)

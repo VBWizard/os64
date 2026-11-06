@@ -654,10 +654,12 @@ typedef struct Sheet {
     garb_import_t *imports;         // once ready: its @imports, and each one's entry or -1
     int32_t *child;
     int32_t nimports;
-    // A constructed sheet a tree has adopted (os64_dom_adopted): its key and
-    // the generation of the text it was parsed from; key 0 for any other.
-    // It has no node, and no @imports are fetched for it (CSSOM drops them).
-    uint64_t key, generation;
+    // A constructed sheet a tree has adopted (os64_dom_adopted), known by its
+    // text (its source's `inline_text`): one entry serves every sheet with
+    // that text, however many instances of a component each make their
+    // own. It has no node, and no @imports are fetched for it (CSSOM drops
+    // them).
+    bool constructed;
 } Sheet;
 
 // Where a person scrolled a box, by its element: a layout starts every box
@@ -1025,18 +1027,21 @@ static void page_clear(Page *p)
 static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
 {
     for (int32_t e = 0; e < p->nsheets; e++)
-        if (p->sheets[e].node == node && p->sheets[e].importer < 0 && p->sheets[e].key == 0)
+        if (p->sheets[e].node == node && p->sheets[e].importer < 0 && !p->sheets[e].constructed)
             return e;
     return -1;
 }
 
-// The table's entry for constructed sheet `key` as parsed at `generation`,
+// The table's entry for a constructed sheet of `length` bytes of `text`,
 // -1 when it has none.
-static int32_t sheet_constructed(const Page *p, uint64_t key, uint64_t generation)
+static int32_t sheet_constructed(const Page *p, const char *text, size_t length)
 {
-    for (int32_t e = 0; e < p->nsheets; e++)
-        if (p->sheets[e].key == key && p->sheets[e].generation == generation)
+    for (int32_t e = 0; e < p->nsheets; e++) {
+        const SheetParse *source = p->sheets[e].source;
+        if (p->sheets[e].constructed && source != NULL && source->inline_text != NULL &&
+            source->inline_len == length && os64_memcmp(source->inline_text, text, length) == 0)
             return e;
+    }
     return -1;
 }
 
@@ -1343,7 +1348,6 @@ static yonder_scripts_t *page_scripts(const Page *p);
 static yonder_scripts_t *scripts_for(uint64_t serial);
 static const yonder_scripts_t *adoptions_host(const Page *p);
 static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, const os64_html_node_t *x);
-static int32_t sheet_constructed(const Page *p, uint64_t key, uint64_t generation);
 
 // The cascade's scopes (SHADOW_DOM.md § 6): every (cascade input, tree)
 // pair, in the order the inputs go in — a sheet the model lists in the tree
@@ -1469,7 +1473,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
              ? adopting_root(doc, NULL) : NULL; root; root = adopting_root(doc, root)) {
         size_t count = yonder_scripts_adopted(scripts, root, adopted, SHEETS_MAX);
         for (size_t i = 0; i < count && i < SHEETS_MAX; i++) {
-            int32_t e = sheet_constructed(p, adopted[i].key, adopted[i].generation);
+            int32_t e = sheet_constructed(p, adopted[i].text, adopted[i].length);
             if (e < 0)
                 continue;
             if (input_of[e] < 0)
@@ -5012,7 +5016,7 @@ static void sheet_ready(Page *p, int32_t e)
     int32_t n = garb_sheet_imports(&sh->source->parsed, NULL, 0);
     if (n > SHEET_IMPORTS_MAX)
         n = SHEET_IMPORTS_MAX;
-    if (n == 0 || sh->key != 0)
+    if (n == 0 || sh->constructed)
         return;
     // A `style` element's against the page's base: the model's, or for the
     // stream's page, which has no model, the one a model would have. With
@@ -5143,20 +5147,20 @@ static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, co
 }
 
 // A constructed sheet a tree adopted (SHADOW_DOM.md § 12, D4b), if the
-// table has no entry for it at this generation: parsed from its text, or
-// the replaced table's parse while the generation holds. False once the
-// table is full.
+// table has no entry for its text: the replaced table's parse of that text
+// when it had one, or parsed now, its text kept to be known by. A sheet
+// whose text will not parse, or that there is no memory for, is left out,
+// as a `style`'s is. False once the table is full.
 static bool sheet_adopt(Page *p, const os64_dom_adopted_sheet_t *one)
 {
-    if (sheet_constructed(p, one->key, one->generation) >= 0)
+    if (sheet_constructed(p, one->text, one->length) >= 0)
         return true;
     Sheet *sh = sheet_new(p, NULL, NULL, -1, -1);
     if (sh == NULL)
         return false;
-    sh->key = one->key;
-    sh->generation = one->generation;
+    sh->constructed = true;
     int32_t e = (int32_t)(sh - p->sheets);
-    int32_t old = p->reuse_sheets ? sheet_constructed(p->reuse_sheets, one->key, one->generation) : -1;
+    int32_t old = p->reuse_sheets ? sheet_constructed(p->reuse_sheets, one->text, one->length) : -1;
     Sheet *from = old >= 0 ? &p->reuse_sheets->sheets[old] : NULL;
     if (from != NULL && from->ready && from->source->refs < UINT32_MAX) {
         sh->source = from->source;
@@ -5165,11 +5169,18 @@ static bool sheet_adopt(Page *p, const os64_dom_adopted_sheet_t *one)
         return true;
     }
     SheetParse *source = os64_calloc(1, sizeof(*source));
-    if (source == NULL)
+    char *text = source != NULL ? os64_malloc(one->length + 1) : NULL;
+    if (text == NULL) {
+        os64_free(source);
         return true;
+    }
+    os64_memcpy(text, one->text, one->length);
+    text[one->length] = '\0';
     source->refs = 1;
+    source->inline_text = text;
+    source->inline_len = one->length;
     sh->source = source;
-    if (garb_parse_sheet_text(one->text, one->length, &source->parsed) == GARB_OK)
+    if (garb_parse_sheet_text(text, one->length, &source->parsed) == GARB_OK)
         sheet_ready(p, e);
     return true;
 }

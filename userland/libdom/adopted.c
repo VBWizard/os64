@@ -11,9 +11,11 @@
  *
  * A root's adoptedStyleSheets — the document node's or a shadow root's — is
  * one array object for the root's life, a Proxy over a plain array that an
- * embedded factory makes. Its traps hand every value about to go in to
- * `check` (a constructed sheet, or a TypeError or NotAllowedError, as CSSOM
- * says) and every change to `changed`, which keeps the root's list here
+ * embedded factory makes, with WebIDL observable array's shape (no holes,
+ * no accessors at an index, never made non-extensible). Its traps hand
+ * every value about to go in to `check` (a constructed sheet of the root's
+ * document, or a TypeError or NotAllowedError, as CSSOM says) and every
+ * change to `changed`, which keeps the root's list here
  * (DAdopted) for the host and touches the root (os64_html_touch), since the
  * host restyles when the document's version moves and an adoption moves no
  * node. Assigning to adoptedStyleSheets replaces the array's contents.
@@ -107,14 +109,10 @@ static bool holds(const struct DAdopted *list, const DValue *sheet)
 
 enum { A_REPLACE_SYNC, A_REPLACE };
 
-/* replaceSync(text) and replace(text): the sheet's text becomes `text`, and
- * every root adopting it is touched; replace answers a Promise of the
- * sheet, already resolved, as nothing here is fetched. */
-static JSValue sheet_replace(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
-                             JSValue *data)
+/* The text of the sheet `self` is becomes argument 0, and every root
+ * adopting it is touched. JS_UNDEFINED, or JS_EXCEPTION with it pending. */
+static JSValue replace_text(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (dom == NULL) return JS_EXCEPTION;
     DValue *entry = constructed_of(ctx, self);
     if (entry == NULL) return JS_EXCEPTION;
     size_t length = 0;
@@ -135,26 +133,56 @@ static JSValue sheet_replace(JSContext *ctx, JSValueConst self, int argc, JSValu
     text->generation++;
     for (struct DAdopted *a = dom->adoptions; a != NULL; a = a->next)
         if (holds(a, entry)) (void)os64_html_touch(dom->document, (os64_html_node_t *)a->root);
-    if (magic == A_REPLACE_SYNC) return JS_UNDEFINED;
+    return JS_UNDEFINED;
+}
+
+/* replaceSync(text) and replace(text). replace answers a Promise of the
+ * sheet, already settled since nothing here is fetched: resolved, or
+ * rejected with what replaceSync would have thrown (WebIDL: a
+ * Promise-returning operation does not throw). */
+static JSValue sheet_replace(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue done = replace_text(dom, ctx, self, argc, argv);
+    if (magic == A_REPLACE_SYNC) return done;
+    /* A runtime that must stop keeps its exception, uncatchable. */
+    if (JS_IsException(done) && !d_exception_catchable(ctx)) return JS_EXCEPTION;
+    JSValue settle = JS_IsException(done) ? JS_GetException(ctx) : JS_DupValue(ctx, self);
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-    if (JS_IsException(promise)) return promise;
-    JSValue done = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &self);
+    if (JS_IsException(promise)) {
+        JS_FreeValue(ctx, settle);
+        return promise;
+    }
+    JSValue called = JS_Call(ctx, resolving[JS_IsException(done) ? 1 : 0], JS_UNDEFINED, 1, (JSValueConst *)&settle);
+    JS_FreeValue(ctx, settle);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
-    if (JS_IsException(done)) {
+    if (JS_IsException(called)) {
         JS_FreeValue(ctx, promise);
-        return done;
+        return called;
     }
-    JS_FreeValue(ctx, done);
+    JS_FreeValue(ctx, called);
     return promise;
 }
 
-/* check(value): the factory's traps ask before a value goes into an array. */
+/* check(root, value): the factory's traps ask before a value goes into a
+ * root's array: a constructed sheet, made in the root's document — the
+ * window's, the only one a constructor makes sheets for (CSSOM:
+ * NotAllowedError otherwise). */
 static JSValue adopt_check(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
 {
     (void)self;
-    return constructed_of(ctx, argc > 0 ? argv[0] : JS_UNDEFINED) != NULL ? JS_UNDEFINED : JS_EXCEPTION;
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL || argc < 2) return JS_EXCEPTION;
+    if (constructed_of(ctx, argv[1]) == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *root = d_node(dom, ctx, argv[0]);
+    if (root == NULL) return JS_EXCEPTION;
+    if (d_node_document(dom, root) != dom->document->document)
+        return d_error(ctx, "NotAllowedError", "A sheet is adopted only in the document it was made for");
+    return JS_UNDEFINED;
 }
 
 /* changed(root, array): the array behind a root's Proxy changed; its list
@@ -198,24 +226,45 @@ static JSValue adopt_changed(JSContext *ctx, JSValueConst self, int argc, JSValu
 }
 
 /* The factory: given check and changed, a function of a root wrapper that
- * answers [the Proxy, assign]. An index set or defined is checked first;
- * any change is reported after. assign(list) takes an iterable, checks
- * every value, then replaces the contents in one report. */
+ * answers [the Proxy, assign]. It is run at install, before any page
+ * script, and takes the intrinsics it uses then, so a page that replaces
+ * Proxy, Reflect or Array.from later changes nothing here. The traps keep
+ * WebIDL's observable array's shape: no holes — an index may be set or
+ * defined (as a data property) only up to the length, `length` may only
+ * shrink, only the last index may be deleted — the array cannot be made
+ * non-extensible, and a value about to go in is checked first; each change
+ * is reported after. assign(list) takes an iterable, checks every value,
+ * then replaces the contents in one report. */
 static const char kFactory[] =
-    "(function(check, changed){ return function(root){"
+    "(function(check, changed){ 'use strict';"
+    "var P = Proxy, set = Reflect.set, define = Reflect.defineProperty, remove = Reflect.deleteProperty,"
+    " from = Array.from, iter = Symbol.iterator, S = String;"
+    "function index(k){ return typeof k === 'string' && S(k >>> 0) === k && (k >>> 0) !== 4294967295; }"
+    "function length(t, v){ var n = v >>> 0; if (n !== +v) throw new RangeError('Invalid array length');"
+    " if (n > t.length) return false; set(t, 'length', n); return true; }"
+    "return function(root){"
     "var a = [];"
-    "function index(k){ return typeof k === 'string' && k !== 'length' && String(k >>> 0) === k; }"
-    "var p = new Proxy(a, {"
-    " set: function(t, k, v){ if (index(k)) check(v); var ok = Reflect.set(t, k, v); changed(root, t); return ok; },"
-    " defineProperty: function(t, k, d){ if (index(k) && 'value' in d) check(d.value);"
-    "  var ok = Reflect.defineProperty(t, k, d); changed(root, t); return ok; },"
-    " deleteProperty: function(t, k){ var ok = Reflect.deleteProperty(t, k); changed(root, t); return ok; }"
+    "function put(t, k, v){ if ((k >>> 0) > t.length) return false; check(root, v); set(t, k, v); return true; }"
+    "var p = new P(a, {"
+    " set: function(t, k, v){ var ok = k === 'length' ? length(t, v) : index(k) ? put(t, k, v) : set(t, k, v);"
+    "  changed(root, t); return ok; },"
+    " defineProperty: function(t, k, d){ var ok;"
+    "  if (k === 'length' || index(k)) {"
+    "   if ('get' in d || 'set' in d) return false;"
+    "   ok = !('value' in d) || (k === 'length' ? length(t, d.value) : put(t, k, d.value));"
+    "  } else ok = define(t, k, d);"
+    "  changed(root, t); return ok; },"
+    " deleteProperty: function(t, k){ var ok;"
+    "  if (index(k)) { var i = k >>> 0; ok = i >= t.length || (i === t.length - 1 && set(t, 'length', i)); }"
+    "  else ok = remove(t, k);"
+    "  changed(root, t); return ok; },"
+    " preventExtensions: function(){ return false; }"
     "});"
     "return [p, function(list){"
-    " if (list == null || typeof list[Symbol.iterator] !== 'function')"
+    " if (list == null || typeof list[iter] !== 'function')"
     "  throw new TypeError('adoptedStyleSheets takes a sequence of CSSStyleSheet');"
-    " var v = Array.from(list); for (var i = 0; i < v.length; i++) check(v[i]);"
-    " a.length = 0; for (var j = 0; j < v.length; j++) a[j] = v[j]; changed(root, a); }];"
+    " var v = from(list); for (var i = 0; i < v.length; i++) check(root, v[i]);"
+    " set(a, 'length', 0); for (var j = 0; j < v.length; j++) set(a, j, v[j]); changed(root, a); }];"
     "}; })";
 
 /* The root's record, made when first asked for. */
@@ -284,7 +333,7 @@ int d_adopted_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSVa
     (void)global;
     JSValue factory = JS_Eval(ctx, kFactory, sizeof(kFactory) - 1, "adoptedStyleSheets", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(factory)) return -1;
-    JSValue hooks[2] = {JS_NewCFunction(ctx, adopt_check, "check", 1),
+    JSValue hooks[2] = {JS_NewCFunction(ctx, adopt_check, "check", 2),
                         JS_NewCFunction(ctx, adopt_changed, "changed", 2)};
     JSValue made = JS_IsException(hooks[0]) || JS_IsException(hooks[1])
         ? JS_EXCEPTION : JS_Call(ctx, factory, JS_UNDEFINED, 2, (JSValueConst *)hooks);
