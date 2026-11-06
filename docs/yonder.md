@@ -43,6 +43,18 @@ The five buttons wear the icon set's pictures beside their labels (the
 set `icons.conf` names, the shipped one beneath it); without a set they
 are their labels alone.
 
+The window remembers its normal position and content size in
+`yonder-window.conf`, using the configuration search path. Moves and resizes
+save that normal rectangle. On orderly exit, it also saves whether it was
+maximized; the next launch opens in that state, with the normal rectangle
+available through Restore. Minimizing does not become a saved startup state.
+
+The buttons, address field and status line follow Appearance Workshop's
+Interface font. A font that leaves too little room for the address field is
+refused without changing the current font. Enlarging or maximizing the window
+retries that setting automatically. Page text and form controls use their own
+Web font settings.
+
 - **The address field** takes an address (`https://...`, `http://...`, or
   a bare `host/path`, which means http) or a path that begins with `/`.
   Press Enter to go. **Ctrl+L** takes you there from anywhere in the

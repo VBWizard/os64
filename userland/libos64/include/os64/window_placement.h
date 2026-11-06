@@ -10,7 +10,8 @@
 typedef enum {
     OS64_WINDOW_REMEMBER_NONE,
     OS64_WINDOW_REMEMBER_SIZE,
-    OS64_WINDOW_REMEMBER_POSITION_AND_SIZE
+    OS64_WINDOW_REMEMBER_POSITION_AND_SIZE,
+    OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED
 } os64_window_remember_mode_t;
 typedef struct {
     int32_t x, y;
@@ -24,7 +25,8 @@ typedef struct {
     char config[OS64_WINDOW_CONFIG_MAX];
     os64_window_remember_mode_t mode;
     os64_window_geometry_t preferred;
-    int64_t status; // latest configuration read/publication result; zero on success
+    bool maximized;
+    int64_t status; // latest native/configuration result; zero on success
 } os64_window_placement_t;
 
 // App-owned storage, copied options. Coordinates are frame x/y with content w/h,
@@ -35,6 +37,11 @@ bool os64_window_placement_init(os64_window_placement_t *,
 // Fit only the live request; retain preferred dimensions across smaller screens.
 os64_window_geometry_t os64_window_placement_prepare(const os64_window_placement_t *);
 // Consume explicit placement for an opted-in window, even if persistence fails.
-// Re-read, merge masked components and publish. No close-time save or worker.
+// Re-read, merge masked components and publish. Normal geometry is saved here,
+// not on close, so an older window cannot overwrite a newer normal placement.
 bool os64_window_placement_event(os64_window_placement_t *, const os64_gui_event_t *);
+// For POSITION_SIZE_AND_MAXIMIZED, save only the current maximized bit on
+// orderly exit. Re-read and preserve normal geometry and unrelated settings.
+// Other modes do nothing. A failed state read leaves the preference untouched.
+int64_t os64_window_placement_save_state(os64_window_placement_t *, int64_t window);
 #endif

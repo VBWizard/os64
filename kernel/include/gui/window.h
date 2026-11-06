@@ -485,6 +485,10 @@ void wm_set_decorated(window_t *w, bool decorated);
 // resize event exactly as it would for a drag.
 void wm_set_maximized(window_t *w, bool maximized);
 
+// Apply initial maximized geometry after installing the client canvas,
+// preserving wm_create's stacking and focus decisions. Caller holds kGuiLock.
+void wm_maximize_at_birth(window_t *w);
+
 // Hide from the glass, or bring back (restored = raised + focused). See
 // GUI_WINDOW_MINIMIZED.
 void wm_set_minimized(window_t *w, bool minimized);
