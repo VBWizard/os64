@@ -111,6 +111,7 @@ static void dom_performance_cases(void)
         "assert(!Object.getOwnPropertyDescriptor(window,'PerformanceNavigationTiming').enumerable);"
         "assert(Object.prototype.toString.call(nav)==='[object PerformanceNavigationTiming]');"
         "var j=nav.toJSON();assert(j.name===nav.name&&j.domLoading===undefined&&j.type==='reload'&&j.responseStart===2);"
+        "assert(Array.isArray(j.serverTiming)&&j.serverTiming.length===0,'serverTiming is a JSON type');"
         "var p=performance.toJSON();assert(p.timeOrigin===performance.timeOrigin&&p.timing.domLoading===t.domLoading&&p.navigation.type===1);"
         "assert(performance.getEntriesByType('resource').length===0&&performance.getEntriesByType('paint').length===0);"
         "throws('TypeError',()=>new Performance());throws('TypeError',()=>performance.now.call({}));"

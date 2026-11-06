@@ -985,7 +985,7 @@ static JSValue entry_json(JSContext *ctx, JSValueConst self, const DEntry *entry
         "initiatorType", "nextHopProtocol", "workerStart", "redirectStart", "redirectEnd", "fetchStart",
         "domainLookupStart", "domainLookupEnd", "connectStart", "connectEnd", "secureConnectionStart",
         "requestStart", "responseStart", "responseEnd", "transferSize", "encodedBodySize",
-        "decodedBodySize", "unloadEventStart", "unloadEventEnd", "domInteractive",
+        "decodedBodySize", "serverTiming", "unloadEventStart", "unloadEventEnd", "domInteractive",
         "domContentLoadedEventStart", "domContentLoadedEventEnd", "domComplete", "loadEventStart",
         "loadEventEnd", "type", "redirectCount"};
     size_t count = sizeof(kAll) / sizeof(kAll[0]) +
@@ -1043,13 +1043,9 @@ static JSValue interface_of(JSContext *ctx, JSValueConst global, const char *nam
     JSValue f = d_interface_new(ctx, name, length, constructor, prototype, parent);
     if (JS_IsException(f)) return f;
     JSValue borrowed = f;
-    JSValue held = JS_DupValue(ctx, f);
-    if (JS_DefinePropertyValueStr(ctx, global, name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
-        JS_FreeValue(ctx, held);
+    if (JS_DefinePropertyValueStr(ctx, global, name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
         return JS_EXCEPTION;
-    }
     /* The prototype's `constructor` holds it from here. */
-    JS_FreeValue(ctx, held);
     return borrowed;
 }
 
