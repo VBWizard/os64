@@ -347,7 +347,8 @@ struct os64_dom {
     void *svg_hit_opaque;
     DValue *svg_graphics_proto, *svg_geometry_proto;
     /* ShadowRoot's and HTMLSlotElement's prototypes, refining a shadow
-     * root's DocumentFragment kind and a slot's HTMLElement kind (shadow.c). */
+     * root's DocumentFragment kind and a slot's HTMLElement kind (shadow.c);
+     * NULL with the surface off. */
     DValue *shadow_root_proto, *slot_proto;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
@@ -717,8 +718,9 @@ int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
 bool d_svg_geometry_node(const os64_html_node_t *);
 JSValueConst d_svg_prototype(os64_dom_t *, const os64_html_node_t *);
 /* Shadow trees' surface (shadow.c, SHADOW_DOM.md § 7): the two prototypes,
- * made at creation; the prototype a node's wrapper takes, refined for a
- * shadow root and a slot before SVG's; the members and interfaces, which
+ * made at creation when the surface is on (NULL otherwise); the prototype
+ * a node's wrapper takes, refined for a shadow root and a slot before
+ * SVG's; the members and interfaces, which
  * d_modern_install puts on with options.shadow_trees; the names it puts on
  * window, by index, NULL past the last. */
 int d_shadow_prototypes(os64_dom_t *dom, JSContext *ctx);
@@ -768,7 +770,7 @@ int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_h
 /* DOM's "retarget A against B" (§ 4.8): A, unless A is in a shadow tree
  * whose root is not a shadow-including inclusive ancestor of B, when it is
  * that root's host, again until it is not. A NULL B (the window) retargets
- * A into the document tree. */
+ * A out of every shadow tree, into the tree its shadow-including root is. */
 const os64_html_node_t *d_retarget(const os64_html_node_t *a, const os64_html_node_t *b);
 /* DOM's "get the parent" for a node on an event's path (§ 2.9, § 4.8): a
  * node assigned to a slot goes to the slot; a shadow root to its host,
@@ -824,6 +826,9 @@ int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int
 int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target);
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,
                     bool cancelable, bool trusted);
+/* Mark an event the binding made composed, for an event its standard
+ * fires so (a checkbox's input). */
+void d_event_set_composed(os64_dom_t *dom, JSValueConst event);
 /* d_event_new with the event's prototype `prototype` when it is an object
  * (an Event interface's own, PopStateEvent's and the rest), else Event's. */
 JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type,

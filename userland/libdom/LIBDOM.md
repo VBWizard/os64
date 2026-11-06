@@ -329,7 +329,8 @@ the event is `composed` or the root is not the target's own. Each step shows
 its target retargeted, so a listener outside a shadow tree sees the host; a
 step whose target a host is runs at its target, capture and bubble, whether
 or not the event bubbles; a relatedTarget is retargeted at each step, and an
-event whose relatedTarget retargets to its own target is not dispatched.
+event whose relatedTarget, being some other node, retargets to its own
+target is not dispatched.
 Afterwards the event keeps the last step's target, or none when that is
 inside a shadow tree. A click's activation is found on this path, so a
 button around a host is activated by a click inside it. A list is cut where it ended when its target was
@@ -346,8 +347,8 @@ no script has a wrapper for would otherwise be reclaimed when a listener
 takes it out of the tree) and wraps them only when asked. Outside a
 dispatch it is empty. A closed shadow tree's nodes are left out for a
 listener outside that tree, by § 2.9's hidden levels: a closed root between
-a step and the current target is one level deeper, and so is a slot in a
-closed tree that a slotted target entered by.
+a step and the current target is one level deeper, and a slot in a closed
+tree that an assigned node on the path climbed to is one level back.
 
 Two callers, two shapes. **The host** (`os64_dom_dispatch`) opens a libjs
 task, runs each listener as one `os64_js_call` followed by a checkpoint, and

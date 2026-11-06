@@ -202,10 +202,13 @@ mutation and the checkpoint recomputes too, and the comparison is with
 the assignment as last REPORTED, which libhtml keeps apart from its cache
 (`os64_html_slot_changes`), so a read neither fires nor swallows the
 event. libhtml marks for itself, at every change it describes, with or
-without a listener; a document with no shadow tree pays nothing. One
-departure: DOM also signals a slot removed from its shadow tree that had
-nodes assigned. Its last-reported list may name nodes since reclaimed,
-so it is not reported; booked with the slice (§ 10).
+without a listener; a document with no shadow tree pays nothing. Two
+departures. DOM also signals a slot removed from its shadow tree that had
+nodes assigned; its last-reported list may name nodes since reclaimed,
+so it is not reported. And DOM signals at each change, so an assignment
+changed and changed back before the checkpoint fires once where this,
+comparing at the report, fires nothing (the cold read of D2b). Both are
+booked with the slice (§ 10).
 
 ## 5. Rendering: box building and inheritance walk the flat tree
 
@@ -359,7 +362,10 @@ without them:
 - **The path crosses a shadow root to its host** only when the event is
   `composed`. `Event.composed` and the `composed` init member arrive with
   this slice; UA-dispatched UI events (pointer, mouse, keyboard, focus,
-  input) are composed, as the UI Events standard says.
+  input) are composed, as the UI Events and Pointer Events tables say,
+  except the four enter and leave events and pointer capture's two, which
+  those tables make not composed; HTML's checkbox and radio `input` is
+  composed too, and `change` is not.
 - **Retargeting.** A listener outside a shadow tree sees `target` (and
   `relatedTarget`) as the host, never the node inside. The path holds
   each step's retargeted target, computed once per dispatch.
@@ -436,7 +442,7 @@ booked. The record in § 1 alone carries about 57 `::part`.
 | `::part` and `exportparts` | 7 | a DEBTS row with this slice; a selector and a cascade step on top of § 6 |
 | Tree-scoped `@keyframes` and `@font-face` names | — | a DEBTS row with this slice (§ 6) |
 | `:host-context()` | 0 | not booked: one engine's |
-| `slotchange` at a slot removed from its shadow tree, and at a slot with nothing assigned whose fallback children change | — | a DEBTS row with this slice (§ 4): both compare more than assigned lists |
+| `slotchange` at a slot removed from its shadow tree, at a slot with nothing assigned whose fallback children change, and at a slot whose assignment changed and changed back before the checkpoint | — | a DEBTS row with this slice (§ 4): each compares more than the assigned lists at the report |
 | `delegatesFocus` | 3 | DEBTS; needs the focus navigation yonder has (Tab order) to learn shadow trees |
 | Tab order by the flat tree | — | a DEBTS row with this slice (A.2's `collect_node` row): the first cut tabs in shadow-including order |
 | Declarative shadow roots (`<template shadowrootmode>`) | 1 | DEBTS' template row (line "A template has none of declarative shadow DOM's members"); a libhtml parser step |
@@ -659,7 +665,8 @@ here.
 
 | Sites | Question | Ruling |
 |---|---|---|
-| libdom event.c `d_event_parent`, `path_walk` (which replaces `activation_target` and `dispatch`'s climbs, and finds the activation target on the path it builds); pointer.c `path_make` and `common` through `d_event_parent` | an event's path | the A.1 row's ruling, built: CROSSES by DOM's "get the parent" |
+| libdom event.c `d_event_parent`, `assigned`, `path_walk` (which replaces `activation_target` and `dispatch`'s climbs, and finds the activation target on the path it builds) | an event's path | the A.1 row's ruling, built: CROSSES by DOM's "get the parent" |
+| libdom pointer.c `up`, and `path_make` and `common` through it | a pointer's ancestors: boundary chains, the kept fallback, a click's common ancestor | FLAT: "get the parent" through slots, past a shadow root to its host, so no root is ever a pointer's node (the cold read of D2b) |
 | libdom event.c `d_retarget`, `shadow_including_inclusive_ancestor`, `in_shadow_tree`, `tree_root` | DOM's retargeting, and whether a node is in a shadow tree | CROSSES for the ancestor test; STOPS for the root whose host retargeting climbs to, which is the node's own tree's |
 | libdom shadow.c `tree_shadow_root`, and `shadow_member`'s and `attach_shadow`'s uses of it | the shadow root of a node's own tree (assignedSlot's closed test, activeElement's tree test) | STOPS: a node's own tree |
 | libdom shadow.c `flattened` | a slot's assigned nodes, flattened | FLAT: assigned nodes, a slot among them replaced by its own, else fallback children |

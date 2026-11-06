@@ -13,8 +13,8 @@
  * of these names together (Lit's test reads ShadowRoot, adoptedStyleSheets
  * and CSSStyleSheet's replace), so they come and go as one.
  *
- * The two prototypes are made for every page, as each kind's is, and a
- * wrapper takes them by refinement (d_node_prototype) rather than by a
+ * The two prototypes are made with the binding when the surface is on,
+ * and a wrapper takes them by refinement (d_node_prototype) rather than by a
  * kind of their own: a shadow root keeps DocumentFragment's kind and a
  * slot HTMLElement's, so every member and receiver check those kinds have
  * applies to them unchanged. */
@@ -33,6 +33,9 @@ static bool is_slot(const os64_html_node_t *n)
 
 int d_shadow_prototypes(os64_dom_t *dom, JSContext *ctx)
 {
+    /* With the surface off a slot's wrapper keeps HTMLElement's prototype
+     * itself, so no link a page can see appears without the names. */
+    if (!dom->options.shadow_trees || !dom->options.modern) return 0;
     dom->shadow_root_proto = d_retain(dom, ctx, JS_NewObjectProto(ctx, dom->prototypes[D_PROTO_FRAGMENT]->value));
     if (dom->shadow_root_proto == NULL) return -1;
     dom->slot_proto = d_retain(dom, ctx, JS_NewObjectProto(ctx, dom->prototypes[D_PROTO_HTML_ELEMENT]->value));

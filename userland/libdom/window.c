@@ -579,7 +579,11 @@ int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
                 status = os64_page_node_set_indeterminate(dom->state, node, saved->was_indeterminate);
             if (status < 0) { d_page_error(ctx, status); return -1; }
         } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != saved->was) {
-            result = fire(dom, ctx, node, "input", true, false);
+            /* HTML's checkbox and radio activation: input is composed,
+             * change is not. */
+            JSValue input = d_event_new(dom, ctx, "input", true, false, false);
+            if (!JS_IsException(input)) d_event_set_composed(dom, input);
+            result = fire_made(dom, ctx, node, input);
             if (result >= 0) result = fire(dom, ctx, node, "change", true, false);
         }
         return result;

@@ -52,13 +52,14 @@ typedef struct {
     uint32_t path_count;
     bool path_window;
     /* Shadow trees (SHADOW_DOM.md § 8): whether the path may leave a
-     * shadow root for its host (EventInit's composed; a trusted UI event
-     * is composed), and, while dispatching, which step of the path is
-     * being invoked and which step, if any, is the slot a slotted target
-     * passed through into a closed tree (UINT32_MAX for none), which
-     * composedPath reads. */
+     * shadow root for its host (EventInit's composed; for a trusted event,
+     * as its standard says, host_event), and, while dispatching, which
+     * step of the path is being invoked and, for each of path_nodes, DOM's
+     * slot-in-closed-tree (NULL with no nodes), which composedPath reads.
+     * The flags are in the path's block, as the nodes are. */
     bool composed;
-    uint32_t path_at, path_closed_slot;
+    uint32_t path_at;
+    const bool *path_closed_slots;
     /* A ProgressEvent's (XHR § 4): its three attributes. */
     bool progress, length_computable;
     double loaded, total;
@@ -199,6 +200,12 @@ JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototyp
                       .custom_detail = JS_NULL};
     JS_SetOpaque(object, event);
     return object;
+}
+
+void d_event_set_composed(os64_dom_t *dom, JSValueConst event)
+{
+    DEvent *state = JS_GetOpaque(event, dom->event_class);
+    if (state != NULL) state->composed = true;
 }
 
 static DEvent *event_of(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
@@ -887,30 +894,33 @@ const os64_html_node_t *d_event_parent(const os64_dom_t *dom, const os64_html_no
 /* The nodes of the path DOM's dispatch builds (§ 2.9) from the node an
  * event is dispatched at, walked once to count them and once, with arrays
  * of `count` to hold them, to fill them: each step's node, its
- * shadow-adjusted target (NULL where it has none), and the event's
- * relatedTarget retargeted against it. A step whose node the retargeted
+ * shadow-adjusted target (NULL where it has none), the event's
+ * relatedTarget retargeted against it, and DOM's slot-in-closed-tree: the
+ * step is the slot an assigned node on the path climbed to, in a closed
+ * tree, which composedPath hides by. A step whose node the retargeted
  * relatedTarget is ends the path before it, and an event whose
- * relatedTarget retargets to its own target has no path at all. The walk
- * also finds the click's activation target; the step that is a slot a
- * slotted target entered a closed tree by (SIZE_MAX for none), which
- * composedPath hides by; and DOM's clearTargets, whether the last adjusted
- * target or its relatedTarget is in a shadow tree, when the dispatch
- * leaves neither showing. */
+ * relatedTarget retargets to its target, being some other node, has no
+ * path at all. The walk also finds the click's activation target, and
+ * DOM's clearTargets: whether the last adjusted target or its
+ * relatedTarget is in a shadow tree, when the dispatch leaves neither
+ * showing. */
 typedef struct {
     const os64_html_node_t **nodes, **adjusted, **related;
-    size_t count, closed_slot, last_adjusted;
+    bool *closed_slots;
+    size_t count, last_adjusted;
     const os64_html_node_t *top, *activation;
     bool clear;
 } DPath;
 
 static void path_step(DPath *p, const os64_html_node_t *node, const os64_html_node_t *adjusted,
-                      const os64_html_node_t *related)
+                      const os64_html_node_t *related, bool closed_slot)
 {
     p->top = node;
     if (p->nodes != NULL) {
         p->nodes[p->count] = node;
         p->adjusted[p->count] = adjusted;
         p->related[p->count] = related;
+        p->closed_slots[p->count] = closed_slot;
     }
     if (adjusted != NULL) {
         p->last_adjusted = p->count;
@@ -919,39 +929,46 @@ static void path_step(DPath *p, const os64_html_node_t *node, const os64_html_no
     p->count++;
 }
 
+static bool assigned(const os64_dom_t *dom, const os64_html_node_t *node)
+{
+    return node->parent != NULL && node->parent->shadow_root != NULL &&
+        os64_html_assigned_slot(dom->document, node) != NULL;
+}
+
 static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os64_html_node_t *related, DPath *p)
 {
     const os64_dom_t *dom = d->dom;
     bool composed = d->event->composed, activation = activates(d);
     const os64_html_node_t *target = node, *first = tree_root(node), *now = d_retarget(related, target);
     p->count = p->last_adjusted = 0;
-    p->closed_slot = SIZE_MAX;
     p->activation = NULL;
     p->clear = false;
     if (now == target && related != target) return;
-    path_step(p, target, target, now);
+    path_step(p, target, target, now, false);
     if (activation && d_activation_has(target)) p->activation = target;
-    bool slotted = target->parent != NULL && target->parent->shadow_root != NULL &&
-        os64_html_assigned_slot(dom->document, target) != NULL;
+    /* DOM's slottable: the assigned node the path last climbed from, whose
+     * parent on the path is its slot. */
+    const os64_html_node_t *slottable = assigned(dom, target) ? target : NULL;
     for (const os64_html_node_t *parent = d_event_parent(dom, target, composed, first); parent != NULL;
          parent = d_event_parent(dom, parent, composed, first)) {
-        if (slotted) {
+        bool closed_slot = false;
+        if (slottable != NULL) {
             const os64_html_node_t *root = tree_root(parent);
-            if (os64_html_shadow_host(root) != NULL && (root->shadow & OS64_HTML_SHADOW_CLOSED) != 0)
-                p->closed_slot = p->count;
-            slotted = false;
+            closed_slot = os64_html_shadow_host(root) != NULL && (root->shadow & OS64_HTML_SHADOW_CLOSED) != 0;
+            slottable = NULL;
         }
+        if (assigned(dom, parent)) slottable = parent;
         now = d_retarget(related, parent);
         if (shadow_including_inclusive_ancestor(tree_root(target), parent)) {
             if (activation && d->event->bubbles && p->activation == NULL && d_activation_has(parent))
                 p->activation = parent;
-            path_step(p, parent, NULL, now);
+            path_step(p, parent, NULL, now, closed_slot);
         } else if (parent == now) {
             break;
         } else {
             target = parent;
             if (activation && p->activation == NULL && d_activation_has(target)) p->activation = target;
-            path_step(p, parent, parent, now);
+            path_step(p, parent, parent, now, closed_slot);
         }
     }
 }
@@ -978,9 +995,10 @@ static void steps_free(Dispatch *d, JSValue *steps, size_t values)
  * from the outside in, then each step's own listeners from the inside out,
  * a step at its target (at_target) for both and the rest capturing, then
  * bubbling when the event bubbles. A plain target, and the window's own
- * events, are a path of one. Once it is over the event shows the last
- * step's target and relatedTarget, or neither when they are in a shadow
- * tree. A click's activation runs its first half before the listeners and
+ * events, are a path of one. Once it is over the event shows the target
+ * and relatedTarget of the last step invoked (the window's for a bubbling
+ * event, else the last at its target), or neither when they are in a
+ * shadow tree. A click's activation runs its first half before the listeners and
  * its second once the dispatch is over, the event's phase, current target
  * and flags already reset, as DOM's steps order them. */
 static int dispatch(Dispatch *d, const os64_html_node_t *node)
@@ -999,18 +1017,22 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     DPath walk = {0};
     if (node != NULL) {
         path_walk(d, node, related, &walk);
-        if (walk.count == 0) return 1;
+        /* No path: no listener runs, and the dispatch ends as one does. */
+        if (walk.count == 0) {
+            event->stop = event->stop_now = false;
+            return event->canceled ? 0 : 1;
+        }
     }
     size_t depth = walk.count, length = d->plain != NULL ? 1 : depth;
     bool to_window = d->plain == NULL && (node == NULL || (walk.top == document_node(dom) && kind != D_EVENT_LOAD));
     if (to_window) length++;
     /* One block: for a node's path, each step's target and relatedTarget as
      * wrapped; the wrappers the listeners are invoked on; then the path's
-     * nodes for composedPath, which a node with no wrapper is in too, and
-     * each step's target and relatedTarget as walked. */
+     * nodes for composedPath, which a node with no wrapper is in too, each
+     * step's target and relatedTarget as walked, and its slot-in-closed-tree. */
     size_t values = node != NULL ? length * (related != NULL ? 2 : 1) : 0;
     JSValue *steps = d_alloc(dom, values * sizeof(JSValue) + length * sizeof(DValue *) +
-                                  depth * 3 * sizeof(const os64_html_node_t *));
+                                  depth * 3 * sizeof(const os64_html_node_t *) + depth * sizeof(bool));
     if (steps == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM event path quota exceeded");
         return -1;
@@ -1022,6 +1044,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         walk.nodes = nodes;
         walk.adjusted = nodes + depth;
         walk.related = nodes + 2 * depth;
+        walk.closed_slots = (bool *)(nodes + 3 * depth);
         path_walk(d, node, related, &walk);
         for (size_t i = 0; i < values; i++) steps[i] = JS_UNDEFINED;
         d->targets = steps;
@@ -1065,7 +1088,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_count = (uint32_t)depth;
     event->path_window = to_window;
     event->path_at = 0;
-    event->path_closed_slot = walk.closed_slot == SIZE_MAX ? UINT32_MAX : (uint32_t)walk.closed_slot;
+    event->path_closed_slots = walk.closed_slots;
     JS_FreeValue(ctx, event->target);
     event->target = target;
     DActiveEvent active = {dom->current_event, JS_DupValue(ctx,d->object)};
@@ -1108,6 +1131,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_nodes = NULL;
     event->path_count = 0;
     event->path_window = false;
+    event->path_closed_slots = NULL;
     d_free(dom, steps);
     sweep(dom);
     /* sweep walks the registry; a collectable target is not on it. */
@@ -1247,10 +1271,25 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
 static int ui_kind_of(os64_dom_event_kind_t kind);
 static JSValue ui_host_event(os64_dom_t *dom, JSContext *ctx, const os64_dom_event_t *ev, int kind);
 
+/* Whether a host event is composed, as its standard's table says: a UI
+ * event is (UI Events, Pointer Events), so it reaches the page through
+ * shadow roots, except the boundary events that go to each element
+ * entered or left on their own (mouseenter, mouseleave, pointerenter,
+ * pointerleave) and pointer capture's two; a form's submit is not. */
+static bool host_composed(int kind, const char *type)
+{
+    static const char *const kUncomposed[] = {
+        "mouseenter", "mouseleave", "pointerenter", "pointerleave", "gotpointercapture", "lostpointercapture"
+    };
+    if (kind == D_UI_NONE || kind == D_UI_SUBMIT) return false;
+    for (size_t i = 0; i < sizeof(kUncomposed) / sizeof(kUncomposed[0]); i++)
+        if (os64_streq(type, kUncomposed[i])) return false;
+    return true;
+}
+
 /* A host event as os64_dom_event_t describes it: the UI event its kind
- * names, with the switch on; else an Event with its mouse or key fields.
- * What the user does is composed, so it reaches the page through shadow
- * roots (UI Events); a form's submit is not. */
+ * names, with the switch on; else an Event with its mouse or key fields;
+ * composed as host_composed says. */
 static JSValue host_event(os64_dom_t *dom, JSContext *ctx, void *arg)
 {
     const os64_dom_event_t *ev = arg;
@@ -1265,7 +1304,7 @@ static JSValue host_event(os64_dom_t *dom, JSContext *ctx, void *arg)
         }
     }
     DEvent *event = JS_IsException(object) ? NULL : JS_GetOpaque(object, dom->event_class);
-    if (event != NULL) event->composed = kind != D_UI_NONE && kind != D_UI_SUBMIT;
+    if (event != NULL) event->composed = host_composed(kind, ev->type);
     return object;
 }
 
@@ -1970,14 +2009,20 @@ static bool closed_root_step(const DEvent *event, uint32_t i)
     return os64_html_shadow_host(node) != NULL && (node->shadow & OS64_HTML_SHADOW_CLOSED) != 0;
 }
 
+/* Whether step i is DOM's slot-in-closed-tree (path_walk). */
+static bool closed_slot_step(const DEvent *event, uint32_t i)
+{
+    return i < event->path_count && event->path_closed_slots != NULL && event->path_closed_slots[i];
+}
+
 /* composedPath() (DOM § 2.9): the path the dispatch walks, innermost first,
  * the window last when the path ends there; a new empty array outside a
  * dispatch. The path's nodes are as the dispatch found them, whatever its
  * listeners have moved since. A closed shadow tree's nodes are left out
  * for a listener outside it, as § 2.9 counts it: a level for each closed
- * root between a step and the current one, less one for each slot a
- * slotted target entered a closed tree by, a step kept only at the current
- * one's level or shallower. */
+ * root between a step and the current one, less one for each slot in a
+ * closed tree that an assigned node on the path climbed to, a step kept
+ * only at the current one's level or shallower. */
 static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                              JSValue *data)
 {
@@ -1998,7 +2043,7 @@ static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValu
     int64_t level = 0;
     for (uint32_t i = steps; i > current; i--) {
         if (closed_root_step(event, i - 1)) level++;
-        if (i - 1 == event->path_closed_slot) level--;
+        if (closed_slot_step(event, i - 1)) level--;
     }
     if (closed_root_step(event, current)) level++;
     bool *keep = d_alloc(dom, steps * sizeof(bool));
@@ -2011,14 +2056,14 @@ static JSValue composed_path(JSContext *ctx, JSValueConst self, int argc, JSValu
     for (uint32_t i = current; i > 0; i--) {
         if (closed_root_step(event, i - 1)) now++;
         keep[i - 1] = now <= most;
-        if (i - 1 == event->path_closed_slot) {
+        if (closed_slot_step(event, i - 1)) {
             now--;
             if (now < most) most = now;
         }
     }
     now = most = level;
     for (uint32_t i = current + 1; i < steps; i++) {
-        if (i == event->path_closed_slot) now++;
+        if (closed_slot_step(event, i)) now++;
         keep[i] = now <= most;
         if (closed_root_step(event, i)) {
             now--;

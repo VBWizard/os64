@@ -474,11 +474,6 @@ static void report_lost(os64_dom_t *dom, JSContext *ctx)
     }
 }
 
-/* DOM's "notify mutation observers": every observer, in the order the page
- * made them (those made by a callback meanwhile wait for the next notify),
- * handed its records if it has any; its transient registrations go either
- * way.
- * -1 when the runtime must stop. */
 /* The slots os64_html_slot_changes reports, each held until its slotchange
  * has fired. */
 typedef struct {
@@ -519,11 +514,14 @@ static int signal_failed(os64_dom_t *dom, JSContext *ctx)
 }
 
 /* DOM's "notify mutation observers": the slots whose assignment changed
- * are taken first (its signal slots), each observer's records handed to
- * its callback, then a slotchange fired at each slot taken, so one an
- * observer's callback causes waits for the next notify. A root left
- * marked for want of memory is reported by a later one; a slot that could
- * not be listed loses its event, and says so. */
+ * are taken first (its signal slots); then every observer, in the order
+ * the page made them (those made by a callback meanwhile wait for the next
+ * notify), is handed its records if it has any, its transient
+ * registrations going either way; then a slotchange fires at each slot
+ * taken, so one an observer's callback causes waits for the next notify.
+ * A root left marked for want of memory is reported by a later one; a
+ * slot that could not be listed loses its event, and says so. -1 when the
+ * runtime must stop. */
 static int notify(os64_dom_t *dom, JSContext *ctx)
 {
     struct DObservers *s = dom->observers;

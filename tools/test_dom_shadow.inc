@@ -18,7 +18,9 @@ static void dom_shadow_switch_cases(void)
         dom_script(&f, SHADOW_ASSERT
             "assert(typeof ShadowRoot==='undefined'&&typeof HTMLSlotElement==='undefined','interfaces');"
             "var e=Element.prototype;assert(!('attachShadow' in e)&&!('shadowRoot' in e)&&!('assignedSlot' in e)"
-            "&&!('slot' in e),'Element members');assert(!('assignedSlot' in Text.prototype),'Text member');",
+            "&&!('slot' in e),'Element members');assert(!('assignedSlot' in Text.prototype),'Text member');"
+            "assert(Object.getPrototypeOf(document.createElement('slot'))===HTMLElement.prototype,"
+            "'a slot keeps HTMLElement.prototype');assert(!('composed' in Event.prototype),'Event.composed');",
             "shadow-off");
         fixture_free(&f);
     }
@@ -177,7 +179,17 @@ static void dom_shadow_event_cases(void)
         /* A light child slotted into a closed tree: outside, the slot and root are hidden. */
         "cr.appendChild(document.createElement('slot'));var lk=document.createElement('b');c.appendChild(lk);"
         "lk.dispatchEvent(new Event('p',{bubbles:true}));"
-        "assert(seen.length===6&&seen[0]===lk&&seen[1]===c,'a closed slot hides: '+seen.length);",
+        "assert(seen.length===6&&seen[0]===lk&&seen[1]===c,'a closed slot hides: '+seen.length);"
+        /* A descendant of a slotted node: the slot's level is undone, so the light nodes show. */
+        "var lb=document.createElement('button');lk.appendChild(lb);lb.dispatchEvent(new Event('p',{bubbles:true}));"
+        "assert(seen.length===7&&seen[0]===lb&&seen[1]===lk&&seen[2]===c,'below a slotted node: '+seen.length);"
+        /* Forwarded through two closed trees: each slot's level is undone. */
+        "var outer=document.createElement('div');document.body.appendChild(outer);"
+        "var orr=outer.attachShadow({mode:'closed'});var mid=document.createElement('div');orr.appendChild(mid);"
+        "orr.appendChild(document.createElement('slot'));var mr=mid.attachShadow({mode:'closed'});"
+        "mr.appendChild(document.createElement('slot'));var fs=document.createElement('slot');mid.appendChild(fs);"
+        "var deep=document.createElement('em');outer.appendChild(deep);deep.dispatchEvent(new Event('p',{bubbles:true}));"
+        "assert(seen.length===6&&seen[0]===deep&&seen[1]===outer,'through two closed trees: '+seen.length);",
         "shadow-composed-path");
     dom_script(&f, SHADOW_TREE
         /* relatedTarget retargets per step and keeps the outside's answer. */
@@ -190,6 +202,15 @@ static void dom_shadow_event_cases(void)
         "rel=[];h.addEventListener('mouseover',R('host'));"
         "h.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,composed:true,relatedTarget:w}));"
         "assert(rel.length===0,'to itself: '+rel.join());"
+        /* ...and ends as any dispatch does: canceled answers false, the flags are reset. */
+        "var nd=new MouseEvent('mouseover',{cancelable:true,composed:true,relatedTarget:w});"
+        "nd.preventDefault();nd.stopPropagation();"
+        "assert(h.dispatchEvent(nd)===false&&nd.cancelBubble===false,'no path still ends the dispatch');"
+        /* A checkbox's activation input is composed, its change not. */
+        "var heard=[];document.addEventListener('input',function(e){heard.push('input:'+e.composed)});"
+        "document.addEventListener('change',function(e){heard.push('change')});"
+        "var cbox=document.createElement('input');cbox.type='checkbox';r.appendChild(cbox);cbox.click();"
+        "assert(cbox.checked&&heard.join()==='input:true','checkbox input composed: '+heard.join());"
         /* click() is composed, and its activation is found on the path: a
          * submit button around a host is activated by a click inside it. */
         "var cs;r.addEventListener('click',function(e){cs=e.composed});w.click();assert(cs===true,'click() is composed');"
@@ -272,10 +293,60 @@ static void dom_shadow_slotchange_cases(void)
     fixture_free(&f);
 }
 
+/* A native pointer packet hitting `hit`, which may be inside a shadow
+ * tree, where no id reaches. */
+static void shadow_pointer(DomFixture *f, const os64_html_node_t *hit, os64_dom_pointer_action_t action, int button,
+                           unsigned buttons)
+{
+    os64_dom_pointer_sample_t sample = {.action = action, .hit = hit,
+        .event = {.client_x = 4, .client_y = 4, .button = button, .buttons = buttons}};
+    os64_js_outcome_t out;
+    check(os64_dom_pointer_dispatch(f->binding, &sample, NULL, NULL, NULL, &out) == OS64_JS_OK,
+          "shadow: a pointer packet completes");
+}
+
+/* SHADOW_DOM.md § 8, pointer.c: enter and leave are not composed, so a
+ * host hears its own mouseenter once however deep the pointer goes; a
+ * click whose press and release are in different trees goes to their
+ * common element, never a shadow root. */
+static void dom_shadow_pointer_cases(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.shadow_trees = true;
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, SHADOW_ASSERT
+        "document.body.innerHTML='';var h=document.createElement('div');h.id='ph';document.body.appendChild(h);"
+        "var r=h.attachShadow({mode:'open'});r.innerHTML='<i></i><div><span></span></div><slot></slot>';"
+        "var k=document.createElement('b');k.id='pk';h.appendChild(k);"
+        "globalThis.enters=0;globalThis.clicks=[];globalThis.rootClick=0;"
+        "h.addEventListener('mouseenter',function(e){enters++;assert(!e.composed,'mouseenter is not composed')});"
+        "r.addEventListener('click',function(e){if(e.target===r)rootClick++});"
+        "document.addEventListener('click',function(e){clicks.push(e.target===h?'h':e.target&&e.target.nodeName)});",
+        "shadow-pointer-setup");
+    os64_html_node_t *host = native_id(f.document->document, "ph");
+    const os64_html_node_t *root = host != NULL ? host->shadow_root : NULL;
+    const os64_html_node_t *italic = root != NULL ? root->first_child : NULL;
+    const os64_html_node_t *span = italic != NULL && italic->next != NULL ? italic->next->first_child : NULL;
+    const os64_html_node_t *light = native_id(f.document->document, "pk");
+    check(span != NULL && light != NULL, "shadow: the pointer fixture");
+    if (span != NULL && light != NULL) {
+        shadow_pointer(&f, span, OS64_DOM_POINTER_MOVE, -1, 0);
+        shadow_pointer(&f, italic, OS64_DOM_POINTER_DOWN, 0, 1);
+        shadow_pointer(&f, light, OS64_DOM_POINTER_UP, 0, 0);
+        dom_script(&f, SHADOW_ASSERT
+            "assert(enters===1,'the host hears its own mouseenter once: '+enters);"
+            "assert(rootClick===0&&clicks.join()==='h','a click across trees goes to the host: '+clicks.join());",
+            "shadow-pointer");
+    }
+    fixture_free(&f);
+}
+
 static void dom_shadow_cases(void)
 {
     dom_shadow_switch_cases();
     dom_shadow_surface_cases();
     dom_shadow_event_cases();
     dom_shadow_slotchange_cases();
+    dom_shadow_pointer_cases();
 }
