@@ -60,6 +60,12 @@ static void shadow_flow_cases(void)
     flow_tree_t *moved = snapshot_layout(&p, old, &input);
     expect("shadow: a child moved to another slot is laid out there", moved != NULL &&
            flow_box_for(moved, i) != NULL && flow_box_for(moved, shown_fallback) != NULL, NULL);
+    // The rule's own effect: the host and all it laid out are marked, not
+    // just the child whose attribute changed. The output check beside it
+    // is what makes the rule safe to refine later.
+    flow_reuse_stats_t ms = moved != NULL ? flow_reuse_stats(moved) : (flow_reuse_stats_t){0};
+    expect("shadow: a slot move marks the host's whole saved flat subtree", ms.source_ready && ms.dirty_nodes > 5,
+           NULL);
     snapshot_equal(&p, moved);
     os64_html_set_attr(p.doc, u, "slot", "z", 1);
     flow_tree_t *filled = snapshot_layout(&p, moved, &input);
