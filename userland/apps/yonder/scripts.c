@@ -2191,6 +2191,12 @@ const os64_dom_timing_t *yonder_scripts_timing(const yonder_scripts_t *s)
     return s != NULL ? &s->timing : NULL;
 }
 
+size_t yonder_scripts_adopted(const yonder_scripts_t *s, const os64_html_node_t *root,
+                              os64_dom_adopted_sheet_t *out, size_t cap)
+{
+    return s != NULL && s->dom != NULL ? os64_dom_adopted(s->dom, root, out, cap) : 0;
+}
+
 uint64_t yonder_scripts_storage_due(const yonder_scripts_t *s)
 {
     return s != NULL && s->dom != NULL ? os64_dom_storage_due(s->dom) : UINT64_MAX;

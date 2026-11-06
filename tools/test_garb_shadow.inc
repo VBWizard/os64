@@ -381,8 +381,69 @@ static void shadow_batch_removal(void)
     sh_close(&f);
 }
 
+// Many component roots, one shared sheet in every scope (Lit's shape): the
+// last root is styled.
+static void shadow_many(int roots, bool *styled)
+{
+    os64_html_document_t *doc = update_doc("<!doctype html><body>");
+    garb_parsed_t sheet;
+    const char *text = "p{z-index:7}";
+    garb_parse_sheet_text(text, strlen(text), &sheet);
+    garb_sheet_in_t in = {.sheet = &sheet, .parent = -1};
+    int32_t zero = 0;
+    garb_scope_in_t *scopes = calloc((size_t)roots, sizeof(*scopes));
+    os64_html_node_t *last = NULL;
+    for (int i = 0; scopes && i < roots; i++) {
+        os64_html_node_t *host = os64_html_create_element(doc, OS64_HTML_NS_HTML, "x-c", NULL);
+        os64_html_insert(doc, doc->body, host, NULL);
+        os64_html_node_t *root = os64_html_attach_shadow(doc, host, OS64_HTML_SHADOW_OPEN, NULL);
+        last = os64_html_create_element(doc, OS64_HTML_NS_HTML, "p", NULL);
+        os64_html_insert(doc, root, last, NULL);
+        scopes[i] = (garb_scope_in_t){root, &zero, 1};
+    }
+    garb_cascade_t *c = scopes ? garb_cascade_scoped(&in, 1, scopes, roots, doc,
+                                                     (garb_env_t){.width = 800, .height = 600}, NULL) : NULL;
+    *styled = c && last && !strcmp(sh_win(c, last, "z-index"), "7");
+    garb_cascade_free(c);
+    free(scopes);
+    garb_free(&sheet);
+    os64_html_document_free(doc);
+}
+
+// The time a cascade takes to take `n` scopes whose roots the document does
+// not hold, so that taking them is all it costs: each is found by hashing,
+// so four times the scopes cost about four times as much, not sixteen.
+static double shadow_scopes_taken(int n)
+{
+    os64_html_document_t *doc = update_doc("<!doctype html><body>");
+    garb_scope_in_t *scopes = calloc((size_t)n, sizeof(*scopes));
+    for (int i = 0; scopes && i < n; i++)
+        scopes[i] = (garb_scope_in_t){os64_html_create_fragment(doc, NULL), NULL, 0};
+    clock_t began = clock();
+    garb_cascade_t *c = scopes ? garb_cascade_scoped(NULL, 0, scopes, n, doc,
+                                                     (garb_env_t){.width = 800, .height = 600}, NULL) : NULL;
+    double spent = (double)(clock() - began) / CLOCKS_PER_SEC;
+    bool built = c != NULL;
+    garb_cascade_free(c);
+    free(scopes);
+    os64_html_document_free(doc);
+    return built ? spent : 1e9;
+}
+
+static void shadow_scale(void)
+{
+    bool styled = false;
+    shadow_many(2000, &styled);
+    shadow_check(styled, "many roots: the last root's tree is styled");
+    double small = shadow_scopes_taken(8000), large = shadow_scopes_taken(32000);
+    bool linear = large < small * 10 + 0.05;
+    if (!linear) fprintf(stderr, "  many scopes: 8000 took %.3f s, 32000 took %.3f s\n", small, large);
+    shadow_check(linear, "many scopes: four times the scopes cost about four times as much");
+}
+
 static int cascade_shadow(void)
 {
+    shadow_scale();
     shadow_scoping();
     shadow_imports();
     shadow_updates();

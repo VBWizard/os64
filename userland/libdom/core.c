@@ -521,6 +521,7 @@ void os64_dom_free(os64_dom_t *dom)
         d_event_free(dom, entry);
         d_attr_free(dom, entry);
         d_canvas_free(entry);
+        d_adopted_free(dom, entry);
         d_free(dom, entry->output_default);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);

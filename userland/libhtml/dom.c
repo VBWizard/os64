@@ -1637,6 +1637,17 @@ int64_t os64_html_set_ce(os64_html_document_t *doc, HNode *e, os64_html_ce_t ce)
     return OS64_HTML_OK;
 }
 
+int64_t os64_html_touch(os64_html_document_t *doc, HNode *node)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !node || !ours(d, node))
+        return OS64_HTML_BAD_ARGUMENT;
+    d->version++;
+    os64_html_change_t change = {.kind = OS64_HTML_CHANGE_STATE, .target = node};
+    log_change(d, &change);
+    return OS64_HTML_OK;
+}
+
 bool os64_html_custom_name(const char *name)
 {
     static const char *const kReserved[] = {"annotation-xml", "color-profile", "font-face",

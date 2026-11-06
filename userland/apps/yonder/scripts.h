@@ -433,6 +433,10 @@ void yonder_scripts_mark(yonder_scripts_t *scripts, os64_dom_milestone_t which, 
 // The page's navigation timing as far as its milestones have been told it;
 // NULL for no host.
 const os64_dom_timing_t *yonder_scripts_timing(const yonder_scripts_t *scripts);
+// The constructed sheets `root` has adopted (os64_dom_adopted); none for no
+// host.
+size_t yonder_scripts_adopted(const yonder_scripts_t *scripts, const os64_html_node_t *root,
+                              os64_dom_adopted_sheet_t *out, size_t cap);
 // The page's storage (dom.h § Web storage): every task the host runs ends
 // with os64_dom_storage_settle, which commits what is due; `due` is when
 // the next commit is (UINT64_MAX for none, yonder_now_ms' clock), and

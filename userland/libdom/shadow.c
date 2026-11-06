@@ -7,7 +7,8 @@
  * attachShadow, shadowRoot, slot and assignedSlot, Text's assignedSlot,
  * ShadowRoot's members and HTMLSlotElement's, onslotchange wherever HTML
  * puts it (GlobalEventHandlers and ShadowRoot, its content attribute too),
- * Event's composed, and the two interfaces on window. The event path is
+ * Event's composed, the two interfaces on window, and constructed sheets
+ * with both adoptedStyleSheets (adopted.c). The event path is
  * event.c's and slotchange's firing observer.c's. All of it is installed
  * only with options.shadow_trees (and the
  * Modern Web's switch), as one switch: a page decides once from several
@@ -236,7 +237,8 @@ int d_shadow_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JSValueConst element = dom->prototypes[D_PROTO_ELEMENT]->value;
     JSValueConst text = dom->prototypes[D_PROTO_TEXT]->value;
     JSValueConst root = dom->shadow_root_proto->value, slot = dom->slot_proto->value;
-    if (d_method_named(dom, ctx, element, "attachShadow", shadow_member, 1, S_ATTACH) < 0 ||
+    if (d_adopted_install(dom, ctx, global, dom->sheet_prototype->value, root) < 0 ||
+        d_method_named(dom, ctx, element, "attachShadow", shadow_member, 1, S_ATTACH) < 0 ||
         d_accessor(dom, ctx, element, "shadowRoot", shadow_member, S_SHADOW_ROOT, false) < 0 ||
         d_accessor(dom, ctx, element, "slot", shadow_member, S_SLOT, true) < 0 ||
         d_accessor(dom, ctx, element, "assignedSlot", shadow_member, S_ASSIGNED_SLOT, false) < 0 ||
