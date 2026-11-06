@@ -105,11 +105,18 @@ child of it (LIBDOM.md § Objects and collections); every walk of
 children skips it because it is not on the child list. A shadow root is
 the same arrangement with three differences:
 
-- **The node.** A new kind, `OS64_HTML_SHADOW_ROOT`, laid out as a
-  fragment, with `host` pointing back at its element and the element
-  pointing at it through `shadow_root`. Its `mode`, `delegates_focus`,
-  `clonable` and `serializable` are the node's fields. The root lives in
-  the host's document arena and counts against its budget like any node.
+- **The node.** An `OS64_HTML_FRAGMENT`, as DOM has it ("a
+  DocumentFragment whose host is non-null"), so every place that treats a
+  fragment as a fragment (an insertion moves its children, a query takes
+  it as a receiver) treats a root the same with no change. The element
+  points at it through a new `shadow_root` field; the root keeps its host
+  in the fragment's private word, where a template's contents keep their
+  template, and `os64_html_shadow_host` tells the two apart by which of
+  the owner's pointers names the fragment. Its options (mode,
+  `delegatesFocus`, `clonable`, `serializable`) are the bits of a new
+  `shadow` byte, which sits in padding the node already had. The root
+  lives in the host's document arena and counts against its budget like
+  any node.
 - **One verb.** `os64_html_attach_shadow(doc, host, options)` checks what
   DOM's "attach a shadow root" algorithm checks (the host is an HTML
   element on the standard's list or has a valid custom element name; it

@@ -22,7 +22,8 @@ typedef enum {
     OS64_HTML_NOT_FOUND = -7,      /* the reference child is not the parent's child */
     OS64_HTML_BAD_TEXT = -8,       /* not UTF-8, or it holds a NUL */
     OS64_HTML_ROOT_REQUIRED = -9,  /* the document would lose its html element */
-    OS64_HTML_BAD_ARGUMENT = -10
+    OS64_HTML_BAD_ARGUMENT = -10,
+    OS64_HTML_NOT_SUPPORTED = -11  /* what the DOM Standard refuses as NotSupportedError */
 } os64_html_status_t;
 
 /* Exit badge for a broken node-hold or snapshot-pin lifetime contract,
@@ -77,11 +78,17 @@ typedef struct os64_html_node {
     /* An element's custom state, an os64_html_ce_t (below). Only
      * os64_html_set_ce changes it. */
     uint8_t ce;
+    /* A shadow root's OS64_HTML_SHADOW_* options (SHADOW TREES, below);
+     * zero on every other node. Set once, by os64_html_attach_shadow. */
+    uint8_t shadow;
     const char *public_id, *system_id;
     const char *text;
     size_t text_len;
     os64_html_attr_t *attrs;
     struct os64_html_node *template_contents;
+    /* An element's shadow root, or NULL. Like a template's contents it is
+     * no child of the element and on no child list (SHADOW TREES, below). */
+    struct os64_html_node *shadow_root;
     struct os64_html_node *parent, *first_child, *last_child, *prev, *next;
     /* Parser association at insertion, or NULL; document-owned, possibly
      * non-ancestor. Consumers resolve form= and ancestry separately. */
@@ -546,6 +553,47 @@ typedef enum {
 } os64_html_ce_t;
 int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
 bool os64_html_custom_name(const char *name);
+
+/* ── SHADOW TREES (docs/design/pending/SHADOW_DOM.md § 3) ──────────────
+ *
+ * A shadow root is a FRAGMENT its host element owns through
+ * `shadow_root`, as a template owns its contents: on no child list, so no
+ * walk of children enters it, and it lives and is reclaimed with its host.
+ * Its `shadow` field holds the options it was attached with.
+ *
+ * `attach_shadow` is DOM's "attach a shadow root" for what libhtml can
+ * judge: `host` must be an HTML element of `doc` that is a valid shadow
+ * host (`valid_shadow_host`) and has no root yet, else
+ * OS64_HTML_NOT_SUPPORTED; whether a custom element definition disables
+ * shadows is its caller's to know. `options` is OS64_HTML_SHADOW_OPEN or
+ * OS64_HTML_SHADOW_CLOSED with any of the flags; anything else is
+ * OS64_HTML_BAD_ARGUMENT. Attaching moves the version and logs a CHILDREN
+ * change of the host with nothing added or removed, since what the host
+ * renders changed; like `set_ce` it tells no listener, as DOM queues no
+ * mutation record for it.
+ *
+ * `shadow_host` is a shadow root's host, and NULL for any other node.
+ * `shadow_including_root` climbs parents, and from a shadow root to its
+ * host, to the top: a node is connected when that is a document.
+ * `shadow_including_next` is preorder over `root`'s shadow-including
+ * descendants, a host's shadow root (and its tree) before the host's
+ * children, NULL after the last: the standard's shadow-including tree
+ * order. A template's contents are no part of it, as they are no part of
+ * the tree. */
+enum {
+    OS64_HTML_SHADOW_OPEN = 1,
+    OS64_HTML_SHADOW_CLOSED = 2,
+    OS64_HTML_SHADOW_DELEGATES_FOCUS = 4,
+    OS64_HTML_SHADOW_CLONABLE = 8,
+    OS64_HTML_SHADOW_SERIALIZABLE = 16
+};
+bool os64_html_valid_shadow_host(const os64_html_node_t *element);
+os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_node_t *host,
+                                          uint8_t options, int64_t *status);
+const os64_html_node_t *os64_html_shadow_host(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *root,
+                                                        const os64_html_node_t *node);
 
 /* Parse a complete UTF-8 string in an owned ELEMENT context.
  * This HTML fragment entry point refuses XML documents and unknown/no-namespace

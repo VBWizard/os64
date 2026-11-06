@@ -670,6 +670,8 @@ const char *os64_html_status_name(int64_t s)
         return "OS64_HTML_ROOT_REQUIRED";
     case OS64_HTML_BAD_ARGUMENT:
         return "OS64_HTML_BAD_ARGUMENT";
+    case OS64_HTML_NOT_SUPPORTED:
+        return "OS64_HTML_NOT_SUPPORTED";
     default:
         return "OS64_HTML_UNKNOWN_STATUS";
     }

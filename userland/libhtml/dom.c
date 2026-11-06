@@ -66,9 +66,11 @@ static bool same_bytes(const char *held, const char *s, size_t n)
     return held[n] == 0;
 }
 
-/* A template's contents hang off the template and have no parent. The
- * fragment remembers its template, which is what makes "is this node above
- * that one" answerable across the boundary. */
+/* A template's contents hang off the template, and a shadow root off its
+ * host, and neither has a parent. Each fragment remembers its owner, which
+ * is what makes "is this node above that one" answerable across the
+ * boundary. Which of the two it is, the owner says: its
+ * `template_contents` or its `shadow_root` is the fragment. */
 static HNode *host(const HNode *fragment)
 {
     return fragment->kind == FRAGMENT ? (HNode *)*h_word(fragment) : NULL;
@@ -117,14 +119,27 @@ static size_t depth_of(const HNode *n, uint64_t *steps)
             return depth;
     }
 }
-/* Preorder over `root`'s subtree, a template's contents before its own
- * children; `depth` follows by the same count as depth_of. No recursion: a
- * document may have been parsed with a `max_depth` no stack could hold. */
-static HNode *next_in(HNode *root, HNode *n, size_t *depth)
+/* The fragment `n` owns that a walk of `n`'s subtree enters: its template
+ * contents, or its shadow root when `every_root` or the root is clonable
+ * (a clone copies a shadow tree only then). */
+static HNode *owned(const HNode *n, bool every_root)
 {
-    if (n->template_contents && n->template_contents->first_child) {
+    if (n->template_contents)
+        return n->template_contents;
+    if (n->shadow_root && (every_root || (n->shadow_root->shadow & OS64_HTML_SHADOW_CLONABLE)))
+        return n->shadow_root;
+    return NULL;
+}
+/* Preorder over `root`'s subtree, a fragment `owned` answers before its
+ * owner's children; `depth` follows by the same count as depth_of. No
+ * recursion: a document may have been parsed with a `max_depth` no stack
+ * could hold. */
+static HNode *next_in(HNode *root, HNode *n, size_t *depth, bool every_root)
+{
+    HNode *own = owned(n, every_root);
+    if (own && own->first_child) {
         ++*depth;
-        return n->template_contents->first_child;
+        return own->first_child;
     }
     if (n->first_child) {
         ++*depth;
@@ -135,24 +150,28 @@ static HNode *next_in(HNode *root, HNode *n, size_t *depth)
             return n->next;
         HNode *parent = n->parent;
         if (parent != root && host(parent)) {
-            /* The contents are done; the template's own children are next,
-             * at the depth the contents were. */
-            HNode *template = host(parent);
-            if (template->first_child)
-                return template->first_child;
-            n = template;
+            /* The fragment is done; its owner's own children are next, at
+             * the depth the fragment's were. */
+            HNode *owner = host(parent);
+            if (owner->first_child)
+                return owner->first_child;
+            n = owner;
         } else
             n = parent;
         --*depth;
     }
     return NULL;
 }
-/* Lifetime walks include the contents fragment itself, since callers can
- * hold that identity independently of its template and its children. */
+/* Lifetime walks include the contents fragment and the shadow root
+ * themselves, since callers can hold those identities independently of
+ * their owner and its children. An element has at most one of the two: a
+ * template is no valid shadow host. */
 static HNode *lifetime_next(HNode *root, HNode *n)
 {
     if (n->template_contents)
         return n->template_contents;
+    if (n->shadow_root)
+        return n->shadow_root;
     if (n->first_child)
         return n->first_child;
     while (n != root) {
@@ -371,8 +390,9 @@ static void subtree_free(HDoc *d, HNode *root)
     assert_records(d);
     HNode *n = root;
     for (;;) {
-        if (n->template_contents) {
-            n = n->template_contents;
+        HNode *own = owned(n, true);
+        if (own) {
+            n = own;
             continue;
         }
         if (n->first_child) {
@@ -381,8 +401,10 @@ static void subtree_free(HDoc *d, HNode *root)
         }
         bool done = n == root;
         HNode *up = above(n);
-        if (host(n))
+        if (host(n) && up->template_contents == n)
             up->template_contents = NULL;
+        else if (host(n))
+            up->shadow_root = NULL;
         else
             h_detach(d, n);
         node_free(d, n);
@@ -437,10 +459,13 @@ size_t d_pending_bytes(const HDoc *d)
     return bytes;
 }
 
+/* How far below `root` its deepest node is, every shadow tree counted: a
+ * shadow tree renders below its host, so an insertion's depth is bounded
+ * through it. A clone that leaves a deep tree behind is held to it too. */
 static size_t height_of(HNode *root, uint64_t *steps)
 {
     size_t depth = 0, deepest = 0;
-    for (HNode *n = root; n; n = next_in(root, n, &depth)) {
+    for (HNode *n = root; n; n = next_in(root, n, &depth, true)) {
         step(steps);
         if (depth > deepest)
             deepest = depth;
@@ -1108,6 +1133,16 @@ static HNode *contents_new(HDoc *d, HNode *template, int64_t *why)
     }
     return fragment;
 }
+static HNode *shadow_new(HDoc *d, HNode *host, uint8_t options, int64_t *why)
+{
+    HNode *root = node_new(d, FRAGMENT, why);
+    if (root) {
+        *h_word(root) = (size_t)host;
+        root->shadow = options;
+        host->shadow_root = root;
+    }
+    return root;
+}
 
 os64_html_node_t *os64_html_create_element(os64_html_document_t *doc, os64_html_ns_t ns,
                                            const char *name, int64_t *status)
@@ -1608,6 +1643,89 @@ bool os64_html_custom_name(const char *name)
     return hyphen;
 }
 
+/* DOM's valid shadow host name: a valid custom element name, or one of
+ * the HTML elements its list names. */
+bool os64_html_valid_shadow_host(const os64_html_node_t *e)
+{
+    static const os64_html_tag_t kHosts[] = {
+        OS64_HTML_TAG_ARTICLE, OS64_HTML_TAG_ASIDE, OS64_HTML_TAG_BLOCKQUOTE, OS64_HTML_TAG_BODY,
+        OS64_HTML_TAG_DIV, OS64_HTML_TAG_FOOTER, OS64_HTML_TAG_H1, OS64_HTML_TAG_H2,
+        OS64_HTML_TAG_H3, OS64_HTML_TAG_H4, OS64_HTML_TAG_H5, OS64_HTML_TAG_H6,
+        OS64_HTML_TAG_HEADER, OS64_HTML_TAG_MAIN, OS64_HTML_TAG_NAV, OS64_HTML_TAG_P,
+        OS64_HTML_TAG_SECTION, OS64_HTML_TAG_SPAN};
+    if (!e || e->kind != ELEMENT || e->ns != OS64_HTML_NS_HTML)
+        return false;
+    for (size_t i = 0; i < H_ARRAY(kHosts); i++)
+        if (e->tag == kHosts[i])
+            return true;
+    return os64_html_custom_name(e->name);
+}
+
+os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_node_t *host,
+                                          uint8_t options, int64_t *status)
+{
+    HDoc *d = (HDoc *)doc;
+    uint8_t mode = options & (OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLOSED);
+    uint8_t known = OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLOSED | OS64_HTML_SHADOW_DELEGATES_FOCUS |
+                    OS64_HTML_SHADOW_CLONABLE | OS64_HTML_SHADOW_SERIALIZABLE;
+    if (!d || !host || !ours(d, host) || host->kind != ELEMENT ||
+        (mode != OS64_HTML_SHADOW_OPEN && mode != OS64_HTML_SHADOW_CLOSED) || (options & ~known)) {
+        say(status, OS64_HTML_BAD_ARGUMENT);
+        return NULL;
+    }
+    if (!os64_html_valid_shadow_host(host) || host->shadow_root) {
+        say(status, OS64_HTML_NOT_SUPPORTED);
+        return NULL;
+    }
+    int64_t why = OS64_HTML_OK;
+    HNode *root = shadow_new(d, host, options, &why);
+    if (root) {
+        d->version++;
+        os64_html_change_t change = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = host,
+                                     .version = d->version};
+        log_change(d, &change);
+    }
+    say(status, why);
+    return root;
+}
+
+const os64_html_node_t *os64_html_shadow_host(const os64_html_node_t *n)
+{
+    const HNode *owner = n && n->kind == FRAGMENT ? host(n) : NULL;
+    return owner && owner->shadow_root == n ? owner : NULL;
+}
+
+const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *n)
+{
+    while (n && (n->parent || os64_html_shadow_host(n)))
+        n = n->parent ? n->parent : os64_html_shadow_host(n);
+    return n;
+}
+
+const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *root,
+                                                        const os64_html_node_t *n)
+{
+    if (!root || !n)
+        return NULL;
+    if (n->shadow_root)
+        return n->shadow_root;
+    if (n->first_child)
+        return n->first_child;
+    while (n != root) {
+        if (n->next)
+            return n->next;
+        /* A shadow tree is done: its host's own children come next. */
+        const os64_html_node_t *owner = os64_html_shadow_host(n);
+        if (owner) {
+            if (owner->first_child)
+                return owner->first_child;
+            n = owner;
+        } else
+            n = n->parent;
+    }
+    return NULL;
+}
+
 /* ── Clone ───────────────────────────────────────────────────────────── */
 
 /* Names in permanent document chunks may be shared. Packed fragment names
@@ -1668,6 +1786,11 @@ static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
         d->form_inputs += d_form_input(n);
         if (from->template_contents && !contents_new(d, n, why))
             return NULL;
+        /* DOM's clone gives a clonable host's copy a root of its own with
+         * the same options; os64_html_clone fills it. */
+        if (from->shadow_root && (from->shadow_root->shadow & OS64_HTML_SHADOW_CLONABLE) &&
+            !shadow_new(d, n, from->shadow_root->shadow, why))
+            return NULL;
     }
     return n;
 }
@@ -1679,6 +1802,11 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
     int64_t why = OS64_HTML_OK;
     if (!d || !node || node->kind == DOCUMENT) {
         say(status, OS64_HTML_BAD_ARGUMENT);
+        return NULL;
+    }
+    /* DOM refuses to clone a shadow root; its host's clone may copy it. */
+    if (os64_html_shadow_host(node)) {
+        say(status, OS64_HTML_NOT_SUPPORTED);
         return NULL;
     }
     /* A subtree is of one document throughout: nothing puts one document's
@@ -1693,23 +1821,37 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
     size_t depth = 0;
     /* `at` and `mirror` walk the original and the copy in step: the copy of
      * a node's parent is found by climbing both until the original's side
-     * reaches that parent, or the template whose contents it is. */
+     * reaches that parent, or the owner whose template contents or clonable
+     * shadow root it is (clone_one gave the copy its own). */
     HNode *at = root, *mirror = copy;
-    for (HNode *n = deep && copy ? next_in(root, root, &depth) : NULL; n;
-         n = next_in(root, n, &depth)) {
+    for (HNode *n = deep && copy ? next_in(root, root, &depth, false) : NULL; n;
+         n = next_in(root, n, &depth, false)) {
         HNode *made = clone_one(d, n, foreign, &why);
         if (!made) {
             copy = NULL;
             break;
         }
-        while (at != n->parent && at->template_contents != n->parent) {
+        while (at != n->parent && at->template_contents != n->parent && at->shadow_root != n->parent) {
             HNode *up = at->parent ? at->parent : host(at);
             mirror = mirror->parent ? mirror->parent : host(mirror);
             at = up;
         }
-        h_attach(d, at == n->parent ? mirror : mirror->template_contents, NULL, made);
+        h_attach(d, at == n->parent ? mirror : at->template_contents == n->parent ? mirror->template_contents
+                                                                                   : mirror->shadow_root,
+                 NULL, made);
         at = n;
         mirror = made;
+    }
+    /* DOM copies a clonable shadow tree whether or not the clone is deep:
+     * a shallow clone of a host still gets its root's children. */
+    for (HNode *c = !deep && copy && copy->shadow_root ? root->shadow_root->first_child : NULL; c;
+         c = c->next) {
+        HNode *kid = os64_html_clone(doc, c, true, &why);
+        if (!kid) {
+            copy = NULL;
+            break;
+        }
+        h_attach(d, copy->shadow_root, NULL, kid);
     }
     say(status, why);
     return copy;

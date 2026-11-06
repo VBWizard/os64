@@ -494,6 +494,112 @@ static void t_templates(void)
     check(live == 0, "template cases freed");
 }
 
+// SHADOW_DOM.md § 3: a shadow root is a fragment its host owns, as a
+// template owns its contents.
+static void t_shadow(void)
+{
+    os64_html_document_t *doc = parse("<body><div id=h><p id=light>l</p></div><template id=t></template>"
+                                      "<input id=i><x-y id=c></x-y><span id=gone></span>");
+    HNode *h = id_in(doc, "h"), *light = id_in(doc, "light"), *t = id_in(doc, "t"), *in = id_in(doc, "i");
+    HNode *custom = id_in(doc, "c"), *gone = id_in(doc, "gone");
+    int64_t st = 0;
+    check(os64_html_valid_shadow_host(h) && os64_html_valid_shadow_host(custom) &&
+              !os64_html_valid_shadow_host(t) && !os64_html_valid_shadow_host(in) &&
+              !os64_html_valid_shadow_host(light->first_child),
+          "valid hosts: a div and a custom element name, not a template, an input or a text");
+    check(!os64_html_attach_shadow(doc, in, OS64_HTML_SHADOW_OPEN, &st) && st == OS64_HTML_NOT_SUPPORTED,
+          "an input is no host");
+    check(!os64_html_attach_shadow(doc, h, 0, &st) && st == OS64_HTML_BAD_ARGUMENT, "a root needs a mode");
+    check(!os64_html_attach_shadow(doc, h, OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLOSED, &st) &&
+              st == OS64_HTML_BAD_ARGUMENT, "and only one");
+    check(!os64_html_attach_shadow(doc, h, OS64_HTML_SHADOW_OPEN | 64, &st) && st == OS64_HTML_BAD_ARGUMENT,
+          "an option nobody named");
+    check(!h->shadow_root, "a refusal attaches nothing");
+
+    uint64_t v = os64_html_version(doc);
+    HNode *root = os64_html_attach_shadow(doc, h, OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLONABLE, &st);
+    check(root && st == OS64_HTML_OK && root->kind == OS64_HTML_FRAGMENT && h->shadow_root == root &&
+              root->shadow == (OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLONABLE) && !root->parent &&
+              h->first_child == light,
+          "attached: a fragment the host owns, beside its own children");
+    check(os64_html_version(doc) > v, "attaching moves the version");
+    check(os64_html_shadow_host(root) == h && !os64_html_shadow_host(t->template_contents) &&
+              !os64_html_shadow_host(h) && !os64_html_shadow_host(NULL),
+          "shadow_host answers for a shadow root alone");
+    check(!os64_html_attach_shadow(doc, h, OS64_HTML_SHADOW_OPEN, &st) && st == OS64_HTML_NOT_SUPPORTED &&
+              h->shadow_root == root,
+          "a second root is refused, the first kept");
+
+    HNode *span = os64_html_create_element(doc, OS64_HTML_NS_HTML, "span", NULL);
+    HNode *slot = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    check(os64_html_insert(doc, root, span, NULL) == OS64_HTML_OK &&
+              os64_html_insert(doc, span, slot, NULL) == OS64_HTML_OK && span->parent == root,
+          "content goes into the root as into any fragment");
+    check(os64_html_shadow_including_root(slot) == doc->document &&
+              os64_html_shadow_including_root(root) == doc->document,
+          "a node in the shadow tree is connected through its host");
+    HNode *inside = os64_html_create_element(doc, OS64_HTML_NS_HTML, "b", NULL);
+    check(os64_html_insert(doc, t->template_contents, inside, NULL) == OS64_HTML_OK &&
+              os64_html_shadow_including_root(inside) == t->template_contents,
+          "a template's contents are no part of the shadow-including tree");
+    check(os64_html_insert(doc, span, h, NULL) == OS64_HTML_HIERARCHY &&
+              os64_html_insert(doc, slot, h, NULL) == OS64_HTML_HIERARCHY,
+          "a host may not be inserted into its own shadow tree");
+
+    // Shadow-including order: the host, its root and the root's tree, then
+    // the host's own children.
+    const HNode *want[] = {h, root, span, slot, light, light->first_child};
+    size_t at = 0;
+    bool in_order = true;
+    for (const HNode *n = h; n; n = os64_html_shadow_including_next(h, n), at++)
+        in_order = in_order && at < H_ARRAY(want) && n == want[at];
+    check(in_order && at == H_ARRAY(want), "shadow-including order from the host (%zu steps)", at);
+    at = 0;
+    for (const HNode *n = root; n; n = os64_html_shadow_including_next(root, n))
+        at++;
+    check(at == 3, "a walk of the root alone stays in its tree (%zu)", at);
+    size_t seen = 0;
+    for (const HNode *n = doc->document; n; n = os64_html_shadow_including_next(doc->document, n))
+        seen += n == slot;
+    check(seen == 1, "a walk of the document reaches the shadow tree once");
+
+    // Clones (DOM's "clone a node"): a clonable root is copied, deep or not.
+    HNode *deep = os64_html_clone(doc, h, true, &st), *shallow = os64_html_clone(doc, h, false, &st);
+    check(deep && deep->shadow_root && deep->shadow_root != root &&
+              deep->shadow_root->shadow == root->shadow && os64_html_shadow_host(deep->shadow_root) == deep &&
+              deep->shadow_root->first_child && deep->shadow_root->first_child->first_child &&
+              !strcmp(deep->shadow_root->first_child->first_child->name, "slot") && deep->first_child,
+          "a deep clone copies the clonable root and the host's children");
+    check(shallow && shallow->shadow_root && shallow->shadow_root->first_child &&
+              shallow->shadow_root->first_child->first_child && !shallow->first_child,
+          "a shallow clone still copies the clonable shadow tree, and no children");
+    HNode *closed = os64_html_attach_shadow(doc, custom, OS64_HTML_SHADOW_CLOSED, &st);
+    check(closed && closed->shadow == OS64_HTML_SHADOW_CLOSED, "a closed root, not clonable");
+    os64_html_insert(doc, closed, os64_html_create_text(doc, "x", 1, NULL), NULL);
+    HNode *plain = os64_html_clone(doc, custom, true, &st);
+    check(plain && !plain->shadow_root, "a root that is not clonable stays behind");
+    check(!os64_html_clone(doc, root, true, &st) && st == OS64_HTML_NOT_SUPPORTED, "a shadow root is not cloned");
+
+    // Lifetime: the root lives and is reclaimed with its host.
+    HNode *g = os64_html_attach_shadow(doc, gone, OS64_HTML_SHADOW_OPEN, &st);
+    HNode *kept = os64_html_create_element(doc, OS64_HTML_NS_HTML, "i", NULL);
+    os64_html_insert(doc, g, kept, NULL);
+    os64_html_hold(doc, kept);
+    size_t before = doc->node_count;
+    check(os64_html_remove(doc, gone) == OS64_HTML_OK && doc->node_count == before,
+          "a held node in a removed host's shadow tree keeps the host");
+    check(gone->shadow_root == g && os64_html_shadow_host(g) == gone && kept->parent == g,
+          "and the tree is whole");
+    os64_html_release(doc, kept);
+    check(doc->node_count == before - 3, "released, the host, its root and their child go together (%zu)",
+          before - doc->node_count);
+
+    HDoc *d = (HDoc *)doc;
+    check(links_ok(d, doc->document, 0) == d->records, "links after the shadow cases");
+    os64_html_document_free(doc);
+    check(live == 0, "shadow cases freed");
+}
+
 static void t_attributes(void)
 {
     // Two <b> elements that the parser made from one start tag share one
@@ -2687,6 +2793,7 @@ int main(int argc, char **argv)
         t_observe_attributes();
         t_observe_parser();
         t_custom_state();
+        t_shadow();
         t_change_log();
         t_change_log_loss();
         t_change_log_parser();
