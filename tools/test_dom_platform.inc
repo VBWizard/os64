@@ -116,6 +116,7 @@ static void dom_performance_cases(void)
         "assert(performance.getEntriesByType('resource').length===0&&performance.getEntriesByType('paint').length===0);"
         "assert(performance.clearResourceTimings()===undefined&&performance.setResourceTimingBufferSize(10)===undefined);"
         "assert(performance.clearResourceTimings.length===0&&performance.setResourceTimingBufferSize.length===1);"
+        "assert(performance.clearResourceTimings.name==='clearResourceTimings'&&performance.now.name==='now'&&performance.getEntriesByType.name==='getEntriesByType');"
         "var threw=false;try{performance.setResourceTimingBufferSize()}catch(e){threw=e instanceof TypeError}assert(threw,'a size is required');"
         "threw=false;try{performance.setResourceTimingBufferSize(Symbol())}catch(e){threw=e instanceof TypeError}assert(threw,'a size converts');"
         "assert(performance.onresourcetimingbufferfull===null);var full=function(){};performance.onresourcetimingbufferfull=full;"

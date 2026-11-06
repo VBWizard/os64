@@ -12207,8 +12207,10 @@ static void input_lost(void)
 }
 
 // A key, before libui sees it: keydown, and keypress for a character, at
-// the control holding focus (the page's body when the view has it). A
-// cancelled one is not typed. Keys in a VT100 burst (the arrows, ESC [ A)
+// the control holding focus (the page's body when the view has it, or
+// nothing does). A cancelled one is not typed. A key typed into the
+// window's own controls — the address field, the bar — is no page's: a
+// page that takes single keys as shortcuts would take them from there. Keys in a VT100 burst (the arrows, ESC [ A)
 // are libui's own and are not dispatched (DOM.md § D7b, as built: Booked).
 static bool key_event(const os64_gui_event_t *ev)
 {
@@ -12235,6 +12237,8 @@ static bool key_event(const os64_gui_event_t *ev)
     for (int32_t i = 0; i < g.nfw && target == NULL; i++)
         if (g.fw[i]->w == g.ui.focus)
             target = g.fw[i]->node;
+    if (target == NULL && g.ui.focus != NULL && g.ui.focus != &g.view)
+        return false;
     if (target == NULL)
         target = page_doc(&g.page)->body != NULL ? page_doc(&g.page)->body : page_doc(&g.page)->document;
     char name[8];

@@ -2,7 +2,8 @@
 #include "os64/date.h"
 
 /* `performance` (High Resolution Time; Performance Timeline; User Timing;
- * Navigation Timing's `timing`, `navigation` and the `navigation` entry).
+ * Navigation Timing's `timing`, `navigation` and the `navigation` entry;
+ * Resource Timing's buffer members, over an empty buffer).
  *
  * THE CLOCK. A page's time origin is when its navigation began, read once
  * from the host's timing (options.timing) when the binding is made, or the
@@ -1115,7 +1116,7 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"clearResourceTimings", M_CLEAR_RESOURCES, 0}, {"setResourceTimingBufferSize", M_RESOURCE_SIZE, 1},
     };
     for (size_t i = 0; i < sizeof(kMethods) / sizeof(kMethods[0]); i++)
-        if (d_method(dom, ctx, on, kMethods[i].name, performance_member, kMethods[i].argc, kMethods[i].magic) < 0)
+        if (d_method_named(dom, ctx, on, kMethods[i].name, performance_member, kMethods[i].argc, kMethods[i].magic) < 0)
             return -1;
     if (d_accessor(dom, ctx, on, "timeOrigin", performance_member, M_TIME_ORIGIN, false) < 0 ||
         d_accessor(dom, ctx, on, "timing", performance_member, M_TIMING, false) < 0 ||
