@@ -5,7 +5,8 @@
  * libhtml holds the trees (a shadow root is a fragment its host owns,
  * assignment, the flat tree); this is what a page reaches of them: Element's
  * attachShadow, shadowRoot, slot and assignedSlot, Text's assignedSlot,
- * ShadowRoot's members (onslotchange among them) and HTMLSlotElement's,
+ * ShadowRoot's members and HTMLSlotElement's, onslotchange wherever HTML
+ * puts it (GlobalEventHandlers and ShadowRoot, its content attribute too),
  * Event's composed, and the two interfaces on window. The event path is
  * event.c's and slotchange's firing observer.c's. All of it is installed
  * only with options.shadow_trees (and the
@@ -246,7 +247,12 @@ int d_shadow_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom, ctx, root, "serializable", shadow_member, S_SERIALIZABLE, false) < 0 ||
         d_accessor(dom, ctx, root, "slotAssignment", shadow_member, S_SLOT_ASSIGNMENT, false) < 0 ||
         d_accessor(dom, ctx, root, "activeElement", shadow_member, S_ACTIVE_ELEMENT, false) < 0 ||
-        d_event_handler_named(dom, ctx, root, "slotchange") < 0 || d_event_composed_install(dom, ctx) < 0 ||
+        /* onslotchange: GlobalEventHandlers' (window, elements, the
+         * document) and ShadowRoot's own. */
+        d_event_handler(dom, ctx, root, D_EVENT_SLOTCHANGE) < 0 ||
+        d_event_handler(dom, ctx, element, D_EVENT_SLOTCHANGE) < 0 ||
+        d_event_handler(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, D_EVENT_SLOTCHANGE) < 0 ||
+        d_event_handler(dom, ctx, global, D_EVENT_SLOTCHANGE) < 0 || d_event_composed_install(dom, ctx) < 0 ||
         d_accessor(dom, ctx, root, "innerHTML", shadow_member, S_INNER_HTML, true) < 0 ||
         d_accessor(dom, ctx, slot, "name", shadow_member, S_NAME, true) < 0 ||
         d_method_named(dom, ctx, slot, "assignedNodes", shadow_member, 0, S_ASSIGNED_NODES) < 0 ||

@@ -17,7 +17,7 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "languagechange", "error", "unhandledrejection", "rejectionhandled", "readystatechange",
     "visibilitychange", "prerenderingchange", "DOMContentLoaded", "message", "messageerror", "invalid",
     "pointerdown", "pointerup", "pointermove", "pointerover", "pointerout", "pointerenter", "pointerleave",
-    "pointercancel", "gotpointercapture", "lostpointercapture", "mouseenter", "mouseleave", "auxclick"
+    "pointercancel", "gotpointercapture", "lostpointercapture", "mouseenter", "mouseleave", "auxclick", "slotchange"
 };
 /* A page's handler attributes are a bit per kind in a uint64_t
  * (os64_dom_handler_attributes, attribute_mask). */
@@ -125,10 +125,12 @@ static bool content_attribute(int kind)
 
 /* Whether on<type> is a handler on this page: the arc's types (SCROLL on)
  * only with the Modern Web switch on, so a content attribute for one is
- * an ordinary attribute with it off, as it was before the arc. */
+ * an ordinary attribute with it off, as it was before the arc; slotchange
+ * only with shadow trees' too. */
 static bool handler_on(const os64_dom_t *dom, int kind)
 {
-    return has_handler_name(kind) && (kind < D_EVENT_SCROLL || dom->options.modern);
+    return has_handler_name(kind) && (kind < D_EVENT_SCROLL || dom->options.modern) &&
+        (kind != D_EVENT_SLOTCHANGE || dom->options.shadow_trees);
 }
 
 /* HTML's "window-reflecting body element event handler set" and the body's
@@ -2227,12 +2229,10 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     /* As handler_property: an entry made on demand is made for a handler
-     * set, and its absence reads null. A node's is its wrapper's (a
-     * ShadowRoot's onslotchange). */
+     * set, and its absence reads null. */
     DValue *entry = NULL;
     int found = plain_entry(dom, ctx, self, set && argc > 0 && JS_IsObject(argv[0]), &entry);
     if (found < 0) return JS_EXCEPTION;
-    if (found == 0 && JS_IsObject(self) && (entry = JS_GetOpaque(self, dom->node_class)) != NULL) found = 1;
     if (found == 0) return JS_ThrowTypeError(ctx, "Expected an event target");
     if (entry == NULL) return set ? JS_UNDEFINED : JS_NULL;
     const char *type = JS_ToCString(ctx, data[1]);

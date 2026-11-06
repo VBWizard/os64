@@ -143,7 +143,9 @@ int d_proto_parent(int kind);
  * them (browsing.c and document.c say why). A script may listen for any
  * other type. The handler
  * properties of the ones from SCROLL on are the Modern Web arc's, installed
- * by its table's rows (d_event_handler), not with the rest.
+ * by its table's rows (d_event_handler), not with the rest; SLOTCHANGE's
+ * by shadow trees' install, with that switch (shadow.c, observer.c fires
+ * it).
  * READYSTATECHANGE, VISIBILITYCHANGE and PRERENDERINGCHANGE are the
  * document's alone: HTML gives them an IDL property on Document and no
  * content attribute, so no element's on<type> attribute is a handler for
@@ -160,7 +162,7 @@ enum {
     D_EVENT_INVALID, D_EVENT_POINTERDOWN, D_EVENT_POINTERUP, D_EVENT_POINTERMOVE,
     D_EVENT_POINTEROVER, D_EVENT_POINTEROUT, D_EVENT_POINTERENTER, D_EVENT_POINTERLEAVE,
     D_EVENT_POINTERCANCEL, D_EVENT_GOTPOINTERCAPTURE, D_EVENT_LOSTPOINTERCAPTURE,
-    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_COUNT
+    D_EVENT_MOUSEENTER, D_EVENT_MOUSELEAVE, D_EVENT_AUXCLICK, D_EVENT_SLOTCHANGE, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
  * five that inherit it, then HTML's SubmitEvent, which inherits Event. An

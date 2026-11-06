@@ -836,8 +836,10 @@ and at teardown, which releases the holds. An Attr root is a TypeError
 of libhtml's shadow trees, all behind `options.shadow_trees` and the Modern
 Web switch, as one switch: Element's `attachShadow`, `shadowRoot` (an open
 root's only), `slot` and `assignedSlot` (a slot in a closed tree is not
-handed out), Text's `assignedSlot`, `Event.composed`, and the `ShadowRoot`
-and `HTMLSlotElement` interfaces with their members. A root and a slot keep
+handed out), Text's `assignedSlot`, `Event.composed`, the `ShadowRoot`
+and `HTMLSlotElement` interfaces with their members, and `onslotchange` on
+window, elements, the document and a root, with its content attribute (an
+event kind of its own, a handler only with the switch on). A root and a slot keep
 their kinds' prototypes refined (`d_node_prototype`), so every member and
 receiver check of DocumentFragment and HTMLElement applies to them.
 `slotAssignment: "manual"` and `assign()` are NotSupportedError, and so is

@@ -340,7 +340,7 @@ int d_pointer_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     for (int i = 0; i < 3; i++)
         if (d_method(dom, ctx, dom->prototypes[D_PROTO_ELEMENT]->value, names[i], capture_method, 1, i) < 0) return -1;
     JSValue holders[] = {global, dom->prototypes[D_PROTO_ELEMENT]->value, dom->prototypes[D_PROTO_DOCUMENT]->value};
-    for (int kind = D_EVENT_POINTERDOWN; kind < D_EVENT_COUNT; kind++)
+    for (int kind = D_EVENT_POINTERDOWN; kind <= D_EVENT_AUXCLICK; kind++)
         for (size_t i = 0; i < sizeof(holders) / sizeof(holders[0]); i++)
             if (d_event_handler(dom, ctx, holders[i], kind) < 0) return -1;
     d_mutation_register(dom, &dom->pointer.mutations, changed);

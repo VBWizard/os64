@@ -20,7 +20,11 @@ static void dom_shadow_switch_cases(void)
             "var e=Element.prototype;assert(!('attachShadow' in e)&&!('shadowRoot' in e)&&!('assignedSlot' in e)"
             "&&!('slot' in e),'Element members');assert(!('assignedSlot' in Text.prototype),'Text member');"
             "assert(Object.getPrototypeOf(document.createElement('slot'))===HTMLElement.prototype,"
-            "'a slot keeps HTMLElement.prototype');assert(!('composed' in Event.prototype),'Event.composed');",
+            "'a slot keeps HTMLElement.prototype');assert(!('composed' in Event.prototype),'Event.composed');"
+            "assert(!('onslotchange' in e)&&!('onslotchange' in window)&&!('onslotchange' in document),'onslotchange');"
+            "globalThis.ran=0;var se=document.createElement('div');se.setAttribute('onslotchange','globalThis.ran++');"
+            "document.body.appendChild(se);se.dispatchEvent(new Event('slotchange'));"
+            "assert(ran===0,'an onslotchange attribute is no handler');",
             "shadow-off");
         fixture_free(&f);
     }
@@ -296,6 +300,17 @@ static void dom_shadow_slotchange_cases(void)
         "shadow-slotchange-clone");
     dom_script(&f, SHADOW_ASSERT "assert(cc.join()==='copy','a clone\\'s first assignment: '+cc.join());",
                "shadow-slotchange-cloned");
+    /* onslotchange is GlobalEventHandlers': a slot's own property and its
+     * content attribute both fire. */
+    dom_script(&f, SHADOW_ASSERT
+        "assert('onslotchange' in window&&'onslotchange' in document&&'onslotchange' in document.body,'GlobalEventHandlers');"
+        "var g=document.createElement('div');document.body.appendChild(g);var gr=g.attachShadow({mode:'open'});"
+        "gr.innerHTML='<slot name=p></slot><slot onslotchange=\"globalThis.byAttr++\"></slot>';"
+        "globalThis.byAttr=0;globalThis.byProp=0;gr.firstChild.onslotchange=function(){byProp++};"
+        "var gp=document.createElement('i');gp.slot='p';g.appendChild(gp);g.appendChild(document.createElement('u'));",
+        "shadow-onslotchange");
+    dom_script(&f, SHADOW_ASSERT "assert(byProp===1&&byAttr===1,'property '+byProp+', attribute '+byAttr);",
+               "shadow-onslotchange-fired");
     fixture_free(&f);
 }
 
