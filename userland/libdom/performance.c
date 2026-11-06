@@ -806,6 +806,7 @@ done:
 
 enum {
     M_NOW, M_TIME_ORIGIN, M_TO_JSON, M_MARK, M_MEASURE, M_CLEAR_MARKS, M_CLEAR_MEASURES,
+    M_CLEAR_RESOURCES, M_RESOURCE_SIZE,
     M_ENTRIES, M_BY_TYPE, M_BY_NAME, M_TIMING, M_NAVIGATION, M_WINDOW,
     E_NAME, E_TYPE, E_START, E_DURATION, E_DETAIL, E_TO_JSON,
     N_TYPE, N_REDIRECTS, N_TO_JSON, N_TIMING_JSON,
@@ -970,6 +971,17 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
         JS_FreeValue(ctx, name);
         return done < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
+    /* Resource Timing's buffer, which holds nothing: no resource entry is
+     * recorded (supportedEntryTypes), so clearing it clears none and its
+     * size is never reached. The size is still converted, as WebIDL's
+     * `unsigned long` is, so a call that would throw elsewhere throws here. */
+    case M_CLEAR_RESOURCES: return JS_UNDEFINED;
+    case M_RESOURCE_SIZE: {
+        uint32_t size = 0;
+        if (argc < 1) return JS_ThrowTypeError(ctx, "setResourceTimingBufferSize needs a size");
+        if (JS_ToUint32(ctx, &size, argv[0]) < 0) return JS_EXCEPTION;
+        return JS_UNDEFINED;
+    }
     case M_ENTRIES: return entries_query(dom, ctx, -1, JS_UNDEFINED, NULL, 0);
     case M_BY_TYPE: case M_BY_NAME: return query_by(dom, ctx, magic == M_BY_NAME, argc, argv, NULL, 0);
     default: return JS_ThrowTypeError(ctx, "Unknown Performance member");
@@ -1092,13 +1104,15 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_SetClassProto(ctx, timing_id, JS_DupValue(ctx, timing->value));
     JS_SetClassProto(ctx, navigation_id, JS_DupValue(ctx, navigation->value));
 
-    /* Performance: an EventTarget, with HR-Time's, the Timeline's and User
-     * Timing's members, and Navigation Timing's two legacy objects. */
+    /* Performance: an EventTarget, with HR-Time's, the Timeline's, User
+     * Timing's and Resource Timing's members, and Navigation Timing's two
+     * legacy objects. */
     JSValueConst on = performance->value;
     static const struct { const char *name; int magic, argc; } kMethods[] = {
         {"now", M_NOW, 0}, {"toJSON", M_TO_JSON, 0}, {"mark", M_MARK, 1}, {"measure", M_MEASURE, 1},
         {"clearMarks", M_CLEAR_MARKS, 0}, {"clearMeasures", M_CLEAR_MEASURES, 0},
         {"getEntries", M_ENTRIES, 0}, {"getEntriesByType", M_BY_TYPE, 1}, {"getEntriesByName", M_BY_NAME, 1},
+        {"clearResourceTimings", M_CLEAR_RESOURCES, 0}, {"setResourceTimingBufferSize", M_RESOURCE_SIZE, 1},
     };
     for (size_t i = 0; i < sizeof(kMethods) / sizeof(kMethods[0]); i++)
         if (d_method(dom, ctx, on, kMethods[i].name, performance_member, kMethods[i].argc, kMethods[i].magic) < 0)
@@ -1106,7 +1120,8 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (d_accessor(dom, ctx, on, "timeOrigin", performance_member, M_TIME_ORIGIN, false) < 0 ||
         d_accessor(dom, ctx, on, "timing", performance_member, M_TIMING, false) < 0 ||
         d_accessor(dom, ctx, on, "navigation", performance_member, M_NAVIGATION, false) < 0 ||
-        d_event_target(dom, ctx, on, performance_id, NULL) < 0)
+        d_event_target(dom, ctx, on, performance_id, NULL) < 0 ||
+        d_event_handler_named(dom, ctx, on, "resourcetimingbufferfull") < 0)
         return -1;
 
     /* PerformanceEntry and its kinds. */

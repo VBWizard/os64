@@ -114,6 +114,12 @@ static void dom_performance_cases(void)
         "assert(Array.isArray(j.serverTiming)&&j.serverTiming.length===0,'serverTiming is a JSON type');"
         "var p=performance.toJSON();assert(p.timeOrigin===performance.timeOrigin&&p.timing.domLoading===t.domLoading&&p.navigation.type===1);"
         "assert(performance.getEntriesByType('resource').length===0&&performance.getEntriesByType('paint').length===0);"
+        "assert(performance.clearResourceTimings()===undefined&&performance.setResourceTimingBufferSize(10)===undefined);"
+        "assert(performance.clearResourceTimings.length===0&&performance.setResourceTimingBufferSize.length===1);"
+        "var threw=false;try{performance.setResourceTimingBufferSize()}catch(e){threw=e instanceof TypeError}assert(threw,'a size is required');"
+        "threw=false;try{performance.setResourceTimingBufferSize(Symbol())}catch(e){threw=e instanceof TypeError}assert(threw,'a size converts');"
+        "assert(performance.onresourcetimingbufferfull===null);var full=function(){};performance.onresourcetimingbufferfull=full;"
+        "assert(performance.onresourcetimingbufferfull===full);performance.onresourcetimingbufferfull=null;"
         "throws('TypeError',()=>new Performance());throws('TypeError',()=>performance.now.call({}));"
         "throws('TypeError',()=>Object.getOwnPropertyDescriptor(PerformanceTiming.prototype,'fetchStart').get.call(nav));",
         "performance: the clock, timing, navigation and the navigation entry");
