@@ -5351,6 +5351,37 @@ static void geometry_shadow_cases(void)
     s_shadow_dom = had;
 }
 
+/* SHADOW_DOM.md § 6 (D4a): a shadow tree's own <style> styles that tree,
+ * its host through :host and its slotted child through ::slotted(); the
+ * page's sheet styles the page alone, and wins over ::slotted() for the
+ * light child it also reaches. */
+static void shadow_style_cases(void)
+{
+    bool had = s_shadow_dom;
+    s_shadow_dom = true;
+    probe_page("<!doctype html><style>body{margin:0}p{display:block;width:10px}"
+        "span{display:block}#t{width:50px}</style>"
+        "<div id=h><span id=s>x</span><span id=t>y</span></div><script>"
+        "function eq(a,b,w){if(a!==b)throw Error(w+': '+a+' != '+b)};"
+        "var r=document.getElementById('h').attachShadow({mode:'open'});"
+        "r.innerHTML='<style>p{width:30px}:host{display:block;width:200px}"
+        "::slotted(span){width:40px}</style><p id=in>i</p><slot></slot>';"
+        "eq(r.querySelector('#in').offsetWidth,30,'the tree');"
+        "eq(document.getElementById('h').offsetWidth,200,'the host');"
+        "eq(document.getElementById('s').offsetWidth,40,'the slotted child');"
+        "eq(document.getElementById('t').offsetWidth,50,'the page over ::slotted()');"
+        "var o=document.createElement('p');document.body.appendChild(o);"
+        "eq(o.offsetWidth,10,'the page');"
+        "document.body.setAttribute('data-shadow-style','yes');"
+        "</script>",true);
+    check(script_turn(), "shadow style script task completes");
+    const os64_html_attr_t *passed=os64_html_attr(g.page.way.doc->body,"data-shadow-style");
+    check(passed!=NULL && os64_streq(passed->value,"yes"),
+          "shadow style: a tree's sheet styles its tree, its host and its slotted children");
+    probe_drop();
+    s_shadow_dom = had;
+}
+
 static void geometry_publish_cases(void)
 {
     probe_page("<!doctype html><style>html,body{margin:0;padding:0}</style>"
@@ -11517,6 +11548,7 @@ int main(void)
     geometry_pseudo_cases();
     geometry_body_cases();
     geometry_shadow_cases();
+    shadow_style_cases();
     geometry_publish_cases();
     geometry_scroll_cases();
     geometry_fragment_cases();

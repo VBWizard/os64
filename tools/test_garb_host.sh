@@ -47,6 +47,7 @@ cc -fsanitize=address,undefined,float-cast-overflow "${host_objs[@]}" -o "$work/
 if [ -n "${GARB_DRIVER:-}" ]; then cp "$work/garb_driver" "$GARB_DRIVER"; fi
 if [ "$#" -gt 0 ]; then "$work/garb_driver" "$@"; exit; fi
 "$work/garb_driver" --updates
+"$work/garb_driver" --shadow
 python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --media-depth
 "$work/garb_driver" --sweep tools/garb_corpus/sweep.css

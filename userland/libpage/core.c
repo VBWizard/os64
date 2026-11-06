@@ -874,6 +874,10 @@ static void sheet_fill(os64_page_t *page, const os64_html_node_t *n, os64_page_s
     if (s->linked)
         p_resolve(page, p_attr(n, "href"), &s->href);
     s->media = p_attr(n, "media");
+    const os64_html_node_t *root = n;
+    while (root->parent != NULL)
+        root = root->parent;
+    s->scope = root;
 }
 
 static void add_sheet(os64_page_t *page, const os64_html_node_t *n)
@@ -895,9 +899,10 @@ typedef struct {
     os64_page_sheet_t one;
 } SheetsWalk;
 
-// Every node under `n`, in tree order, as the model's walk visits them for
-// its sheets: `template` contents hang off their own pointer and are not
-// followed. False once `each` said stop.
+// Every node under `n`, in shadow-including order, as the model's walk
+// visits them for its sheets: a host's shadow tree before its children,
+// and `template` contents, which hang off their own pointer, not at all.
+// False once `each` said stop.
 static bool walk_sheets(SheetsWalk *w, const os64_html_node_t *n)
 {
     for (; n != NULL; n = n->next) {
@@ -907,6 +912,8 @@ static bool walk_sheets(SheetsWalk *w, const os64_html_node_t *n)
             if (!w->each(w->ctx, &w->one))
                 return false;
         }
+        if (n->shadow_root != NULL && !walk_sheets(w, n->shadow_root->first_child))
+            return false;
         if (!walk_sheets(w, n->first_child))
             return false;
     }
@@ -1048,16 +1055,15 @@ static void collect_ids(os64_page_t *page, const os64_html_node_t *n)
     }
 }
 
-static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off, bool shadow);
+static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off);
 
 // One node and everything under it, a host's shadow tree before its
 // children (shadow-including order: a control or a link inside a component
 // is one a person uses). `off` says a disabled fieldset above has taken
 // this subtree away, which HTML scopes to one tree, so a shadow tree starts
-// with it clear. `shadow` says the node is in a shadow tree, whose sheets
-// apply in a scope of their own that the page's sheet list does not carry
-// (SHADOW_DOM.md § 6), so they are left out of it.
-static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off, bool shadow)
+// with it clear. A shadow tree's sheets join the list in that order, each
+// saying which tree it styles (os64_page_sheet_t.scope).
+static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
 {
     // A foreign element is not an HTML link or control however it is
     // spelled, but HTML nested INSIDE one still is — so the test is per
@@ -1087,26 +1093,25 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off,
         if (element_kind(n, &element))
             add_control(page, n, element, off);
     }
-    if (!shadow)
-        add_sheet(page, n);
+    add_sheet(page, n);
     // `template` contents are a separate fragment and belong to no form, so
     // the walk never follows them: they hang off their own pointer rather
     // than off first_child, which is what makes that free.
     if (n->shadow_root != NULL)
-        collect_model(page, n->shadow_root->first_child, false, true);
+        collect_model(page, n->shadow_root->first_child, false);
     if (p_is(n, OS64_HTML_TAG_FIELDSET) && p_has_attr(n, "disabled")) {
         const os64_html_node_t *legend = first_legend(n);
         for (const os64_html_node_t *c = n->first_child; c != NULL; c = c->next)
-            collect_node(page, c, off || c != legend, shadow);
+            collect_node(page, c, off || c != legend);
         return;
     }
-    collect_model(page, n->first_child, off, shadow);
+    collect_model(page, n->first_child, off);
 }
 
-static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off, bool shadow)
+static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off)
 {
     for (; n != NULL; n = n->next)
-        collect_node(page, n, off, shadow);
+        collect_node(page, n, off);
 }
 
 // Chain every radio sharing a name, so the rest of a group can be found from
@@ -1313,7 +1318,7 @@ os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *docume
     // because a control's owner is settled as it is met, and the model last.
     collect_ids(page, root);
     collect_forms(page, root);
-    collect_model(page, root, false, false);
+    collect_model(page, root, false);
     if (!chain_radios(page))
         page->incomplete = true;
     if (!page->incomplete) {

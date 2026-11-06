@@ -461,8 +461,10 @@ int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t
 
 // ── The page's style sheets ─────────────────────────────────────────────
 //
-// Every sheet the page names, in DOCUMENT ORDER, which is the order the
-// cascade ranks them in (GARB.md): a `style` element, whose text is its
+// Every sheet the page names, in its shadow trees too, in SHADOW-INCLUDING
+// ORDER — the document's order, a host's shadow tree before its children —
+// which within any one tree is the order the cascade ranks them in (GARB.md;
+// SHADOW_DOM.md § 6): a `style` element, whose text is its
 // children as libhtml keeps them, and a `link` whose `rel` holds the token
 // `stylesheet` and not `alternate` (an alternate sheet is off until a
 // person picks it), with an `href` that is not empty or white space,
@@ -476,6 +478,9 @@ typedef struct {
     bool linked;                    // a `link`: its sheet is at `href`
     os64_page_ref_t href;           // a `link`'s, resolved; refused says why
     const char *media;
+    // The root of the tree the element is in — the document node, or a
+    // shadow root — whose elements the sheet styles (garb_scope_in_t).
+    const os64_html_node_t *scope;
 } os64_page_sheet_t;
 
 // Whether `node` names a sheet by the rule above, as its tree stands now,
