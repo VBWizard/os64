@@ -1142,6 +1142,9 @@ static HNode *contents_new(HDoc *d, HNode *template, int64_t *why)
     }
     return fragment;
 }
+/* A root for `host`, however it is made (attached, or a clonable host's
+ * copy): from now every change to the document is described, for slot
+ * marking, and the root's first assignment is one to report. */
 static HNode *shadow_new(HDoc *d, HNode *host, uint8_t options, int64_t *why)
 {
     HNode *root = node_new(d, FRAGMENT, why);
@@ -1149,6 +1152,8 @@ static HNode *shadow_new(HDoc *d, HNode *host, uint8_t options, int64_t *why)
         *h_word(root) = (size_t)host;
         root->shadow = options;
         host->shadow_root = root;
+        d->shadows = true;
+        h_slots_mark(d, root);
     }
     return root;
 }
@@ -1693,10 +1698,6 @@ os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_n
         os64_html_change_t change = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = host,
                                      .version = d->version};
         log_change(d, &change);
-        /* From now every change is described, for slot marking, and the new
-         * root's first assignment is one to report. */
-        d->shadows = true;
-        h_slots_mark(d, root);
     }
     say(status, why);
     return root;

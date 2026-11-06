@@ -960,6 +960,26 @@ static void t_shadow_more(void)
               !strcmp(ctpl->template_contents->first_child->name, "u"),
           "a template inside a clonable root keeps its contents in the clone");
 
+    // A clonable host's copy registers its root for reporting: in the same
+    // document, and in a document that never attached one (Codex #483).
+    HNode *cs = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    os64_html_insert(doc, doc->body, cs, NULL);
+    HNode *csr = os64_html_attach_shadow(doc, cs, OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLONABLE, NULL);
+    os64_html_insert(doc, csr, os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL), NULL);
+    os64_html_insert(doc, cs, os64_html_create_text(doc, "c", 1, NULL), NULL);
+    drain(doc, NULL);
+    HNode *same = os64_html_clone(doc, cs, true, NULL);
+    check(same && same->shadow_root && drain(doc, NULL) == 1 && reported_slots[0] == same->shadow_root->first_child,
+          "a same-document clone's first assignment is reported");
+    os64_html_document_t *fresh_doc = parse("<body>");
+    HNode *foreign = os64_html_clone(fresh_doc, cs, true, NULL);
+    os64_html_insert(fresh_doc, fresh_doc->body, foreign, NULL);
+    drain(fresh_doc, NULL);
+    os64_html_insert(fresh_doc, foreign, os64_html_create_text(fresh_doc, "d", 1, NULL), NULL);
+    check(foreign && foreign->shadow_root && drain(fresh_doc, NULL) == 1,
+          "a clone into a document with no root of its own is tracked");
+    os64_html_document_free(fresh_doc);
+
     os64_html_document_free(doc);
     check(live == 0, "the cold read's cases freed");
 }

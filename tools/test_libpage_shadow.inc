@@ -66,4 +66,68 @@ static void shadow_cases(void)
         os64_page_free(page);
     }
     os64_html_document_free(doc);
+
+    // A clonable host's clone carries its shadow controls' state, a shallow
+    // clone's too (Codex #483).
+    name = "shadow: a clone keeps an edited shadow input's value";
+    checks++;
+    doc = parse("<body><div id=h></div>", "utf-8");
+    os64_page_state_t *state = doc != NULL ? os64_page_state_create(doc, 0) : NULL;
+    host = doc != NULL ? doc->body->first_child : NULL;
+    root = host != NULL ? os64_html_attach_shadow(doc, host, OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLONABLE, NULL)
+                        : NULL;
+    if (root == NULL || state == NULL) {
+        fail(name, "the fixture");
+    } else {
+        os64_html_node_t *field = shadow_input(doc, root, "text", "q", false);
+        os64_html_set_attr(doc, field, "value", "default", 7);
+        os64_page_node_set_value(state, field, "edited", 6);
+        for (int deep = 0; deep < 2; deep++) {
+            os64_html_node_t *copy = os64_page_node_clone(state, host, deep != 0, NULL);
+            const os64_html_node_t *cfield = copy && copy->shadow_root ? copy->shadow_root->first_child : NULL;
+            const char *value = NULL;
+            size_t len = 0;
+            if (cfield == NULL || os64_page_node_value(state, cfield, &value, &len) != OS64_HTML_OK ||
+                len != 6 || memcmp(value, "edited", 6) != 0)
+                fail(name, "%s clone: %.*s", deep ? "deep" : "shallow", (int)len, value ? value : "");
+        }
+    }
+    os64_page_state_free(state);
+    os64_html_document_free(doc);
+
+    // A host removed changes its shadow radios' owners: form= resolves only
+    // while connected. The radio whose owner changed wins its new group
+    // (Codex #483).
+    name = "shadow: a removed host's radio joining a group clears the group's other";
+    checks++;
+    doc = parse("<body><div id=h></div>", "utf-8");
+    state = doc != NULL ? os64_page_state_create(doc, 0) : NULL;
+    host = doc != NULL ? doc->body->first_child : NULL;
+    root = host != NULL ? os64_html_attach_shadow(doc, host, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+    if (root == NULL || state == NULL) {
+        fail(name, "the fixture");
+    } else {
+        os64_html_node_t *f = os64_html_create_element(doc, OS64_HTML_NS_HTML, "form", NULL);
+        os64_html_set_attr(doc, f, "id", "f", 1);
+        os64_html_insert(doc, root, f, NULL);
+        os64_html_node_t *g = os64_html_create_element(doc, OS64_HTML_NS_HTML, "form", NULL);
+        os64_html_insert(doc, root, g, NULL);
+        os64_html_node_t *first = shadow_input(doc, g, "radio", "x", true);
+        os64_html_set_attr(doc, first, "form", "f", 1);
+        os64_html_node_t *second = shadow_input(doc, g, "radio", "x", true);
+        bool a = false, b = false;
+        os64_page_node_checked(state, first, &a);
+        os64_page_node_checked(state, second, &b);
+        if (!a || !b) fail(name, "the fixture: both checked in two groups (%d %d)", a, b);
+        if (os64_page_node_remove(state, host) != OS64_HTML_OK) fail(name, "remove refused");
+        os64_page_node_checked(state, first, &a);
+        os64_page_node_checked(state, second, &b);
+        if (!a || b) fail(name, "after removal: first %d, second %d", a, b);
+        os64_page_node_insert(state, doc->body, host, NULL);
+        os64_page_node_checked(state, first, &a);
+        os64_page_node_checked(state, second, &b);
+        if (!a || b) fail(name, "after reinsertion: first %d, second %d", a, b);
+    }
+    os64_page_state_free(state);
+    os64_html_document_free(doc);
 }
