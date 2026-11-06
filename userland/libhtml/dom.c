@@ -403,9 +403,10 @@ static void subtree_free(HDoc *d, HNode *root)
         HNode *up = above(n);
         if (host(n) && up->template_contents == n)
             up->template_contents = NULL;
-        else if (host(n))
+        else if (host(n)) {
             up->shadow_root = NULL;
-        else
+            h_slots_forget(d, n);
+        } else
             h_detach(d, n);
         node_free(d, n);
         if (done)
@@ -1695,10 +1696,16 @@ const os64_html_node_t *os64_html_shadow_host(const os64_html_node_t *n)
     return owner && owner->shadow_root == n ? owner : NULL;
 }
 
+const os64_html_node_t *os64_html_shadow_including_parent(const os64_html_node_t *n)
+{
+    return !n ? NULL : n->parent ? n->parent : os64_html_shadow_host(n);
+}
+
 const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *n)
 {
-    while (n && (n->parent || os64_html_shadow_host(n)))
-        n = n->parent ? n->parent : os64_html_shadow_host(n);
+    for (const os64_html_node_t *up = os64_html_shadow_including_parent(n); up;
+         up = os64_html_shadow_including_parent(n))
+        n = up;
     return n;
 }
 

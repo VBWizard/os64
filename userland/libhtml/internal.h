@@ -88,6 +88,10 @@ typedef struct {
     size_t log_bytes, log_limit;
     uint64_t log_floor;
     bool log_limited;
+    /* Each shadow root's slot assignment, as last computed (shadow.c): an
+     * open-addressed table keyed by the root, `slots_cap` a power of two. */
+    struct HSlots **slots;
+    size_t slots_cap, slots_used;
 } HDoc;
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
@@ -303,6 +307,8 @@ void h_free(HDoc *d, void *ptr);
  * the parse ended, is left alone. */
 void *d_permanent(HDoc *d, size_t size, int64_t *why);
 void *d_alloc(HDoc *d, size_t size, int64_t *why);
+/* Drops a shadow root's cached slot assignment as the root is freed. */
+void h_slots_forget(HDoc *d, const HNode *root);
 void *d_node_alloc(HDoc *d, size_t size, int64_t *why);
 void d_transfer_blocks(HDoc *to, HDoc *from);
 HDoc *d_xml_document_new(size_t budget, size_t depth, int64_t *why);

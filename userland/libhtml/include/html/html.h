@@ -573,8 +573,10 @@ bool os64_html_custom_name(const char *name);
  * mutation record for it.
  *
  * `shadow_host` is a shadow root's host, and NULL for any other node.
- * `shadow_including_root` climbs parents, and from a shadow root to its
- * host, to the top: a node is connected when that is a document.
+ * `shadow_including_parent` is a node's parent, or for a shadow root its
+ * host: one step of the climb a question about inheritance through hosts
+ * (directionality, language) takes. `shadow_including_root` climbs it to
+ * the top: a node is connected when that is a document.
  * `shadow_including_next` is preorder over `root`'s shadow-including
  * descendants, a host's shadow root (and its tree) before the host's
  * children, NULL after the last: the standard's shadow-including tree
@@ -591,9 +593,40 @@ bool os64_html_valid_shadow_host(const os64_html_node_t *element);
 os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_node_t *host,
                                           uint8_t options, int64_t *status);
 const os64_html_node_t *os64_html_shadow_host(const os64_html_node_t *node);
+const os64_html_node_t *os64_html_shadow_including_parent(const os64_html_node_t *node);
 const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *node);
 const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *root,
                                                         const os64_html_node_t *node);
+
+/* SLOTS AND THE FLAT TREE (SHADOW_DOM.md § 4). Named assignment: each
+ * element or text child of a host is assigned to the first `slot` in the
+ * host's shadow tree, in tree order, whose `name` equals the child's `slot`
+ * attribute (the empty name for none). It is computed per shadow root and
+ * kept until the document's version moves; a refused allocation answers
+ * the same by walking the trees, more slowly.
+ *
+ * `assigned_slot` is a node's slot, NULL when it has none (its parent is
+ * no host, or no slot takes its name). `slot_assigned_count` and
+ * `slot_assigned` are a slot's assigned nodes in tree order; a slot in no
+ * shadow tree has none.
+ *
+ * The flat tree: a host's flat children are its shadow root's children, a
+ * slot's are its assigned nodes or, with none, its own children, every
+ * other node's its own. A slot is a node of it. `flat_parent` of a host's
+ * child is its slot, NULL when it has none: such a child is in no flat
+ * tree and renders nowhere. These take a const document though they may
+ * refresh its cache; a document is read on one thread. */
+const os64_html_node_t *os64_html_assigned_slot(const os64_html_document_t *doc,
+                                                const os64_html_node_t *node);
+size_t os64_html_slot_assigned_count(const os64_html_document_t *doc, const os64_html_node_t *slot);
+const os64_html_node_t *os64_html_slot_assigned(const os64_html_document_t *doc,
+                                                const os64_html_node_t *slot, size_t index);
+const os64_html_node_t *os64_html_flat_first_child(const os64_html_document_t *doc,
+                                                   const os64_html_node_t *node);
+const os64_html_node_t *os64_html_flat_next_sibling(const os64_html_document_t *doc,
+                                                    const os64_html_node_t *node);
+const os64_html_node_t *os64_html_flat_parent(const os64_html_document_t *doc,
+                                              const os64_html_node_t *node);
 
 /* Parse a complete UTF-8 string in an owned ELEMENT context.
  * This HTML fragment entry point refuses XML documents and unknown/no-namespace
