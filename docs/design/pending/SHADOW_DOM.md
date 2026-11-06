@@ -653,3 +653,4 @@ here.
 | libpage core.c `tree_id` | an id in a shadow tree, for `form=` | STOPS: ids are per tree (A.2's `collect_ids` row) |
 | libpage core.c `p_form_owner` (core.c's `form_owner` and state.c's `node_owner` both call it) | a control's form owner | CROSSES for the connected test, STOPS for the id lookup and the ancestor form: HTML's one rule, in one place (Fable, round 3) |
 | libpage core.c `capture_initial` | which radios are one group | STOPS: a form-less radio's group is keyed by its tree's root, as HTML's group is per tree |
+| libpage state.c `tree_plan_shadow_radios` | the radios a moving host carries, whose `form=` owner may change with its connectedness | CROSSES: every shadow tree inside the host, nested ones included |
