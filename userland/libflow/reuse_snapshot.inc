@@ -6,6 +6,9 @@ typedef struct {
     size_t parent;
     const FBox *box;
     bool changed, dirty, ambiguous, animated;
+    // Inside a host whose whole saved flat subtree the slot rule has marked
+    // (reuse_mark_host), so marking it again would walk it for nothing.
+    bool hosted;
 } FReuseNode;
 
 struct FReuseSnapshot {
@@ -61,16 +64,48 @@ static void reuse_snapshot_free(FReuseSnapshot *r)
     for (size_t i = 0; i < r->ncalls; ++i) calls[i].box->reuse_call = NULL;
     os64_free(r);
 }
-static const os64_html_node_t *reuse_next(const os64_html_node_t *node)
+// The snapshot is of what was laid out: the flat tree (internal.h), in
+// pre-order, each node's parent its flat parent.
+static const os64_html_node_t *reuse_next(const os64_html_document_t *doc, const os64_html_node_t *node)
 {
-    if (node->first_child) return node->first_child;
-    while (node && !node->next) node = node->parent;
-    return node ? node->next : NULL;
+    return flat_after(doc, NULL, node, true);
 }
 static void reuse_mark(FReuseSnapshot *r, const os64_html_node_t *node)
 {
     size_t i = reuse_find(r, node);
     if (i != SIZE_MAX) reuse_nodes(r)[i].changed = reuse_nodes(r)[i].dirty = true;
+}
+// SHADOW_DOM.md § 5's slot rule. A host and everything saved under it
+// changed, so nothing in its flat subtree is reused: the first version of
+// the rule, which leaves finer reuse to a measured later step. A pre-order
+// subtree is the run after its root whose saved parents are at or past the
+// root. Each node it reaches is `hosted`, so a host already covered, by
+// an earlier change or by a host round it, is not walked again.
+static void reuse_mark_host(FReuseSnapshot *r, const os64_html_node_t *host)
+{
+    size_t h = host != NULL ? reuse_find(r, host) : SIZE_MAX;
+    if (h == SIZE_MAX) return;
+    FReuseNode *nodes = reuse_nodes(r);
+    if (nodes[h].hosted) return;
+    nodes[h].changed = nodes[h].dirty = nodes[h].hosted = true;
+    for (size_t i = h + 1; i < r->count && nodes[i].parent != SIZE_MAX && nodes[i].parent >= h; ++i)
+        nodes[i].changed = nodes[i].dirty = nodes[i].hosted = true;
+}
+// Every host whose flat children a change at `target` can move: the host
+// `target` is (its children changed), the host it is a child of (it was
+// added, removed, or its `slot` attribute set), and the host of the shadow
+// tree it is in (a slot or anything round one changed). It over-marks on
+// purpose: any change there maps to those hosts, a host child's own text
+// or an attribute that is not `slot` included, which costs reuse and never
+// correctness.
+static void reuse_slot_rule(FReuseSnapshot *r, const os64_html_node_t *target)
+{
+    if (target == NULL) return;
+    if (target->shadow_root) reuse_mark_host(r, target);
+    if (target->parent && target->parent->shadow_root) reuse_mark_host(r, target->parent);
+    const os64_html_node_t *root = target;
+    while (root->parent) root = root->parent;
+    reuse_mark_host(r, os64_html_shadow_host(root));
 }
 static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
 {
@@ -82,10 +117,12 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
         os64_html_reader_free(r->reader); r->reader = NULL;
         return false;
     }
+    bool shadows = os64_html_has_shadow_roots(r->doc);
     for (; entry; entry = entry->next) {
         reuse_mark(r, entry->target);
         for (size_t i = 0; i < entry->nadded; ++i) reuse_mark(r, entry->added[i]);
         for (size_t i = 0; i < entry->nremoved; ++i) reuse_mark(r, entry->removed[i]);
+        if (shadows) reuse_slot_rule(r, entry->target);
     }
     // Preorder index: the saved parent precedes its children, even if current
     // DOM links have moved those children elsewhere or disconnected them.
@@ -167,7 +204,7 @@ static FReuseSnapshot *reuse_snapshot_new(flow_tree_t *tree, int32_t width,
     }
     size_t cap = f_arena_budget(env), count = 0;
     if (cap < sizeof(FReuseSnapshot)) goto budget;
-    for (const os64_html_node_t *n = tree->doc->document; n; n = reuse_next(n)) {
+    for (const os64_html_node_t *n = tree->doc->document; n; n = reuse_next(tree->doc, n)) {
         if (count >= (cap - sizeof(FReuseSnapshot)) / sizeof(FReuseNode) || count >= UINT32_MAX / 2)
             goto budget;
         ++count;
@@ -190,8 +227,8 @@ static FReuseSnapshot *reuse_snapshot_new(flow_tree_t *tree, int32_t width,
     FReuseNode *nodes = reuse_nodes(r);
     uint32_t *hash = reuse_slots(r);
     size_t i = 0;
-    for (const os64_html_node_t *n = tree->doc->document; n; n = reuse_next(n), ++i) {
-        nodes[i] = (FReuseNode){.node = n, .parent = reuse_find(r, n->parent)};
+    for (const os64_html_node_t *n = tree->doc->document; n; n = reuse_next(tree->doc, n), ++i) {
+        nodes[i] = (FReuseNode){.node = n, .parent = reuse_find(r, f_flat_parent(tree->doc, n))};
         const FStyled *st = f_style_of(tree->styles, n);
         nodes[i].animated = (nodes[i].parent != SIZE_MAX && nodes[nodes[i].parent].animated) ||
                            (st && (st->motion || st->style.animations.nname || st->style.animating));

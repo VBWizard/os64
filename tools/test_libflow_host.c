@@ -1410,6 +1410,7 @@ static void layout_sweep(void)
 #include "test_libflow_computed.inc"
 #include "test_libflow_restyle.inc"
 #include "test_libflow_snapshot.inc"
+#include "test_libflow_shadow.inc"
 #include "test_libflow_graft.inc"
 #include "test_libflow_filter.inc"
 
@@ -1574,6 +1575,7 @@ int main(int argc, char **argv)
     motion_cases();
     restyle_cases();
     snapshot_cases();
+    shadow_flow_cases();
     correspondence_cases();
     graft_cases();
     graft_stress();

@@ -168,11 +168,11 @@ bool os64_dom_resizes_owed(const os64_dom_t *dom)
 }
 
 /* The standard's "calculate depth for node": how many nodes from it to the
- * root of its tree, itself included. */
-static size_t node_depth(const os64_html_node_t *node)
+ * root of its flattened tree, itself included. */
+static size_t node_depth(const os64_dom_t *dom, const os64_html_node_t *node)
 {
     size_t depth = 0;
-    for (; node != NULL; node = node->parent) depth++;
+    for (; node != NULL; node = os64_html_flat_parent(dom->document, node)) depth++;
     return depth;
 }
 
@@ -223,7 +223,7 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
             observed_size(&t->now, t->box, size);
             t->active = t->skipped = false;
             if (size[0] == t->last[0] && size[1] == t->last[1]) continue;
-            if (node_depth(t->node) > depth) {
+            if (node_depth(dom, t->node) > depth) {
                 t->active = true;
                 active++;
             } else {
@@ -347,7 +347,7 @@ static size_t broadcast(os64_dom_t *dom, JSContext *ctx, os64_js_outcome_t *out)
                 t->active = false;
                 if (t->last[0] < 0) s->owed--;
                 observed_size(&t->now, t->box, t->last);
-                size_t depth = node_depth(t->node);
+                size_t depth = node_depth(dom, t->node);
                 if (depth < shallowest) shallowest = depth;
             }
             JSValue self = JS_DupValue(ctx, o->object), callback = JS_DupValue(ctx, o->callback);

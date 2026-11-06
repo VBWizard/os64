@@ -573,16 +573,16 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap)
     }
     const os64_html_document_t *doc = styles->doc;
     const os64_html_node_t *top = doc->document;
-    const os64_html_node_t *cur = top != NULL ? top->first_child : doc->html;
+    const os64_html_node_t *cur = top != NULL ? os64_html_flat_first_child(doc, top) : doc->html;
     int32_t depth = 0;
     while (cur != NULL) {
         const FStyled *self = cur->kind == OS64_HTML_ELEMENT ? f_style_of(styles, cur) : NULL;
         const os64_html_node_t *down = NULL;
         if (self != NULL) {
-            const FStyled *up = f_style_of(styles, cur->parent);
+            const FStyled *up = f_style_of(styles, f_flat_parent(doc, cur));
             element(&b, styles, cur, self, up != NULL ? &up->style : NULL, depth);
             if (self->style.display != FLOW_DISPLAY_NONE)
-                down = cur->first_child;
+                down = os64_html_flat_first_child(doc, cur);
         }
         if (down != NULL) {
             cur = down;
@@ -594,11 +594,12 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap)
                 cur = NULL;
                 break;
             }
-            if (cur->next != NULL) {
-                cur = cur->next;
+            const os64_html_node_t *next = os64_html_flat_next_sibling(doc, cur);
+            if (next != NULL) {
+                cur = next;
                 break;
             }
-            cur = cur->parent;
+            cur = f_flat_parent(doc, cur);
             depth--;
             if (cur == top)
                 cur = NULL;

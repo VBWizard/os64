@@ -121,7 +121,7 @@ mutants = [
      '    if (!run_paints(p, run))\n        return;\n    ClipInk',
      '    if (false && !run_paints(p, run))\n        return;\n    ClipInk'),
     ('a-refused-clip-draws-nothing', PAINT,
-     '    pen.pen = clip_solid(p, run);\n    flow_visit_text_clip(run->b, pen_text, &pen);',
+     '    pen.pen = clip_solid(p, run);\n    flow_visit_text_clip(p->tree, run->b, pen_text, &pen);',
      '    pen.pen = clip_solid(p, run);'),
     ('a-spoiled-clip-is-not-rescued', PAINT,
      '        if (drawn)\n            return;\n    }',

@@ -64,6 +64,23 @@ static bool named(const os64_html_node_t *node, const char *name)
            os64_streq(node->name, name);
 }
 
+// DOM's "closed-shadow-hidden": `a` is in a shadow tree whose root is not a
+// shadow-including inclusive ancestor of `b`, and that root is closed or
+// its host is itself hidden from `b`.
+static bool closed_shadow_hidden(const os64_html_node_t *a, const os64_html_node_t *b)
+{
+    const os64_html_node_t *root = a;
+    while (root->parent != NULL)
+        root = root->parent;
+    const os64_html_node_t *host = os64_html_shadow_host(root);
+    if (host == NULL)
+        return false;
+    for (const os64_html_node_t *at = b; at != NULL; at = os64_html_shadow_including_parent(at))
+        if (at == root)
+            return false;
+    return (root->shadow & OS64_HTML_SHADOW_CLOSED) != 0 || closed_shadow_hidden(host, b);
+}
+
 // The box an element's own sizes are read off: its principal box, or, for
 // an inline-block, inline-flex or inline-grid, the container its atom
 // holds. The atom is the line's piece; the container carries the element's
@@ -192,9 +209,17 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     const flow_box_t *parent = NULL;
     if (!is_root && !is_body) {
         bool static_position = first->style == NULL || first->style->position == FLOW_POSITION_STATIC;
-        for (const os64_html_node_t *at = fixed ? NULL : node->parent; at != NULL; at = at->parent) {
+        // CSSOM View's walk up the flat tree: an ancestor closed-shadow-
+        // hidden from the element is passed over (a fixed one ends the walk
+        // with none), and the first visible one that qualifies answers.
+        for (const os64_html_node_t *at = fixed ? NULL : os64_html_flat_parent(document, node); at != NULL;
+             at = os64_html_flat_parent(document, at)) {
             const flow_box_t *box = flow_box_for(tree, at);
             if (box == NULL || box->style == NULL) continue;
+            if (closed_shadow_hidden(at, node)) {
+                if (box->style->position == FLOW_POSITION_FIXED) break;
+                continue;
+            }
             if (at == document->body || box->style->position != FLOW_POSITION_STATIC ||
                 (static_position && (named(at, "table") || named(at, "td") || named(at, "th")))) {
                 parent = box;

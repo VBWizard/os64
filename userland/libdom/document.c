@@ -193,7 +193,7 @@ const os64_html_node_t *d_focused(os64_dom_t *dom)
 static JSValue active_element(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, bool window)
 {
     const os64_html_node_t *focused = window ? d_focused(dom) : NULL;
-    if (focused != NULL) return d_wrap(dom, ctx, d_retarget(focused, document));
+    if (focused != NULL) return d_wrap(dom, ctx, os64_html_retarget(focused, document));
     const os64_html_node_t *body = d_document_part(document, true);
     return d_wrap(dom, ctx, body != NULL ? body : d_document_element(document));
 }

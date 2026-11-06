@@ -518,10 +518,11 @@ typedef struct {
     int32_t link;
     uint8_t decoration;
     FDecorationColors decoration_colors;
-    // How many of this element and its ancestors are lists (`ul ol menu
-    // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
-    // for its children, by the same bargain. And whether one of them is a
-    // `nobr`, which is what `nobr wbr` asks.
+    // How many of this element and its ancestors in the document's own tree
+    // (a selector's, not the flat tree's) are lists (`ul ol menu dir`),
+    // lists or `dl`s, and `li`s: the chapter's descendant selectors for its
+    // children, by the same bargain. And whether one of them is a `nobr`,
+    // which is what `nobr wbr` asks.
     int32_t lists, lists_or_dls, items;
     bool in_nobr;
     // Its `quotes` (inherited): the winner's value, its marks' pairs, or
@@ -574,6 +575,18 @@ uint32_t f_counter_spell(flow_list_style_type_t type, int32_t value, char out[F_
 // for. A synthetic node never leaves libflow (GENERATED_CONTENT.md § 4).
 garb_pseudo_t f_pseudo_of(const os64_html_node_t *n);
 const os64_html_node_t *f_pseudo_origin(const os64_html_node_t *n);
+
+// THE FLAT TREE (SHADOW_DOM.md § 5) is what renders: a host's children are
+// its shadow root's, a slot's are its assigned nodes or else its own, and a
+// host's child no slot takes, or a slot's own while nodes are assigned to
+// it, is in it nowhere. With no shadow trees it is the document's own
+// tree. libhtml answers for a document's nodes; a synthetic node is in no
+// child list, so it, and its text, climb by their own parent.
+static inline const os64_html_node_t *f_flat_parent(const os64_html_document_t *doc,
+                                                    const os64_html_node_t *n)
+{
+    return f_pseudo_of(n) != GARB_PSEUDO_NONE ? n->parent : os64_html_flat_parent(doc, n);
+}
 
 // What is left of the budget for the lists a declaration hands each element
 // it reaches (style.c, list_alloc): the one part of styling a page can

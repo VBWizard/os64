@@ -865,21 +865,6 @@ static bool in_shadow_tree(const os64_html_node_t *node)
     return os64_html_shadow_host(tree_root(node)) != NULL;
 }
 
-static bool shadow_including_inclusive_ancestor(const os64_html_node_t *a, const os64_html_node_t *b)
-{
-    for (const os64_html_node_t *at = b; at != NULL; at = os64_html_shadow_including_parent(at))
-        if (at == a) return true;
-    return false;
-}
-
-const os64_html_node_t *d_retarget(const os64_html_node_t *a, const os64_html_node_t *b)
-{
-    for (;;) {
-        const os64_html_node_t *root = tree_root(a), *host = os64_html_shadow_host(root);
-        if (host == NULL || shadow_including_inclusive_ancestor(root, b)) return a;
-        a = host;
-    }
-}
 
 const os64_html_node_t *d_event_parent(const os64_dom_t *dom, const os64_html_node_t *node, bool composed,
                                        const os64_html_node_t *first)
@@ -950,7 +935,7 @@ static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os6
      * anything. So a page with no shadow trees walks its path once. */
     const os64_html_node_t *target = node, *first = tree_root(node), *home = first, *previous = node;
     bool plain = related == NULL || !in_shadow_tree(related);
-    const os64_html_node_t *now = plain ? related : d_retarget(related, target);
+    const os64_html_node_t *now = plain ? related : os64_html_retarget(related, target);
     p->count = p->last_adjusted = 0;
     p->activation = NULL;
     p->clear = false;
@@ -969,7 +954,7 @@ static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os6
             slottable = NULL;
         }
         if (assigned(dom, parent)) slottable = parent;
-        now = plain ? related : d_retarget(related, parent);
+        now = plain ? related : os64_html_retarget(related, parent);
         bool inside = !(previous == home && os64_html_shadow_host(home) == parent);
         if (inside) {
             if (activation && d->event->bubbles && p->activation == NULL && d_activation_has(parent))
@@ -1073,7 +1058,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
                 failed = JS_IsException(steps[i]);
             } else steps[i] = JS_DupValue(ctx, steps[i - 1]);
             if (!failed && d->related != NULL) {
-                d->related[i] = d_wrap(dom, ctx, window ? d_retarget(related, NULL) : walk.related[i]);
+                d->related[i] = d_wrap(dom, ctx, window ? os64_html_retarget(related, NULL) : walk.related[i]);
                 failed = JS_IsException(d->related[i]);
             }
         }

@@ -199,7 +199,7 @@ static JSValue shadow_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         /* DocumentOrShadowRoot's: the focused element retargeted against
          * this root, when that lands in this tree. */
         const os64_html_node_t *focused = d_focused(dom);
-        const os64_html_node_t *candidate = focused != NULL ? d_retarget(focused, node) : NULL;
+        const os64_html_node_t *candidate = focused != NULL ? os64_html_retarget(focused, node) : NULL;
         return candidate != NULL && tree_shadow_root(candidate) == node ? d_wrap(dom, ctx, candidate) : JS_NULL;
     }
     case S_INNER_HTML:

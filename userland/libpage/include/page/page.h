@@ -236,9 +236,11 @@ typedef struct {
     // an empty answer, and sending `on` for it picks a different branch on
     // the far side.
     bool has_value_attribute;
-    // It sits inside a subtree the page marked `hidden`, so it is drawn
-    // nowhere and is still submitted — and is still its form's default
-    // button when it comes first, which no cursor can reach.
+    // It sits inside a subtree the page marked `hidden`, or outside the
+    // flat tree (under a host's child no slot takes, or a slot's own child
+    // while nodes are assigned to it), so it is drawn nowhere and
+    // is still submitted — and is still its form's default button when it
+    // comes first, which no cursor can reach.
     bool hidden_subtree;
     bool has_datalist_ancestor;   // an autocomplete suggestion; never sent
     // The standard's "field that blocks implicit submission". `readonly`

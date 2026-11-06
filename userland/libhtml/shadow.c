@@ -41,7 +41,7 @@ typedef struct HSlots {
     uint32_t *slot_serial, *assigned_serial;
     /* Where the last walk of a slot's list was, and the host child last
      * looked up, so a walk in order (a flat walk asks both questions at
-     * each step) is constant time a step. */
+     * each step, and may ask one twice) is constant time a step. */
     const HNode *hint_slot;
     size_t hint_at;
     size_t hint_kid;
@@ -381,6 +381,12 @@ static bool report_root(HDoc *d, const HNode *root, void (*changed)(void *, cons
     return true;
 }
 
+bool os64_html_has_shadow_roots(const os64_html_document_t *doc)
+{
+    const HDoc *d = (const HDoc *)doc;
+    return d != NULL && d->shadows;
+}
+
 bool os64_html_slot_changes_pending(const os64_html_document_t *doc)
 {
     const HDoc *d = (const HDoc *)doc;
@@ -527,9 +533,13 @@ const os64_html_node_t *os64_html_flat_next_sibling(const os64_html_document_t *
     }
     size_t k = slot_index(s, slot);
     const HNode **list = s->assigned + s->first[k];
-    size_t count = s->count[k], at = s->hint_slot == slot && s->hint_at < count && list[s->hint_at] == n
-                                          ? s->hint_at
-                                          : SIZE_MAX;
+    /* The node the last answer named, or the one it was asked about (a
+     * caller that asks twice for one node), before a scan. */
+    size_t count = s->count[k], at = SIZE_MAX;
+    if (s->hint_slot == slot && s->hint_at < count && list[s->hint_at] == n)
+        at = s->hint_at;
+    else if (s->hint_slot == slot && s->hint_at > 0 && s->hint_at - 1 < count && list[s->hint_at - 1] == n)
+        at = s->hint_at - 1;
     for (size_t i = 0; at == SIZE_MAX && i < count; i++)
         if (list[i] == n)
             at = i;

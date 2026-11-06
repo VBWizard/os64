@@ -186,17 +186,28 @@ static bool is_list_or_dl(const os64_html_node_t *n)
     return is_list(n) || is(n, OS64_HTML_TAG_DL);
 }
 
-// The chapter's descendant selectors (`ul ul`, `li ul`), answered from the
-// parent's record — which counts itself and everything above it
-// (FStyled.lists) — rather than by walking up from every element.
+// The record of the element `n` inherits from: its flat parent's
+// (internal.h).
 static const FStyled *above(const Ctx *c, const os64_html_node_t *n)
+{
+    return f_map_get(&c->out->map, f_flat_parent(c->doc, n));
+}
+
+// The record of `n`'s parent in the document's own tree, where a selector
+// matches: what the chapter's selectors are answered from (`ul ul`, `li
+// ul`, `nobr wbr` from the counts a record keeps of itself and everything
+// above it, FStyled.lists; `tr > td` from its parent's style), rather than
+// by walking up from every element. A shadow root's child has none, so a
+// shadow tree's counts start again, as a selector's match does; a slotted
+// node's is its host's.
+static const FStyled *selector_above(const Ctx *c, const os64_html_node_t *n)
 {
     return f_map_get(&c->out->map, n->parent);
 }
 
 static int32_t lists_above(const Ctx *c, const os64_html_node_t *n)
 {
-    const FStyled *up = above(c, n);
+    const FStyled *up = selector_above(c, n);
     return up != NULL ? up->lists : 0;
 }
 
@@ -770,7 +781,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // `nobr wbr { white-space: normal }`: the one break a nowrap run
     // allows, which pass 3 honours only if the wbr's own style says so.
     case OS64_HTML_TAG_WBR: {
-        const FStyled *up = f_map_get(&c->out->map, n->parent);
+        const FStyled *up = selector_above(c, n);
         if (up != NULL && up->in_nobr)
             s->white_space = FLOW_WS_NORMAL;
         break;
@@ -903,7 +914,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         s->display = FLOW_DISPLAY_NONE;
 
     // §15.3.7: a list inside a list keeps no block margins.
-    if (is_list_or_dl(n) && above(c, n) != NULL && above(c, n)->lists_or_dls > 0)
+    if (is_list_or_dl(n) && selector_above(c, n) != NULL && selector_above(c, n)->lists_or_dls > 0)
         margin_block(sp, px(c, 0));
     // `dd { margin-inline-start: 40px }`
     if (is(n, OS64_HTML_TAG_DD))
@@ -911,7 +922,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
 
     // §15.3.8: cells take their vertical alignment from the row, and the
     // row from the group; `table > tr` without a group is middle itself.
-    const FStyled *parent = f_map_get(&c->out->map, n->parent);
+    const FStyled *parent = selector_above(c, n);
     if (is(n, OS64_HTML_TAG_TR) || is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH))
         s->vertical_align = parent != NULL ? parent->style.vertical_align : FLOW_VALIGN_BASELINE;
     if (is(n, OS64_HTML_TAG_TR) && is(n->parent, OS64_HTML_TAG_TABLE))
@@ -977,7 +988,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         bool in_list = lists_above(c, n) > 0;
         if (is_li(n) && !in_list)
             s->list_style_position = FLOW_LIST_INSIDE;
-        if (is_list(n) && !in_list && above(c, n) != NULL && above(c, n)->items > 0)
+        if (is_list(n) && !in_list && selector_above(c, n) != NULL && selector_above(c, n)->items > 0)
             s->list_style_position = FLOW_LIST_OUTSIDE;
     }
 }
@@ -4495,7 +4506,7 @@ static void taken_from(const FStyled *up, const FProps *taken)
 
 static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
 {
-    const FStyled *up = f_map_get(&c->out->map, n->parent);
+    const FStyled *up = above(c, n);
     const flow_style_t *parent = up != NULL ? &up->style : NULL;
     FStyled *out = f_arena_alloc(&c->out->arena, sizeof(*out));
     if (out == NULL)
@@ -4610,10 +4621,12 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
     if (out->link < 0 && up != NULL)
         out->link = up->link;
-    out->lists = (up != NULL ? up->lists : 0) + is_list(n);
-    out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
-    out->items = (up != NULL ? up->items : 0) + is_li(n);
-    out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
+    // The selectors' counts go down the document's own tree (selector_above).
+    const FStyled *sel = selector_above(c, n);
+    out->lists = (sel != NULL ? sel->lists : 0) + is_list(n);
+    out->lists_or_dls = (sel != NULL ? sel->lists_or_dls : 0) + is_list_or_dl(n);
+    out->items = (sel != NULL ? sel->items : 0) + is_li(n);
+    out->in_nobr = (sel != NULL && sel->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
     out->quotes = own_quotes(c->env->cascade != NULL
                                  ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
                              up != NULL ? up->quotes : NULL);
@@ -4626,7 +4639,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
                        (up != NULL && up->transparent);
     out->taken = sp.taken;
     taken_from(up, &sp.taken);
-    FStyled *holder = f_map_get(&c->out->map, n->parent);
+    FStyled *holder = f_map_get(&c->out->map, f_flat_parent(c->doc, n));
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))
         holder->has_rp = true;
     out->decoration = sp.s.text_decoration;
@@ -4741,7 +4754,8 @@ static const garb_val_t *counter_list(Ctx *c, garb_style_t st, garb_prop_t prop,
     const garb_val_t *v = winner(st, prop);
     while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit") && from != NULL) {
         v = winner(garb_style_for(c->env->cascade, from), prop);
-        from = from->parent != NULL && from->parent->kind == OS64_HTML_ELEMENT ? from->parent : NULL;
+        const os64_html_node_t *up = f_flat_parent(c->doc, from);
+        from = up != NULL && up->kind == OS64_HTML_ELEMENT ? up : NULL;
     }
     return v != NULL && v->kind == GARB_V_STRING ? v : NULL;
 }
@@ -5052,9 +5066,10 @@ static bool open_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
         return true;
     }
     if (c->env->cascade != NULL) {
-        const os64_html_node_t *up = el->parent != NULL && el->parent->kind == OS64_HTML_ELEMENT
-                                         ? el->parent : NULL;
-        count_on(c, garb_style_for(c->env->cascade, el), up, el->parent);
+        // Counters scope by the flat tree (CSS Lists 3 § 4.1).
+        const os64_html_node_t *parent = f_flat_parent(c->doc, el);
+        const os64_html_node_t *up = parent != NULL && parent->kind == OS64_HTML_ELEMENT ? parent : NULL;
+        count_on(c, garb_style_for(c->env->cascade, el), up, parent);
     }
     if (!f_draws_inside(c->env, el, of->style.display))
         c->inert = el;
@@ -5078,10 +5093,11 @@ static bool close_element(Ctx *c, const os64_html_node_t *el, FStyled *of)
     return !c->counters_failed;
 }
 
-static const os64_html_node_t *next_element(const os64_html_node_t *n)
+// `n`, or the first element among its flat siblings after it.
+static const os64_html_node_t *next_element(const os64_html_document_t *doc, const os64_html_node_t *n)
 {
     while (n != NULL && n->kind != OS64_HTML_ELEMENT)
-        n = n->next;
+        n = os64_html_flat_next_sibling(doc, n);
     return n;
 }
 
@@ -5135,11 +5151,11 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
              .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
     c.root_font = css(&c, env->viewport_font_px);
 
-    // Pre-order down, and each element FINISHED on the way back up, when
-    // everything under it has been styled — which is when its holds_block
-    // can be told to its parent.
+    // Pre-order down the flat tree (internal.h), and each element FINISHED
+    // on the way back up, when everything under it has been styled — which
+    // is when its holds_block can be told to its parent.
     const os64_html_node_t *top = doc->document;
-    const os64_html_node_t *cur = top != NULL ? next_element(top->first_child) : doc->html;
+    const os64_html_node_t *cur = top != NULL ? next_element(doc, os64_html_flat_first_child(doc, top)) : doc->html;
     while (cur != NULL) {
         FStyled *styled = style_element(&c, cur);
         if (styled != NULL && !open_element(&c, cur, styled))
@@ -5152,7 +5168,7 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
             return retry ? f_style_build(doc, model, env) : NULL;
         }
         const os64_html_node_t *child = styled->style.display == FLOW_DISPLAY_NONE
-                                            ? NULL : next_element(cur->first_child);
+                                            ? NULL : next_element(doc, os64_html_flat_first_child(doc, cur));
         if (child != NULL) {
             cur = child;
             continue;
@@ -5172,7 +5188,7 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
             if (done && (done->pseudo[0] || done->pseudo[1] ||
                          (old && (old->pseudo[0] || old->pseudo[1]))))
                 done->subtree_steady = false;
-            FStyled *parent = f_map_get(&out->map, cur->parent);
+            FStyled *parent = f_map_get(&out->map, f_flat_parent(doc, cur));
             if (parent != NULL && done != NULL) {
                 if (contributes_block(done)) parent->holds_block = true;
                 parent->subtree_steady &= done->subtree_steady;
@@ -5183,12 +5199,12 @@ FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_
                 cur = NULL;
                 break;
             }
-            const os64_html_node_t *sibling = next_element(cur->next);
+            const os64_html_node_t *sibling = next_element(doc, os64_html_flat_next_sibling(doc, cur));
             if (sibling != NULL) {
                 cur = sibling;
                 break;
             }
-            cur = cur->parent;
+            cur = f_flat_parent(doc, cur);
             if (cur == top)
                 cur = NULL;
         }
@@ -5220,7 +5236,7 @@ const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_
     int32_t depth = 0;
     const os64_html_node_t *styled = element;
     while (styled != NULL && styled->kind == OS64_HTML_ELEMENT && f_style_of(styles, styled) == NULL) {
-        styled = styled->parent;
+        styled = f_flat_parent(styles->doc, styled);
         depth++;
     }
     if (styled == NULL || styled->kind != OS64_HTML_ELEMENT || depth == 0)
@@ -5242,7 +5258,7 @@ const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_
     for (int32_t d = depth; d > 0; d--) {
         const os64_html_node_t *n = element;
         for (int32_t up = 1; up < d; up++)
-            n = n->parent;
+            n = f_flat_parent(extra->doc, n);
         if (style_element(&c, n) == NULL)
             return NULL;
     }

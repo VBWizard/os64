@@ -101,8 +101,9 @@ typedef struct {
     /* Each shadow root's slot assignment as last computed, and as last
      * reported to os64_html_slot_changes (shadow.c): open-addressed tables
      * keyed by the root. `slot_dirty` lists the roots a change may have
-     * reassigned since they were last reported; `shadows` is set by the
-     * first attach, so a document with none pays nothing for this. */
+     * reassigned since they were last reported; `shadows` is set when the
+     * document gets its first shadow root, attached or cloned, and stays
+     * set, so a document with none pays nothing for this. */
     HSlotTable slots, reported;
     const HNode **slot_dirty;
     size_t slot_dirty_n, slot_dirty_cap;

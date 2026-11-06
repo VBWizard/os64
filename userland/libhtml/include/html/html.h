@@ -597,6 +597,16 @@ const os64_html_node_t *os64_html_shadow_including_parent(const os64_html_node_t
 const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *node);
 const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *root,
                                                         const os64_html_node_t *node);
+/* DOM's "retarget A against B" (§ 4.8): A, unless A is in a shadow tree
+ * whose root is not a shadow-including inclusive ancestor of B, when it is
+ * that root's host, again until it is not. A NULL B (the window, or no
+ * node) retargets A out of every shadow tree, into the tree its
+ * shadow-including root is. */
+const os64_html_node_t *os64_html_retarget(const os64_html_node_t *a, const os64_html_node_t *b);
+/* Whether the document has ever had a shadow root (it stays true once
+ * one is made), so a reader can skip shadow-only work on a page with
+ * none. */
+bool os64_html_has_shadow_roots(const os64_html_document_t *doc);
 
 /* SLOTS AND THE FLAT TREE (SHADOW_DOM.md § 4). Named assignment: each
  * element or text child of a host is assigned to the first `slot` in the

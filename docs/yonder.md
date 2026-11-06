@@ -307,6 +307,7 @@ cache_dir = /var/cache/yonder
 | `motion` | `reduce` or `no-preference`: what pages are told about movement | `no-preference` |
 | `diagnostics` | a directory to write a file about each page into, an absolute path | none |
 | `modern` | `on` or `off`: the Modern Web surface | `on` |
+| `shadow_dom` | `on`: shadow trees (`attachShadow` and the rest) for a developer trying them, with `modern` on; anything else leaves them off; read when yonder starts | off |
 | `profile` | the folder for your own files (page storage, the cookie file), an absolute path; made when first needed | `/home/yogi/.yonder` |
 | `downloads` | the folder the Save dialog opens on, an absolute path; made when first needed | `/home/yogi/downloads` |
 | `cookies` | `on`, `session` or `off`: whether cookies are kept in the profile's `cookies` file, only while the window is open, or not at all | `on` |

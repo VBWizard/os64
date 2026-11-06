@@ -41,6 +41,9 @@ typedef struct {
 
 typedef struct {
     const yonder_verbs_t *v;
+    // The tree the boxes are from: a text clip asks it which text an
+    // element holds (flow_visit_text_clip).
+    const flow_tree_t *tree;
     // `view` is what is painted, and `shift` what to add to a box's
     // flow_box_doc_offset, both in the coordinates being painted: inside a
     // group laid through its matrix, the group's own; inside one drawn
@@ -2381,7 +2384,7 @@ static void text_clip(const Painter *p, const LayerRun *run)
     if (!run_paints(p, run))
         return;
     ClipInk ink = {p, INT64_MAX, INT64_MAX, INT64_MIN, INT64_MIN};
-    flow_visit_text_clip(run->b, clip_ink, &ink);
+    flow_visit_text_clip(p->tree, run->b, clip_ink, &ink);
     if (ink.x1 <= ink.x0 || ink.y1 <= ink.y0)
         return;
     os64_gui_rect_t bounds = cut(cut(held(ink.x0, ink.y0, ink.x1, ink.y1), on_page(p, run->b->rect)),
@@ -2397,7 +2400,7 @@ static void text_clip(const Painter *p, const LayerRun *run)
     if (p->v->clip_open != NULL && p->v->clip_fill != NULL && p->v->clip_close != NULL &&
         p->v->clip_open(p->v->ctx, bounds)) {
         pen.pen = 0x00ffffffu;
-        flow_visit_text_clip(run->b, pen_text, &pen);
+        flow_visit_text_clip(p->tree, run->b, pen_text, &pen);
         p->v->clip_fill(p->v->ctx);
         bool drawn = run_layers(p, run);
         p->v->clip_close(p->v->ctx);
@@ -2405,7 +2408,7 @@ static void text_clip(const Painter *p, const LayerRun *run)
             return;
     }
     pen.pen = clip_solid(p, run);
-    flow_visit_text_clip(run->b, pen_text, &pen);
+    flow_visit_text_clip(p->tree, run->b, pen_text, &pen);
 }
 
 // The pixels corner `c` of `s` (Round's order) can curve through: the
@@ -2785,7 +2788,7 @@ static const flow_box_t *canvas_owner(const Painter *p, const flow_box_t *root)
 
 const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs)
 {
-    Painter p = {.v = verbs};
+    Painter p = {.v = verbs, .tree = tree};
     const flow_box_t *root = flow_root(tree);
     return root != NULL ? canvas_owner(&p, root) : NULL;
 }
@@ -2799,7 +2802,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
                           .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * viewport.w * viewport.h};
     flow_cut_memo_t cuts;
     flow_cut_memo_open(&cuts, tree);
-    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
+    Painter p = {.v = verbs, .tree = tree, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
                  .cache = cache, .scratch = scratch, .cuts = &cuts,
                  .shown = viewport};
     yonder_paint_layers_refused = 0;

@@ -605,6 +605,32 @@ static void t_shadow(void)
 }
 
 // SHADOW_DOM.md § 4: named slot assignment and the flat tree.
+/* A walk that asks for one node's flat sibling twice (Codex #486 rd2: a
+ * caller testing an answer, then asking again) stays linear: the hint
+ * knows the node it was last asked about as well as the one it named.
+ * 40,000 assigned children, so the quadratic scan it replaced is about a
+ * billion comparisons against a budget of half a second. */
+static void t_flat_walk_linear(void)
+{
+    enum { KIDS = 40000 };
+    os64_html_document_t *doc = parse("<body><div id=h></div>");
+    HNode *h = id_in(doc, "h");
+    HNode *root = os64_html_attach_shadow(doc, h, OS64_HTML_SHADOW_OPEN, NULL);
+    os64_html_insert(doc, root, os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL), NULL);
+    for (int i = 0; i < KIDS; i++)
+        os64_html_insert(doc, h, os64_html_create_element(doc, OS64_HTML_NS_HTML, "i", NULL), NULL);
+    clock_t start = clock();
+    size_t seen = 0;
+    for (const HNode *c = os64_html_flat_first_child(doc, root->first_child); c != NULL;
+         c = os64_html_flat_next_sibling(doc, c)) {
+        (void)os64_html_flat_next_sibling(doc, c);
+        seen++;
+    }
+    double seconds = (double)(clock() - start) / CLOCKS_PER_SEC;
+    check(seen == KIDS && seconds < 0.5, "a flat walk asking twice a step stays linear");
+    os64_html_document_free(doc);
+}
+
 static void t_slots(void)
 {
     os64_html_document_t *doc = parse("<body><div id=h><span id=sa slot=a>A</span>t<b id=b>B</b>"
@@ -3179,6 +3205,7 @@ int main(int argc, char **argv)
         t_custom_state();
         t_shadow();
         t_slots();
+        t_flat_walk_linear();
         t_slotchange();
         t_shadow_more();
         t_change_log();

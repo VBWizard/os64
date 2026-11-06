@@ -1722,6 +1722,22 @@ const os64_html_node_t *os64_html_shadow_including_root(const os64_html_node_t *
     return n;
 }
 
+const os64_html_node_t *os64_html_retarget(const os64_html_node_t *a, const os64_html_node_t *b)
+{
+    for (;;) {
+        const os64_html_node_t *root = a;
+        while (root && root->parent)
+            root = root->parent;
+        const os64_html_node_t *host = os64_html_shadow_host(root);
+        if (!host)
+            return a;
+        for (const os64_html_node_t *at = b; at; at = os64_html_shadow_including_parent(at))
+            if (at == root)
+                return a;
+        a = host;
+    }
+}
+
 const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *root,
                                                         const os64_html_node_t *n)
 {

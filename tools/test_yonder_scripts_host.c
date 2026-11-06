@@ -5324,6 +5324,33 @@ static void geometry_body_cases(void)
     probe_drop();
 }
 
+/* SHADOW_DOM.md A.6, Quinn's review of #486: offsetParent walks the flat
+ * tree and passes over an ancestor closed-shadow-hidden from the element:
+ * a slotted span in an open tree's cell answers the cell; in a closed
+ * tree's, the walk goes on past the cell, the table and the static host to
+ * the body. */
+static void geometry_shadow_cases(void)
+{
+    bool had = s_shadow_dom;
+    s_shadow_dom = true;
+    probe_page("<!doctype html><style>body{margin:0}</style>"
+        "<div id=h><span id=s>x</span></div><div id=c><span id=cs>y</span></div><script>"
+        "function eq(a,b){if(a!==b)throw Error(a+' != '+b)};"
+        "var cell='<table><tr><td><slot></slot></td></tr></table>';"
+        "var r=document.getElementById('h').attachShadow({mode:'open'});r.innerHTML=cell;"
+        "eq(document.getElementById('s').offsetParent,r.querySelector('td'));"
+        "document.getElementById('c').attachShadow({mode:'closed'}).innerHTML=cell;"
+        "eq(document.getElementById('cs').offsetParent,document.body);"
+        "document.body.setAttribute('data-shadow-pass','yes');"
+        "</script>",true);
+    check(script_turn(), "geometry shadow script task completes");
+    const os64_html_attr_t *passed=os64_html_attr(g.page.way.doc->body,"data-shadow-pass");
+    check(passed!=NULL && os64_streq(passed->value,"yes"),
+          "geometry: offsetParent passes over closed-shadow-hidden ancestors and answers open ones");
+    probe_drop();
+    s_shadow_dom = had;
+}
+
 static void geometry_publish_cases(void)
 {
     probe_page("<!doctype html><style>html,body{margin:0;padding:0}</style>"
@@ -8395,23 +8422,23 @@ static void whole_view_cases(void) {
     const os64_html_node_t *x=whole_find(page_doc(&g.page)->document,"x");
     char what[96];
     flow_parts_said_t said={FLOW_PARTS_MOVED,x,-1};
-    parts_what(what,sizeof(what),&said);
+    parts_what(page_doc(&g.page),what,sizeof(what),&said);
     bool named=strcmp(what,"div#x.a.b")==0;
     said.node=x!=NULL?x->first_child:NULL;
-    parts_what(what,sizeof(what),&said);
+    parts_what(page_doc(&g.page),what,sizeof(what),&said);
     named=named && strcmp(what,"text in div#x.a.b")==0;
     said=(flow_parts_said_t){FLOW_PARTS_PLACED,x,GARB_Z_INDEX};
-    parts_what(what,sizeof(what),&said);
+    parts_what(page_doc(&g.page),what,sizeof(what),&said);
     named=named && strcmp(what,"div#x.a.b, z-index")==0;
     said=(flow_parts_said_t){FLOW_PARTS_PLACED,NULL,GARB_Z_INDEX};
-    parts_what(what,sizeof(what),&said);
+    parts_what(page_doc(&g.page),what,sizeof(what),&said);
     named=named && strcmp(what,"z-index")==0;
     said=(flow_parts_said_t){FLOW_PARTS_DEEP,NULL,-1};
-    parts_what(what,sizeof(what),&said);
+    parts_what(page_doc(&g.page),what,sizeof(what),&said);
     named=named && what[0]=='\0';
     char tiny[6];
     said=(flow_parts_said_t){FLOW_PARTS_PLACED,x,GARB_Z_INDEX};
-    parts_what(tiny,sizeof(tiny),&said);
+    parts_what(page_doc(&g.page),tiny,sizeof(tiny),&said);
     named=named && strcmp(tiny,"div#x")==0;
     check(x!=NULL && named,"whole views: what refused is named as a selector would, cut to its room");
 
@@ -11489,6 +11516,7 @@ int main(void)
     svg_fill_hit_cases();
     geometry_pseudo_cases();
     geometry_body_cases();
+    geometry_shadow_cases();
     geometry_publish_cases();
     geometry_scroll_cases();
     geometry_fragment_cases();

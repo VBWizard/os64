@@ -1575,10 +1575,11 @@ os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box);
 // nor an absolutely positioned or fixed descendant's, nor a transformed
 // one's, nor anything in those (Chrome's answers, PILE3.md § The text
 // clip). For a SPAN piece, the text on its own line that its element
-// holds. The decorations drawn with each are the text's too; where each
-// is drawn is the painter's.
-void flow_visit_text_clip(const flow_box_t *box, void (*visit)(void *ctx, const flow_box_t *text),
-                          void *ctx);
+// holds (in the flat tree, so `tree` is the one `box` is from). The
+// decorations drawn with each are the text's too; where each is drawn is
+// the painter's.
+void flow_visit_text_clip(const flow_tree_t *tree, const flow_box_t *box,
+                          void (*visit)(void *ctx, const flow_box_t *text), void *ctx);
 // Such a matrix undone: false when it cannot be — its 2x2 part has no
 // inverse, or that inverse is not a finite double. Its determinant, and
 // the determinants its translation is worked from, are worked so neither a
