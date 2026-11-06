@@ -1,7 +1,9 @@
 /* LIVE RANGES (docs/design/pending/RANGE.md § 3, § 4) against a reference
  * model. The model mirrors the tree as child arrays and runs every mutation
- * as the DOM Standard writes it — replace is "adopt, remove the old child,
- * insert", a fragment's insertion removes each child then inserts them —
+ * as the DOM Standard writes it — insert moves the ranges before adopt
+ * takes the node out of its old place, replace is "adopt, remove the old
+ * child, insert", a fragment's insertion removes each child then inserts
+ * them —
  * with each live range's steps applied at the model's own indexes, which it
  * reads off its arrays. A random walk applies each operation to libhtml and
  * to the model and compares every boundary, and the tree's shape, after
@@ -162,16 +164,19 @@ static void rr_remove(MN *n)
 }
 
 /* DOM § 4.2.3, insert one node before `before` (NULL appends). */
+/* DOM § 4.2.3, insert: the ranges move by the reference child's index with
+ * the node still where it was (step 5), then adopt takes it out (7.1). */
 static void rr_insert_one(MN *n, MN *p, MN *before)
 {
-    rr_remove(n);
-    int at = before ? rr_index(before) : p->nk;
-    if (before)
+    if (before) {
+        int at = rr_index(before);
         for (int r = 0; r < rr_k; r++)
             for (int e = 0; e < 2; e++)
                 if (rr_b[r][e].node == p && rr_b[r][e].off > (uint32_t)at)
                     rr_b[r][e].off++;
-    rr_link(p, n, at);
+    }
+    rr_remove(n);
+    rr_link(p, n, before ? rr_index(before) : p->nk);
 }
 
 static void rr_insert(MN *n, MN *p, MN *before)
@@ -499,8 +504,45 @@ static double t_ranges_walk(uint32_t seed, int ranges, unsigned steps)
     return seconds > 0 ? done / seconds : 0;
 }
 
+/* A split that fails changes nothing: each allocation it makes failed in
+ * turn, the tree, the text and a range into the text are as they were. */
+static void t_ranges_split_failure(void)
+{
+    static const char text[] = "one\xF0\x9F\x98\x80two";
+    int failed = 0;
+    bool intact = true;
+    for (size_t k = 1; k < 256; k++) {
+        os64_html_document_t *doc = parse("<body><p id=a>one\xF0\x9F\x98\x80two</p></body>");
+        HNode *a = id_in(doc, "a"), *t = a->first_child;
+        os64_html_range_t *r = os64_html_range_new(doc);
+        os64_html_range_set(r, 0, t, 5);
+        os64_html_range_set(r, 1, a, 1);
+        HNode *tail = NULL;
+        fail_at = allocations + k;
+        int64_t why = os64_html_split_text(doc, t, 3, &tail);
+        bool reached = allocations >= fail_at;
+        fail_at = 0;
+        if (why != OS64_HTML_OK) {
+            failed++;
+            const os64_html_node_t *n0, *n1;
+            uint32_t o0, o1;
+            os64_html_range_get(r, 0, &n0, &o0);
+            os64_html_range_get(r, 1, &n1, &o1);
+            intact = intact && tail == NULL && a->first_child == t && t->next == NULL &&
+                     t->text_len == sizeof(text) - 1 && !memcmp(t->text, text, sizeof(text) - 1) &&
+                     n0 == t && o0 == 5 && n1 == a && o1 == 1;
+        }
+        os64_html_range_free(r);
+        os64_html_document_free(doc);
+        if (why == OS64_HTML_OK && !reached)
+            break;
+    }
+    check(failed > 0 && intact, "ranges: a split that fails (%d allocations failed in turn) changes nothing", failed);
+}
+
 static void t_ranges(void)
 {
+    t_ranges_split_failure();
     for (uint32_t seed = 1; seed <= 24 && !checks_failed; seed++)
         (void)t_ranges_walk(0x52a00000u + seed, (int)(seed % 6) + 1, 3000);
     check(!checks_failed, "ranges: every boundary follows the standard's steps across random mutation");

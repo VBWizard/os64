@@ -1153,28 +1153,34 @@ static JSValue character_data_member(JSContext *ctx, JSValueConst this_value, in
     if (self == NULL) return JS_EXCEPTION;
     if (self->kind != OS64_HTML_TEXT && self->kind != OS64_HTML_COMMENT && self->kind != OS64_HTML_PI)
         return JS_ThrowTypeError(ctx, "CharacterData member requires a character-data node");
-    uint32_t length = os64_html_node_length(self);
-    if (magic == C_LENGTH) return JS_NewUint32(ctx, length);
+    if (magic == C_LENGTH) return JS_NewUint32(ctx, os64_html_node_length(self));
     /* The arguments in IDL order: (offset, count, data), each present where
-     * the member takes it; unsigned longs wrap, as WebIDL converts them. */
+     * the member takes it; unsigned longs wrap, as WebIDL converts them. All
+     * are converted before the data is read, since a conversion runs script
+     * that may change it. */
     bool takes_offset = magic != C_APPEND, takes_count = magic == C_SUBSTRING || magic == C_DELETE ||
                                                          magic == C_REPLACE;
     bool takes_data = magic == C_APPEND || magic == C_INSERT || magic == C_REPLACE;
     int needed = (int)takes_offset + (int)takes_count + (int)takes_data;
     if (argc < needed) return JS_ThrowTypeError(ctx, "Missing argument");
-    uint32_t offset = length, count = 0;
+    uint32_t offset = 0, count = 0;
     int at = 0;
     if (takes_offset && JS_ToUint32(ctx, &offset, argv[at++]) < 0) return JS_EXCEPTION;
     if (takes_count && JS_ToUint32(ctx, &count, argv[at++]) < 0) return JS_EXCEPTION;
-    if (offset > length) return d_error(ctx, "IndexSizeError", "The offset is past the data's end");
+    DString string = {0};
+    if (takes_data && !d_string(dom, ctx, argv[at], &string)) return JS_EXCEPTION;
+    uint32_t length = os64_html_node_length(self);
+    if (!takes_offset) offset = length;
+    if (offset > length) {
+        d_string_free(dom, &string);
+        return d_error(ctx, "IndexSizeError", "The offset is past the data's end");
+    }
     if (magic == C_SUBSTRING) {
         size_t from = os64_html_utf16_byte(self->text, self->text_len, offset);
         size_t to = count > length - offset ? self->text_len
                                             : os64_html_utf16_byte(self->text, self->text_len, offset + count);
         return JS_NewStringLen(ctx, self->text + from, to - from);
     }
-    DString string = {0};
-    if (takes_data && !d_string(dom, ctx, argv[at], &string)) return JS_EXCEPTION;
     int64_t status = os64_page_node_replace_data(dom->state, (os64_html_node_t *)self, offset, count,
                                                  string.data, string.length);
     d_string_free(dom, &string);

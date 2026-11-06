@@ -458,7 +458,9 @@ static inline HNode *h_adjusted_current(os64_html_parser_t *p)
 }
 HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind);
 void h_detach(HDoc *d, HNode *n);
+void h_unlink(HDoc *d, HNode *n);
 void h_attach(HDoc *d, HNode *parent, HNode *before, HNode *n);
+void h_link(HDoc *d, HNode *parent, HNode *before, HNode *n);
 void h_tokenize(os64_html_parser_t *p, uint32_t cp);
 void h_emit(os64_html_parser_t *p);
 void h_tree(os64_html_parser_t *p, HToken *token);

@@ -86,9 +86,14 @@ for three reasons the code map found:
 - The parser, the fragment parser, libpage and libdom all mutate the tree;
   only libhtml sees all of them, and it already funnels every link and
   unlink through two primitives (`h_attach`, `h_detach`, core.c) that call
-  `d_linking` / `d_unlinking` at exactly the moments the standard's steps
-  name: before the unlink, with the old index still computable; at the
-  link, with the new one.
+  `d_linking` / `d_unlinking` where the standard's steps can run: before
+  the unlink, with the old index still computable; before a moved node
+  leaves its old place, with the index the insert step reads. Each step
+  runs in the primitive; their bare halves (`h_link`, `h_unlink`) serve a
+  caller that ran the insert step itself (`place`, dom.c, which splits
+  form owners between the step and the link) and collection, which frees
+  only a unit with no holds — no boundary can be in it, so its frees cost
+  no range walk.
 
 So libhtml gains **`os64_html_range_t`**: start node and offset, end node
 and offset, owned by its document, on a per-document list, holding both
@@ -143,7 +148,7 @@ Each is the DOM Standard's text, run inside libhtml at the point named:
 
 | Mutation | Where | Steps |
 |---|---|---|
-| insert (one node at a time) | `h_attach`, before the link, which hands the step its `before` | if `before` is non-null, each boundary at (parent, offset > index of `before`) gains 1; an append (`before` null) moves nothing and computes no index |
+| insert (one node at a time) | `h_attach` (and `place`, dom.c), before the moved node leaves its old place — DOM's insert moves the ranges (step 5) before adopt takes the node out (7.1), which shows when a node moves earlier among its own siblings | if `before` is non-null, each boundary at (parent, offset > index of `before`) gains 1; an append (`before` null) moves nothing and computes no index |
 | remove | `h_detach`, before the unlink — and before `d_unlinking`'s unit accounting, so a boundary leaving the subtree moves its hold while the subtree still counts it | each boundary whose node is an inclusive descendant of the removed node moves to (parent, the node's index); each boundary at (parent, offset > that index) loses 1; the index taken only when a boundary needs it |
 | replace data (node, offset, count, data) | a new verb, below | each boundary in the node with offset in (offset, offset + count] goes to offset; each past offset + count shifts by data length − count |
 | split a Text node | a new verb | the new node is inserted (insert steps), boundaries in the old node past the offset move to the new node, boundaries at (parent, index + 1) gain 1, then replace data truncates |

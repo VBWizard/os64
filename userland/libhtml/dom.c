@@ -407,7 +407,7 @@ static void subtree_free(HDoc *d, HNode *root)
             up->shadow_root = NULL;
             h_slots_forget(d, n);
         } else
-            h_detach(d, n);
+            h_unlink(d, n);
         node_free(d, n);
         if (done)
             break;
@@ -918,8 +918,13 @@ static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
             h_attach(d, parent, before, c);
         }
     } else {
+        /* h_attach's order, with take_out's form-owner split between the
+         * range step and the link: the ranges move with the node still in
+         * place (DOM's insert, step 5). */
+        if (d->ranges)
+            d_ranges_linking(d, parent, before);
         take_out(d, node, NULL);
-        h_attach(d, parent, before, node);
+        h_link(d, parent, before, node);
     }
     if (touched)
         landmarks(d, NULL);
@@ -1007,7 +1012,11 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     d_seen(d, parent, node, before, &seen);
     seen.previous = old->prev;
     moved(d);
-    bool touched = is_landmark_parent(d, parent);
+    /* The node out first, then `old`, as the comment above says: place()
+     * then finds the node parentless, so its old parent's landmarks are
+     * asked here. */
+    bool touched = is_landmark_parent(d, parent) || (node->parent && is_landmark_parent(d, node->parent));
+    take_out(d, node, NULL);
     take_out(d, old, NULL);
     place(d, parent, node, before);
     if (touched)
@@ -1632,12 +1641,22 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
 
 /* `n`'s data becomes `len` bytes of `utf8` (already judged by d_text_ok),
  * the version moved and the change told and logged. */
+static void install_text(HDoc *d, HNode *n, char *bytes, size_t len);
+
 static int64_t put_text(HDoc *d, HNode *n, const char *utf8, size_t len)
 {
     int64_t why = OS64_HTML_OK;
     char *bytes = bytes_new(d, utf8, len, &why);
     if (!bytes)
         return why;
+    install_text(d, n, bytes, len);
+    return OS64_HTML_OK;
+}
+
+/* `bytes` (from bytes_new, `len` long) become `n`'s text; nothing here can
+ * fail, which is what lets split_text allocate first and commit last. */
+static void install_text(HDoc *d, HNode *n, char *bytes, size_t len)
+{
     /* A buffer with no capacity recorded is a literal or lies in a permanent
      * chunk: it is left where it is and goes with the document. */
     const char *was = n->text;
@@ -1649,7 +1668,6 @@ static int64_t put_text(HDoc *d, HNode *n, const char *utf8, size_t len)
     *h_word(n) = len + 1;
     d_tell_text(d, n, was, was_len, true);
     d_retire(d, old);
-    return OS64_HTML_OK;
 }
 
 static bool data_node(const HNode *n)
@@ -1707,21 +1725,32 @@ int64_t os64_html_split_text(os64_html_document_t *doc, HNode *n, uint32_t offse
         return OS64_HTML_INDEX_SIZE;
     size_t from = h_utf16_byte(n->text, n->text_len, offset);
     offset = h_utf16_length(n->text, from);
+    /* Everything that can fail comes before anything changes: the kept text
+     * and the new node are allocated first, so a failure leaves the tree
+     * and its ranges as they were (an unlinked new node is collected), and
+     * the truncation at the end cannot fail. */
     int64_t why = OS64_HTML_OK;
-    HNode *tail = os64_html_create_text(doc, n->text + from, n->text_len - from, &why);
-    if (!tail)
+    char *kept = bytes_new(d, n->text, from, &why);
+    if (!kept)
         return why;
+    HNode *tail = os64_html_create_text(doc, n->text + from, n->text_len - from, &why);
+    if (!tail) {
+        h_free(d, kept);
+        return why;
+    }
     /* DOM § 4.11: insert the new node, move the ranges, then truncate. */
     if (n->parent) {
         why = os64_html_insert(doc, n->parent, tail, n->next);
-        if (why != OS64_HTML_OK)
+        if (why != OS64_HTML_OK) {
+            h_free(d, kept);
             return why;
+        }
         if (d->ranges)
             d_ranges_split(d, n, tail, offset);
     }
-    why = os64_html_replace_data(doc, n, offset, units - offset, "", 0);
-    if (why != OS64_HTML_OK)
-        return why;
+    install_text(d, n, kept, from);
+    if (d->ranges)
+        d_ranges_replaced(d, n, offset, units - offset, 0);
     *out = tail;
     return OS64_HTML_OK;
 }

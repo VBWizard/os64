@@ -603,9 +603,11 @@ int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node
                                 const char *utf8, size_t len);
 // libhtml's replace data, split and normalize (os64_html_replace_data,
 // os64_html_split_text, os64_html_normalize: UTF-16 offsets, the live range
-// steps), with set_text's state contract for the text a parent holds.
-// Splitting a Text node and normalizing keep every parent's text as it was,
-// so they change no control's value or default.
+// steps). replace_data keeps set_text's state contract for the text a
+// parent holds. Splitting a Text node and normalizing keep every parent's
+// text as it was, so they change no control's value or default and plan
+// nothing: a failed split changes nothing, and a normalize that fails has
+// merged the runs before the one it failed on and left that one whole.
 int64_t os64_page_node_replace_data(os64_page_state_t *state, os64_html_node_t *node, uint32_t offset,
                                     uint32_t count, const char *utf8, size_t len);
 int64_t os64_page_node_split_text(os64_page_state_t *state, os64_html_node_t *node, uint32_t offset,

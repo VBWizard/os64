@@ -7,8 +7,10 @@
  * other node. The DOM Standard keeps every live range right across every
  * mutation by steps written into the mutation algorithms, and this file
  * holds those steps. They run inside libhtml because every link and unlink
- * of a node, the parser's included, passes through h_attach and h_detach
- * (core.c), at the moments the steps are written for; a listener told after
+ * of a node, the parser's included, passes through h_attach (or h_link,
+ * after its caller ran the insert step) and h_detach (or h_unlink, for a
+ * node collection frees, which no range can name) (core.c), at the
+ * moments the steps are written for; a listener told after
  * the fact could not recover a moved node's old index, nor where in a text
  * an edit fell.
  *
