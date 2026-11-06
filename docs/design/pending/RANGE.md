@@ -1,6 +1,8 @@
 # RANGE.md — DOM Range, the page Selection, and hit testing
 
-Status: DESIGN, for review. No code yet. Chris asked for it on 2026-11-06,
+Status: DESIGN, reviewed (Fable, 2026-11-06: sound; nine findings folded
+in below) and ruled (Chris and Fable: the cut, the registry in libhtml,
+MessageChannel apart). Chris asked for it on 2026-11-06,
 after a large social site's endless feed showed "There was an error
 loading the next page" on yonder: its next page arrived whole (200, about
 560 KB of HTML) and died turning into nodes, because the component that
@@ -29,7 +31,7 @@ page may call and a ceiling for what it does call):
 | `elementFromPoint` / `elementsFromPoint` | 66 / 24 | the feed's timers call it every few seconds and fail |
 | `caretPositionFromPoint` / `caretRangeFromPoint` | 3 / 3 | |
 | `StaticRange` | 2 | |
-| `MessageChannel` | 115 | 73 hosts' records say MISSING; not this design (§ 11) |
+| `MessageChannel` | 115 | 73 hosts' records say MISSING; ruled its own slice, not this design (§ 11, and its DEBTS row) |
 
 Records: in the pulls, one host dies on `createRange` outright (FAILED …
 `'createRange' is not a function`), and the feed's record on the P5 is a
@@ -52,9 +54,17 @@ SHADOW_DOM.md § 2 reached the same answer for the same reason.
 So: the whole Range interface (§ 5), its rects (§ 7), and the Selection's
 range members (§ 9) are behind **one libdom switch, `options.ranges`**,
 off until the last slice turns it on in yonder, as `shadow_trees` was.
-`elementFromPoint` (§ 8) is independent of the rest and needs no switch:
-nothing tests for it as part of a set, and today a call to it simply
-throws.
+The switched names are `Range`, `AbstractRange`, `StaticRange`,
+`document.createRange` and the Selection's range members, and **off means
+absent**, not present and throwing: `typeof Range` and `'Range' in window`
+are tests too.
+
+What is NOT behind it, because nothing tests for it as part of a set and
+today a call to it simply throws:
+- the CharacterData members (`length`, `appendData`, `insertData`,
+  `deleteData`, `replaceData`, `substringData`), and `splitText` and
+  `normalize` moving onto the new verbs (§ 4) — they land switched on in R1;
+- `elementFromPoint` and `elementsFromPoint` (§ 8).
 
 ## 3. The model: live ranges live in libhtml
 
@@ -94,10 +104,28 @@ is not reclaimed under it. Its verbs:
   is the script's algorithm, not the tree's.
 
 The list costs nothing when empty, which is every page that never makes a
-range: each mutation primitive tests one pointer. With ranges, a mutation
-walks the document's ranges; QuickJS frees an unreferenced Range object at
-once (reference counting), so the list holds the ranges scripts still
-hold, not every range ever made.
+range: each mutation primitive tests one pointer. With ranges:
+- **an append moves no boundary and computes nothing** (the insert step
+  wants the reference child's index, and an append has none) — the
+  parser's case and the feed's, so a long page parsed while one range
+  lives stays linear;
+- **a removal walks each range's boundaries up toward the removed node**
+  (O(ranges × depth)), and computes the removed node's index — a sibling
+  walk — only when some boundary turned out to be in the removed subtree or
+  at the parent, which that same walk discovers;
+- an insert before a child computes that child's index under the same
+  condition.
+QuickJS frees an unreferenced Range object at once (reference counting),
+so the list holds the ranges scripts still hold, not every range ever
+made. R1 measures the reference-model walk at 1, 100 and 1,000 live
+ranges, before and after the conditional index, and writes the numbers
+here — the argument a future child-index cache would have to win.
+
+The walks are plain-tree, in SHADOW_DOM.md Appendix A's vocabulary
+(STOPS): the standard's remove step says "inclusive descendant", not
+shadow-including, and a range's root is its plain tree root. libhtml has
+both kinds of parent walk; these use `->parent`, never
+`os64_html_shadow_including_parent`.
 
 ## 4. The mutation steps, and the verbs that carry them
 
@@ -105,11 +133,24 @@ Each is the DOM Standard's text, run inside libhtml at the point named:
 
 | Mutation | Where | Steps |
 |---|---|---|
-| insert (one node at a time) | `d_linking`, after the link | for each range with a boundary at (parent, offset > index of the node) add 1 |
+| insert (one node at a time) | `d_linking`, before the link, which grows a `before` argument | if `before` is non-null, each boundary at (parent, offset > index of `before`) gains 1; an append (`before` null) moves nothing and computes no index |
 | remove | `d_unlinking`, before the unlink | the node's index first; each boundary whose node is an inclusive descendant of the removed node moves to (parent, index); then each boundary at (parent, offset > index) loses 1 |
 | replace data (node, offset, count, data) | a new verb, below | each boundary in the node with offset in (offset, offset + count] goes to offset; each past offset + count shifts by data length − count |
 | split a Text node | a new verb | the new node is inserted (insert steps), boundaries in the old node past the offset move to the new node, boundaries at (parent, index + 1) gain 1, then replace data truncates |
 | normalize | a new verb | boundaries in each merged node move into the first node, shifted by the length merged before it; boundaries at (parent, index of a merged node) move into the first node at that same length |
+
+The parser's own text appends (`h_text_put`, and the fragment parser's)
+are "append data", whose range steps move no boundary that was valid
+before: they carry no hook, on purpose.
+
+**A boundary between the halves of a surrogate pair** (web semantics,
+ruled in Fable's review): offsets are UTF-16, text
+is stored UTF-8, and libhtml refuses a lone surrogate, so `splitText`,
+`deleteData`, `substringData`, `toString` and every boundary at an offset
+inside a non-BMP character cannot make the lone surrogates other browsers
+make. The verbs snap such an offset **down to the start of the code
+point**: a pair is never split, and a boundary set there reads back at the
+pair's start. DIVERGENCES names it.
 
 **The character-data verbs.** libhtml's `set_text` replaces a whole string
 and is the standard's "replace data(0, length, data)", so it carries its
@@ -177,8 +218,12 @@ document. The members, each the standard's algorithm:
 
 **Lifetime.** The record follows walker.c's `DWalk`: the finalizer marks it
 dead (a finalizer must not reach into libhtml while the runtime is being
-torn down), dead records are freed at the next creation, and the binding
-drains the rest when the document goes. A range in a document that is
+torn down), dead records are freed at the next creation **and at the top
+of libdom's own mutation wrappers** (`d_tree_change`, `d_insert`,
+`d_remove`, which run on the owner thread outside any finalizer) — so a
+dropped range on a large detached subtree does not pin it until the next
+Range is made, and the mutation walk does not keep visiting it — and the
+binding drains the rest when the document goes. A range in a document that is
 being freed is released before the document, since a hold left behind is
 fatal (`OS64_HTML_FATAL_EXIT`).
 
@@ -192,26 +237,43 @@ answering an empty list (event.c), now with an interface to name.
 
 ## 7. Geometry: a range's rects
 
-CSSOM View: a range's client rects are, for each element entirely inside
-it, that element's border boxes, and for each Text node it touches, the
-boxes of the selected part of its text. The element half exists (the
-geometry provider). The text half does not: libflow lays text out as
-TEXT boxes over a whitespace-collapsed, possibly case-changed copy of each
-node's data (`f_collapse_white`), and nothing maps a DOM offset into that
-copy.
+CSSOM View: a range's client rects are the border boxes of each **selected
+element whose parent is not selected** (a selected element's descendants
+add nothing of their own — without that rule `selectNodeContents(body)`
+answers every border box in the page, and the list, not just the bounding
+rect, is what the framework in § 1 reads), and for each Text node the
+range touches, the boxes of the selected part of its text. The element
+half exists (the geometry provider). The text half needs a map.
+
+**Three coordinate systems** meet at a text boundary:
+1. the boundary's offset, in UTF-16 units into the node's data;
+2. the node's data as stored, in UTF-8 bytes — `byte_of_unit` is that hop;
+3. the PROCESSED text libflow laid out, after white-space collapse
+   (`f_collapse_white`); a TEXT box's `begin` is already an offset into it
+   (flow.h: what a selection maps a pixel back through).
+
+The missing hop is 2 → 3, and a box's two ends would not give it — a
+partly selected box is exactly a boundary inside one. It needs no table:
+`f_collapse_white` deletes and substitutes, never reorders, so replaying
+it over a node byte's source prefix, with the `space` state the item
+started in, gives that byte's processed offset (and the inverse). libflow
+records per text item its source start byte and that entry state;
+`text_item` is already handed the offset, and pre-line's `seg` (a
+processed index) carries the source `from` with it. `text-transform` needs
+no map: boxes.c keeps it length-preserving by construction (the ß/ÿ
+exclusion exists for exactly this).
 
 The design:
-- **libflow records each TEXT box's source span**: the first and last DOM
-  byte offsets of the node's data it was laid out from, written where the
-  collapse already walks both strings. A transformed or collapsed run then
-  still says which part of its node it shows.
+- **libflow keeps the item's source start and entry state**, and offers
+  the replay (DOM byte → processed offset) beside its other text queries.
 - **A range-rects provider** beside the geometry one in dom.h
   (`os64_dom_range_rects_provider_t(opaque, start, start16, end, end16,
   out, cap)`): libdom hands the boundary points; yonder makes the layout
   current (as `script_geometry` does), walks the boxes of the nodes the
   range touches, and for a partly selected TEXT box measures the
-  selected bytes with `os64_text_caret` at the source span's ends; it
-  answers CSS-pixel rects in viewport coordinates.
+  selected processed bytes with `os64_text_caret`; it answers CSS-pixel
+  rects in the viewport of the document the range is in — the same choice
+  the geometry provider makes for a frame's document, which this follows.
 - `getBoundingClientRect` is their union (or the empty rect).
 - Generated content and list markers name their element, not a Text node,
   and are skipped, as other browsers skip them.
@@ -225,7 +287,16 @@ others in dom.h. yonder answers with what it already does for the pointer
 an image map's area resolved, text retargeted to its element through the
 flat tree), after making the layout current as the SVG hit provider does.
 libdom retargets the answer against the root asked (a node inside a
-shadow tree answers its host to the document).
+shadow tree answers its host to the document) — the one FLAT walk in
+this design, in SHADOW_DOM.md Appendix A's vocabulary.
+
+A point inside the viewport but on bare canvas answers **the root
+element**, never null (the canvas is the root's box), and
+`elementsFromPoint` ends in `body, html` for the same reason; if
+`element_hit` answers otherwise there for the pointer, the provider
+adjusts it. Like the geometry provider, the hit provider serves the
+document it is asked about: a call on a frame's document hit-tests in
+that frame's viewport, in its coordinates.
 
 `elementsFromPoint` needs every box at the point in paint order, which
 libflow does not have: a `flow_hit_all` beside `flow_hit` collects them
@@ -271,8 +342,13 @@ their own edits (the framework that keeps `focusedElem` and
   the switch off (no name exists).
 - **yonder**: an end-to-end case shaped like the feed (a streamed partial
   parsed with `createContextualFragment` and inserted piecewise), range
-  rects against laid-out text (collapsed whitespace, `text-transform`),
-  and `elementFromPoint` through a zoom and a shadow tree.
+  rects against laid-out text (collapsed whitespace, `text-transform`, a
+  boundary inside a box, `selectNodeContents(body)`'s list), and
+  `elementFromPoint` through a zoom, a shadow tree and a point in the
+  margin.
+- **Measured** (R1): the reference-model walk at 1, 100 and 1,000 live
+  ranges, mutations per second, before and after the conditional index
+  (§ 3), one line here.
   `tools/wpt/expected/css/cssom-view.txt` lists the elementFromPoint
   parameter tests as passing today because calling an undefined method
   also throws TypeError; they are re-read honestly once it exists.
@@ -295,15 +371,19 @@ their own edits (the framework that keeps `focusedElem` and
 Stacked, as Slice D was; reviews by the same rule — Fable on this design,
 Codex on each PR.
 
-**Rulings wanted:**
-1. The cut (§ 2): the whole interface behind one switch — my lean, as with
-   shadow trees — rather than exposing members slice by slice.
+**Ruled (Chris and Fable, 2026-11-06):**
+1. The cut (§ 2): the whole interface behind one switch, as with shadow
+   trees, rather than exposing members slice by slice.
 2. The registry in libhtml (§ 3) rather than on libdom's listener.
-3. `MessageChannel` (115 hosts, 73 MISSING) as its own small slice after
-   this arc, not folded in: it shares nothing with Range but the census.
+3. `MessageChannel` (115 hosts, 73 MISSING) is its own small slice, not
+   folded in: it shares nothing with Range but the census. When: Fable's
+   lean is right after R2 rather than after R4 — it is S and needs no part
+   of this arc — and that is the plan unless Chris places it otherwise.
 
 ## 12. What waits (DEBTS rows the arc books)
 
+- `MessageChannel` and `MessagePort`, booked with R1 so the census's
+  largest missing name has its row while its slice waits.
 - `caretPositionFromPoint` / `caretRangeFromPoint`.
 - Painting the page Selection, a person's own text selection, and
   `selectionchange`.
