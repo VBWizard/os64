@@ -73,7 +73,10 @@ def main():
     call = re.compile(r'\b(' + '|'.join(sorted(helpers)) + r')\s*\(') if helpers else None
     ruled = None
     if '--check' in sys.argv:
-        text = open(sys.argv[sys.argv.index('--check') + 1], encoding='utf-8').read()
+        at = sys.argv.index('--check') + 1
+        if at >= len(sys.argv):
+            sys.exit(__doc__.strip())
+        text = open(sys.argv[at], encoding='utf-8').read()
         at = text.find('## Appendix A')
         ruled = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', ' '.join(re.findall(r'`([^`]*)`', text[at:]))))
         unruled = set()

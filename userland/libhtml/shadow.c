@@ -39,10 +39,12 @@ typedef struct HSlots {
      * assignment is compared by pointer and serial, so a node freed and a
      * new one at its address are two nodes. */
     uint32_t *slot_serial, *assigned_serial;
-    /* Where the last walk of a slot's list was, so a walk in order is
-     * constant time a step. */
+    /* Where the last walk of a slot's list was, and the host child last
+     * looked up, so a walk in order (a flat walk asks both questions at
+     * each step) is constant time a step. */
     const HNode *hint_slot;
     size_t hint_at;
+    size_t hint_kid;
     size_t bytes; /* the block, for os64_html_slot_changes' copy */
 } HSlots;
 
@@ -202,6 +204,7 @@ static HSlots *slots_of(HDoc *d, const HNode *root)
     s->bytes = bytes;
     s->hint_slot = NULL;
     s->hint_at = 0;
+    s->hint_kid = 0;
     layout(s, nslots, nkids);
     if (!table_put(d, &d->slots, s)) {
         h_free(d, s);
@@ -404,7 +407,8 @@ int64_t os64_html_slot_changes(os64_html_document_t *doc,
         d->slot_dirty[kept++] = d->slot_dirty[i];
     }
     d->slot_dirty_n = kept;
-    return status;
+    /* A recovery whose marks were lost again leaves roots to report too. */
+    return d->slot_dirty_all ? OS64_HTML_NO_MEMORY : status;
 }
 
 /* ── Assignment ────────────────────────────────────────────────────────── */
@@ -436,10 +440,17 @@ const os64_html_node_t *os64_html_assigned_slot(const os64_html_document_t *doc,
     HSlots *s = slots_of(d, host->shadow_root);
     if (!s)
         return find_slot(host->shadow_root, slottable_name(node));
-    for (size_t k = 0; k < s->nkids; k++)
-        if (s->kid[k] == node)
-            return s->kid_slot[k] == UINT32_MAX ? NULL : s->slot[s->kid_slot[k]];
-    return NULL;
+    /* The child last asked about, and the one after it, before a scan. */
+    size_t k = s->hint_kid < s->nkids && s->kid[s->hint_kid] == node ? s->hint_kid
+             : s->hint_kid + 1 < s->nkids && s->kid[s->hint_kid + 1] == node ? s->hint_kid + 1
+             : SIZE_MAX;
+    for (size_t i = 0; k == SIZE_MAX && i < s->nkids; i++)
+        if (s->kid[i] == node)
+            k = i;
+    if (k == SIZE_MAX)
+        return NULL;
+    s->hint_kid = k;
+    return s->kid_slot[k] == UINT32_MAX ? NULL : s->slot[s->kid_slot[k]];
 }
 
 size_t os64_html_slot_assigned_count(const os64_html_document_t *doc, const os64_html_node_t *slot)
@@ -532,5 +543,12 @@ const os64_html_node_t *os64_html_flat_parent(const os64_html_document_t *doc,
     if (p->shadow_root)
         return os64_html_assigned_slot(doc, n);
     const HNode *host = os64_html_shadow_host(p);
-    return host ? host : p;
+    if (host)
+        return host;
+    /* A slot's own children are its fallback, in the flat tree only while
+     * nothing is assigned to it; otherwise they render nowhere, as a host's
+     * child assigned to no slot does. */
+    if (is_slot(p) && os64_html_slot_assigned_count(doc, p) > 0)
+        return NULL;
+    return p;
 }

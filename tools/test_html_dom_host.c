@@ -659,7 +659,8 @@ static void t_slots(void)
               os64_html_slot_assigned(doc, slot_any, 0) == sa && os64_html_slot_assigned_count(doc, slot_a) == 0,
           "a child that loses its slot attribute joins the default slot, in tree order");
     check(os64_html_set_attr(doc, slot_a2, "name", "", 0) == OS64_HTML_OK && os64_html_remove(doc, slot_any) == OS64_HTML_OK &&
-              os64_html_assigned_slot(doc, b) == slot_a2 && os64_html_flat_first_child(doc, slot_a2) == sa,
+              os64_html_assigned_slot(doc, b) == slot_a2 && os64_html_flat_first_child(doc, slot_a2) == sa &&
+              !os64_html_flat_parent(doc, fallback),
           "a slot renamed, another removed: the default moves to it and its fallback hides");
 
     // A refused allocation answers the same, by walking. The cache is made
@@ -914,6 +915,37 @@ static void t_shadow_more(void)
               os64_html_flat_first_child(doc, forward) == passed && os64_html_flat_parent(doc, passed) == forward &&
               os64_html_flat_parent(doc, forward) == inner_slot,
           "a forwarded slot is a flat node between the two hosts' slots");
+
+    // A long list in two slots, walked flat in order: the hints that make a
+    // step constant must not change what the walk visits.
+    HNode *many = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    os64_html_insert(doc, doc->body, many, NULL);
+    HNode *mroot = os64_html_attach_shadow(doc, many, OS64_HTML_SHADOW_OPEN, NULL);
+    HNode *even = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    HNode *odd = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_set_attr(doc, odd, "name", "o", 1);
+    os64_html_insert(doc, mroot, even, NULL);
+    os64_html_insert(doc, mroot, odd, NULL);
+    for (int i = 0; i < 300; i++) {
+        HNode *kid = os64_html_create_element(doc, OS64_HTML_NS_HTML, "b", NULL);
+        if (i % 2)
+            os64_html_set_attr(doc, kid, "slot", "o", 1);
+        os64_html_insert(doc, many, kid, NULL);
+    }
+    size_t walked = 0, in_order = 1;
+    const HNode *expect = many->first_child;
+    for (const HNode *n = os64_html_flat_first_child(doc, even); n; n = os64_html_flat_next_sibling(doc, n)) {
+        in_order = in_order && n == expect && os64_html_flat_parent(doc, n) == even;
+        expect = expect && expect->next ? expect->next->next : NULL;
+        walked++;
+    }
+    expect = many->first_child->next;
+    for (const HNode *n = os64_html_flat_first_child(doc, odd); n; n = os64_html_flat_next_sibling(doc, n)) {
+        in_order = in_order && n == expect && os64_html_flat_parent(doc, n) == odd;
+        expect = expect && expect->next ? expect->next->next : NULL;
+        walked++;
+    }
+    check(walked == 300 && in_order, "two interleaved slots walk flat in order (%zu)", walked);
 
     // A template in a clonable root is cloned with its contents.
     HNode *ch = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);

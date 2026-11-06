@@ -448,6 +448,7 @@ static void model(const char *step_ids, const char *name, const char *html,
 #include "test_libpage_boundaries.inc"
 #include "test_libpage_navigation.inc"
 #include "test_libpage_review3.inc"
+#include "test_libpage_shadow.inc"
 
 // A script sending a form itself (HTML's "submitted from submit() method"):
 // no submitter, so no button's name and value in the data and no button's
@@ -657,6 +658,7 @@ int main(int argc, char **argv)
         navigation_cases();
         review3_cases();
         script_submit_cases();
+        shadow_cases();
         sheets_walk_cases();
         base_url_cases();
     }

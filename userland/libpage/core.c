@@ -477,18 +477,27 @@ static const os64_html_node_t *tree_id(const os64_html_node_t *root, const char 
 // leaves it in no form as well, and NOT in the nearest ancestor. Without
 // form=, the parser's insertion association precedes ancestry: table
 // parsing can leave a form empty while its controls still belong to it.
-static int32_t form_owner(const os64_page_t *page, const os64_html_node_t *n)
+const os64_html_node_t *p_form_owner(const os64_html_node_t *n, const PStrMap *document_ids)
 {
     const char *named = p_attr(n, "form");
-    if (named != NULL) {
+    if (named != NULL && os64_html_shadow_including_root(n)->kind == OS64_HTML_DOCUMENT) {
+        // An id is never empty, so form="" names nothing.
+        if (named[0] == '\0')
+            return NULL;
         const os64_html_node_t *root = n;
         while (root->parent != NULL)
             root = root->parent;
-        const void *node = os64_html_shadow_host(root) != NULL ? tree_id(root, named)
-                                                                : p_strmap_get(&page->id_map, named);
-        return node != NULL ? p_ptrmap_get(&page->form_map, node) : -1;
+        const void *found = root->kind == OS64_HTML_DOCUMENT && document_ids != NULL
+                                ? p_strmap_get(document_ids, named)
+                                : tree_id(root, named);
+        return found != NULL && p_is(found, OS64_HTML_TAG_FORM) ? found : NULL;
     }
-    const os64_html_node_t *owner = n->form_owner ? n->form_owner : p_ancestor(n, OS64_HTML_TAG_FORM);
+    return n->form_owner ? n->form_owner : p_ancestor(n, OS64_HTML_TAG_FORM);
+}
+
+static int32_t form_owner(const os64_page_t *page, const os64_html_node_t *n)
+{
+    const os64_html_node_t *owner = p_form_owner(n, &page->id_map);
     return owner != NULL ? p_ptrmap_get(&page->form_map, owner) : -1;
 }
 
@@ -1121,23 +1130,30 @@ static bool chain_radios(os64_page_t *page)
 
 // Visit each name chain once, with the owner as the second group key: link
 // each (name, owner) group, and settle its initial state. Later checked
-// members replace earlier ones, including hidden controls.
+// members replace earlier ones, including hidden controls. HTML's group is
+// per tree: a radio with a form owner shares its form's tree, so the form
+// is the key; one with none is keyed by its tree's root, so two instances
+// of a component, each with a form-less `name=size`, are two groups.
 static bool capture_initial(os64_page_t *page)
 {
-    size_t owners = (size_t)page->nforms + 1;
-    int32_t *last = os64_malloc(owners * sizeof(*last));
-    int32_t *tail = os64_malloc(owners * sizeof(*tail));
+    size_t owners = (size_t)page->nforms + 1, keys = owners + (size_t)page->ncontrols;
+    int32_t *last = os64_malloc(keys * sizeof(*last));
+    int32_t *tail = os64_malloc(keys * sizeof(*tail));
+    int32_t *key_of = os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*key_of));
+    const os64_html_node_t **trees = os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*trees));
     page->group_head = os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*page->group_head));
     page->group_next = os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*page->group_next));
     page->group_judged_at =
         os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*page->group_judged_at));
-    if (last == NULL || tail == NULL || page->group_head == NULL || page->group_next == NULL ||
-        page->group_judged_at == NULL) {
+    if (last == NULL || tail == NULL || key_of == NULL || trees == NULL || page->group_head == NULL ||
+        page->group_next == NULL || page->group_judged_at == NULL) {
         os64_free(last);
         os64_free(tail);
+        os64_free(key_of);
+        os64_free(trees);
         return false;
     }
-    for (size_t i = 0; i < owners; i++)
+    for (size_t i = 0; i < keys; i++)
         last[i] = tail[i] = -1;
     for (int32_t i = 0; i < page->ncontrols; i++) {
         page->group_head[i] = i;
@@ -1149,23 +1165,45 @@ static bool capture_initial(os64_page_t *page)
         if (head == NULL)
             continue;
         int32_t first = p_ptrmap_get(&page->control_map, head);
+        // This chain's form-less radios, keyed by their trees' roots.
+        size_t ntrees = 0;
+        for (int32_t i = first; i >= 0; i = page->radio_next[i]) {
+            const os64_page_control_t *c = &page->controls[i];
+            if (c->form >= 0) {
+                key_of[i] = c->form + 1;
+                continue;
+            }
+            const os64_html_node_t *top = c->node;
+            while (top->parent != NULL)
+                top = top->parent;
+            size_t t = 0;
+            while (t < ntrees && trees[t] != top)
+                t++;
+            if (t == ntrees)
+                trees[ntrees++] = top;
+            // The first tree the chain meets takes the key a form-less radio
+            // always had (owner -1); each further tree gets one of its own.
+            key_of[i] = t == 0 ? 0 : (int32_t)(owners + t);
+        }
         for (int32_t i = first; i >= 0; i = page->radio_next[i]) {
             os64_page_control_t *c = &page->controls[i];
-            int32_t *end = &tail[c->form + 1];
+            int32_t *end = &tail[key_of[i]];
             if (*end >= 0) {
                 page->group_next[*end] = i;
                 page->group_head[i] = page->group_head[*end];
             }
             *end = i;
             if (c->checked) {
-                if (last[c->form + 1] >= 0)
-                    page->controls[last[c->form + 1]].checked = false;
-                last[c->form + 1] = i;
+                if (last[key_of[i]] >= 0)
+                    page->controls[last[key_of[i]]].checked = false;
+                last[key_of[i]] = i;
             }
         }
         for (int32_t i = first; i >= 0; i = page->radio_next[i])
-            last[page->controls[i].form + 1] = tail[page->controls[i].form + 1] = -1;
+            last[key_of[i]] = tail[key_of[i]] = -1;
     }
+    os64_free(key_of);
+    os64_free(trees);
     os64_free(last);
     os64_free(tail);
     for (int32_t i = 0; i < page->ncontrols; i++) {

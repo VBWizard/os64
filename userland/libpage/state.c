@@ -342,21 +342,11 @@ static const os64_html_node_t *tree_next(const os64_html_node_t *root,
     return node != root ? node->next : NULL;
 }
 
+// A control's form owner as the page model settles it (p_form_owner),
+// walking for the id: state is asked without a model.
 static const os64_html_node_t *node_owner(const os64_html_node_t *node)
 {
-    const char *form = p_attr(node, "form");
-    const os64_html_node_t *root = tree_root(node);
-    // Explicit association is an ID lookup in the document tree, and an ID
-    // is never empty; a control in no document has its ancestor form.
-    if (form != NULL && root->kind == OS64_HTML_DOCUMENT) {
-        for (const os64_html_node_t *at = root; at != NULL && form[0] != '\0'; at = tree_next(root, at)) {
-            const char *id = p_attr(at, "id");
-            if (id != NULL && os64_streq(id, form))
-                return p_is(at, OS64_HTML_TAG_FORM) ? at : NULL;
-        }
-        return NULL;
-    }
-    return node->form_owner != NULL ? node->form_owner : p_ancestor(node, OS64_HTML_TAG_FORM);
+    return p_form_owner(node, NULL);
 }
 
 static bool radio_group_member(const os64_html_node_t *target, const os64_html_node_t *node)

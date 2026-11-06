@@ -614,9 +614,10 @@ const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *
  * The flat tree: a host's flat children are its shadow root's children, a
  * slot's are its assigned nodes or, with none, its own children, every
  * other node's its own. A slot is a node of it. `flat_parent` of a host's
- * child is its slot, NULL when it has none: such a child is in no flat
- * tree and renders nowhere. These take a const document though they may
- * refresh its cache; a document is read on one thread. */
+ * child is its slot, NULL when it has none, and of a slot's own child NULL
+ * while the slot has nodes assigned: neither is in the flat tree, and
+ * neither renders. These take a const document though they may refresh
+ * its cache; a document is read on one thread. */
 const os64_html_node_t *os64_html_assigned_slot(const os64_html_document_t *doc,
                                                 const os64_html_node_t *node);
 size_t os64_html_slot_assigned_count(const os64_html_document_t *doc, const os64_html_node_t *slot);

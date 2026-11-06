@@ -2663,10 +2663,16 @@ static const os64_html_node_t *subtree_next(const os64_html_node_t *x,
     while (x != root && !x->next) x = x->parent;
     return x == root ? NULL : x->next;
 }
-// DOM's connected: a node in a shadow tree is connected when its host is.
+// In the tree the cascade matches: the document's own, which is all its
+// match walk visits, so a change inside a shadow tree is outside it. This
+// question crosses together with the scoped match walk (SHADOW_DOM.md § 6,
+// § 12): crossed alone, every such change would find no slot and refuse
+// the update.
 static bool connected(const garb_cascade_t *c, const os64_html_node_t *x)
 {
-    return x != NULL && os64_html_shadow_including_root(x) == c->doc->document;
+    if (!x) return false;
+    while (x->parent) x = x->parent;
+    return x == c->doc->document;
 }
 static bool mark_subtree(garb_cascade_t *c, const os64_html_node_t *root)
 {
