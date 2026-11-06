@@ -1,6 +1,6 @@
 # HTML is an optional userland parser. Only its consumers acquire this edge;
 # libos64 remains independent of parser code and generated entity tables.
-LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c libhtml/dom.c libhtml/fragment.c libhtml/serialize.c libhtml/xml.c libhtml/shadow.c
+LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c libhtml/dom.c libhtml/fragment.c libhtml/serialize.c libhtml/xml.c libhtml/shadow.c libhtml/range.c
 LIBHTML_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBHTML_SRCS))
 LIBHTML_SO := $(BIN)/libhtml.so
 # Optimize the character and stack walks; host sanitizer runners use the

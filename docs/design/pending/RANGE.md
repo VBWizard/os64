@@ -117,9 +117,19 @@ range: each mutation primitive tests one pointer. With ranges:
   condition.
 QuickJS frees an unreferenced Range object at once (reference counting),
 so the list holds the ranges scripts still hold, not every range ever
-made. R1 measures the reference-model walk at 1, 100 and 1,000 live
-ranges, before and after the conditional index, and writes the numbers
-here — the argument a future child-index cache would have to win.
+made.
+
+Measured (R1, `test_html_dom_host.sh --ranges-cost`, the host build under
+ASan and UBSan, so a floor): a node inserted before a child of a
+four-child list and removed again, with the ranges in another subtree,
+runs at about 6.0 million mutations a second with no range, 6.2 million
+with one, 1.2 million with 100 and 144 thousand with 1,000. Computing the
+index on every mutation instead of only when a boundary needs it changed
+none of those (6.2, 1.2 and 0.15 million): with short sibling lists the
+cost is the per-range ancestor walk, linear in ranges. The conditional
+index earns its keep where a list is long — the walk it skips is the
+list's length — and appends never take it. That is the argument a future
+child-index cache would have to win.
 
 The walks are plain-tree, in SHADOW_DOM.md Appendix A's vocabulary
 (STOPS): the standard's remove step says "inclusive descendant", not
@@ -133,8 +143,8 @@ Each is the DOM Standard's text, run inside libhtml at the point named:
 
 | Mutation | Where | Steps |
 |---|---|---|
-| insert (one node at a time) | `d_linking`, before the link, which grows a `before` argument | if `before` is non-null, each boundary at (parent, offset > index of `before`) gains 1; an append (`before` null) moves nothing and computes no index |
-| remove | `d_unlinking`, before the unlink | the node's index first; each boundary whose node is an inclusive descendant of the removed node moves to (parent, index); then each boundary at (parent, offset > index) loses 1 |
+| insert (one node at a time) | `h_attach`, before the link, which hands the step its `before` | if `before` is non-null, each boundary at (parent, offset > index of `before`) gains 1; an append (`before` null) moves nothing and computes no index |
+| remove | `h_detach`, before the unlink — and before `d_unlinking`'s unit accounting, so a boundary leaving the subtree moves its hold while the subtree still counts it | each boundary whose node is an inclusive descendant of the removed node moves to (parent, the node's index); each boundary at (parent, offset > that index) loses 1; the index taken only when a boundary needs it |
 | replace data (node, offset, count, data) | a new verb, below | each boundary in the node with offset in (offset, offset + count] goes to offset; each past offset + count shifts by data length − count |
 | split a Text node | a new verb | the new node is inserted (insert steps), boundaries in the old node past the offset move to the new node, boundaries at (parent, index + 1) gain 1, then replace data truncates |
 | normalize | a new verb | boundaries in each merged node move into the first node, shifted by the length merged before it; boundaries at (parent, index of a merged node) move into the first node at that same length |
@@ -346,9 +356,8 @@ their own edits (the framework that keeps `focusedElem` and
   boundary inside a box, `selectNodeContents(body)`'s list), and
   `elementFromPoint` through a zoom, a shadow tree and a point in the
   margin.
-- **Measured** (R1): the reference-model walk at 1, 100 and 1,000 live
-  ranges, mutations per second, before and after the conditional index
-  (§ 3), one line here.
+- **Measured** (R1): mutations a second at 0, 1, 100 and 1,000 live
+  ranges, with and without the conditional index; the numbers are in § 3.
   `tools/wpt/expected/css/cssom-view.txt` lists the elementFromPoint
   parameter tests as passing today because calling an undefined method
   also throws TypeError; they are re-read honestly once it exists.

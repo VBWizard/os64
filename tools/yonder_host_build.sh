@@ -55,7 +55,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
         "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
-        userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml,shadow}.c userland/libxml/xml.c \
+        userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,xml,shadow,range}.c userland/libxml/xml.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
         userland/libpage/upstream/ryu/ryu/d2s.c \
         userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow,computed}.c \

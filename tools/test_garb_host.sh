@@ -39,7 +39,7 @@ host_sources=(tools/test_garb_host.c
    userland/libgarb/media.c userland/libgarb/cascade.c
    userland/libhtml/core.c userland/libhtml/encoding.c
    userland/libhtml/tokenizer.c userland/libhtml/tree.c userland/libhtml/dom.c
-   userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c
+   userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c userland/libhtml/range.c
    userland/libos64/str.c userland/libos64/fmt.c userland/libos64/arena.c)
 host_objects "$work"
 cc -fsanitize=address,undefined,float-cast-overflow "${host_objs[@]}" -o "$work/garb_driver"

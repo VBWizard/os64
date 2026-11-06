@@ -597,6 +597,11 @@ void h_detach(HDoc *d, HNode *n)
 {
     if (!n->parent)
         return;
+    /* The ranges first: a boundary leaving the subtree moves its hold while
+     * the subtree is still counted in its unit, so the accounting below
+     * moves the holds that remain, not one already gone. */
+    if (d->ranges)
+        d_ranges_unlinking(d, n);
     d_unlinking(d, n);
     if (n->prev)
         n->prev->next = n->next;
@@ -612,6 +617,8 @@ void h_attach(HDoc *d, HNode *parent, HNode *before, HNode *n)
 {
     h_detach(d, n);
     d_linking(d, parent, n);
+    if (d->ranges)
+        d_ranges_linking(d, parent, before);
     n->parent = parent;
     n->next = before;
     n->prev = before ? before->prev : parent->last_child;

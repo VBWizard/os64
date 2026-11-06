@@ -989,6 +989,14 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
         HSeen seen;
         d_seen(d, parent, node, old->next, &seen);
         seen.previous = old->prev;
+        /* The node left and came back, so a live range follows the steps
+         * of both (RANGE.md § 4) though no pointer moves: a boundary inside
+         * it collapses to the parent. With the node still linked, its own
+         * index is the one its next sibling would have had once it left. */
+        if (d->ranges) {
+            d_ranges_unlinking(d, node);
+            d_ranges_linking(d, parent, node);
+        }
         d_tell_placed(d, parent, node, old->next, NULL, &seen, false);
         return OS64_HTML_OK;
     }
@@ -1589,6 +1597,14 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *n
     return OS64_HTML_OK;
 }
 
+static int64_t put_text(HDoc *d, HNode *n, const char *utf8, size_t len);
+
+static void copy_bytes(char *to, const char *from, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        to[i] = from[i];
+}
+
 int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8, size_t len)
 {
     HDoc *d = (HDoc *)doc;
@@ -1597,12 +1613,27 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
         return OS64_HTML_BAD_ARGUMENT;
     if (!d_text_ok(utf8, len))
         return OS64_HTML_BAD_TEXT;
+    /* Replace data of the whole length (RANGE.md § 4): a range's offset into
+     * the node collapses to 0 even when the text is the same. */
+    uint32_t was_units = d->ranges ? h_utf16_length(n->text, n->text_len) : 0;
     /* The text it has already: as in set_attr, nothing is replaced, and the
      * listener is told. */
     if (same_bytes(n->text, utf8, len)) {
         d_tell_text(d, n, n->text, n->text_len, false);
+        if (d->ranges)
+            d_ranges_replaced(d, n, 0, was_units, was_units);
         return OS64_HTML_OK;
     }
+    int64_t why = put_text(d, n, utf8, len);
+    if (why == OS64_HTML_OK && d->ranges)
+        d_ranges_replaced(d, n, 0, was_units, h_utf16_length(utf8, len));
+    return why;
+}
+
+/* `n`'s data becomes `len` bytes of `utf8` (already judged by d_text_ok),
+ * the version moved and the change told and logged. */
+static int64_t put_text(HDoc *d, HNode *n, const char *utf8, size_t len)
+{
     int64_t why = OS64_HTML_OK;
     char *bytes = bytes_new(d, utf8, len, &why);
     if (!bytes)
@@ -1618,6 +1649,152 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
     *h_word(n) = len + 1;
     d_tell_text(d, n, was, was_len, true);
     d_retire(d, old);
+    return OS64_HTML_OK;
+}
+
+static bool data_node(const HNode *n)
+{
+    return n->kind == TEXT || n->kind == COMMENT || n->kind == PI;
+}
+
+int64_t os64_html_replace_data(os64_html_document_t *doc, HNode *n, uint32_t offset, uint32_t count,
+                               const char *utf8, size_t len)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !n || !ours(d, n) || !data_node(n) || (!utf8 && len))
+        return OS64_HTML_BAD_ARGUMENT;
+    if (!d_text_ok(utf8, len))
+        return OS64_HTML_BAD_TEXT;
+    uint32_t units = h_utf16_length(n->text, n->text_len);
+    if (offset > units)
+        return OS64_HTML_INDEX_SIZE;
+    if (count > units - offset)
+        count = units - offset;
+    size_t from = h_utf16_byte(n->text, n->text_len, offset);
+    size_t to = h_utf16_byte(n->text, n->text_len, offset + count);
+    /* The snapped units: what the range steps are told was replaced. */
+    offset = h_utf16_length(n->text, from);
+    count = h_utf16_length(n->text + from, to - from);
+    size_t total = from + len + (n->text_len - to);
+    if (total < from + len)
+        return OS64_HTML_TOO_LARGE;
+    int64_t why = OS64_HTML_OK;
+    char *joined = d_alloc(d, total ? total : 1, &why);
+    if (!joined)
+        return why;
+    if (from)
+        copy_bytes(joined, n->text, from);
+    if (len)
+        copy_bytes(joined + from, utf8, len);
+    if (n->text_len - to)
+        copy_bytes(joined + from + len, n->text + to, n->text_len - to);
+    why = put_text(d, n, joined, total);
+    h_free(d, joined);
+    if (why == OS64_HTML_OK && d->ranges)
+        d_ranges_replaced(d, n, offset, count, h_utf16_length(utf8, len));
+    return why;
+}
+
+int64_t os64_html_split_text(os64_html_document_t *doc, HNode *n, uint32_t offset, HNode **out)
+{
+    HDoc *d = (HDoc *)doc;
+    if (out)
+        *out = NULL;
+    if (!d || !n || !ours(d, n) || n->kind != TEXT || !out)
+        return OS64_HTML_BAD_ARGUMENT;
+    uint32_t units = h_utf16_length(n->text, n->text_len);
+    if (offset > units)
+        return OS64_HTML_INDEX_SIZE;
+    size_t from = h_utf16_byte(n->text, n->text_len, offset);
+    offset = h_utf16_length(n->text, from);
+    int64_t why = OS64_HTML_OK;
+    HNode *tail = os64_html_create_text(doc, n->text + from, n->text_len - from, &why);
+    if (!tail)
+        return why;
+    /* DOM § 4.11: insert the new node, move the ranges, then truncate. */
+    if (n->parent) {
+        why = os64_html_insert(doc, n->parent, tail, n->next);
+        if (why != OS64_HTML_OK)
+            return why;
+        if (d->ranges)
+            d_ranges_split(d, n, tail, offset);
+    }
+    why = os64_html_replace_data(doc, n, offset, units - offset, "", 0);
+    if (why != OS64_HTML_OK)
+        return why;
+    *out = tail;
+    return OS64_HTML_OK;
+}
+
+static bool exclusive_text(const HNode *n)
+{
+    return n && n->kind == TEXT;
+}
+
+/* The node after `x` in `root`'s tree order, not entering a template's
+ * contents or a shadow root, skipping `x`'s children when `children` is
+ * false. */
+static HNode *normalize_next(HNode *x, const HNode *root, bool children)
+{
+    if (children && x->first_child)
+        return x->first_child;
+    while (x != root && !x->next)
+        x = x->parent;
+    return x == root ? NULL : x->next;
+}
+
+int64_t os64_html_normalize(os64_html_document_t *doc, HNode *node)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !node || !ours(d, node))
+        return OS64_HTML_BAD_ARGUMENT;
+    for (HNode *x = node->first_child ? node->first_child : NULL; x;) {
+        if (!exclusive_text(x)) {
+            x = normalize_next(x, node, true);
+            continue;
+        }
+        uint32_t length = h_utf16_length(x->text, x->text_len);
+        if (length == 0) {
+            HNode *next = normalize_next(x, node, false);
+            int64_t why = os64_html_remove(doc, x);
+            if (why != OS64_HTML_OK)
+                return why;
+            x = next;
+            continue;
+        }
+        /* The contiguous Text siblings' data, appended to x in one replace —
+         * made even when they are all empty, as the standard makes it, since
+         * their ranges move into x and they go all the same. */
+        if (exclusive_text(x->next)) {
+            size_t more = 0;
+            for (HNode *s = x->next; exclusive_text(s); s = s->next)
+                more += s->text_len;
+            int64_t why = OS64_HTML_OK;
+            char *data = d_alloc(d, more ? more : 1, &why);
+            if (!data)
+                return why;
+            size_t at = 0;
+            for (HNode *s = x->next; exclusive_text(s); s = s->next) {
+                copy_bytes(data + at, s->text, s->text_len);
+                at += s->text_len;
+            }
+            why = os64_html_replace_data(doc, x, length, 0, data, more);
+            h_free(d, data);
+            if (why != OS64_HTML_OK)
+                return why;
+            for (HNode *s = x->next; exclusive_text(s); s = s->next) {
+                if (d->ranges)
+                    d_ranges_merged(d, x, s, length);
+                length += h_utf16_length(s->text, s->text_len);
+            }
+            while (exclusive_text(x->next)) {
+                why = os64_html_remove(doc, x->next);
+                if (why != OS64_HTML_OK)
+                    return why;
+            }
+        }
+        x = normalize_next(x, node, false);
+    }
     return OS64_HTML_OK;
 }
 

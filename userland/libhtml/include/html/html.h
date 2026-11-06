@@ -23,7 +23,9 @@ typedef enum {
     OS64_HTML_BAD_TEXT = -8,       /* not UTF-8, or it holds a NUL */
     OS64_HTML_ROOT_REQUIRED = -9,  /* the document would lose its html element */
     OS64_HTML_BAD_ARGUMENT = -10,
-    OS64_HTML_NOT_SUPPORTED = -11  /* what the DOM Standard refuses as NotSupportedError */
+    OS64_HTML_NOT_SUPPORTED = -11, /* what the DOM Standard refuses as NotSupportedError */
+    OS64_HTML_INVALID_NODE_TYPE = -12, /* a doctype as a range's boundary: InvalidNodeTypeError */
+    OS64_HTML_INDEX_SIZE = -13     /* an offset past a node's length: IndexSizeError */
 } os64_html_status_t;
 
 /* Exit badge for a broken node-hold or snapshot-pin lifetime contract,
@@ -563,6 +565,53 @@ bool os64_html_custom_name(const char *name);
  * `node` is the document node or a shadow root whose sheets changed. A node
  * of `doc` only; anything else is OS64_HTML_BAD_ARGUMENT. */
 int64_t os64_html_touch(os64_html_document_t *doc, os64_html_node_t *node);
+
+/* ── LIVE RANGES (docs/design/pending/RANGE.md § 3, § 4) ───────────────
+ *
+ * A live range is two boundary points, start (0) and end (1), each a node
+ * and an offset: UTF-16 code units into a Text, Comment or PI node's data,
+ * a child index into any other node. Every mutation of the document keeps
+ * every range right, by the DOM Standard's steps for inserting, removing,
+ * replacing data, splitting a Text node and normalizing, run inside the
+ * verbs that make them, the parser's included. A range holds both its
+ * boundary nodes, so a subtree it points into is not reclaimed under it;
+ * every range must be freed before its document is.
+ *
+ * `range_new` places both points at (the document, 0). `range_set` places
+ * one: a doctype is INVALID_NODE_TYPE, an offset past the node's length
+ * INDEX_SIZE; an offset between a surrogate pair's halves is snapped down to
+ * the pair's start, since the data is UTF-8 and a pair is never split. It
+ * checks nothing about the other point: comparing points, and collapsing a
+ * range whose start would pass its end, is the caller's algorithm.
+ *
+ * `node_length` is the DOM's "length": the data's UTF-16 units for Text,
+ * Comment and PI, 0 for a doctype, the number of children otherwise.
+ *
+ * The data verbs, offsets and counts in UTF-16 units, each snapped down to
+ * a code point's start, a count past the end taken as reaching it, an
+ * offset past the length INDEX_SIZE; each logs a TEXT change with the old
+ * data, as `set_text` does:
+ * - `replace_data` is the standard's replace data: `count` units at
+ *   `offset` become `utf8` (Text, Comment, PI). `set_text` is replace data
+ *   of the whole length, and carries the same range steps.
+ * - `split_text` is Text's splitText: the data from `offset` on becomes a
+ *   new Text node, inserted after the node when it has a parent (an insert,
+ *   logged as one), then the node is truncated; the new node in `*out`.
+ * - `normalize` is Node's normalize over `node`'s descendants: an empty
+ *   Text node is removed, contiguous Text siblings are merged into the
+ *   first (an append to it, then the removal of the rest). */
+typedef struct os64_html_range os64_html_range_t;
+os64_html_range_t *os64_html_range_new(os64_html_document_t *doc);
+void os64_html_range_free(os64_html_range_t *range);
+int64_t os64_html_range_set(os64_html_range_t *range, int which, os64_html_node_t *node, uint32_t offset);
+void os64_html_range_get(const os64_html_range_t *range, int which, const os64_html_node_t **node,
+                         uint32_t *offset);
+uint32_t os64_html_node_length(const os64_html_node_t *node);
+int64_t os64_html_replace_data(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
+                               uint32_t count, const char *utf8, size_t len);
+int64_t os64_html_split_text(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
+                             os64_html_node_t **out);
+int64_t os64_html_normalize(os64_html_document_t *doc, os64_html_node_t *node);
 
 /* ── SHADOW TREES (docs/design/pending/SHADOW_DOM.md § 3) ──────────────
  *
