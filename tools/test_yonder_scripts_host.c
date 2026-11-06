@@ -2684,6 +2684,25 @@ static void input_hover(void) {
         "input: mouseover and mouseout follow the element under the pointer, with relatedTarget");
     probe_drop();
 }
+/* A page's single-key shortcut does not reach into the window's own
+ * address field: the key is typed there and the page sees none; with the
+ * page focused, the same key is the page's. */
+static void input_window_keys(void) {
+    probe_page("<p id=log>-</p><script>document.addEventListener('keydown',function(e){"
+        "if(e.key==='w'){e.preventDefault();document.getElementById('log').textContent='took w'}});</script>",true);
+    script_turn();
+    os64_ui_widget_t chrome={0};                 /* a control of the window's own, the address field's place */
+    os64_ui_widget_t *was=g.ui.focus;
+    g.ui.focus=&chrome;
+    os64_gui_event_t w={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='w'}};
+    check(!key_event(&w) && probe_text_is("log","-"),
+          "input: a key typed in the window's own control is not the page's");
+    g.ui.focus=was;
+    os64_ui_set_focus(&g.ui,&g.view); inputs_run();
+    input_key('w');
+    check(probe_text_is("log","took w"),"input: the same key with the page focused is the page's");
+    probe_drop();
+}
 static void input_forms(void) {
     probe_page("<form id=f action=/send><input id=field name=q><input id=tick type=checkbox name=t>"
         "<button id=send>send</button><button id=undo type=reset>undo</button></form><p id=log>-</p>"
@@ -3013,6 +3032,7 @@ static void input_cases(void) {
     input_attribute_backstop();
     input_hover();
     input_forms();
+    input_window_keys();
     input_ui_events();
     input_script_buttons();
     input_validation();
