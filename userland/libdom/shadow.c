@@ -228,8 +228,9 @@ static JSValue shadow_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     }
 }
 
-/* The surface, installed by d_modern_install once the Modern Web's rows
- * have made the interfaces it inherits (DocumentFragment, HTMLElement). */
+/* The surface, installed by d_modern_install once the interfaces it
+ * inherits exist (DocumentFragment, HTMLElement), and before custom
+ * elements' row wraps the [CEReactions] members, its setters among them. */
 int d_shadow_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValueConst element = dom->prototypes[D_PROTO_ELEMENT]->value;

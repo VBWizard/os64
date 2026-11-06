@@ -127,7 +127,14 @@ static void dom_shadow_surface_cases(void)
         "var early=document.createElement('x-late-shut');early.attachShadow({mode:'open'});document.body.appendChild(early);"
         "var built=0;class Shut extends HTMLElement{static get disabledFeatures(){return ['shadow']}"
         "constructor(){super();built++}}customElements.define('x-late-shut',Shut);"
-        "assert(built===0&&!(early instanceof Shut)&&errs.join()==='NotSupportedError','a late definition: '+built+' '+errs.join());",
+        "assert(built===0&&!(early instanceof Shut)&&errs.join()==='NotSupportedError','a late definition: '+built+' '+errs.join());"
+        /* The surface's [CEReactions] setters run their reactions before they return. */
+        "var obs=[];customElements.define('x-watch',class extends HTMLElement{static get observedAttributes(){return ['slot']}"
+        "attributeChangedCallback(n,o,v){obs.push(n+':'+v)}});var xw=document.createElement('x-watch');xw.slot='a';"
+        "assert(obs.join()==='slot:a','Element.slot is [CEReactions]: '+obs.join());"
+        "var cbs=0;customElements.define('x-cb',class extends HTMLElement{connectedCallback(){cbs++}});"
+        "var ih=document.createElement('div');document.body.appendChild(ih);var ihr=ih.attachShadow({mode:'open'});"
+        "ihr.innerHTML='<x-cb></x-cb>';assert(cbs===1,'ShadowRoot.innerHTML is [CEReactions]: '+cbs);",
         "shadow-custom");
     fixture_free(&f);
 }

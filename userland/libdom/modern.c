@@ -2,8 +2,8 @@
 
 /* THE MODERN WEB'S TABLE (MODERN_WEB.md § How the slices run side by side).
  * Every global the arc adds to window is installed by a row here, or by
- * shadow trees' install, which this walk runs last under a switch of its
- * own (d_shadow_install), and nowhere else, so os64_dom_options_t.modern
+ * shadow trees' install, which this walk runs under a switch of its own
+ * (d_shadow_install), and nowhere else, so os64_dom_options_t.modern
  * removes all of it at once: with
  * the option clear the walk does not run, and a name that is not installed
  * is a name a page's feature detection finds missing, which is the point
@@ -197,11 +197,18 @@ int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     /* A row that leaves an exception pending failed, whatever it answered:
      * the engine's function constructors define `length` and `name`
      * without saying when that ran out of memory. */
-    for (size_t i = 0; i < sizeof(kModern) / sizeof(kModern[0]); i++)
+    for (size_t i = 0; i < sizeof(kModern) / sizeof(kModern[0]); i++) {
+        /* Shadow trees' surface has a switch of its own beside this one
+         * (options.shadow_trees, shadow.c) and inherits the interfaces
+         * row's interfaces. It goes in before custom elements' row, whose
+         * [CEReactions] wrappers take the members as they stand when it
+         * runs: Element's slot, a slot's name and a root's innerHTML are
+         * among them. */
+        if (kModern[i].install == d_custom_install && dom->options.shadow_trees &&
+            (d_shadow_install(dom, ctx, global) < 0 || JS_HasException(ctx)))
+            return -1;
         if (kModern[i].install(dom, ctx, global) < 0 || JS_HasException(ctx)) return -1;
-    /* Shadow trees' surface has a switch of its own beside this one
-     * (options.shadow_trees, shadow.c), and inherits the rows' interfaces. */
-    if (dom->options.shadow_trees && (d_shadow_install(dom, ctx, global) < 0 || JS_HasException(ctx))) return -1;
+    }
     return 0;
 }
 
