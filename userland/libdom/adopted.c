@@ -168,20 +168,36 @@ static JSValue sheet_replace(JSContext *ctx, JSValueConst self, int argc, JSValu
     return promise;
 }
 
-/* check(root, value): the factory's traps ask before a value goes into a
- * root's array: a constructed sheet, made in the root's document — the
- * window's, the only one a constructor makes sheets for (CSSOM:
- * NotAllowedError otherwise). */
+/* check(root, value, size): the factory's traps ask before a value goes
+ * into a root's array that will then hold `size` values: a constructed
+ * sheet, made in the root's document — the window's, the only one a
+ * constructor makes sheets for (CSSOM: NotAllowedError otherwise) — and
+ * room in the root's list for `size`. */
 static JSValue adopt_check(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
 {
     (void)self;
     os64_dom_t *dom = d_binding(ctx);
-    if (dom == NULL || argc < 2) return JS_EXCEPTION;
+    if (dom == NULL || argc < 3) return JS_EXCEPTION;
     if (constructed_of(ctx, argv[1]) == NULL) return JS_EXCEPTION;
     const os64_html_node_t *root = d_node(dom, ctx, argv[0]);
     if (root == NULL) return JS_EXCEPTION;
     if (d_node_document(dom, root) != dom->document->document)
         return d_error(ctx, "NotAllowedError", "A sheet is adopted only in the document it was made for");
+    /* The list's room for the length the array will have, taken now, while
+     * a refusal still leaves the array as it was: `changed` then never has
+     * to grow it, and JS and the host cannot come to see two lists. */
+    DValue *owner = d_find(dom, root);
+    struct DAdopted *list = owner != NULL ? owner->adopted : NULL;
+    uint32_t size = 0;
+    if (list == NULL || JS_ToUint32(ctx, &size, argv[2]) < 0) return JS_EXCEPTION;
+    if (size > list->cap) {
+        DValue **more = d_alloc(dom, (size_t)size * sizeof(*more));
+        if (more == NULL) return d_error(ctx, "QuotaExceededError", "DOM sheet quota exceeded");
+        if (list->n != 0) os64_memcpy(more, list->sheets, list->n * sizeof(*more));
+        d_free(dom, list->sheets);
+        list->sheets = more;
+        list->cap = size;
+    }
     return JS_UNDEFINED;
 }
 
@@ -209,16 +225,9 @@ static JSValue adopt_changed(JSContext *ctx, JSValueConst self, int argc, JSValu
         if (JS_IsException(one)) return one;
         DValue *sheet = JS_IsObject(one) ? JS_GetOpaque(one, d_sheet_class()) : NULL;
         JS_FreeValue(ctx, one);
-        if (sheet == NULL || sheet->constructed == NULL) continue;      /* a hole */
-        if (list->n == list->cap) {
-            size_t cap = list->cap != 0 ? list->cap * 2 : 8;
-            DValue **more = d_alloc(dom, cap * sizeof(*more));
-            if (more == NULL) return d_error(ctx, "QuotaExceededError", "DOM sheet quota exceeded");
-            if (list->n != 0) os64_memcpy(more, list->sheets, list->n * sizeof(*more));
-            d_free(dom, list->sheets);
-            list->sheets = more;
-            list->cap = cap;
-        }
+        /* Every value went in through `check`, which reserved its room;
+         * nothing else is kept. */
+        if (sheet == NULL || sheet->constructed == NULL || list->n == list->cap) continue;
         list->sheets[list->n++] = sheet;
     }
     (void)os64_html_touch(dom->document, (os64_html_node_t *)root);
@@ -244,7 +253,7 @@ static const char kFactory[] =
     " if (n > t.length) return false; set(t, 'length', n); return true; }"
     "return function(root){"
     "var a = [];"
-    "function put(t, k, v){ if ((k >>> 0) > t.length) return false; check(root, v); set(t, k, v); return true; }"
+    "function put(t, k, v){ if ((k >>> 0) > t.length) return false; var i = k >>> 0; check(root, v, i < t.length ? t.length : i + 1); set(t, k, v); return true; }"
     "var p = new P(a, {"
     " set: function(t, k, v){ var ok = k === 'length' ? length(t, v) : index(k) ? put(t, k, v) : set(t, k, v);"
     "  changed(root, t); return ok; },"
@@ -263,7 +272,7 @@ static const char kFactory[] =
     "return [p, function(list){"
     " if (list == null || typeof list[iter] !== 'function')"
     "  throw new TypeError('adoptedStyleSheets takes a sequence of CSSStyleSheet');"
-    " var v = from(list); for (var i = 0; i < v.length; i++) check(root, v[i]);"
+    " var v = from(list); for (var i = 0; i < v.length; i++) check(root, v[i], v.length);"
     " set(a, 'length', 0); for (var j = 0; j < v.length; j++) set(a, j, v[j]); changed(root, a); }];"
     "}; })";
 
@@ -333,7 +342,7 @@ int d_adopted_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSVa
     (void)global;
     JSValue factory = JS_Eval(ctx, kFactory, sizeof(kFactory) - 1, "adoptedStyleSheets", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(factory)) return -1;
-    JSValue hooks[2] = {JS_NewCFunction(ctx, adopt_check, "check", 2),
+    JSValue hooks[2] = {JS_NewCFunction(ctx, adopt_check, "check", 3),
                         JS_NewCFunction(ctx, adopt_changed, "changed", 2)};
     JSValue made = JS_IsException(hooks[0]) || JS_IsException(hooks[1])
         ? JS_EXCEPTION : JS_Call(ctx, factory, JS_UNDEFINED, 2, (JSValueConst *)hooks);

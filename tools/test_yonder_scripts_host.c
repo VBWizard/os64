@@ -5404,6 +5404,13 @@ static void adopted_style_cases(void)
         "shared.replaceSync(':host{display:block;width:150px}');"
         "eq(document.getElementById('a').offsetWidth,150,'replaceSync restyles every adopter');"
         "eq(roots[0].querySelector('#in').offsetWidth,99,'the root\\'s own <style> once the sheet stops');"
+        /* More adoptions than the sheet table holds, of few texts: every
+         * entry is read, and the table's cap is on distinct texts (Codex #488). */
+        "var many=[];for(var i=0;i<70;i++){var c=new CSSStyleSheet();c.replaceSync('p{width:30px}');many.push(c)}"
+        "var last=new CSSStyleSheet();last.replaceSync(':host{display:block;width:77px}');many.push(last);"
+        "var h=document.createElement('x-a');document.body.appendChild(h);"
+        "h.attachShadow({mode:'open'}).adoptedStyleSheets=many;"
+        "eq(h.offsetWidth,77,'the 71st adoption styles its host');"
         "document.body.setAttribute('data-adopted','yes');"
         "</script>",true);
     check(script_turn(), "adopted style script task completes");

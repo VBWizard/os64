@@ -1437,6 +1437,26 @@ static bool page_scopes_group(PageScopes *s)
     return true;
 }
 
+// Every sheet `root` adopted, into `*buffer`, grown as the list needs
+// (`*cap` its room; the caller frees it): however many entries a root's
+// array holds, since entries of one text share one table entry and the
+// table's cap is on distinct texts. How many were written: with no memory
+// to grow, those that fit.
+static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node_t *root,
+                           os64_dom_adopted_sheet_t **buffer, size_t *cap)
+{
+    size_t n = yonder_scripts_adopted(scripts, root, *buffer, *cap);
+    if (n > *cap) {
+        os64_dom_adopted_sheet_t *more = os64_realloc(*buffer, n * sizeof(*more));
+        if (more != NULL) {
+            *buffer = more;
+            *cap = n;
+            n = yonder_scripts_adopted(scripts, root, *buffer, *cap);
+        }
+    }
+    return n < *cap ? n : *cap;
+}
+
 static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
@@ -1468,11 +1488,12 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     int32_t input_of[SHEETS_MAX];
     for (int32_t e = 0; e < SHEETS_MAX; e++)
         input_of[e] = -1;
-    os64_dom_adopted_sheet_t adopted[SHEETS_MAX];
+    os64_dom_adopted_sheet_t *adopted = NULL;
+    size_t adopted_cap = 0;
     for (const os64_html_node_t *root = doc != NULL && doc->document != NULL && scripts != NULL
              ? adopting_root(doc, NULL) : NULL; root; root = adopting_root(doc, root)) {
-        size_t count = yonder_scripts_adopted(scripts, root, adopted, SHEETS_MAX);
-        for (size_t i = 0; i < count && i < SHEETS_MAX; i++) {
+        size_t count = adopted_read(scripts, root, &adopted, &adopted_cap);
+        for (size_t i = 0; i < count; i++) {
             int32_t e = sheet_constructed(p, adopted[i].text, adopted[i].length);
             if (e < 0)
                 continue;
@@ -1482,6 +1503,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
                 paired = paired && page_scopes_add(&ps, input_of[e], root);
         }
     }
+    os64_free(adopted);
     // With no memory for the scopes there is no cascade, as with no memory
     // for the cascade itself: given none, it would style the document with
     // every tree's sheets.
@@ -5186,20 +5208,23 @@ static bool sheet_adopt(Page *p, const os64_dom_adopted_sheet_t *one)
 }
 
 // The constructed sheets the page's trees adopted, after the sheets its
-// model lists. A sheet that will not parse is left out, as a `style`'s is.
+// model lists, every adoption read: one whose text the table already has
+// costs nothing, and a full table leaves out only new texts. A sheet that
+// will not parse is left out, as a `style`'s is.
 static void sheets_adopted(Page *p)
 {
     const os64_html_document_t *doc = page_doc(p);
     const yonder_scripts_t *scripts = adoptions_host(p);
     if (doc == NULL || doc->document == NULL || scripts == NULL)
         return;
-    os64_dom_adopted_sheet_t list[SHEETS_MAX];
+    os64_dom_adopted_sheet_t *list = NULL;
+    size_t cap = 0;
     for (const os64_html_node_t *root = adopting_root(doc, NULL); root; root = adopting_root(doc, root)) {
-        size_t n = yonder_scripts_adopted(scripts, root, list, SHEETS_MAX);
-        for (size_t i = 0; i < n && i < SHEETS_MAX; i++)
-            if (!sheet_adopt(p, &list[i]))
-                return;
+        size_t n = adopted_read(scripts, root, &list, &cap);
+        for (size_t i = 0; i < n; i++)
+            (void)sheet_adopt(p, &list[i]);
     }
+    os64_free(list);
 }
 
 // The rest of the page's sheets: its model's, then its trees' adopted ones.

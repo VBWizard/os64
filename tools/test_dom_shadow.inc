@@ -469,9 +469,49 @@ static void dom_shadow_adopted_cases(void)
     fixture_free(&f);
 }
 
+/* Every allocation an adoption makes, failed in turn: whatever the page is
+ * told, the array its script sees and the list the host reads stay one
+ * list (Codex #488: the list's room is taken before the array changes). */
+static void dom_shadow_adopted_sweep(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.shadow_trees = true;
+    static const char kSetup[] =
+        "globalThis.sheets=[];for(var i=0;i<9;i++){var s=new CSSStyleSheet();s.replaceSync('p{}');sheets.push(s)}"
+        "document.adoptedStyleSheets=sheets.slice(0,8);";
+    static const char kStep[] = "try{document.adoptedStyleSheets.push(sheets[8])}catch(e){}";
+    static const char kRead[] = "document.body.setAttribute('data-n',String(document.adoptedStyleSheets.length));";
+    os64_js_outcome_t outcome;
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, kSetup, "adopted-sweep-setup");
+    size_t start = dom_attempts;
+    dom_script(&f, kStep, "adopted-sweep-measure");
+    size_t count = dom_attempts - start;
+    fixture_free(&f);
+    check(count > 0, "adopted sweep: a push allocates");
+    for (size_t cut = 1; cut <= count; cut++) {
+        f = fixture_new(&options);
+        if (!fixture_ready(&f)) break;
+        dom_script(&f, kSetup, "adopted-sweep-setup");
+        dom_fail_at = dom_attempts + cut;
+        (void)os64_js_run(f.runtime, kStep, sizeof(kStep) - 1, "adopted-sweep-step", &outcome);
+        dom_fail_at = 0;
+        dom_sweeps++;
+        if (os64_js_run(f.runtime, kRead, sizeof(kRead) - 1, "adopted-sweep-read", &outcome) == OS64_JS_OK) {
+            const os64_html_attr_t *seen = os64_html_attr(f.document->body, "data-n");
+            size_t script = seen != NULL ? (size_t)strtoul(seen->value, NULL, 10) : 0;
+            size_t host = os64_dom_adopted(f.binding, f.document->document, NULL, 0);
+            check(seen != NULL && script == host, "adopted sweep: the script's array and the host's list agree");
+        }
+        fixture_free(&f);
+    }
+}
+
 static void dom_shadow_cases(void)
 {
     dom_shadow_adopted_cases();
+    dom_shadow_adopted_sweep();
     dom_shadow_switch_cases();
     dom_shadow_surface_cases();
     dom_shadow_event_cases();
