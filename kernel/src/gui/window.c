@@ -570,7 +570,7 @@ void wm_set_decorated(window_t *w, bool decorated)
 	gui_damage_add_locked(rect_union(old,frame));
 }
 
-void wm_set_maximized(window_t *w, bool maximized)
+static void set_maximized(window_t *w, bool maximized, bool raise)
 {
 	// A desktop already fills the screen; "maximize" would be a no-op that
 	// still clobbered restoreFrame, and un-maximizing would then shrink your
@@ -584,10 +584,10 @@ void wm_set_maximized(window_t *w, bool maximized)
 		gui_geometry_changing(w);
 		w->restoreFrame = w->frame;
 		w->flags |= GUI_WINDOW_MAXIMIZED;
-		// Raised as well: a maximized window you cannot see (focused but
-		// stacked under its siblings, which START_UNFOCUSED makes possible)
-		// answers the chord with nothing visible happening.
-		wm_raise(w);
+		// Interactive maximization raises and focuses the window so the
+		// action is visible. Birth already placed it atop its band and
+		// decided focus, including START_UNFOCUSED's existing-owner case.
+		if (raise) wm_raise(w);
 		wm_resize(w, (rect_t){0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height});
 	} else {
 		// The saved rectangle may predate a larger application minimum (for
@@ -607,6 +607,16 @@ void wm_set_maximized(window_t *w, bool maximized)
 		if (already_there || wm_resize(w, target))
 			w->flags &= ~GUI_WINDOW_MAXIMIZED;
 	}
+}
+
+void wm_set_maximized(window_t *w, bool maximized)
+{
+	set_maximized(w, maximized, true);
+}
+
+void wm_maximize_at_birth(window_t *w)
+{
+	set_maximized(w, true, false);
 }
 
 void wm_set_minimized(window_t *w, bool minimized)

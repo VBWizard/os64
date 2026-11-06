@@ -3074,9 +3074,32 @@ static os64_font_set_t *interface_test_set(uint32_t px)
     return set;
 }
 
+static os64_font_set_t *interface_session_set;
+static unsigned interface_session_reads;
+static void interface_session_refresh(os64_ui_t *ui)
+{
+    ++interface_session_reads;
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(ui,&consumer);
+    ui->font_settings_result=os64_font_adopt(interface_session_set,&consumer,1,NULL);
+}
+
 static void interface_font_cases(void)
 {
     stream_window();
+    // Include the Downloads caption and icon widths of the production row.
+    // The leases supply presence only; these cases measure without painting.
+    os64_ui_button(&g.downloads,"Downloads",NULL,NULL);
+    os64_ui_add_child(&g.root,&g.downloads);
+    // forms_drop unlinks page controls after status, so keep the chrome
+    // before that tail just as the production window does.
+    g.badge.next_sibling=&g.downloads;
+    g.downloads.next_sibling=&g.status;
+    g.status.next_sibling=NULL;
+    static const uint32_t icon=0xff000000;
+    for (size_t i=0;i<sizeof(s_head_faces)/sizeof(s_head_faces[0]);++i)
+        s_head_faces[i].icon.pixels=&icon;
+    g.root.bounds.w=1400;
     layout();
     int32_t initial_h = g.back.bounds.h;
     os64_font_set_t *web = interface_test_set(13);
@@ -3127,6 +3150,34 @@ static void interface_font_cases(void)
           !memcmp(&g.field.w.bounds, &before, sizeof(before)) && !g.back.bounds_staged_valid &&
           !s_interface_resize_due,
           "interface font: a face wider than the toolbar fits is refused atomically");
+    check(os64_font_adopt(large,&consumer,1,NULL)==OS64_FONT_OK,
+          "interface font: restore smaller face for narrow-window retry");
+    interface_font_finish();
+    g.root.bounds.w=860; layout();
+    before=g.field.w.bounds;
+    interface_session_set=larger;
+    interface_session_reads=0;
+    g.ui.font_session=interface_session_refresh;
+    g.ui.follow_session=true;
+    g.ui.font_settings_result=OS64_FONT_LIMIT;
+    interface_font_retry();
+    check(g.ui.font_settings_result==OS64_FONT_LIMIT && interface_session_reads==1 &&
+          !memcmp(&before,&g.field.w.bounds,sizeof(before)),
+          "interface font: full toolbar refuses 32px at narrow width without changing live bounds");
+    g.root.bounds.w=1400; layout();
+    interface_font_retry();
+    interface_font_finish();
+    check(!g.ui.font_settings_result && interface_session_reads==2 &&
+          os64_ui_font_row_height(&g.ui,OS64_FONT_ROLE_UI)>old_row && g.field.w.bounds.w>0,
+          "interface font: enlargement retries the rejected session font without another Apply");
+    interface_font_retry();
+    check(interface_session_reads==2,"interface font: accepted font is not retried on ordinary resizes");
+    g.ui.font_settings_result=OS64_FONT_LIMIT; g.ui.follow_session=false;
+    interface_font_retry();
+    check(interface_session_reads==2,"interface font: window not following session does not retry");
+    interface_session_set=NULL;
+    for (size_t i=0;i<sizeof(s_head_faces)/sizeof(s_head_faces[0]);++i)
+        s_head_faces[i].icon.pixels=NULL;
     os64_font_set_release(huge);
     os64_font_set_release(larger);
     os64_font_set_release(large);
@@ -11349,6 +11400,14 @@ int main(void)
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"frames: text released");
         check(live==0,"frames: heap empty");
         printf("yonder animation: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_INTERFACE_ONLY")) {
+        interface_font_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"interface: text released");
+        check(live==0,"interface: heap empty");
+        printf("yonder interface: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
     if(getenv("YONDER_GRAFT_FONTS_ONLY")) {

@@ -40,6 +40,7 @@
 #include "os64/ui_dispatcher.h"
 #include "os64/ui_menu.h"
 #include "os64/ui_file_dialog.h"
+#include "os64/ui_window.h"
 #include "os64/ui_icon.h"
 #include "os64/work.h"
 #include "agent.h"
@@ -16186,6 +16187,14 @@ static void interface_font_finish(void)
     on_resize(&g.ui);
 }
 
+static void interface_font_retry(void)
+{
+    // The session callback retains a rejected generation for another attempt.
+    // A resize can make room without publishing a new Workshop setting.
+    if (g.ui.follow_session && g.ui.font_settings_result && g.ui.font_session)
+        g.ui.font_session(&g.ui);
+}
+
 // Why the window loop ended, said in the log as yonder leaves (left_said):
 // every way out is a clean exit with code 0, so without it the log cannot
 // tell a close the person asked for from one nobody did.
@@ -16495,6 +16504,8 @@ static void window_event(void *user, const os64_gui_event_t *event)
             (void)os64_ui_menu_open(g.menus, menu, g.action_view, s_pointer_menu_anchor, OS64_UI_MENU_CONTEXT);
         }
     }
+    if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE)
+        interface_font_retry();
     interface_font_finish();
     // What the event became, as DOM events, now libui is done with it.
     inputs_run();
@@ -16558,17 +16569,16 @@ int main(int argc, char **argv)
             os64_free(bytes);
         }
     }
-    g.win = os64_gui_window_create(title, 60, 40, 860, 640, OS64_GUI_WINDOW_HAS_SETTINGS);
-    if (g.win < 0) {
-        os64_printf("yonder: no window (is the desktop running?)\n");
+    os64_ui_window_options_t options = {.title = title, .x = 60, .y = 40,
+        .content_width = 860, .content_height = 640, .flags = OS64_GUI_WINDOW_HAS_SETTINGS,
+        .remember = {"yonder-window.conf", OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED}};
+    if (os64_ui_window_open(&g.ui, &g.ctx, &g.win, &options) != OS64_UI_OK) {
+        os64_printf("yonder: window initialization failed (%ld)\n", (long)g.win);
+        if (g.win > 0) (void)os64_gui_window_destroy(g.win);
         return 1;
     }
     s_bells = true;
     os64_strcopy(s_title_worn, sizeof(s_title_worn), title);
-    if (os64_draw_ctx_init(&g.ctx, g.win) != 0) {
-        os64_gui_window_destroy(g.win);
-        return 1;
-    }
     // The display, for `screen`: what a window may take of it is not known
     // here, so it is all of it.
     {
@@ -16595,7 +16605,6 @@ int main(int argc, char **argv)
     yonder_settings_on_cookies_problem(cookies_problem);
     g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network
 
-    os64_ui_init(&g.ui, &g.ctx);
     if (!os64_ui_on_gesture_cancel(&g.ui, pointer_widget_canceled)) {
         os64_printf("yonder: could not install pointer cancellation observer\n");
         os64_gui_window_destroy(g.win);
@@ -16788,6 +16797,8 @@ int main(int argc, char **argv)
     }
 
     left_said(woke);
+    if (os64_window_placement_save_state(&g.ui.placement, g.win) != 0)
+        os64_debug_log("yonder: could not save maximized window state");
     // The Settings dialog, the popup controller (an open list or menu goes
     // with it) and the clock first; the clock only rings, and nothing after
     // this should. The menus' verbs go only once the controller has, which

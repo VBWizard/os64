@@ -26,7 +26,8 @@ static bool parse_geometry(const char *s, os64_window_remember_mode_t mode,
 {
     os64_window_geometry_t g=*out;
     int64_t x,y,w,h;
-    if (mode==OS64_WINDOW_REMEMBER_POSITION_AND_SIZE) {
+    if (mode==OS64_WINDOW_REMEMBER_POSITION_AND_SIZE ||
+        mode==OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED) {
         if (s[0]!='1' || s[1]!=',') return false;
         s+=2;
         if (!number(&s,true,&x) || *s++!=',' || !number(&s,true,&y) || *s++!=',') return false;
@@ -41,6 +42,7 @@ typedef struct {
     os64_window_remember_mode_t mode;
     os64_window_geometry_t fallback, value;
     bool syntax_ok;
+    bool maximized;
 } placement_parse_t;
 static bool setting(const char *key, const char *value, void *user)
 {
@@ -50,6 +52,9 @@ static bool setting(const char *key, const char *value, void *user)
         p->value=p->fallback; // a later invalid duplicate must not revive an earlier value
         (void)parse_geometry(value,p->mode,&p->value);
     }
+    if (p->mode==OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED &&
+        os64_streq_nocase(key,"maximized"))
+        p->maximized=os64_streq_nocase(value,"true");
     return true;
 }
 static bool validate(const char *text, size_t length, void *user)
@@ -59,7 +64,7 @@ static bool validate(const char *text, size_t length, void *user)
     return os64_conf_parse(text,length,setting,&p)>=0 && p.syntax_ok;
 }
 static int64_t read_preference(const os64_window_placement_t *p,
-    os64_window_geometry_t *g, char source[OS64_CONF_PATH_MAX])
+    os64_window_geometry_t *g, bool *maximized, char source[OS64_CONF_PATH_MAX])
 {
     if (os64_conf_find(p->config,source,OS64_CONF_PATH_MAX)!=0) return OS64_CONF_NO_FILE;
     uint8_t *bytes=NULL; size_t length=0;
@@ -72,6 +77,7 @@ static int64_t read_preference(const os64_window_placement_t *p,
     if (result<0) return result;
     if (!parse.syntax_ok) return OS64_CONF_BAD_SETTING;
     *g=parse.value;
+    if (maximized) *maximized=parse.maximized;
     return 0;
 }
 bool os64_window_placement_init(os64_window_placement_t *p,
@@ -82,7 +88,8 @@ bool os64_window_placement_init(os64_window_placement_t *p,
     if (!defaults.width || !defaults.height || defaults.width>OS64_WINDOW_PREFERENCE_MAX ||
         defaults.height>OS64_WINDOW_PREFERENCE_MAX) return false;
     if (!remember.config) return true;
-    if (remember.mode!=OS64_WINDOW_REMEMBER_SIZE && remember.mode!=OS64_WINDOW_REMEMBER_POSITION_AND_SIZE)
+    if (remember.mode!=OS64_WINDOW_REMEMBER_SIZE && remember.mode!=OS64_WINDOW_REMEMBER_POSITION_AND_SIZE &&
+        remember.mode!=OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED)
         return false;
     size_t n=os64_strlen(remember.config);
     if (!n || n>=sizeof(p->config) || os64_streq(remember.config,".") || os64_streq(remember.config,"..")) return false;
@@ -91,7 +98,7 @@ bool os64_window_placement_init(os64_window_placement_t *p,
     os64_strcopy(p->config,sizeof(p->config),remember.config);
     p->mode=remember.mode;
     char source[OS64_CONF_PATH_MAX];
-    p->status=read_preference(p,&p->preferred,source);
+    p->status=read_preference(p,&p->preferred,&p->maximized,source);
     return true;
 }
 os64_window_geometry_t os64_window_placement_prepare(const os64_window_placement_t *p)
@@ -117,7 +124,7 @@ bool os64_window_placement_event(os64_window_placement_t *p, const os64_gui_even
     }
     char source[OS64_CONF_PATH_MAX], destination[OS64_CONF_PATH_MAX], value[96];
     os64_window_geometry_t g=p->preferred;
-    int64_t rc=read_preference(p,&g,source);
+    int64_t rc=read_preference(p,&g,NULL,source);
     if (rc && rc!=OS64_CONF_NO_FILE) { p->status=rc; return true; }
     if (mask&OS64_GUI_PLACEMENT_X) g.x=e->placement.x;
     if (mask&OS64_GUI_PLACEMENT_Y) g.y=e->placement.y;
@@ -136,4 +143,25 @@ bool os64_window_placement_event(os64_window_placement_t *p, const os64_gui_even
         os64_conf_merge_checked(source,destination,&pair,1,validate,NULL);
     if (!p->status) p->preferred=g;
     return true;
+}
+
+int64_t os64_window_placement_save_state(os64_window_placement_t *p, int64_t window)
+{
+    if (!p) return OS64_CONF_BAD_SETTING;
+    if (p->mode!=OS64_WINDOW_REMEMBER_POSITION_SIZE_AND_MAXIMIZED) return 0;
+    os64_gui_window_state_t state;
+    p->status=os64_gui_window_get_state(window,&state);
+    if (p->status) return p->status;
+    bool maximized=(state.flags & OS64_GUI_WINDOW_MAXIMIZED)!=0;
+    char source[OS64_CONF_PATH_MAX], destination[OS64_CONF_PATH_MAX];
+    os64_window_geometry_t geometry=p->preferred;
+    int64_t rc=read_preference(p,&geometry,NULL,source);
+    if (rc && rc!=OS64_CONF_NO_FILE) return p->status=rc;
+    p->status=os64_conf_target(p->config,destination,sizeof(destination));
+    if (p->status) return p->status;
+    os64_conf_pair_t pair={"maximized",maximized ? "true" : "false"};
+    p->status=rc==OS64_CONF_NO_FILE ? os64_conf_create_checked(destination,&pair,1,validate,NULL) :
+        os64_conf_merge_checked(source,destination,&pair,1,validate,NULL);
+    if (!p->status) p->maximized=maximized;
+    return p->status;
 }
