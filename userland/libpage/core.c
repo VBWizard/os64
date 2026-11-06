@@ -447,13 +447,6 @@ static bool element_kind(const os64_html_node_t *n, os64_page_element_t *out)
     return true;
 }
 
-// §4.10.17.3. The `form=` attribute names an element by id ANYWHERE in the
-// document, and the standard looks the id up first and asks whether what it
-// found is a form second — so `<div id=f></div><form id=f>` leaves the
-// control in NO form, because the div is what that id names. A name matching
-// nothing leaves it in no form as well, and NOT in the nearest ancestor.
-// Without form=, the parser's insertion association precedes ancestry: table
-// parsing can leave a form empty while its controls still belong to it.
 // The first element in tree order in the tree `root` is the root of whose
 // id is `id`. The document's ids are in the id map; a shadow tree's are its
 // own (ids are per tree), so a control there resolves form= by this walk.
@@ -476,6 +469,14 @@ static const os64_html_node_t *tree_id(const os64_html_node_t *root, const char 
     return NULL;
 }
 
+// §4.10.17.3. The `form=` attribute names an element by id ANYWHERE in the
+// control's tree (the document, or the shadow tree the control is in), and
+// the standard looks the id up first and asks whether what it found is a
+// form second — so `<div id=f></div><form id=f>` leaves the control in NO
+// form, because the div is what that id names. A name matching nothing
+// leaves it in no form as well, and NOT in the nearest ancestor. Without
+// form=, the parser's insertion association precedes ancestry: table
+// parsing can leave a form empty while its controls still belong to it.
 static int32_t form_owner(const os64_page_t *page, const os64_html_node_t *n)
 {
     const char *named = p_attr(n, "form");

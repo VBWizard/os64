@@ -4,10 +4,11 @@
  * or a text) is assigned to the first `slot` in tree order in the host's
  * shadow tree whose `name` equals the child's `slot` attribute, the empty
  * name standing for none. Assignment is a function of the host's children
- * and its shadow tree, so it is computed per shadow root and kept against
- * the document's version: any change makes it stale, and the next question
- * computes it again, which is one walk of the shadow tree and one of the
- * host's children.
+ * and its shadow tree, so it is computed per shadow root and kept until
+ * the document's version moves or a change that can move the root's
+ * assignment is described (h_slots_mark: the parser moves the version
+ * once a call, not once an append); the next question computes it again,
+ * which is one walk of the shadow tree and one of the host's children.
  *
  * The cache is an optimisation and nothing else: when it cannot be
  * allocated, the same answers come from walking the trees for each
@@ -34,6 +35,10 @@ typedef struct HSlots {
     /* Each slot's assigned nodes: `assigned[first[s] .. first[s] + count[s])`. */
     uint32_t *first, *count;
     const HNode **assigned;
+    /* The serials (HMeta.serial) of `slot` and `assigned`: a reported
+     * assignment is compared by pointer and serial, so a node freed and a
+     * new one at its address are two nodes. */
+    uint32_t *slot_serial, *assigned_serial;
     /* Where the last walk of a slot's list was, so a walk in order is
      * constant time a step. */
     const HNode *hint_slot;
@@ -169,6 +174,8 @@ static void layout(HSlots *s, size_t nslots, size_t nkids)
     s->kid_slot = (uint32_t *)(nodes + nslots + 2 * nkids);
     s->first = s->kid_slot + nkids;
     s->count = s->first + nslots;
+    s->slot_serial = s->count + nslots;
+    s->assigned_serial = s->slot_serial + nslots;
     s->nslots = nslots;
     s->nkids = nkids;
 }
@@ -185,7 +192,7 @@ static HSlots *slots_of(HDoc *d, const HNode *root)
     for (const HNode *c = host->first_child; c; c = c->next)
         nkids += slottable(c);
     size_t bytes = sizeof(HSlots) + (nslots + 2 * nkids) * sizeof(const HNode *) +
-                   (nkids + 2 * nslots) * sizeof(uint32_t);
+                   (2 * nkids + 3 * nslots) * sizeof(uint32_t);
     int64_t why = OS64_HTML_OK;
     HSlots *s = d_alloc(d, bytes, &why);
     if (!s)
@@ -204,6 +211,7 @@ static HSlots *slots_of(HDoc *d, const HNode *root)
     for (const HNode *n = root->first_child; n; n = tree_next(root, n))
         if (is_slot(n)) {
             s->slot[i] = n;
+            s->slot_serial[i] = h_meta(n)->serial;
             s->count[i] = 0;
             i++;
         }
@@ -231,7 +239,9 @@ static HSlots *slots_of(HDoc *d, const HNode *root)
     for (size_t k = 0; k < nkids; k++)
         if (s->kid_slot[k] != UINT32_MAX) {
             uint32_t at_slot = s->kid_slot[k];
-            s->assigned[s->first[at_slot] + s->count[at_slot]++] = s->kid[k];
+            uint32_t at = s->first[at_slot] + s->count[at_slot]++;
+            s->assigned[at] = s->kid[k];
+            s->assigned_serial[at] = h_meta(s->kid[k])->serial;
         }
     return s;
 }
@@ -239,9 +249,12 @@ void h_slots_forget(HDoc *d, const HNode *root)
 {
     h_free(d, table_take(&d->slots, root));
     h_free(d, table_take(&d->reported, root));
+    /* The list keeps marking order, so the gap closes by shifting. */
     for (size_t i = 0; i < d->slot_dirty_n; i++)
         if (d->slot_dirty[i] == root) {
-            d->slot_dirty[i] = d->slot_dirty[--d->slot_dirty_n];
+            for (size_t k = i + 1; k < d->slot_dirty_n; k++)
+                d->slot_dirty[k - 1] = d->slot_dirty[k];
+            d->slot_dirty_n--;
             break;
         }
 }
@@ -266,6 +279,12 @@ static const HNode *tree_top(const HNode *n)
 }
 void h_slots_mark(HDoc *d, const HNode *root)
 {
+    /* The change may be one that left the version where it was (the
+     * parser moves it once a call), so the cached assignment goes stale
+     * here and not only when the version moves. */
+    HSlots **cached = find_entry(&d->slots, root);
+    if (cached && *cached)
+        (*cached)->version = 0;
     for (size_t i = 0; i < d->slot_dirty_n; i++)
         if (d->slot_dirty[i] == root)
             return;
@@ -313,12 +332,16 @@ void h_slots_note(HDoc *d, const os64_html_change_t *c)
  * slot; a slot `before` did not have had nothing assigned. */
 static bool assigned_same(const HSlots *now, size_t k, const HSlots *before)
 {
-    size_t j = before ? slot_index(before, now->slot[k]) : SIZE_MAX;
+    size_t j = SIZE_MAX;
+    for (size_t i = 0; before && j == SIZE_MAX && i < before->nslots; i++)
+        if (before->slot[i] == now->slot[k] && before->slot_serial[i] == now->slot_serial[k])
+            j = i;
     size_t had = j == SIZE_MAX ? 0 : before->count[j];
     if (had != now->count[k])
         return false;
     for (size_t i = 0; i < had; i++)
-        if (before->assigned[before->first[j] + i] != now->assigned[now->first[k] + i])
+        if (before->assigned[before->first[j] + i] != now->assigned[now->first[k] + i] ||
+            before->assigned_serial[before->first[j] + i] != now->assigned_serial[now->first[k] + i])
             return false;
     return true;
 }
@@ -363,24 +386,24 @@ int64_t os64_html_slot_changes(os64_html_document_t *doc,
         return OS64_HTML_BAD_ARGUMENT;
     int64_t status = OS64_HTML_OK;
     if (d->slot_dirty_all) {
-        /* Every root anything was computed or reported for. */
+        /* Every shadow root the document has, whether or not anything was
+         * ever computed or reported for it: a root whose every mark was
+         * lost is in neither table. */
         d->slot_dirty_all = false;
-        for (size_t i = 0; i < d->slots.cap; i++)
-            if (d->slots.e[i])
-                h_slots_mark(d, d->slots.e[i]->root);
-        for (size_t i = 0; i < d->reported.cap; i++)
-            if (d->reported.e[i])
-                h_slots_mark(d, d->reported.e[i]->root);
+        for (const HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
+            if (os64_html_shadow_host(n))
+                h_slots_mark(d, n);
     }
-    size_t i = 0;
-    while (i < d->slot_dirty_n) {
-        if (report_root(d, d->slot_dirty[i], changed, opaque)) {
-            d->slot_dirty[i] = d->slot_dirty[--d->slot_dirty_n];
+    /* Reported roots leave the list and the rest close up behind them, so
+     * what is left keeps marking order for a later call. */
+    size_t kept = 0;
+    for (size_t i = 0; i < d->slot_dirty_n; i++) {
+        if (report_root(d, d->slot_dirty[i], changed, opaque))
             continue;
-        }
         status = OS64_HTML_NO_MEMORY;
-        i++;
+        d->slot_dirty[kept++] = d->slot_dirty[i];
     }
+    d->slot_dirty_n = kept;
     return status;
 }
 

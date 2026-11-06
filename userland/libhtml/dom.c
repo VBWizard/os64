@@ -1832,7 +1832,11 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
      * node under another's. */
     HNode *root = (HNode *)node;
     bool foreign = !ours(d, root);
-    if (deep && foreign && height_of(root, NULL) > h_depth_limit(d)) {
+    /* A shallow clone of a clonable host copies its shadow tree, so it is
+     * held to the limit as a deep one is (height_of counts the host's own
+     * children too, which only makes the check stricter). */
+    bool copies_tree = deep || (root->shadow_root && (root->shadow_root->shadow & OS64_HTML_SHADOW_CLONABLE));
+    if (copies_tree && foreign && height_of(root, NULL) > h_depth_limit(d)) {
         say(status, OS64_HTML_TOO_DEEP);
         return NULL;
     }

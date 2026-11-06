@@ -602,8 +602,9 @@ const os64_html_node_t *os64_html_shadow_including_next(const os64_html_node_t *
  * element or text child of a host is assigned to the first `slot` in the
  * host's shadow tree, in tree order, whose `name` equals the child's `slot`
  * attribute (the empty name for none). It is computed per shadow root and
- * kept until the document's version moves; a refused allocation answers
- * the same by walking the trees, more slowly.
+ * kept until a change that can move it (SLOTCHANGE, below) or the
+ * document's version moving; a refused allocation answers the same by
+ * walking the trees, more slowly.
  *
  * `assigned_slot` is a node's slot, NULL when it has none (its parent is
  * no host, or no slot takes its name). `slot_assigned_count` and

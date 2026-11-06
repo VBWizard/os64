@@ -30,7 +30,11 @@ typedef struct {
     size_t unit_holds; /* sum of native and parser references in a pending unit */
     uint64_t stamp;
     HNode *pending_next, *pending_prev, *live_prev, *live_next;
-    size_t ordinal;
+    /* The fragment parser's index for a node it made (fragment.c), and the
+     * node's serial: a number no other node of its document had before
+     * it (HDoc.serials), so a node and a later one at the same address
+     * are told apart (shadow.c's reported assignments). */
+    uint32_t ordinal, serial;
 } HMeta;
 #define H_NODE_PACKED 1u
 #define H_NODE_EMBEDDED 2u
@@ -102,8 +106,9 @@ typedef struct {
     HSlotTable slots, reported;
     const HNode **slot_dirty;
     size_t slot_dirty_n, slot_dirty_cap;
-    bool slot_dirty_all; /* a mark was lost: the next report compares every known root */
+    bool slot_dirty_all; /* a mark was lost: the next report compares every shadow root */
     bool shadows;
+    uint32_t serials;   /* the last node serial given out (HMeta.serial) */
 } HDoc;
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),

@@ -282,6 +282,7 @@ HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why)
     if (n) {
         n->kind = kind;
         n->document_id = d->id;
+        h_meta(n)->serial = ++d->serials;
         d_node_register(d, n, 0);
         d->pub.node_count++;
     }
@@ -584,7 +585,7 @@ HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind)
     if (p->d->pub.refusal)
         return NULL;
     int64_t why = OS64_HTML_OK;
-    size_t ordinal = p->d->pub.node_count;
+    uint32_t ordinal = (uint32_t)p->d->pub.node_count;
     HNode *n = d_node_new(p->d, kind, &why);
     if (n)
         h_meta(n)->ordinal = ordinal;

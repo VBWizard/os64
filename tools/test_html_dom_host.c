@@ -704,7 +704,7 @@ static void t_slots(void)
 
 // SHADOW_DOM.md § 4: slotchange is marked at the mutation, reported by
 // comparison.
-static const HNode *reported_slots[16];
+static const HNode *reported_slots[64];
 static size_t nreported;
 static void slot_changed(void *opaque, const os64_html_node_t *slot)
 {
@@ -779,6 +779,157 @@ static void t_slotchange(void)
 
     os64_html_document_free(doc);
     check(live == 0, "slotchange cases freed");
+}
+
+// A host with an open root holding one default slot, and a text child.
+static HNode *slotted_host(os64_html_document_t *doc, HNode **slot)
+{
+    HNode *host = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    os64_html_insert(doc, doc->body, host, NULL);
+    HNode *root = os64_html_attach_shadow(doc, host, OS64_HTML_SHADOW_OPEN, NULL);
+    *slot = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_insert(doc, root, *slot, NULL);
+    os64_html_insert(doc, host, os64_html_create_text(doc, "x", 1, NULL), NULL);
+    return host;
+}
+// The cold read's cases: order past two roots, a reused address, a lost
+// mark, a forgotten root, nested marking, forwarded slots, templates.
+static void t_shadow_more(void)
+{
+    os64_html_document_t *doc = parse("<body>");
+    HNode *slots[10], *hosts[10];
+    for (size_t i = 0; i < 3; i++)
+        hosts[i] = slotted_host(doc, &slots[i]);
+    drain(doc, NULL);
+    for (size_t i = 0; i < 3; i++)
+        os64_html_insert(doc, hosts[i], os64_html_create_text(doc, "y", 1, NULL), NULL);
+    check(drain(doc, NULL) == 3 && reported_slots[0] == slots[0] && reported_slots[1] == slots[1] &&
+              reported_slots[2] == slots[2],
+          "three roots are reported in the order they were marked");
+
+    // A text freed and a new one made at its address are two nodes.
+    HNode *only = hosts[0]->last_child;
+    os64_html_remove(doc, hosts[0]->first_child);
+    drain(doc, NULL);
+    os64_html_remove(doc, only);
+    HNode *fresh = os64_html_create_text(doc, "z", 1, NULL);
+    check(fresh == only, "the fixture: the new text takes the freed one's address");
+    os64_html_insert(doc, hosts[0], fresh, NULL);
+    check(drain(doc, NULL) == 1 && reported_slots[0] == slots[0],
+          "a child replaced by a new one is a change, at the same address or not (reused: %s)",
+          fresh == only ? "yes" : "no");
+
+    // A lost mark makes the next report compare every shadow root.
+    for (size_t i = 3; i < 10; i++)
+        hosts[i] = slotted_host(doc, &slots[i]);
+    drain(doc, NULL);
+    HNode *texts[10];
+    for (size_t i = 0; i < 10; i++)
+        texts[i] = os64_html_create_text(doc, "w", 1, NULL);
+    HDoc *d = (HDoc *)doc;
+    for (size_t i = 0; i < 10; i++) {
+        if (d->slot_dirty_n == d->slot_dirty_cap)
+            fail_at = allocations + 1;
+        os64_html_insert(doc, hosts[i], texts[i], NULL);
+        fail_at = 0;
+    }
+    check(d->slot_dirty_all, "a mark the list had no room for was lost (%zu kept)", d->slot_dirty_n);
+    size_t got = drain(doc, NULL);
+    bool every = got == 10;
+    for (size_t i = 0; every && i < 10; i++) {
+        bool seen = false;
+        for (size_t k = 0; k < 10; k++)
+            seen = seen || reported_slots[k] == slots[i];
+        every = seen;
+    }
+    check(every && !d->slot_dirty_all, "and the next report has all ten (%zu)", got);
+
+    // A root whose every mark was lost, and that nothing ever computed or
+    // reported, is still found: the report walks the document's roots.
+    HNode *filler_slot;
+    for (size_t i = 0; i < 64 && d->slot_dirty_n < d->slot_dirty_cap; i++)
+        slotted_host(doc, &filler_slot);
+    HNode *unseen = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    HNode *unseen_slot = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    HNode *unseen_text = os64_html_create_text(doc, "u", 1, NULL);
+    os64_html_insert(doc, doc->body, unseen, NULL);
+    os64_html_insert(doc, unseen, unseen_text, NULL);
+    check(d->slot_dirty_n == d->slot_dirty_cap, "the fixture: the mark list is full (%zu)", d->slot_dirty_n);
+    fail_at = allocations + 1;
+    HNode *unseen_root = os64_html_attach_shadow(doc, unseen, OS64_HTML_SHADOW_OPEN, NULL);
+    fail_at = 0;
+    if (d->slot_dirty_n == d->slot_dirty_cap)
+        fail_at = allocations + 1;
+    os64_html_insert(doc, unseen_root, unseen_slot, NULL);
+    fail_at = 0;
+    bool listed = false;
+    for (size_t i = 0; i < d->slot_dirty_n; i++)
+        listed = listed || d->slot_dirty[i] == unseen_root;
+    check(unseen_root && d->slot_dirty_all && !listed, "the fixture: every mark of the new root was lost");
+    got = drain(doc, NULL);
+    bool found = false;
+    for (size_t k = 0; k < got && k < H_ARRAY(reported_slots); k++)
+        found = found || reported_slots[k] == unseen_slot;
+    check(found, "its first assignment is reported all the same (%zu reported)", got);
+
+    // A marked root reclaimed before the report is forgotten.
+    os64_html_insert(doc, hosts[9], os64_html_create_text(doc, "v", 1, NULL), NULL);
+    os64_html_remove(doc, hosts[9]);
+    os64_html_create_text(doc, "", 0, NULL);
+    check(drain(doc, NULL) == 0 && d->slot_dirty_n == 0, "a reclaimed root reports nothing and stays off the list");
+
+    // A slot's name changed deep in its tree marks the tree's root.
+    HNode *outer = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    os64_html_insert(doc, doc->body, outer, NULL);
+    HNode *oroot = os64_html_attach_shadow(doc, outer, OS64_HTML_SHADOW_OPEN, NULL);
+    HNode *wrap = os64_html_create_element(doc, OS64_HTML_NS_HTML, "p", NULL);
+    HNode *deep_slot = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_set_attr(doc, deep_slot, "name", "n", 1);
+    os64_html_insert(doc, oroot, wrap, NULL);
+    os64_html_insert(doc, wrap, deep_slot, NULL);
+    HNode *named_kid = os64_html_create_element(doc, OS64_HTML_NS_HTML, "b", NULL);
+    os64_html_set_attr(doc, named_kid, "slot", "m", 1);
+    os64_html_insert(doc, outer, named_kid, NULL);
+    drain(doc, NULL);
+    os64_html_set_attr(doc, deep_slot, "name", "m", 1);
+    check(drain(doc, NULL) == 1 && reported_slots[0] == deep_slot, "a nested slot renamed is reported");
+
+    // A forwarded slot: the outer host's child reaches the inner host's
+    // slot through the outer tree's slot, which is the inner host's child.
+    HNode *inner = os64_html_create_element(doc, OS64_HTML_NS_HTML, "span", NULL);
+    os64_html_insert(doc, oroot, inner, NULL);
+    HNode *iroot = os64_html_attach_shadow(doc, inner, OS64_HTML_SHADOW_OPEN, NULL);
+    HNode *forward = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_set_attr(doc, forward, "name", "f", 1);
+    os64_html_set_attr(doc, forward, "slot", "b", 1);
+    os64_html_insert(doc, inner, forward, NULL);
+    HNode *inner_slot = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_set_attr(doc, inner_slot, "name", "b", 1);
+    os64_html_insert(doc, iroot, inner_slot, NULL);
+    HNode *passed = os64_html_create_element(doc, OS64_HTML_NS_HTML, "i", NULL);
+    os64_html_set_attr(doc, passed, "slot", "f", 1);
+    os64_html_insert(doc, outer, passed, NULL);
+    check(os64_html_flat_first_child(doc, inner) == inner_slot &&
+              os64_html_flat_first_child(doc, inner_slot) == forward &&
+              os64_html_flat_first_child(doc, forward) == passed && os64_html_flat_parent(doc, passed) == forward &&
+              os64_html_flat_parent(doc, forward) == inner_slot,
+          "a forwarded slot is a flat node between the two hosts' slots");
+
+    // A template in a clonable root is cloned with its contents.
+    HNode *ch = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    os64_html_insert(doc, doc->body, ch, NULL);
+    HNode *croot = os64_html_attach_shadow(doc, ch, OS64_HTML_SHADOW_OPEN | OS64_HTML_SHADOW_CLONABLE, NULL);
+    HNode *tpl = os64_html_create_element(doc, OS64_HTML_NS_HTML, "template", NULL);
+    os64_html_insert(doc, croot, tpl, NULL);
+    os64_html_insert(doc, tpl->template_contents, os64_html_create_element(doc, OS64_HTML_NS_HTML, "u", NULL), NULL);
+    HNode *copy = os64_html_clone(doc, ch, true, NULL);
+    HNode *ctpl = copy && copy->shadow_root ? copy->shadow_root->first_child : NULL;
+    check(ctpl && ctpl != tpl && ctpl->template_contents && ctpl->template_contents->first_child &&
+              !strcmp(ctpl->template_contents->first_child->name, "u"),
+          "a template inside a clonable root keeps its contents in the clone");
+
+    os64_html_document_free(doc);
+    check(live == 0, "the cold read's cases freed");
 }
 
 static void t_attributes(void)
@@ -2977,6 +3128,7 @@ int main(int argc, char **argv)
         t_shadow();
         t_slots();
         t_slotchange();
+        t_shadow_more();
         t_change_log();
         t_change_log_loss();
         t_change_log_parser();
