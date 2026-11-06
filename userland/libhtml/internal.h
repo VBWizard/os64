@@ -111,7 +111,8 @@ _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode)
 
 /* The private word after a node: a TEXT, COMMENT or PI buffer capacity (zero
  * when its bytes are a literal or lie in a permanent chunk, so are never
- * freed alone); an ELEMENT's flags; a template-contents FRAGMENT's host. */
+ * freed alone); an ELEMENT's flags; the owner of a FRAGMENT that is a
+ * template's contents or a shadow root (dom.c's `host`). */
 static inline size_t *h_word(const HNode *n)
 {
     return &h_meta(n)->word;

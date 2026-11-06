@@ -73,8 +73,8 @@ detached node without walking the tree or changing it. Consumers use this
 query rather than interpreting the library's opaque document mark.
 `os64_html_hold/release` count external node holders. A removed subtree is
 reclaimed as a unit when none of its nodes is held and no live snapshot pin
-predates its retirement. This includes template contents and consumed
-fragment containers. A node needed after a mutation must be held beforehand;
+predates its retirement. This includes template contents, a host's shadow
+root and its tree, and consumed fragment containers. A node needed after a mutation must be held beforehand;
 newly created nodes never inserted remain document-owned until teardown.
 Document teardown rejects outstanding node holds and snapshot pins;
 consumers must release their references before freeing the document.
@@ -90,6 +90,9 @@ implements insertion modes, formatting reconstruction/adoption, templates,
 foreign integration, and foster parenting. `fragment.c` stages contextual parses
 and copies their reachable result into document-owned ledger blocks.
 `serialize.c` writes HTML without allocating or using recursion.
+`shadow.c` holds slot assignment, the flat tree and slotchange's marking
+(docs/design/pending/SHADOW_DOM.md § 4); shadow roots themselves are
+`dom.c`'s.
 Reprocessing is iterative; bounded
 mode delegation follows the standard's calls to another insertion mode.
 
