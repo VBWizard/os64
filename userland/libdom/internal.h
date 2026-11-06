@@ -346,6 +346,9 @@ struct os64_dom {
     os64_dom_svg_hit_provider_t svg_hit;
     void *svg_hit_opaque;
     DValue *svg_graphics_proto, *svg_geometry_proto;
+    /* ShadowRoot's and HTMLSlotElement's prototypes, refining a shadow
+     * root's DocumentFragment kind and a slot's HTMLElement kind (shadow.c). */
+    DValue *shadow_root_proto, *slot_proto;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
     /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
@@ -713,6 +716,18 @@ int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
 bool d_svg_geometry_node(const os64_html_node_t *);
 JSValueConst d_svg_prototype(os64_dom_t *, const os64_html_node_t *);
+/* Shadow trees' surface (shadow.c, SHADOW_DOM.md § 7): the two prototypes,
+ * made at creation; the prototype a node's wrapper takes, refined for a
+ * shadow root and a slot before SVG's; the members and interfaces, which
+ * d_modern_install puts on with options.shadow_trees; the names it puts on
+ * window, by index, NULL past the last. */
+int d_shadow_prototypes(os64_dom_t *dom, JSContext *ctx);
+JSValueConst d_node_prototype(os64_dom_t *dom, const os64_html_node_t *n);
+int d_shadow_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+const char *d_shadow_name(size_t index);
+/* Whether a custom element definition lists "shadow" in disabledFeatures
+ * (custom.c). */
+bool d_custom_disables_shadow(os64_dom_t *dom, const os64_html_node_t *element);
 int d_svg_geometry_prototypes(os64_dom_t *, JSContext *);
 int d_svg_geometry_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_geometry_install(os64_dom_t *dom, JSContext *ctx);
@@ -750,6 +765,25 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
  * default was not prevented, 0 when it was, -1 with an exception pending
  * when the binding refused its own storage or the runtime failed under it. */
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node);
+/* DOM's "retarget A against B" (§ 4.8): A, unless A is in a shadow tree
+ * whose root is not a shadow-including inclusive ancestor of B, when it is
+ * that root's host, again until it is not. A NULL B (the window) retargets
+ * A into the document tree. */
+const os64_html_node_t *d_retarget(const os64_html_node_t *a, const os64_html_node_t *b);
+/* DOM's "get the parent" for a node on an event's path (§ 2.9, § 4.8): a
+ * node assigned to a slot goes to the slot; a shadow root to its host,
+ * unless the event is not composed and the root is `first`, the root of
+ * the node the event was dispatched at; anything else to its parent. A
+ * node can be assigned only when its parent is a host, so a page with no
+ * shadow trees pays one test a step. */
+const os64_html_node_t *d_event_parent(const os64_dom_t *dom, const os64_html_node_t *node, bool composed,
+                                       const os64_html_node_t *first);
+/* The element the host says has focus, when it is one in the window's
+ * tree (a shadow tree's included); else NULL (document.c). */
+const os64_html_node_t *d_focused(os64_dom_t *dom);
+/* Event's `composed` (SHADOW_DOM.md § 8), which d_shadow_install puts on
+ * Event's prototype with the rest of the surface. */
+int d_event_composed_install(os64_dom_t *dom, JSContext *ctx);
 /* A PLAIN EVENT TARGET: an object that is neither a node nor window and
  * is an EventTarget all the same (performance, screen.orientation, a
  * MediaQueryList, an AbortSignal, an XMLHttpRequest and its upload, a
@@ -1530,8 +1564,8 @@ int d_options_set_index(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
                         JSValueConst value);
 /* getRootNode's GetRootNodeOptions converted as WebIDL converts a
  * dictionary (a page's `composed` getter runs; anything but an object,
- * undefined or null is a TypeError), for both of its receivers. With no
- * shadow trees, `composed` changes no answer. -1 with an exception. */
+ * undefined or null is a TypeError), for both of its receivers: 1 when
+ * `composed` is true, 0 when not, -1 with an exception. */
 int d_root_options(JSContext *ctx, int argc, JSValueConst *argv);
 /* The referrer copied out of the options at creation (core.c), and what
  * os64_dom_free lets go: the copy and the held running script. */
@@ -1735,6 +1769,10 @@ void d_strings_free(os64_dom_t *dom, char **strings, size_t count);
  * running it (os64_dom_reactions_run); teardown, as custom elements'. */
 int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_observers_changed(os64_dom_t *dom, const os64_html_change_t *change);
+/* With shadow trees on: queue the notify that fires slotchange when
+ * libhtml has a slot change waiting to report. Asked at every change the
+ * dispatcher sees, and after a clone, whose copy's slots no change made. */
+void d_slots_changed(os64_dom_t *dom);
 bool d_observers_owed(const os64_dom_t *dom);
 int d_observers_notify_owed(os64_dom_t *dom, JSContext *ctx);
 void d_observers_drain(os64_dom_t *dom);

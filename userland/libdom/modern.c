@@ -1,8 +1,10 @@
 #include "internal.h"
 
 /* THE MODERN WEB'S TABLE (MODERN_WEB.md § How the slices run side by side).
- * Every global the arc adds to window is installed by a row here and
- * nowhere else, so os64_dom_options_t.modern removes all of it at once: with
+ * Every global the arc adds to window is installed by a row here, or by
+ * shadow trees' install, which this walk runs last under a switch of its
+ * own (d_shadow_install), and nowhere else, so os64_dom_options_t.modern
+ * removes all of it at once: with
  * the option clear the walk does not run, and a name that is not installed
  * is a name a page's feature detection finds missing, which is the point
  * (rule 1: a surface either exists whole or does not exist). What the
@@ -197,6 +199,9 @@ int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
      * without saying when that ran out of memory. */
     for (size_t i = 0; i < sizeof(kModern) / sizeof(kModern[0]); i++)
         if (kModern[i].install(dom, ctx, global) < 0 || JS_HasException(ctx)) return -1;
+    /* Shadow trees' surface has a switch of its own beside this one
+     * (options.shadow_trees, shadow.c), and inherits the rows' interfaces. */
+    if (dom->options.shadow_trees && (d_shadow_install(dom, ctx, global) < 0 || JS_HasException(ctx))) return -1;
     return 0;
 }
 

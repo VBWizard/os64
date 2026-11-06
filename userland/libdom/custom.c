@@ -49,6 +49,9 @@ typedef struct DDefinition {
     uint32_t constructor_script, scripts[CB_COUNT];
     char **observed;
     size_t observed_count;
+    /* disabledFeatures named "shadow": attachShadow refuses its elements
+     * (SHADOW_DOM.md § 7). */
+    bool disable_shadow;
     /* The construction stack: the elements being upgraded, innermost
      * last; NULL is the "already constructed" marker. Each is held by its
      * DCustom, which is marked constructing. */
@@ -164,6 +167,14 @@ static DDefinition *definition_for(os64_dom_t *dom, const os64_html_node_t *elem
         element->ns != OS64_HTML_NS_HTML || element->tag != OS64_HTML_TAG_UNKNOWN)
         return NULL;
     return definition_named(s, element->name);
+}
+
+/* Whether `element`'s definition lists "shadow" in disabledFeatures, which
+ * attachShadow refuses (DOM's "attach a shadow root"). */
+bool d_custom_disables_shadow(os64_dom_t *dom, const os64_html_node_t *element)
+{
+    const DDefinition *d = definition_for(dom, element);
+    return d != NULL && d->disable_shadow;
 }
 
 static DDefinition *definition_constructed_by(const struct DCustomState *s, JSValueConst constructor)
@@ -955,6 +966,7 @@ typedef struct {
     JSValue prototype, callbacks[CB_COUNT];
     char **observed;
     size_t observed_count;
+    bool disable_shadow;
 } DReading;
 
 static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constructor, DReading *r)
@@ -982,7 +994,8 @@ static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constru
         if (status < 0) return -1;
     }
     /* disabledFeatures and formAssociated are read as the standard reads
-     * them, and kept by nothing: there is no ElementInternals (DEBTS.md). */
+     * them. A disabled "shadow" is kept, for attachShadow; the rest is kept
+     * by nothing: there is no ElementInternals (DEBTS.md). */
     JSValue disabled = JS_GetPropertyStr(ctx, constructor, "disabledFeatures");
     if (JS_IsException(disabled)) return -1;
     if (!JS_IsUndefined(disabled)) {
@@ -991,6 +1004,8 @@ static int read_definition(os64_dom_t *dom, JSContext *ctx, JSValueConst constru
         int status = d_string_sequence(dom, ctx, disabled, &features, &count);
         JS_FreeValue(ctx, disabled);
         if (status < 0) return -1;
+        for (size_t i = 0; i < count; i++)
+            if (os64_streq(features[i], "shadow")) r->disable_shadow = true;
         d_strings_free(dom, features, count);
     }
     JSValue associated = JS_GetPropertyStr(ctx, constructor, "formAssociated");
@@ -1046,6 +1061,7 @@ static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const cha
     }
     d->observed = reading->observed;
     d->observed_count = reading->observed_count;
+    d->disable_shadow = reading->disable_shadow;
     reading->observed = NULL;
     reading->observed_count = 0;
     struct DCustomState *s = dom->custom;
@@ -1110,7 +1126,7 @@ static JSValue define(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *a
         goto done;
     }
     s->defining = true;
-    DReading reading = {JS_UNDEFINED, {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED}, NULL, 0};
+    DReading reading = {JS_UNDEFINED, {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED}, NULL, 0, false};
     int read = read_definition(dom, ctx, argv[1], &reading);
     s->defining = false;
     DDefinition *d = read < 0 ? NULL : record_definition(dom, ctx, name.data, argv[1], &reading);

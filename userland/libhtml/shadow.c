@@ -381,6 +381,12 @@ static bool report_root(HDoc *d, const HNode *root, void (*changed)(void *, cons
     return true;
 }
 
+bool os64_html_slot_changes_pending(const os64_html_document_t *doc)
+{
+    const HDoc *d = (const HDoc *)doc;
+    return d != NULL && (d->slot_dirty_n != 0 || d->slot_dirty_all);
+}
+
 int64_t os64_html_slot_changes(os64_html_document_t *doc,
                                void (*changed)(void *opaque, const os64_html_node_t *slot), void *opaque)
 {

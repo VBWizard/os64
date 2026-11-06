@@ -178,17 +178,22 @@ static JSValue title_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
     return result;
 }
 
-/* HTML § Document.activeElement's candidate as DOM's retargeting leaves it
- * for a document with no shadow trees: the focused element when it is in
- * this document, else the document, whose answer is its body, else its
+const os64_html_node_t *d_focused(os64_dom_t *dom)
+{
+    const os64_html_node_t *focused = NULL;
+    if (dom->options.focus != NULL) (void)dom->options.focus(dom->options.host_opaque, &focused);
+    return focused != NULL && os64_html_owns_node(dom->document, focused) && focused->kind == OS64_HTML_ELEMENT &&
+        d_in_window_tree(dom, focused) ? focused : NULL;
+}
+
+/* HTML § Document.activeElement: the focused element retargeted against
+ * the document, so a focused element inside a shadow tree shows as its
+ * outermost host; else the document, whose answer is its body, else its
  * element, else null. Only the window's document has anything focused. */
 static JSValue active_element(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, bool window)
 {
-    const os64_html_node_t *focused = NULL;
-    if (window && dom->options.focus != NULL) (void)dom->options.focus(dom->options.host_opaque, &focused);
-    if (focused != NULL && os64_html_owns_node(dom->document, focused) && focused->kind == OS64_HTML_ELEMENT &&
-        d_in_window_tree(dom, focused))
-        return d_wrap(dom, ctx, focused);
+    const os64_html_node_t *focused = window ? d_focused(dom) : NULL;
+    if (focused != NULL) return d_wrap(dom, ctx, d_retarget(focused, document));
     const os64_html_node_t *body = d_document_part(document, true);
     return d_wrap(dom, ctx, body != NULL ? body : d_document_element(document));
 }

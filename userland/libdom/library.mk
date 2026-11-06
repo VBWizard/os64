@@ -26,6 +26,8 @@ LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c libdom/animation.c 
 LIBDOM_SRCS += libdom/rect.c libdom/intersection.c libdom/resize.c libdom/kept.c libdom/css.c
 # DOM § 6: TreeWalker, NodeIterator and NodeFilter.
 LIBDOM_SRCS += libdom/walker.c
+# SHADOW_DOM.md § 7: shadow trees' script surface.
+LIBDOM_SRCS += libdom/shadow.c
 # 0f P1a: the select's options and the Option factory.
 LIBDOM_SRCS += libdom/options.c
 # 0f P2's core: the text controls' selection and the window's Selection.

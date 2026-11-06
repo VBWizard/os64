@@ -118,15 +118,17 @@ static bool emit(Packet *q, const char *type, const os64_html_node_t *node,
            (!dom->pointer.cancel_owed || dom->pointer.canceling);
 }
 /* Snapshot ancestor paths before boundary listeners can detach or reparent
- * them. These holds are independent of capture and event-object lifetimes. */
+ * them. These holds are independent of capture and event-object lifetimes.
+ * An ancestor is as a composed event's path climbs (d_event_parent): a
+ * slotted node's slot, a shadow root's host. */
 typedef struct { const os64_html_node_t **nodes; size_t count; } Path;
 static bool path_make(os64_dom_t *dom, const os64_html_node_t *node, Path *path)
 {
     size_t n = 0;
-    for (const os64_html_node_t *at = node; at; at = at->parent) n++;
+    for (const os64_html_node_t *at = node; at; at = d_event_parent(dom, at, true, NULL)) n++;
     path->count = 0; path->nodes = n ? d_alloc(dom, n * sizeof(*path->nodes)) : NULL;
     if (n && !path->nodes) return false;
-    for (; node; node = node->parent) {
+    for (; node; node = d_event_parent(dom, node, true, NULL)) {
         os64_html_hold(dom->document, node);
         path->nodes[path->count++] = node;
     }
@@ -206,10 +208,11 @@ static void cancel(Packet *q)
     d_pointer_drain(q->dom);
     p->canceling = false;
 }
-static const os64_html_node_t *common(const os64_html_node_t *a, const os64_html_node_t *b)
+/* The nearest node both climb through, as path_make climbs. */
+static const os64_html_node_t *common(os64_dom_t *dom, const os64_html_node_t *a, const os64_html_node_t *b)
 {
-    for (; a; a = a->parent)
-        for (const os64_html_node_t *n = b; n; n = n->parent)
+    for (; a; a = d_event_parent(dom, a, true, NULL))
+        for (const os64_html_node_t *n = b; n; n = d_event_parent(dom, n, true, NULL))
             if (a == n) return a;
     return NULL;
 }
@@ -295,7 +298,7 @@ os64_js_status_t os64_dom_pointer_dispatch(os64_dom_t *dom, const os64_dom_point
         }
         if (up && button >= 0 && button < 3 && p->down[button] && connected(dom, target)) {
             /* Capture was in force for this release, even after implicit release. */
-            const os64_html_node_t *activate = captured ? target : common(p->down[button], target);
+            const os64_html_node_t *activate = captured ? target : common(dom, p->down[button], target);
             if (activate && connected(dom, activate))
                 emit(&q, button == 0 ? "click" : "auxclick", activate, NULL, true, true, true, true, NULL);
             hold(dom, &p->down[button], NULL);
