@@ -30,7 +30,7 @@ scripts names the feature.
 | `delegatesFocus` | 4 | 3 | 3 |
 | `slotchange` | 4 | 3 | 2 |
 | `slotAssignment` (manual slots) | 0 | 0 | 0 |
-| `attachInternals(` called | 0 | 0 | 0 |
+| `attachInternals(` called (these three pulls; § 9 reads the whole corpus) | 0 | 0 | 0 |
 | a declarative shadow root in the HTML | — | 1 | |
 
 Libraries among the 53: Lit on 5, a Shady DOM polyfill on 3, Stencil,
@@ -261,8 +261,12 @@ and the filter above never applies to them.
 
 Rules whose subject is `:host` and rules ending in `::slotted()` are
 filed in two more index targets beside the element's and the
-pseudo-elements', consulted when matching a host (for each root it hosts)
-and a slotted element (for its slot's tree).
+pseudo-elements', consulted when matching a host (for the one root it
+hosts) and a slotted element. `::slotted()` matches after flattening (CSS
+Scoping): an element passed on through a forwarded slot (`<slot name=a
+slot=b>`, common in nested components) is assigned to every slot on that
+chain, so each tree along the chain consults its `::slotted()` rules for
+it, innermost slot last.
 
 **Tree-scoped names are global in this cut.** `@keyframes` and
 `@font-face` names written in a shadow sheet should resolve in that tree
@@ -419,6 +423,7 @@ booked. The record in § 1 alone carries about 57 `::part`.
 | Tree-scoped `@keyframes` and `@font-face` names | — | a DEBTS row with this slice (§ 6) |
 | `:host-context()` | 0 | not booked: one engine's |
 | `delegatesFocus` | 3 | DEBTS; needs the focus navigation yonder has (Tab order) to learn shadow trees |
+| Tab order by the flat tree | — | a DEBTS row with this slice (A.2's `collect_node` row): the first cut tabs in shadow-including order |
 | Declarative shadow roots (`<template shadowrootmode>`) | 1 | DEBTS' template row (line "A template has none of declarative shadow DOM's members"); a libhtml parser step |
 | Manual slot assignment | 0 | DEBTS |
 | `getHTML`, `serializable` serialization | — | DEBTS |
@@ -512,7 +517,8 @@ Each entry is ruled one of three ways:
 
 | Sites | Question | Ruling |
 |---|---|---|
-| libhtml dom.c `above`, `unit_root`, `depth_of` | a node's reclamation unit; its depth against `max_depth` | CROSSES. These already climb from a template's contents to the template (`host`); a shadow root's host joins `host`, so the root lives and dies with its host, and depth counts through it because D3's flat walk descends through it |
+| libhtml dom.c `above`, `unit_root`, `depth_of` (and through them `d_ref`, `d_linking`, `d_unlinking`, `d_collect`, `d_detached`) | a node's reclamation unit; its depth against `max_depth` | CROSSES. These already climb from a template's contents to the template (`host`); a shadow root's host joins `host`, so the root lives and dies with its host, and depth counts through it because D3's flat walk descends through it |
+| libhtml dom.c `may_insert`'s climb on `above` | is the parent inside the node being inserted | CROSSES: DOM's check is host-including, so a host may not be inserted into its own shadow tree |
 | libhtml dom.c `root_of` in `split_records`, `d_parted`, `take_out`, `assert_records`, `d_root`; tree.c `tree_root` in `associate_form` | does a form owner share the node's tree | STOPS, because HTML resets a form owner that is not in the element's tree |
 | libhtml fragment.c `h_parse_fragment`'s context climb | the fragment parser's context element | STOPS, because a ShadowRoot's `innerHTML` passes its host as the context explicitly |
 | libdom window.c `tree_root` under `d_connected` and `d_in_window_tree`, and their callers: custom.c `children_changed` and `upgrade`, window.c `submit`, canvas.c `os64_dom_canvas_visit_damage`, view.c `d_computed_property` and `computed_empty`, pointer.c `connected` (its sixteen uses); libgarb cascade.c `connected` (and `mark_subtree`, `mark_changed`, `mark_children`, `garb_cascade_update` through it); yonder geometry.c `connected` and the snapshot's root check, yonder.c `node_in_document` and `asks_perform_with_fallback`'s root check | is the node in the document | CROSSES. DOM's "connected" is the shadow-including root being a document; these become one libhtml call |
@@ -540,7 +546,7 @@ Each entry is ruled one of three ways:
 | libdom window.c `subtree_next` in `d_script_mark_tree`, `d_script_copy_marks`, `d_script_collect`, `d_script_connected` | the scripts an insertion makes connected | CROSSES, because a script that becomes connected inside a shadow tree runs |
 | libdom event.c `os64_dom_handler_attributes` | which event-handler attributes the page has | CROSSES: a handler on an element in a shadow tree is a listener the page has |
 | libdom node.c `getElementById` (`method`), collection.c `query_next`, `query_step`, `refresh`, `d_select`; classic.c `next_node`, `d_form_control`, `named_property`, `d_classic_collection`; content.c `text_next`, `d_content_get`, `d_replace_content`; controls.c `d_child_text`, `d_label_control`; mixin.c `change`, `adjacent`, `normalize`, `reflect`; tables.c; options.c `text_step`, `option_text`; walker.c `walker_children`, `walker_siblings`, `iterator_traverse`; validity.c `d_form_validate` | `querySelector*`, `getElementsBy*` and live collections, `getElementById`, the document's collections and named access, `form.elements`, `textContent`, labels, `normalize`, table parts, option text, traversal, form validation | STOPS, because each is scoped to the receiver's own descendants or the document's own tree; a ShadowRoot is a receiver of its own for the queries (§ 7) |
-| libpage core.c `collect_node`, `gather`, `collect_forms` | the page model: controls, links, frames, Tab order | CROSSES, in shadow-including order: a control or link inside a component is one a person types into or follows. (Tab order in shadow-including order is the first cut; the standard's focus navigation scopes are `delegatesFocus`'s row, § 10) |
+| libpage core.c `collect_node`, `gather`, `collect_forms` | the page model: controls, links, frames, Tab order | CROSSES for gathering, in shadow-including order: a frame in a connected tree loads, and a control or link inside a component is one a person types into or follows. But what a person can REACH follows the flat tree: a node with no place in it (a light child assigned to no slot) renders nowhere, so the model counts it hidden, as it counts a node under `display: none`. Tab order by the flat tree (a component's own controls around the content it wraps, not before it) is its own DEBTS row with this slice, apart from `delegatesFocus`'s |
 | libpage core.c `collect_ids` | the document's ids, for `#fragment` navigation and `form=` | STOPS for the document's map, because ids are per tree; a control in a shadow tree resolves `form=` in its own tree (libpage gains per-root lookup in D2a) |
 | libpage core.c `walk_sheets`; yonder.c's sheet list | the page's sheets | CROSSES, each sheet carrying its scope (§ 6; D4) |
 | libpage state.c `tree_next`, `os64_page_node_checked`, `os64_page_node_set_checked`, `p_radio_group_missing`, `select_assign`, `option_index`, `os64_page_node_selected_index`, `os64_page_node_value`, `p_state_set_value`, `attr_owner`, `attr_select_baseline`, `attr_selection`, `os64_page_node_set_attr`, `tree_plan_*`, `tree_radio_same`, `textarea_value_equal`, `tree_change`, `os64_page_node_clone` | control state: radio peers, selection, normalization after a tree change | STOPS, because each is per tree; a host inserted with a shadow tree brings controls whose groups are already their root's |
@@ -553,6 +559,62 @@ Each entry is ruled one of three ways:
 | yonder.c `diag_elements` | the record's element census | CROSSES: the record counts what the page has |
 | yonder scripts.c `yonder_scripts_preload`, `inline_source`; yonder.c `sheet_inline`, `sheet_inline_matches`, `next_within`, `button_caption`; geometry.c `next_node` in `yonder_image_map_hit`; svg.c `node`, `fragment_target`, `gradient_paint`, `clip_source`; svg_document.c | the preload scan, an element's own text, a button's caption, `usemap`, SVG `url(#id)` | STOPS: the preload scanner reads what the parser wrote, and nothing parses into a shadow tree until declarative roots (§ 10); a button is no valid shadow host; `usemap` and `url(#id)` resolve in their tree |
 
-Not on either list because nothing walks for them in yonder today:
+### A.3 The second scan
+
+Fable's second read found walks the first pattern missed: helpers outside
+its twenty names (libgarb's `parent_el`, `prev_el`), single steps rather
+than loops, and bare root climbs. The inventory is now made by a tool
+whose pattern does not depend on a list of names:
+
+```
+python3 -I tools/walk_inventory.py                                          # the inventory
+python3 -I tools/walk_inventory.py --check docs/design/pending/SHADOW_DOM.md   # exit 1 on an unruled walk
+```
+
+`tools/walk_inventory.py` prints every line in the six directories that
+steps through `->first_child`, climbs (`X = X->parent`, or a loop whose
+condition reads `->parent`), or calls a WALK HELPER: any function there
+that returns a node pointer and whose body reads a tree link
+(`->parent`, `->first_child`, `->last_child`, `->next`, `->prev`) or
+calls another walk helper, found to a fixed point. Comments and helper
+prototypes are skipped. Against 473d6be7 it prints 893 lines in 416
+functions, 96 of them helpers, and `--check` finds every one of those
+functions named in A.1, A.2 or the table below (a copy of this doc with
+one name removed fails it). The check is by name: it proves no walk is
+unruled, not that each ruling sits beside the right file, which is the
+reader's half. D2a's last commit re-runs it against the code as D2a
+leaves it.
+
+| Sites | Question | Ruling |
+|---|---|---|
+| libgarb select.c `parent_el`, `prev_el` in `match_from` | a descendant, child or sibling combinator | STOPS: § 6's first rule, a combinator never leaves its tree |
+| libgarb select.c `lang_matches`, `dir_matches` | `:lang()`, `:dir()` | CROSSES: HTML gives a shadow root its host's language and directionality, as A.1 rules for libpage's `directionality`; the two must agree |
+| libdom canvas_text.c `text_method`, `canonical_font` | a canvas's inherited direction and font | CROSSES, the same rule |
+| libgarb cascade.c `animation_names`; libflow style.c `cell_table`, `lists_above`, `sheet`, `hints`, `counter_list`, `open_element`, `f_style_beyond`, `f_pseudo_of`, `f_pseudo_origin`; computed.c `flow_computed_new`; flow.c `add`, `flow_clip_parent` (and yonder geometry.c's and `yonder_intersections`' uses of it); layout.c `paint_for`; reuse_match.inc `reuse_element`, `reuse_derived_equal`; boxes.c `scan`, `flow_range`, `loose_end`, `row_range`, `rows_range`; dump.c `element` | inheritance, the style walk's parents, list and table structure, clipping ancestors, the reuse match | FLAT (D3) |
+| yonder pointer_input.inc `pointer_default` | is the hit node in the page's document, before its default action | CROSSES. Unmoved, every press inside a component loses its default action |
+| yonder pointer_input.inc `pointer_turn`, `pointer_route`; yonder.c `element_hit`, `element_at` and their callers `link_at`, `view_event`, `view_context`, `hover` | the node under the pointer | FLAT: hit testing answers the innermost flat-tree node, and dispatch retargets (§ 8) |
+| yonder.c `element_of`, `parts_what` | the element holding a text node, for an event and for the record | FLAT: text that is a child of a shadow root (what `relative-time` writes) climbs to no element today |
+| yonder scripts.c `run_item` | is the script's element connected | CROSSES: the other half of `d_script_*` (A.2) |
+| yonder svg.c `yonder_svg_contains` | does an inline `svg`'s chain end at the document | CROSSES. Unmoved, an icon inside a component is refused as unsupported |
+| yonder svg.c `resource_transform` | `transform: inherit` | FLAT: inheritance |
+| libdom attr.c `detach`, `attr_document`, `attr_member`; implementation.c `d_window_document`, `d_leaving`, `document_take`; mixin.c `text_member`, `d_base_uri`; options.c `options_length_set`, `d_options_set_index` (each through `d_node_document`) | an Attr's or a node's document | CROSSES, riding `d_node_document` (A.1) |
+| libdom mixin.c `mixin_method`: `contains` | is the argument a descendant | STOPS (DOM's `contains` is per tree) |
+| libdom mixin.c `mixin_method`: `getRootNode` | the node's root | STOPS without `composed`, CROSSES with `{composed: true}`: the option is read and ignored today; D2b makes it count |
+| libdom node.c `d_node_clone` | `cloneNode` | CROSSES only into a `clonable` root, as libhtml's clone (A.2) |
+| libdom pointer.c `changed`, `os64_dom_pointer_dispatch`'s `common` | is the captured or hovered node still connected; the common ancestor of down and up | CROSSES (connected), and the event path's rule (§ 8) |
+| libdom classic.c `d_classic_match`, `node_names`; collection.c `matches`; controls.c `control_member`; forms.c `forms_member`; event.c `slot_compile`; options.c `option_member`; window.c `d_activation_after`, `element_method`; libpage core.c `form_owner`, `add_control`, submit.c `node_barred`, state.c `radio_group_member`, `attr_stage`, `attr_radio_group`, `tree_radio_trigger` | form owner, labels, datalist, radio groups | STOPS, riding the rulings of A.1 |
+| libpage state.c `tree_plan_collect`'s `tree_root(...) == document` | is the control connected, before `form=` is resolved | CROSSES for the test (HTML resolves `form=` only for a connected element); the id lookup itself STOPS, per tree |
+| libpage state.c `tree_plan_peers`, `tree_plan_normalize`, `tree_plan_select`, `tree_option_destination`, `os64_page_node_set_text`, the `option_selected` functions; core.c and submit.c's `os64_page_option_*` users | control state after a change, an option's select, a textarea's default value | STOPS: per tree, or the element's own children |
+| libdom compare.c `trees_equal` | `isEqualNode` | STOPS: compares children, never a shadow tree |
+| libdom document.c `active_element`, `document_member`, `d_body_set`; view.c `scrolling_element`, `scroll_owner`; event.c `attribute_source`, `slot_refresh`, `slot_attribute_pending`; implementation.c `document_member`; node.c `property`'s navigation; tables.c; walker.c `last_of` | landmarks, navigation, table parts, traversal | STOPS, riding A.2 (`activeElement`'s retargeting is § 8's) |
+| libhtml dom.c `child_of_kind` in `may_insert` and `d_seat_html`; the fragment cases of `may_insert`, `d_seen`, `place`, `os64_html_insert` | the document's own children; a fragment's children moving on insert | STOPS. Whether a ShadowRoot passed to an insertion behaves as a DocumentFragment is DOM's pre-insert rule, decided in D2a's tests |
+| libdom node.c `element_sibling`; options.c `option_at`, `option_count`, `options_remove`, `select_member`; tables.c `after_captions`, `create_body`, `create_part`, `insert_at`, `insert_row`, `set_part`, `table_member`; libpage core.c `os64_page_option_next`, state.c `os64_page_node_init_option_selected`, `os64_page_node_option_selected`, `os64_page_node_set_option_selected`, submit.c `select_missing` | element siblings, a select's options, a table's parts | STOPS: the element's own children and siblings |
+| yonder geometry.c `yonder_geometry_snapshot` | the snapshot's "is it in the document" root check; its `offsetParent` climb | CROSSES for the root check (A.1); FLAT for `offsetParent` (A.1) |
+| yonder svg.c `yonder_svg_render_image_tree`, svg_document.c `yonder_svg_document_parse`, `yonder_svg_document_size` | an SVG image's own document | STOPS: a tree of its own (A.1) |
+| libflow boxes.c `f_boxes_build`, `inline_element`; computed.c `containing`, `positioned_block`; flow.c `within`, `filtered_open`; layout.c `definite_height`, `quirk_no_wrap_round` | box building, containing blocks, the quirks that read an element's ancestors | FLAT (D3) |
+| Builders, set aside: libhtml dom.c `os64_html_create_comment`, `os64_html_create_doctype`, `os64_html_create_document`, `os64_html_create_element`, `os64_html_create_fragment`, `os64_html_create_text`, `node_new`, `clone_one`, `contents_new`, `data_new`; core.c `h_node`, `d_node_new`; fragment.c `os64_html_parse_fragment`, `os64_html_parse_fragment_root`, `pack_node`; tree.c's insertion modes (`adopt`, `adoption`, `body`, `clone`, `doctype`, `element`, `foreign`, `insert_character`, `insert_comment`, `process`, `raw_element`, `reconstruct`, `rooted`, `synthetic`) and xml.c `event`, `flush`; libdom implementation.c `create_document`, `create_document_type`, `create_element_ns`, `create_html_document`, `parse_from_string`, `document_made`; custom.c `d_custom_create`, `d_html_element_constructor`, `constructed_wrong`; classic.c `classic`, `character_constructor`, `fragment_constructor`; options.c `option_factory`; mixin.c `into_node`, `adjacent_steps`; content.c `d_content_set`; canvas.c `d_canvas_prepare`, `d_canvas_sync` (their `create` is the canvas's, not a node); clone.c `write_blob`, `write_error`, `write_value` (a structured clone's `data_new` is a value, not a node) | making nodes | not walks: they build a tree, and the parser builds the document's (nothing parses into a shadow tree until declarative roots, § 10) |
+| Box walks, set aside: yonder geometry.c `next_box`, yonder.c `anchor_of` (and its callers `lay_out_shown`, `script_rebuild`), `reaches_box`, `canvas_damage_mark`; libflow flow.c `boxes_differ`, `flow_box_covered`, `flow_box_cut_away`, `pieces_holder`, `parts_in`, `stack_build`, `box_named`, `box_seen`, `flow_visit_text_clip`, `visit_clip_subtree`, `ink_grown`, `sticky_new`; layout.c `block_contents`, `cell_layout` (their `children` is layout's own); reuse_match.inc `reuse_match_box`; style.c `style_pseudo` (it writes a generated node's children) | the box tree | not node walks: D3 builds the boxes they walk from the flat tree |
+
+Not on any list because nothing walks for them in yonder today:
 find-in-page (yonder has none) and selection (libdom's selection.c walks
 no tree). Each learns shadow trees the day it is built.
