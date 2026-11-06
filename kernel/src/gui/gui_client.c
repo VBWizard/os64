@@ -401,8 +401,8 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 
 	s_handles[handle - 1] = win;
 	// The task-backed canvas is installed before resize exposes its full
-	// extent. The normal birth frame becomes Restore's rectangle.
-	if (start_maximized) wm_set_maximized(win, true);
+	// extent. Retain birth focus and save the normal frame for Restore.
+	if (start_maximized) wm_maximize_at_birth(win);
 
 	gui_unlock(irqflags);
 	return handle;

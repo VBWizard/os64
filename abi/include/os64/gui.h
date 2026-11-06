@@ -59,6 +59,7 @@
 #define OS64_GUI_CREATE_POPUP_CAPACITY (1ull << 34)
 // Start maximized, retaining the requested normal rectangle for Restore.
 // Ordinary unowned windows only; applied before the initial surface is read.
+// Preserves START_UNFOCUSED's creation-time focus behavior.
 #define OS64_GUI_CREATE_MAXIMIZED (1ull << 35)
 // An owned popup is born and focused atomically only while this same-task
 // parent remains focused. Zero retains unowned creation behavior. Owner bits

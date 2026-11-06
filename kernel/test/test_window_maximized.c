@@ -28,6 +28,41 @@ bool test_window_maximized(void)
             w->content.width==640 && w->content.height==440;
     }
     gui_unlock(irq);
+    // Maximized birth must retain the focus decision made at creation.
+    // Keep the restored window as the existing keyboard focus owner.
+    int64_t unfocused=gui_window_create("unfocused maximized birth",80,60,640,440,
+        flags|OS64_GUI_WINDOW_START_UNFOCUSED);
+    if (unfocused<=0) ok=false;
+    else {
+        bool birth_ok=gui_window_get_state(unfocused,&state)==0 &&
+            (state.flags & OS64_GUI_WINDOW_MAXIMIZED) && state.x==0 && state.y==0 &&
+            gui_window_get_surface(unfocused,&surface)==0 &&
+            surface.width>=640 && surface.height>=440;
+        irq=gui_lock(GUI_LOCK_OTHER);
+        window_t *focused=wm_focused();
+        birth_ok=birth_ok && focused && focused->client_handle==(uint16_t)handle;
+        // The new ordinary window was linked above the existing one.
+        window_t *born=focused;
+        while (born && born->client_handle!=(uint16_t)unfocused) born=born->above;
+        bool interactive_ok=false;
+        if (born) {
+            rect_t normal=born->restoreFrame;
+            wm_set_maximized(born,false);
+            interactive_ok=!(born->flags & GUI_WINDOW_MAXIMIZED) &&
+                born->frame.x==normal.x && born->frame.y==normal.y &&
+                born->frame.w==normal.w && born->frame.h==normal.h && wm_focused()==focused;
+            wm_set_maximized(born,true);
+            interactive_ok=interactive_ok && (born->flags & GUI_WINDOW_MAXIMIZED) &&
+                wm_focused()==born;
+        }
+        gui_unlock(irq);
+        if (!birth_ok)
+            printd(DEBUG_TESTS,"\tFAIL: maximized birth did not preserve START_UNFOCUSED\n");
+        if (!interactive_ok)
+            printd(DEBUG_TESTS,"\tFAIL: interactive maximize/Restore after unfocused birth\n");
+        ok=birth_ok && interactive_ok && ok;
+        ok=gui_window_destroy(unfocused)==0 && ok;
+    }
     ok=gui_window_destroy(handle)==0 && ok;
     // A popup or desktop cannot acquire ordinary maximization semantics.
     uint64_t invalid[]={OS64_GUI_WINDOW_DESKTOP,
