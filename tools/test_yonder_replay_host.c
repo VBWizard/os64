@@ -2179,8 +2179,10 @@ static way_head_t rp_head(int status, const char *reason, const char *type, cons
  * and neither side holds a line an input made. Let be, by their keys: a
  * `paint stages` line, whose times are the processor's counter
  * (YONDER_DIAGNOSTICS.md § What paints cost), which no clock of the
- * harness moves, and a `script heap` line, whose peak is the engine's
- * allocations in whatever order the run made them; the `kept:`, `kept
+ * harness moves, a `script heap` line, whose peak is the engine's
+ * allocations in whatever order the run made them, and the `animated`
+ * lines, whose due times are counted from when the record was written;
+ * the `kept:`, `kept
  * lines:` and `claim:` facts, which say
  * how the record was made and not what the page did; each record's `end`;
  * and the replay's own lines, its state, its budget and what it does not
@@ -2203,7 +2205,10 @@ static bool rp_same(const char *name, const char *a, const char *b) {
         if(*y && rp_let_be(y,yl,true)) { y+=yl+(ye?1:0); continue; }
         bool stages=xl>14 && yl>14 && !strncmp(x,"paint stages: ",14) && !strncmp(y,"paint stages: ",14);
         bool heap=xl>13 && yl>13 && !strncmp(x,"script heap: ",13) && !strncmp(y,"script heap: ",13);
-        if(!stages && !heap && (xl!=yl || memcmp(x,y,xl))) {
+        const char *xc=memchr(x,':',xl), *yc=memchr(y,':',yl);
+        bool animated=xl>8 && yl>8 && !strncmp(x,"animated",8) && !strncmp(y,"animated",8) && xc && yc &&
+                      xc-x==yc-y && !memcmp(x,y,(size_t)(xc-x));
+        if(!stages && !heap && !animated && (xl!=yl || memcmp(x,y,xl))) {
             if(same) printf("  %s: the replay's record differs from the page's own\n",name);
             printf("    kept:   %.*s\n    replay: %.*s\n",(int)xl,x,(int)yl,y);
             same=false;

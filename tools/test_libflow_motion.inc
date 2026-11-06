@@ -4383,8 +4383,61 @@ static void motion_tick_room_cases(void)
            found && whole.ticks && dropped.dropped && !dropped.ticks, NULL);
 }
 
+// What the record says keeps a page moving (flow_motion_entries): each
+// animated element with its box, whether anything of it draws, whether the
+// view shows it, and when it is due — and none for what display:none ends.
+static void motion_entries_cases(void)
+{
+    static const char kSpin[] = "@keyframes spin{to{transform:rotate(360deg)}}"
+                                ".s{display:block;width:16px;height:16px;animation:spin 1s linear infinite}";
+    static const struct { const char *name, *body; int count; bool box, drawn, seen; } kCases[] = {
+        {"one in view", "<span class=s></span>", 1, true, true, true},
+        {"one below the view", "<div style='height:2000px'></div><span class=s></span>", 1, true, true, false},
+        {"one display:none ends", "<div style='display:none'><span class=s></span></div>", 0, false, false, false},
+        {"one that is contents and holds nothing", "<span class=s style='display:contents'></span>", 1, false,
+         false, false},
+        {"one that is contents around a box", "<span class=s style='display:contents'><b>x</b></span>", 1, false,
+         true, true},
+    };
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++)
+        for (int ticks = 0; ticks < 2; ticks++) {
+            char html[1024], name[160];
+            snprintf(html, sizeof(html), MOTION_STYLE "%s</style>%s", kSpin, kCases[i].body);
+            snprintf(name, sizeof(name), "entries: %s (%s)", kCases[i].name, ticks ? "a face that ticks" : "layouts");
+            Moving m;
+            moving_open_for(&m, html, 100, ticks != 0);
+            flow_motion_entry_t e[2];
+            int32_t n = flow_motion_entries(m.tree, kTickView, (flow_point_t){0, 0}, e, 2);
+            bool ok = n == kCases[i].count;
+            if (ok && n == 1)
+                ok = (e[0].box != NULL) == kCases[i].box && e[0].drawn == kCases[i].drawn &&
+                     e[0].seen == kCases[i].seen && !e[0].in_place && e[0].name.len == 4 &&
+                     memcmp(e[0].name.text, "spin", 4) == 0 &&
+                     (ticks ? e[0].ticks && e[0].tick_due == 100 && e[0].layout_due == FLOW_NEVER
+                            : !e[0].ticks && e[0].layout_due == 100 && e[0].tick_due == FLOW_NEVER);
+            char detail[160];
+            snprintf(detail, sizeof(detail), "%d entries; box %d drawn %d seen %d ticks %d layout %llu tick %llu",
+                     (int)n, n > 0 && e[0].box != NULL, n > 0 && e[0].drawn, n > 0 && e[0].seen, n > 0 && e[0].ticks,
+                     n > 0 ? (unsigned long long)e[0].layout_due : 0ULL,
+                     n > 0 ? (unsigned long long)e[0].tick_due : 0ULL);
+            expect(name, ok, detail);
+            moving_close(&m);
+        }
+    // More than `cap`: the count is all of them, `out` holds the first.
+    Moving m;
+    moving_open_for(&m, MOTION_STYLE "@keyframes spin{to{transform:rotate(360deg)}}"
+                    ".s{display:block;width:16px;height:16px;animation:spin 1s linear infinite}</style>"
+                    "<span class=s id=a></span><span class=s id=b></span>", 100, true);
+    flow_motion_entry_t one;
+    int32_t n = flow_motion_entries(m.tree, kTickView, (flow_point_t){0, 0}, &one, 1);
+    expect("entries: past the room, all counted and the first kept",
+           n == 2 && one.node == motion_find(m.p.doc->document, "a"), NULL);
+    moving_close(&m);
+}
+
 static void motion_tick_cases(void)
 {
+    motion_entries_cases();
     motion_tick_layout_cases();
     motion_tick_condition_cases();
     motion_tick_edge_cases();

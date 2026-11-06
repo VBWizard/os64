@@ -390,7 +390,22 @@ was shown, or since its record was last written on asking:
   Measure first), and the paint cache's counts: the blocks it found and
   made, what it let go for room, how often a picture was worked out
   without it and why, and what it holds against its budget
-  (YONDER_PERF.md § perf-2).
+  (YONDER_PERF.md § perf-2). When any part was marked, it names **the
+  biggest part marked** — its size and place on the page, and what marked
+  it: a canvas the page drew on or a form control, by its tag, id and
+  classes, or `the page` for anything else — **the biggest rectangle
+  painted**, and how many marks the canvases and the form controls made.
+  A biggest painted far past the biggest marked is many small marks the
+  dirty list made one: a page of 35 controls each marked every frame
+  repainted 2506x1267 of the view for marks no bigger than 166x32.
+- **What keeps the page moving**, at each write:
+  `animated: 3 elements: 0 draw nothing, 2 in view, 2 due within a
+  second`, then one `animated <n>` line for each of the first eight due —
+  `svg.anim-rotate (rotate-keyframes): box 1693,872 32x32, in view, not in
+  place, ticks, due now` — its element, its first animation's name, its
+  box (or `draws nothing`, no box in or under it), whether the view shows
+  it, whether it repaints only where it draws, whether it ticks or moves
+  by layouts, and when it is next due (libflow `flow_motion_entries`).
 - Timed with the processor's counter, its rate taken from the clock across
   the same span, so the numbers are the machine's own: the P5's on the P5.
   A span with nothing painted keeps every other count and its stages

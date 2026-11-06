@@ -226,9 +226,13 @@ static void reconcile(os64_ui_t *ui)
 
 void os64_ui_set_enabled(os64_ui_t *ui, os64_ui_widget_t *w, bool enabled)
 {
+	// A widget left as it was paints as it did: a caller that sets every
+	// widget's state on each pass marks only what changed.
+	bool changed = w->disabled == enabled;
 	w->disabled = !enabled;
 	reconcile(ui);
-	os64_ui_mark_dirty(ui, w);
+	if (changed)
+		os64_ui_mark_dirty(ui, w);
 }
 
 void os64_ui_set_hidden(os64_ui_t *ui, os64_ui_widget_t *w, bool hidden)
