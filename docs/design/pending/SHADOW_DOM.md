@@ -198,9 +198,14 @@ records § 5 lists mark their shadow root dirty AT THE MUTATION; the
 microtask checkpoint recomputes every dirty root before it notifies
 mutation observers, and signals each slot whose assigned list moved,
 a slot's first assignment included. A read of assignment between the
-mutation and the checkpoint recomputes too and keeps the before-list
-for the checkpoint's comparison, so a read neither fires nor swallows
-the event.
+mutation and the checkpoint recomputes too, and the comparison is with
+the assignment as last REPORTED, which libhtml keeps apart from its cache
+(`os64_html_slot_changes`), so a read neither fires nor swallows the
+event. libhtml marks for itself, at every change it describes, with or
+without a listener; a document with no shadow tree pays nothing. One
+departure: DOM also signals a slot removed from its shadow tree that had
+nodes assigned. Its last-reported list may name nodes since reclaimed,
+so it is not reported; booked with the slice (§ 10).
 
 ## 5. Rendering: box building and inheritance walk the flat tree
 
@@ -429,6 +434,7 @@ booked. The record in § 1 alone carries about 57 `::part`.
 | `::part` and `exportparts` | 7 | a DEBTS row with this slice; a selector and a cascade step on top of § 6 |
 | Tree-scoped `@keyframes` and `@font-face` names | — | a DEBTS row with this slice (§ 6) |
 | `:host-context()` | 0 | not booked: one engine's |
+| `slotchange` at a slot removed from its shadow tree | — | a DEBTS row with this slice (§ 4) |
 | `delegatesFocus` | 3 | DEBTS; needs the focus navigation yonder has (Tab order) to learn shadow trees |
 | Tab order by the flat tree | — | a DEBTS row with this slice (A.2's `collect_node` row): the first cut tabs in shadow-including order |
 | Declarative shadow roots (`<template shadowrootmode>`) | 1 | DEBTS' template row (line "A template has none of declarative shadow DOM's members"); a libhtml parser step |
@@ -634,6 +640,7 @@ here.
 | Sites | Question | Ruling |
 |---|---|---|
 | libhtml dom.c `os64_html_attach_shadow`, `shadow_new`, `os64_html_shadow_including_parent`, and the rest of § 3's verb and walks | the shadow-including tree itself | the climb and descent that CROSSES means |
+| libhtml shadow.c `h_slots_note`, `tree_top` | which shadow root a change may have reassigned | STOPS: a change's own tree (§ 4's marking) |
 | libhtml shadow.c `slots_of`, `find_slot`, `slot_root`, `os64_html_assigned_slot`, `os64_html_slot_assigned`, `os64_html_slot_assigned_count`, `os64_html_flat_first_child`, `os64_html_flat_next_sibling`, `os64_html_flat_parent` | a shadow tree's slots; a host's children; the flat tree | STOPS for finding slots (a host's slots are in its own shadow tree, not in nested ones); these are the walks FLAT means |
 | libgarb select.c `inheriting_parent_el` | the element `:lang()` and `:dir()` inherit from | CROSSES (A.3) |
 | libpage core.c `tree_id` | an id in a shadow tree, for `form=` | STOPS: ids are per tree (A.2's `collect_ids` row) |

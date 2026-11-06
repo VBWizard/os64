@@ -38,6 +38,7 @@ typedef struct HSlots {
      * constant time a step. */
     const HNode *hint_slot;
     size_t hint_at;
+    size_t bytes; /* the block, for os64_html_slot_changes' copy */
 } HSlots;
 
 static bool is_slot(const HNode *n)
@@ -96,38 +97,85 @@ static size_t hash_of(const HNode *root, size_t cap)
     k *= (uintptr_t)0x9E3779B97F4A7C15ull;
     return (size_t)(k >> 7) & (cap - 1);
 }
-static HSlots **find_entry(HDoc *d, const HNode *root)
+static HSlots **find_entry(HSlotTable *t, const HNode *root)
 {
-    if (!d->slots_cap)
+    if (!t->cap)
         return NULL;
-    for (size_t i = hash_of(root, d->slots_cap);; i = (i + 1) & (d->slots_cap - 1)) {
-        if (!d->slots[i] || d->slots[i]->root == root)
-            return &d->slots[i];
-    }
+    for (size_t i = hash_of(root, t->cap);; i = (i + 1) & (t->cap - 1))
+        if (!t->e[i] || t->e[i]->root == root)
+            return &t->e[i];
 }
-static bool table_grow(HDoc *d)
+static bool table_grow(HDoc *d, HSlotTable *t)
 {
-    size_t cap = d->slots_cap ? d->slots_cap * 2 : 16;
+    size_t cap = t->cap ? t->cap * 2 : 16;
     int64_t why = OS64_HTML_OK;
-    HSlots **table = d_alloc(d, cap * sizeof(*table), &why);
-    if (!table)
+    HSlots **e = d_alloc(d, cap * sizeof(*e), &why);
+    if (!e)
         return false;
     for (size_t i = 0; i < cap; i++)
-        table[i] = NULL;
-    HSlots **old = d->slots;
-    size_t old_cap = d->slots_cap;
-    d->slots = table;
-    d->slots_cap = cap;
-    for (size_t i = 0; i < old_cap; i++)
-        if (old[i])
-            *find_entry(d, old[i]->root) = old[i];
-    h_free(d, old);
+        e[i] = NULL;
+    HSlotTable old = *t;
+    t->e = e;
+    t->cap = cap;
+    for (size_t i = 0; i < old.cap; i++)
+        if (old.e[i])
+            *find_entry(t, old.e[i]->root) = old.e[i];
+    h_free(d, old.e);
     return true;
+}
+/* Puts `s` in `t` under its root, freeing what was there. False, with `s`
+ * not put, when the table cannot grow. */
+static bool table_put(HDoc *d, HSlotTable *t, HSlots *s)
+{
+    HSlots **at = find_entry(t, s->root);
+    if (!at || (!*at && (t->used + 1) * 4 > t->cap * 3)) {
+        if (!table_grow(d, t))
+            return false;
+        at = find_entry(t, s->root);
+    }
+    if (*at)
+        h_free(d, *at);
+    else
+        t->used++;
+    *at = s;
+    return true;
+}
+/* Takes `root`'s entry out of `t`, NULL when it has none. */
+static HSlots *table_take(HSlotTable *t, const HNode *root)
+{
+    HSlots **at = find_entry(t, root);
+    if (!at || !*at)
+        return NULL;
+    HSlots *s = *at;
+    *at = NULL;
+    t->used--;
+    /* Open addressing: entries after the hole that hashed before it move
+     * back, so every lookup still finds them. */
+    size_t hole = (size_t)(at - t->e);
+    for (size_t i = (hole + 1) & (t->cap - 1); t->e[i]; i = (i + 1) & (t->cap - 1)) {
+        HSlots *e = t->e[i];
+        t->e[i] = NULL;
+        *find_entry(t, e->root) = e;
+    }
+    return s;
+}
+/* Points an assignment's arrays into its own block. */
+static void layout(HSlots *s, size_t nslots, size_t nkids)
+{
+    const HNode **nodes = (const HNode **)(s + 1);
+    s->slot = nodes;
+    s->kid = nodes + nslots;
+    s->assigned = nodes + nslots + nkids;
+    s->kid_slot = (uint32_t *)(nodes + nslots + 2 * nkids);
+    s->first = s->kid_slot + nkids;
+    s->count = s->first + nslots;
+    s->nslots = nslots;
+    s->nkids = nkids;
 }
 /* A root's assignment as of now, or NULL when it cannot be allocated. */
 static HSlots *slots_of(HDoc *d, const HNode *root)
 {
-    HSlots **at = find_entry(d, root);
+    HSlots **at = find_entry(&d->slots, root);
     if (at && *at && (*at)->version == d->version)
         return *at;
     const HNode *host = os64_html_shadow_host(root);
@@ -142,31 +190,16 @@ static HSlots *slots_of(HDoc *d, const HNode *root)
     HSlots *s = d_alloc(d, bytes, &why);
     if (!s)
         return NULL;
-    if (!at || (!*at && (d->slots_used + 1) * 4 > d->slots_cap * 3)) {
-        if (!table_grow(d)) {
-            h_free(d, s);
-            return NULL;
-        }
-        at = find_entry(d, root);
-    }
-    if (*at)
-        h_free(d, *at);
-    else
-        d->slots_used++;
-    *at = s;
-    const HNode **nodes = (const HNode **)(s + 1);
     s->root = root;
     s->version = d->version;
-    s->slot = nodes;
-    s->kid = nodes + nslots;
-    s->assigned = nodes + nslots + nkids;
-    s->kid_slot = (uint32_t *)(nodes + nslots + 2 * nkids);
-    s->first = s->kid_slot + nkids;
-    s->count = s->first + nslots;
-    s->nslots = nslots;
-    s->nkids = nkids;
+    s->bytes = bytes;
     s->hint_slot = NULL;
     s->hint_at = 0;
+    layout(s, nslots, nkids);
+    if (!table_put(d, &d->slots, s)) {
+        h_free(d, s);
+        return NULL;
+    }
     size_t i = 0;
     for (const HNode *n = root->first_child; n; n = tree_next(root, n))
         if (is_slot(n)) {
@@ -204,20 +237,151 @@ static HSlots *slots_of(HDoc *d, const HNode *root)
 }
 void h_slots_forget(HDoc *d, const HNode *root)
 {
-    HSlots **at = find_entry(d, root);
-    if (!at || !*at)
-        return;
-    h_free(d, *at);
-    *at = NULL;
-    d->slots_used--;
-    /* Open addressing: entries after the hole that hashed before it move
-     * back, so every lookup still finds them. */
-    size_t hole = (size_t)(at - d->slots);
-    for (size_t i = (hole + 1) & (d->slots_cap - 1); d->slots[i]; i = (i + 1) & (d->slots_cap - 1)) {
-        HSlots *e = d->slots[i];
-        d->slots[i] = NULL;
-        *find_entry(d, e->root) = e;
+    h_free(d, table_take(&d->slots, root));
+    h_free(d, table_take(&d->reported, root));
+    for (size_t i = 0; i < d->slot_dirty_n; i++)
+        if (d->slot_dirty[i] == root) {
+            d->slot_dirty[i] = d->slot_dirty[--d->slot_dirty_n];
+            break;
+        }
+}
+
+/* ── Marking, for slotchange (SHADOW_DOM.md § 4) ─────────────────────────
+ *
+ * A recomputation happens when somebody asks, and slotchange must be heard
+ * whether or not anybody asked, so a change that can move an assignment
+ * marks its root at the mutation: a host's children changing, anything
+ * changing inside a shadow tree (a slot added, removed or moved), a host
+ * child's `slot` attribute or a slot's `name`. Marking is over-generous on
+ * purpose; os64_html_slot_changes compares, so a mark that moved nothing
+ * signals nothing. */
+
+static size_t slot_index(const HSlots *s, const HNode *slot);
+
+static const HNode *tree_top(const HNode *n)
+{
+    while (n->parent)
+        n = n->parent;
+    return n;
+}
+void h_slots_mark(HDoc *d, const HNode *root)
+{
+    for (size_t i = 0; i < d->slot_dirty_n; i++)
+        if (d->slot_dirty[i] == root)
+            return;
+    if (d->slot_dirty_n == d->slot_dirty_cap) {
+        size_t cap = d->slot_dirty_cap ? d->slot_dirty_cap * 2 : 8;
+        int64_t why = OS64_HTML_OK;
+        const HNode **list = d_alloc(d, cap * sizeof(*list), &why);
+        if (!list) {
+            /* A mark that cannot be kept makes the next report compare
+             * every root it knows of: a slotchange is late, never lost. */
+            d->slot_dirty_all = true;
+            return;
+        }
+        for (size_t i = 0; i < d->slot_dirty_n; i++)
+            list[i] = d->slot_dirty[i];
+        h_free(d, (void *)d->slot_dirty);
+        d->slot_dirty = list;
+        d->slot_dirty_cap = cap;
     }
+    d->slot_dirty[d->slot_dirty_n++] = root;
+}
+void h_slots_note(HDoc *d, const os64_html_change_t *c)
+{
+    if (!d->shadows || !c->target)
+        return;
+    const HNode *t = c->target;
+    if (c->kind == OS64_HTML_CHANGE_CHILDREN) {
+        if (t->shadow_root)
+            h_slots_mark(d, t->shadow_root);
+        const HNode *top = tree_top(t);
+        if (os64_html_shadow_host(top))
+            h_slots_mark(d, top);
+    } else if (c->kind == OS64_HTML_CHANGE_ATTR && !c->attr_ns && c->attr_local) {
+        if (same(c->attr_local, "slot") && t->parent && t->parent->shadow_root)
+            h_slots_mark(d, t->parent->shadow_root);
+        if (same(c->attr_local, "name") && is_slot(t)) {
+            const HNode *top = tree_top(t);
+            if (os64_html_shadow_host(top))
+                h_slots_mark(d, top);
+        }
+    }
+}
+
+/* Whether slot `k` of `now` has the assigned list `before` had for the same
+ * slot; a slot `before` did not have had nothing assigned. */
+static bool assigned_same(const HSlots *now, size_t k, const HSlots *before)
+{
+    size_t j = before ? slot_index(before, now->slot[k]) : SIZE_MAX;
+    size_t had = j == SIZE_MAX ? 0 : before->count[j];
+    if (had != now->count[k])
+        return false;
+    for (size_t i = 0; i < had; i++)
+        if (before->assigned[before->first[j] + i] != now->assigned[now->first[k] + i])
+            return false;
+    return true;
+}
+/* One root: its assignment now against the one last reported, each slot
+ * whose list moved handed to `changed`, then now kept as reported. False,
+ * with nothing signalled and the root left to report again, when there is
+ * no memory for it. */
+static bool report_root(HDoc *d, const HNode *root, void (*changed)(void *, const os64_html_node_t *),
+                        void *opaque)
+{
+    HSlots *now = slots_of(d, root);
+    if (!now)
+        return false;
+    int64_t why = OS64_HTML_OK;
+    HSlots *kept = d_alloc(d, now->bytes, &why);
+    if (!kept)
+        return false;
+    unsigned char *to = (unsigned char *)kept;
+    const unsigned char *from = (const unsigned char *)now;
+    for (size_t i = 0; i < now->bytes; i++)
+        to[i] = from[i];
+    layout(kept, now->nslots, now->nkids);
+    HSlots *before = table_take(&d->reported, root);
+    if (!table_put(d, &d->reported, kept)) {
+        h_free(d, kept);
+        if (before)
+            table_put(d, &d->reported, before); /* back where it was: the table has its room */
+        return false;
+    }
+    for (size_t k = 0; k < now->nslots; k++)
+        if (!assigned_same(now, k, before))
+            changed(opaque, now->slot[k]);
+    h_free(d, before);
+    return true;
+}
+
+int64_t os64_html_slot_changes(os64_html_document_t *doc,
+                               void (*changed)(void *opaque, const os64_html_node_t *slot), void *opaque)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !changed)
+        return OS64_HTML_BAD_ARGUMENT;
+    int64_t status = OS64_HTML_OK;
+    if (d->slot_dirty_all) {
+        /* Every root anything was computed or reported for. */
+        d->slot_dirty_all = false;
+        for (size_t i = 0; i < d->slots.cap; i++)
+            if (d->slots.e[i])
+                h_slots_mark(d, d->slots.e[i]->root);
+        for (size_t i = 0; i < d->reported.cap; i++)
+            if (d->reported.e[i])
+                h_slots_mark(d, d->reported.e[i]->root);
+    }
+    size_t i = 0;
+    while (i < d->slot_dirty_n) {
+        if (report_root(d, d->slot_dirty[i], changed, opaque)) {
+            d->slot_dirty[i] = d->slot_dirty[--d->slot_dirty_n];
+            continue;
+        }
+        status = OS64_HTML_NO_MEMORY;
+        i++;
+    }
+    return status;
 }
 
 /* ── Assignment ────────────────────────────────────────────────────────── */

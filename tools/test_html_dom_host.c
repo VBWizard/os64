@@ -687,19 +687,98 @@ static void t_slots(void)
     for (size_t i = 0; i < H_ARRAY(hosts); i++)
         all = all && os64_html_flat_first_child(doc, hosts[i]->shadow_root->first_child) == hosts[i]->first_child;
     HDoc *d = (HDoc *)doc;
-    check(all && d->slots_used >= H_ARRAY(hosts) && d->slots_cap >= 2 * H_ARRAY(hosts) / 2,
-          "forty hosts, forty entries (%zu in %zu)", d->slots_used, d->slots_cap);
-    size_t used = d->slots_used;
+    check(all && d->slots.used >= H_ARRAY(hosts) && d->slots.cap >= 2 * H_ARRAY(hosts) / 2,
+          "forty hosts, forty entries (%zu in %zu)", d->slots.used, d->slots.cap);
+    size_t used = d->slots.used;
     for (size_t i = 0; i < H_ARRAY(hosts); i += 2)
         os64_html_remove(doc, hosts[i]);
     os64_html_create_text(doc, "", 0, NULL); /* any verb collects what was released */
     all = true;
     for (size_t i = 1; i < H_ARRAY(hosts); i += 2)
         all = all && os64_html_flat_first_child(doc, hosts[i]->shadow_root->first_child) == hosts[i]->first_child;
-    check(all && d->slots_used == used - H_ARRAY(hosts) / 2,
-          "reclaimed hosts' entries are forgotten and the rest still found (%zu of %zu)", d->slots_used, used);
+    check(all && d->slots.used == used - H_ARRAY(hosts) / 2,
+          "reclaimed hosts' entries are forgotten and the rest still found (%zu of %zu)", d->slots.used, used);
     os64_html_document_free(doc);
     check(live == 0, "slot cases freed");
+}
+
+// SHADOW_DOM.md § 4: slotchange is marked at the mutation, reported by
+// comparison.
+static const HNode *reported_slots[16];
+static size_t nreported;
+static void slot_changed(void *opaque, const os64_html_node_t *slot)
+{
+    (void)opaque;
+    if (nreported < H_ARRAY(reported_slots))
+        reported_slots[nreported] = slot;
+    nreported++;
+}
+static size_t drain(os64_html_document_t *doc, int64_t *status)
+{
+    nreported = 0;
+    int64_t st = os64_html_slot_changes(doc, slot_changed, NULL);
+    if (status)
+        *status = st;
+    return nreported;
+}
+static void t_slotchange(void)
+{
+    // parse() attaches no listener: marking must not depend on one.
+    os64_html_document_t *doc = parse("<body><div id=h><span id=c>c</span></div><div id=h2></div>");
+    HNode *h = id_in(doc, "h"), *c = id_in(doc, "c"), *h2 = id_in(doc, "h2");
+    check(drain(doc, NULL) == 0, "a document with no shadow tree reports nothing");
+    HNode *root = os64_html_attach_shadow(doc, h, OS64_HTML_SHADOW_OPEN, NULL);
+    HNode *any = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    HNode *named = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_set_attr(doc, named, "name", "x", 1);
+    os64_html_insert(doc, root, any, NULL);
+    os64_html_insert(doc, root, named, NULL);
+    check(drain(doc, NULL) == 1 && reported_slots[0] == any, "a first assignment is reported (%zu)", nreported);
+    check(drain(doc, NULL) == 0, "and once");
+
+    // Nothing reads assignment between the change and the report.
+    os64_html_set_attr(doc, c, "slot", "x", 1);
+    check(drain(doc, NULL) == 2 && reported_slots[0] == any && reported_slots[1] == named,
+          "a slot attribute moves a child: both slots, in tree order (%zu)", nreported);
+
+    // A read between them neither fires nor swallows.
+    os64_html_insert(doc, h, os64_html_create_text(doc, "t", 1, NULL), NULL);
+    check(os64_html_slot_assigned_count(doc, any) == 1, "the read sees the text in the default slot");
+    check(drain(doc, NULL) == 1 && reported_slots[0] == any, "and the report still has it");
+
+    // A change that moves nothing reports nothing.
+    os64_html_set_text(doc, c->first_child, "cc", 2);
+    os64_html_set_attr(doc, c, "title", "t", 1);
+    check(drain(doc, NULL) == 0, "text and an unrelated attribute move no assignment");
+
+    // Roots are reported in the order they were marked.
+    HNode *root2 = os64_html_attach_shadow(doc, h2, OS64_HTML_SHADOW_OPEN, NULL);
+    HNode *any2 = os64_html_create_element(doc, OS64_HTML_NS_HTML, "slot", NULL);
+    os64_html_insert(doc, root2, any2, NULL);
+    drain(doc, NULL);
+    os64_html_insert(doc, h2, os64_html_create_text(doc, "u", 1, NULL), NULL);
+    os64_html_remove(doc, c);
+    check(drain(doc, NULL) == 2 && reported_slots[0] == any2 && reported_slots[1] == named,
+          "second host first, as it was marked first (%zu)", nreported);
+
+    // A slot renamed takes what its new name names.
+    os64_html_set_attr(doc, named, "name", "", 0);
+    check(drain(doc, NULL) == 0, "a second default slot gets nothing while the first is ahead of it");
+    os64_html_remove(doc, any);
+    check(drain(doc, NULL) == 1 && reported_slots[0] == named, "with the first gone, it takes the text (%zu)",
+          nreported);
+
+    // No memory: nothing reported, the root left marked, reported later.
+    os64_html_insert(doc, h, os64_html_create_text(doc, "v", 1, NULL), NULL);
+    int64_t st = 0;
+    fail_at = allocations + 1;
+    size_t during = drain(doc, &st);
+    fail_at = 0;
+    check(during == 0 && st == OS64_HTML_NO_MEMORY, "a report with no memory signals nothing (%zu)", during);
+    check(drain(doc, &st) == 1 && st == OS64_HTML_OK && reported_slots[0] == named, "and the next one does");
+
+    os64_html_document_free(doc);
+    check(live == 0, "slotchange cases freed");
 }
 
 static void t_attributes(void)
@@ -2897,6 +2976,7 @@ int main(int argc, char **argv)
         t_custom_state();
         t_shadow();
         t_slots();
+        t_slotchange();
         t_change_log();
         t_change_log_loss();
         t_change_log_parser();

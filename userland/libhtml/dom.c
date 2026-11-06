@@ -814,9 +814,17 @@ void os64_html_observe(os64_html_document_t *doc,
     d->changed = changed;
     d->changed_opaque = changed ? opaque : NULL;
 }
+/* Whether a change is worth describing: a listener or a reader wants it,
+ * or the document has shadow trees, whose slot marking reads every
+ * change (shadow.c). */
+static bool telling(const HDoc *d)
+{
+    return d->changed || d->readers || d->shadows;
+}
 static void tell(HDoc *d, os64_html_change_t *c, bool log)
 {
     c->version = d->version;
+    h_slots_note(d, c);
     if (log) log_change(d, c);
     if (d->changed) d->changed(d->changed_opaque, c);
 }
@@ -827,7 +835,7 @@ static void tell(HDoc *d, os64_html_change_t *c, bool log)
 void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *seen)
 {
     *seen = (HSeen){0};
-    if (!d->changed && !d->readers)
+    if (!telling(d))
         return;
     seen->previous = before ? before->prev : parent->last_child;
     if (node->kind == FRAGMENT) {
@@ -842,7 +850,7 @@ void d_seen(const HDoc *d, HNode *parent, HNode *node, HNode *before, HSeen *see
 }
 void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *next, bool log)
 {
-    if (!d->changed && !d->readers)
+    if (!telling(d))
         return;
     os64_html_change_t c = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = parent, .removed = node,
                             .nremoved = 1, .previous_sibling = prev, .next_sibling = next};
@@ -853,7 +861,7 @@ void d_tell_removed(HDoc *d, HNode *parent, HNode *node, HNode *prev, HNode *nex
 void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *replaced,
                    const HSeen *seen, bool log)
 {
-    if (!d->changed && !d->readers)
+    if (!telling(d))
         return;
     HNode *added = node;
     size_t nadded = 1;
@@ -875,7 +883,7 @@ void d_tell_placed(HDoc *d, HNode *parent, HNode *node, HNode *before, HNode *re
 }
 void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len, bool log)
 {
-    if (!d->changed && !d->readers)
+    if (!telling(d))
         return;
     os64_html_change_t c = {.kind = OS64_HTML_CHANGE_TEXT, .target = node, .text_old = old,
                             .text_old_len = old_len};
@@ -887,7 +895,7 @@ void d_tell_text(HDoc *d, HNode *node, const char *old, size_t old_len, bool log
 static void tell_attr(HDoc *d, HNode *e, const char *name, const char *ns, const char *old,
                       size_t old_len, bool log)
 {
-    if (!d->changed && !d->readers)
+    if (!telling(d))
         return;
     const char *local = name;
     for (const char *c = name; ns && *c; c++)
@@ -1418,7 +1426,7 @@ static bool attrs_equal(const HAttr *a, const HAttr *b)
 static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
                        const os64_html_attr_change_t *changes, size_t count, bool log)
 {
-    if (!d->changed && !d->readers)
+    if (!telling(d))
         return;
     for (size_t i = 0; i < count; i++) {
         const os64_html_attr_change_t *c = &changes[i];
@@ -1685,6 +1693,10 @@ os64_html_node_t *os64_html_attach_shadow(os64_html_document_t *doc, os64_html_n
         os64_html_change_t change = {.kind = OS64_HTML_CHANGE_CHILDREN, .target = host,
                                      .version = d->version};
         log_change(d, &change);
+        /* From now every change is described, for slot marking, and the new
+         * root's first assignment is one to report. */
+        d->shadows = true;
+        h_slots_mark(d, root);
     }
     say(status, why);
     return root;

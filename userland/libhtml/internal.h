@@ -15,6 +15,12 @@ typedef struct {
 } HBuf;
 typedef struct HBlock HBlock;
 typedef struct HChange HChange;
+/* An open-addressed table of shadow roots' slot assignments (shadow.c),
+ * `cap` zero or a power of two. */
+typedef struct {
+    struct HSlots **e;
+    size_t cap, used;
+} HSlotTable;
 /* Node bodies carry uniform lifetime metadata, including embedded nodes and
  * isolated fragment staging. The first word retains the kind-specific data. */
 typedef struct {
@@ -88,10 +94,16 @@ typedef struct {
     size_t log_bytes, log_limit;
     uint64_t log_floor;
     bool log_limited;
-    /* Each shadow root's slot assignment, as last computed (shadow.c): an
-     * open-addressed table keyed by the root, `slots_cap` a power of two. */
-    struct HSlots **slots;
-    size_t slots_cap, slots_used;
+    /* Each shadow root's slot assignment as last computed, and as last
+     * reported to os64_html_slot_changes (shadow.c): open-addressed tables
+     * keyed by the root. `slot_dirty` lists the roots a change may have
+     * reassigned since they were last reported; `shadows` is set by the
+     * first attach, so a document with none pays nothing for this. */
+    HSlotTable slots, reported;
+    const HNode **slot_dirty;
+    size_t slot_dirty_n, slot_dirty_cap;
+    bool slot_dirty_all; /* a mark was lost: the next report compares every known root */
+    bool shadows;
 } HDoc;
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
@@ -307,8 +319,12 @@ void h_free(HDoc *d, void *ptr);
  * the parse ended, is left alone. */
 void *d_permanent(HDoc *d, size_t size, int64_t *why);
 void *d_alloc(HDoc *d, size_t size, int64_t *why);
-/* Drops a shadow root's cached slot assignment as the root is freed. */
+/* Drops a shadow root's cached and reported slot assignment as the root
+ * is freed. */
 void h_slots_forget(HDoc *d, const HNode *root);
+/* Marks the shadow roots a change may have reassigned (shadow.c). */
+void h_slots_note(HDoc *d, const os64_html_change_t *c);
+void h_slots_mark(HDoc *d, const HNode *root);
 void *d_node_alloc(HDoc *d, size_t size, int64_t *why);
 void d_transfer_blocks(HDoc *to, HDoc *from);
 HDoc *d_xml_document_new(size_t budget, size_t depth, int64_t *why);

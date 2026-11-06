@@ -628,6 +628,21 @@ const os64_html_node_t *os64_html_flat_next_sibling(const os64_html_document_t *
 const os64_html_node_t *os64_html_flat_parent(const os64_html_document_t *doc,
                                               const os64_html_node_t *node);
 
+/* SLOTCHANGE (SHADOW_DOM.md § 4). A change that can move an assignment
+ * (a host's children, anything inside a shadow tree, a host child's `slot`
+ * attribute, a slot's `name`, a root attached) marks its shadow root as it
+ * is made, whether or not anything reads assignment afterwards.
+ * `slot_changes` compares each marked root's assignment now with the one
+ * it last reported and hands `changed` each slot whose assigned nodes
+ * differ, a slot's first assignment included, in the order the roots were
+ * marked and each root's slots in tree order; then it keeps the new
+ * assignment as reported. `changed` must not change the document. A root
+ * there is no memory for is left marked, reported by a later call, and
+ * the call answers OS64_HTML_NO_MEMORY. A slot removed from its shadow
+ * tree is not reported: its list may name nodes since reclaimed. */
+int64_t os64_html_slot_changes(os64_html_document_t *doc,
+                               void (*changed)(void *opaque, const os64_html_node_t *slot), void *opaque);
+
 /* Parse a complete UTF-8 string in an owned ELEMENT context.
  * This HTML fragment entry point refuses XML documents and unknown/no-namespace
  * contexts with BAD_ARGUMENT; it does not provide XML fragment parsing. The returned
