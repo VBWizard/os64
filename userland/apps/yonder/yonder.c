@@ -1325,6 +1325,30 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
     return tree;
 }
 
+// The cascade's scopes (SHADOW_DOM.md § 6): the `m` sheets the model lists
+// that went in — `at[i]` the cascade input of one, `roots[i]` the tree it
+// is in — grouped by tree, in the order each tree's first sheet is listed,
+// their indices kept in `list`. How many scopes.
+static int32_t page_scopes(const os64_html_node_t *const *roots, const int32_t *at, int32_t m,
+                           garb_scope_in_t *scopes, int32_t *list)
+{
+    int32_t nscopes = 0, used = 0;
+    for (int32_t i = 0; i < m; i++) {
+        bool seen = false;
+        for (int32_t k = 0; k < nscopes && !seen; k++)
+            seen = scopes[k].root == roots[i];
+        if (seen)
+            continue;
+        garb_scope_in_t *s = &scopes[nscopes++];
+        *s = (garb_scope_in_t){roots[i], list + used, 0};
+        for (int32_t j = i; j < m; j++)
+            if (roots[j] == roots[i])
+                list[used + s->n++] = at[j];
+        used += s->n;
+    }
+    return nscopes;
+}
+
 static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
@@ -1337,20 +1361,29 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     view.scripting = p->scripting;
     int64_t began = s_layout_profile && layout_profile_diag(p) ? os64_micros() : -1;
     garb_sheet_in_t in[SHEETS_MAX];
-    int32_t n = 0;
+    int32_t n = 0, m = 0, at[SHEETS_MAX], list[SHEETS_MAX];
+    const os64_html_node_t *roots[SHEETS_MAX];
+    garb_scope_in_t scopes[SHEETS_MAX];
     const os64_page_t *model = page_model(p);
     for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
-        int32_t e = sheet_of(p, os64_page_sheet(model, i)->node);
-        if (e >= 0) (void)sheet_emit(p, e, in, entry, &n);
+        const os64_page_sheet_t *one = os64_page_sheet(model, i);
+        int32_t e = sheet_of(p, one->node);
+        int32_t emitted = e >= 0 ? sheet_emit(p, e, in, entry, &n) : -1;
+        if (emitted >= 0 && m < SHEETS_MAX) {
+            at[m] = emitted;
+            roots[m++] = one->scope;
+        }
     }
+    int32_t nscopes = page_scopes(roots, at, m, scopes, list);
     uint64_t prior_updates = garb_cascade_updates(cascade);
     // A live page can explicitly invalidate its sheets. A staged table
     // instead proves that its immutable inputs still match the source.
     bool updated = (!p->sheets_changed || p->reuse_sheets) &&
-                   garb_cascade_matches(cascade, in, n, view) && garb_cascade_update(cascade);
+                   garb_cascade_matches_scoped(cascade, in, n, scopes, nscopes, view) &&
+                   garb_cascade_update(cascade);
     if (!updated) {
         measured_fallback(p);
-        cascade = garb_cascade(in, n, page_doc(p), view);
+        cascade = garb_cascade_scoped(in, n, scopes, nscopes, page_doc(p), view, NULL);
     }
     if (s_layout_profile && layout_profile_diag(p)) {
         yonder_layout_stats_t sample = {.refusals = cascade == NULL,

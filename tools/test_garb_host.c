@@ -2088,6 +2088,7 @@ static int media_depth(void)
 
 
 #include "test_garb_updates.inc"
+#include "test_garb_shadow.inc"
 
 // CSS.supports's doors (garb_supports, garb_supports_property): the same
 // judgment as a sheet's @supports, in both of CSSOM's forms, the second
@@ -2159,6 +2160,8 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--supports") == 0)
         return supports_doors();
     if(argc==2 && !strcmp(argv[1],"--updates")) return cascade_updates();
+    if (argc == 2 && strcmp(argv[1], "--shadow") == 0)
+        return cascade_shadow();
     if (argc == 2 && strcmp(argv[1], "--media-depth") == 0)
         return media_depth();
     if (argc == 2 && strcmp(argv[1], "--modern") == 0)

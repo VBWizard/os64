@@ -623,10 +623,13 @@ static svg_status_t resource_transform(Adapter *a, const os64_html_node_t *node,
             if (v->kind != GARB_V_WIDE)
                 return css_transform(v, out);
             // Transform is not inherited by default. Explicit inherit follows
-            // the source parent, not href templates or composed ancestor maps.
+            // the source's flat parent, as every inheritance does (its parent
+            // where it is in no flat tree), not href templates or composed
+            // ancestor maps.
             if (!same_word(v->keyword, "inherit"))
                 return SVG_OK;
-            node = node->parent;
+            const os64_html_node_t *up = os64_html_flat_parent(a->doc, node);
+            node = up != NULL ? up : node->parent;
             fallback = NULL;
             continue;
         }

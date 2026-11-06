@@ -137,7 +137,8 @@ static void sheets_open(Sheets *sh, const os64_html_document_t *doc, const os64_
     os64_memset(sh, 0, sizeof(*sh));
     for (int32_t i = 0; i < os64_page_nsheets(page) && sh->n < 32; i++) {
         const os64_page_sheet_t *one = os64_page_sheet(page, i);
-        if (one->linked)
+        // The cascade below has no scopes: the document's sheets alone.
+        if (one->linked || one->scope != doc->document)
             continue;
         garb_parse_style_element(one->node, &sh->parsed[sh->n]);
         sh->in[sh->n] = (garb_sheet_in_t){.sheet = &sh->parsed[sh->n], .media = one->media};

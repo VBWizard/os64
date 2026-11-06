@@ -1,6 +1,7 @@
 // SHADOW_DOM.md § 5: rendering walks the flat tree. The trees are made with
-// libhtml's verbs (no markup makes a shadow root), and no cascade reaches a
-// shadow tree before D4, so these cases ask what is laid out, not how.
+// libhtml's verbs (no markup makes a shadow root), and these cases'
+// cascades take no scopes, so no author sheet reaches a shadow tree: they
+// ask what is laid out, not how it is styled (§ 6 is libgarb's suite's).
 
 static os64_html_node_t *shadow_el(os64_html_document_t *doc, os64_html_node_t *parent, const char *tag,
                                    const char *slot, const char *text)
