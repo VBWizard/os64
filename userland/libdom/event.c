@@ -693,13 +693,16 @@ typedef struct {
     bool document_target;
     /* A plain target (d_event_target): the path is the target alone. */
     DValue *plain;
-    /* A node's path, while it is dispatched (DOM § 2.9's structs): each
-     * step's shadow-adjusted target, undefined where the step has none
-     * and shows the nearest one before it, and, for an event with a
-     * relatedTarget that is a node, each step's relatedTarget retargeted
-     * against it (NULL otherwise). NULL for a path of one, whose target is
-     * the one it began with. */
+    /* A node's path, while it is dispatched (DOM § 2.9's structs): the
+     * target each step shows (its shadow-adjusted target, or the nearest
+     * one before it), and, for an event with a relatedTarget that is a
+     * node, each step's relatedTarget retargeted against it (NULL
+     * otherwise); and which of its `depth` node steps have a
+     * shadow-adjusted target of their own (`adjusted`, non-NULL there).
+     * NULL for a path of one, whose target is the one it began with. */
     JSValue *targets, *related;
+    const os64_html_node_t *const *adjusted;
+    size_t depth;
 } Dispatch;
 
 /* One step of the path: the target's records whose capture flag fits the
@@ -806,9 +809,8 @@ static int path_entry(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *a
 }
 
 /* invoke_target at path[i], DOM's "invoke": first the event's target
- * becomes the step's shadow-adjusted target, or the nearest one before it,
- * and its relatedTarget the step's, whether or not propagation has
- * stopped. A node that had no wrapper when the path was built is looked at
+ * becomes the one the step shows and its relatedTarget the step's,
+ * whether or not propagation has stopped. A node that had no wrapper when the path was built is looked at
  * again as the dispatch reaches it: a listener before it may have reached
  * it (composedPath, parentNode) and given it a listener, which DOM runs. A
  * wrapper that cannot be made then is reported and the node passed, as a
@@ -819,10 +821,8 @@ static int invoke_at(Dispatch *d, DValue **path, const os64_html_node_t *const *
     DEvent *event = d->event;
     event->path_at = (uint32_t)i;
     if (d->targets != NULL) {
-        size_t at = i;
-        while (JS_IsUndefined(d->targets[at])) at--;
         JS_FreeValue(d->ctx, event->target);
-        event->target = JS_DupValue(d->ctx, d->targets[at]);
+        event->target = JS_DupValue(d->ctx, d->targets[i]);
     }
     if (d->related != NULL) {
         JS_FreeValue(d->ctx, event->detail[U_RELATED]);
@@ -939,7 +939,16 @@ static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os6
 {
     const os64_dom_t *dom = d->dom;
     bool composed = d->event->composed, activation = activates(d);
-    const os64_html_node_t *target = node, *first = tree_root(node), *now = d_retarget(related, target);
+    /* `home` is the target's root. Every step is in its shadow-including
+     * subtree (a slot it detours through included) until the path leaves
+     * it for its host, which is the one step DOM's test (target's root a
+     * shadow-including inclusive ancestor of parent) fails, so the walk
+     * asks that and climbs to a root only when the target moves. A
+     * relatedTarget in no shadow tree retargets to itself against
+     * anything. So a page with no shadow trees walks its path once. */
+    const os64_html_node_t *target = node, *first = tree_root(node), *home = first, *previous = node;
+    bool plain = related == NULL || !in_shadow_tree(related);
+    const os64_html_node_t *now = plain ? related : d_retarget(related, target);
     p->count = p->last_adjusted = 0;
     p->activation = NULL;
     p->clear = false;
@@ -958,8 +967,9 @@ static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os6
             slottable = NULL;
         }
         if (assigned(dom, parent)) slottable = parent;
-        now = d_retarget(related, parent);
-        if (shadow_including_inclusive_ancestor(tree_root(target), parent)) {
+        now = plain ? related : d_retarget(related, parent);
+        bool inside = !(previous == home && os64_html_shadow_host(home) == parent);
+        if (inside) {
             if (activation && d->event->bubbles && p->activation == NULL && d_activation_has(parent))
                 p->activation = parent;
             path_step(p, parent, NULL, now, closed_slot);
@@ -967,9 +977,11 @@ static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os6
             break;
         } else {
             target = parent;
+            home = tree_root(target);
             if (activation && p->activation == NULL && d_activation_has(target)) p->activation = target;
             path_step(p, parent, parent, now, closed_slot);
         }
+        previous = parent;
     }
 }
 
@@ -978,13 +990,14 @@ static void path_walk(const Dispatch *d, const os64_html_node_t *node, const os6
  * any path is. */
 static bool at_target(const Dispatch *d, size_t i)
 {
-    return i == 0 || (d->targets != NULL && !JS_IsUndefined(d->targets[i]));
+    return i == 0 || (d->adjusted != NULL && i < d->depth && d->adjusted[i] != NULL);
 }
 
 static void steps_free(Dispatch *d, JSValue *steps, size_t values)
 {
     for (size_t i = 0; i < values; i++) JS_FreeValue(d->ctx, steps[i]);
     d->targets = d->related = NULL;
+    d->adjusted = NULL;
 }
 
 /* The DOM Standard's dispatch, for one event at one target. A node's path
@@ -1049,12 +1062,14 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         for (size_t i = 0; i < values; i++) steps[i] = JS_UNDEFINED;
         d->targets = steps;
         d->related = related != NULL ? steps + length : NULL;
+        d->adjusted = walk.adjusted;
+        d->depth = depth;
         for (size_t i = 0; !failed && i < length; i++) {
             bool window = i == depth;
             if (!window && walk.adjusted[i] != NULL) {
                 steps[i] = d_wrap(dom, ctx, walk.adjusted[i]);
                 failed = JS_IsException(steps[i]);
-            }
+            } else steps[i] = JS_DupValue(ctx, steps[i - 1]);
             if (!failed && d->related != NULL) {
                 d->related[i] = d_wrap(dom, ctx, window ? d_retarget(related, NULL) : walk.related[i]);
                 failed = JS_IsException(d->related[i]);
@@ -1109,10 +1124,9 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         if (at_target(d, i) || event->bubbles)
             result = invoke_at(d, path, nodes, depth, i, at_target(d, i) ? PHASE_AT_TARGET : PHASE_BUBBLING, false);
     if (d->targets != NULL) {
-        size_t last = event->bubbles ? count - 1 : walk.last_adjusted, at = last;
-        while (JS_IsUndefined(steps[at])) at--;
+        size_t last = event->bubbles ? count - 1 : walk.last_adjusted;
         JS_FreeValue(ctx, event->target);
-        event->target = walk.clear ? JS_NULL : JS_DupValue(ctx, steps[at]);
+        event->target = walk.clear ? JS_NULL : JS_DupValue(ctx, steps[last]);
         if (has_related(event) && (walk.clear || d->related != NULL)) {
             JS_FreeValue(ctx, event->detail[U_RELATED]);
             event->detail[U_RELATED] = walk.clear ? JS_NULL : JS_DupValue(ctx, d->related[last]);
@@ -1145,14 +1159,14 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
 
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_html_node_t *node)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, NULL, NULL, NULL};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, NULL, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, node);
 }
 
 int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *target)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, target, NULL, NULL};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, target, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
 }
@@ -1160,14 +1174,14 @@ int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValu
 int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *target,
                           os64_js_outcome_t *outcome)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, target, NULL, NULL};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, target, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
 }
 
 int d_dispatch_window_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, os64_js_outcome_t *outcome)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, NULL, NULL, NULL};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, NULL, NULL, NULL, NULL, 0};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
 }
@@ -1253,7 +1267,7 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     JSValue object = make(dom, ctx, arg);
     if (JS_IsException(object)) { discard(ctx); return d_task_finish(dom, outcome); }
     Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), outcome,
-                  plain == NULL && node == NULL && d_event_kind(type) == D_EVENT_LOAD, plain, NULL, NULL};
+                  plain == NULL && node == NULL && d_event_kind(type) == D_EVENT_LOAD, plain, NULL, NULL, NULL, 0};
     /* Engine refusals between the wrapper's calls are latched by libjs and
      * reported by task_end; the binding's own refusal is reported here. */
     if (dispatch(&d, node) < 0 && JS_HasException(ctx)) {
@@ -1315,7 +1329,7 @@ int d_event_in_task(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *nod
     if (!activate && !os64_dom_listens(dom, ev->type)) return 0;
     JSValue object = host_event(dom, ctx, (void *)ev);
     if (JS_IsException(object)) return -1;
-    Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), out, false, NULL, NULL, NULL};
+    Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), out, false, NULL, NULL, NULL, NULL, 0};
     d.event->native_activation = activate;
     int result = dispatch(&d, node);
     *prevented = d.event->canceled;
