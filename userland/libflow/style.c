@@ -186,21 +186,28 @@ static bool is_list_or_dl(const os64_html_node_t *n)
     return is_list(n) || is(n, OS64_HTML_TAG_DL);
 }
 
-// The chapter's descendant selectors (`ul ul`, `li ul`), answered from the
-// parent's record — which counts itself and everything above it
-// (FStyled.lists) — rather than by walking up from every element.
 // The record of the element `n` inherits from: its flat parent's
-// (internal.h). Questions shaped like the UA sheet's selectors (`table >
-// tr`, `details > summary`, the margin quirks' places) ask the document's
-// own tree instead, where a selector matches.
+// (internal.h).
 static const FStyled *above(const Ctx *c, const os64_html_node_t *n)
 {
     return f_map_get(&c->out->map, f_flat_parent(c->doc, n));
 }
 
+// The record of `n`'s parent in the document's own tree, where a selector
+// matches: what the chapter's selectors are answered from (`ul ul`, `li
+// ul`, `nobr wbr` from the counts a record keeps of itself and everything
+// above it, FStyled.lists; `tr > td` from its parent's style), rather than
+// by walking up from every element. A shadow root's child has none, so a
+// shadow tree's counts start again, as a selector's match does; a slotted
+// node's is its host's.
+static const FStyled *selector_above(const Ctx *c, const os64_html_node_t *n)
+{
+    return f_map_get(&c->out->map, n->parent);
+}
+
 static int32_t lists_above(const Ctx *c, const os64_html_node_t *n)
 {
-    const FStyled *up = above(c, n);
+    const FStyled *up = selector_above(c, n);
     return up != NULL ? up->lists : 0;
 }
 
@@ -774,7 +781,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // `nobr wbr { white-space: normal }`: the one break a nowrap run
     // allows, which pass 3 honours only if the wbr's own style says so.
     case OS64_HTML_TAG_WBR: {
-        const FStyled *up = above(c, n);
+        const FStyled *up = selector_above(c, n);
         if (up != NULL && up->in_nobr)
             s->white_space = FLOW_WS_NORMAL;
         break;
@@ -907,7 +914,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         s->display = FLOW_DISPLAY_NONE;
 
     // §15.3.7: a list inside a list keeps no block margins.
-    if (is_list_or_dl(n) && above(c, n) != NULL && above(c, n)->lists_or_dls > 0)
+    if (is_list_or_dl(n) && selector_above(c, n) != NULL && selector_above(c, n)->lists_or_dls > 0)
         margin_block(sp, px(c, 0));
     // `dd { margin-inline-start: 40px }`
     if (is(n, OS64_HTML_TAG_DD))
@@ -915,7 +922,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
 
     // §15.3.8: cells take their vertical alignment from the row, and the
     // row from the group; `table > tr` without a group is middle itself.
-    const FStyled *parent = above(c, n);
+    const FStyled *parent = selector_above(c, n);
     if (is(n, OS64_HTML_TAG_TR) || is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH))
         s->vertical_align = parent != NULL ? parent->style.vertical_align : FLOW_VALIGN_BASELINE;
     if (is(n, OS64_HTML_TAG_TR) && is(n->parent, OS64_HTML_TAG_TABLE))
@@ -981,7 +988,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         bool in_list = lists_above(c, n) > 0;
         if (is_li(n) && !in_list)
             s->list_style_position = FLOW_LIST_INSIDE;
-        if (is_list(n) && !in_list && above(c, n) != NULL && above(c, n)->items > 0)
+        if (is_list(n) && !in_list && selector_above(c, n) != NULL && selector_above(c, n)->items > 0)
             s->list_style_position = FLOW_LIST_OUTSIDE;
     }
 }
@@ -4614,10 +4621,12 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
     if (out->link < 0 && up != NULL)
         out->link = up->link;
-    out->lists = (up != NULL ? up->lists : 0) + is_list(n);
-    out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
-    out->items = (up != NULL ? up->items : 0) + is_li(n);
-    out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
+    // The selectors' counts go down the document's own tree (selector_above).
+    const FStyled *sel = selector_above(c, n);
+    out->lists = (sel != NULL ? sel->lists : 0) + is_list(n);
+    out->lists_or_dls = (sel != NULL ? sel->lists_or_dls : 0) + is_list_or_dl(n);
+    out->items = (sel != NULL ? sel->items : 0) + is_li(n);
+    out->in_nobr = (sel != NULL && sel->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
     out->quotes = own_quotes(c->env->cascade != NULL
                                  ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
                              up != NULL ? up->quotes : NULL);

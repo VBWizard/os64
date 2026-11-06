@@ -82,4 +82,77 @@ static void shadow_flow_cases(void)
     flow_free(filled);
     flow_free(dropped);
     sheeted_close(&p);
+
+    // Table parts assigned to a slot: the anonymous table's range is the
+    // flat siblings', which a host child's real next sibling (white space
+    // no slot takes, a child for another slot) is not.
+    snapshot_open(&p, "<!doctype html><body><div id=th></div>");
+    host = (os64_html_node_t *)computed_find(p.doc->document, "th");
+    root = host != NULL ? os64_html_attach_shadow(p.doc, host, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+    if (root != NULL) {
+        os64_html_node_t *cell = shadow_el(p.doc, host, "td", "t", "cellay");
+        os64_html_insert(p.doc, host, os64_html_create_text(p.doc, "\n", 1, NULL), NULL);
+        shadow_el(p.doc, host, "span", "x", "S");
+        shadow_el(p.doc, host, "td", "t", "cellcee");
+        shadow_el(p.doc, root, "slot", "t", NULL);
+        shadow_el(p.doc, root, "slot", "x", NULL);
+        flow_tree_t *t = snapshot_layout(&p, NULL, &input);
+        expect("shadow: a slotted table cell lays out in an anonymous table", t != NULL && flow_box_for(t, cell) != NULL,
+               NULL);
+        // Each cell's range ends at its flat sibling, so a cell after a
+        // child for another slot is laid out once, not again inside the
+        // range of the cell before it.
+        int64_t n = t != NULL ? flow_dump(t, NULL, 0) : 0;
+        char *dump = n > 0 ? malloc((size_t)n + 1) : NULL;
+        int seen = 0;
+        if (dump != NULL) {
+            flow_dump(t, dump, (size_t)n + 1);
+            for (const char *at = strstr(dump, "cellcee"); at != NULL; at = strstr(at + 1, "cellcee"))
+                seen++;
+        }
+        expect("shadow: a slotted cell after another slot's child is laid out once", seen == 1, NULL);
+        free(dump);
+        flow_free(t);
+    }
+    sheeted_close(&p);
+
+    // A host that is another host's child, moved between that host's slots:
+    // the host round it is marked too (the rule's three hosts).
+    snapshot_open(&p, "<!doctype html><body><div id=outer></div>");
+    host = (os64_html_node_t *)computed_find(p.doc->document, "outer");
+    root = host != NULL ? os64_html_attach_shadow(p.doc, host, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+    if (root != NULL) {
+        shadow_el(p.doc, root, "p", NULL, "first");
+        shadow_el(p.doc, root, "slot", "a", NULL);
+        shadow_el(p.doc, root, "p", NULL, "between");
+        shadow_el(p.doc, root, "slot", "b", NULL);
+        os64_html_node_t *inner = shadow_el(p.doc, host, "div", "a", NULL);
+        os64_html_node_t *ir = inner != NULL ? os64_html_attach_shadow(p.doc, inner, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+        if (ir != NULL) shadow_el(p.doc, ir, "span", NULL, "inside");
+        flow_tree_t *was = snapshot_layout(&p, NULL, &input);
+        os64_html_set_attr(p.doc, inner, "slot", "b", 1);
+        flow_tree_t *now = snapshot_layout(&p, was, &input);
+        flow_reuse_stats_t ns = now != NULL ? flow_reuse_stats(now) : (flow_reuse_stats_t){0};
+        expect("shadow: a nested host's move marks the host round it", ns.source_ready && ns.dirty_nodes > 6, NULL);
+        snapshot_equal(&p, now);
+        flow_free(was);
+        flow_free(now);
+    }
+    sheeted_close(&p);
+
+    // The chapter's descendant selectors match within one tree: a list in a
+    // component inside a list is a first-level list (a disc), not `ul ul`.
+    snapshot_open(&p, "<!doctype html><body><ul><li><div id=nav></div></li></ul>");
+    host = (os64_html_node_t *)computed_find(p.doc->document, "nav");
+    root = host != NULL ? os64_html_attach_shadow(p.doc, host, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+    if (root != NULL) {
+        os64_html_node_t *list = shadow_el(p.doc, root, "ul", NULL, NULL);
+        shadow_el(p.doc, list, "li", NULL, "item");
+        flow_tree_t *t = snapshot_layout(&p, NULL, &input);
+        const flow_box_t *lb = t != NULL ? flow_box_for(t, list) : NULL;
+        expect("shadow: `ul ul` does not reach into a shadow tree",
+               lb != NULL && lb->style->list_style_type == FLOW_LIST_DISC, NULL);
+        flow_free(t);
+    }
+    sheeted_close(&p);
 }

@@ -11819,10 +11819,9 @@ static void inputs_drop(void)
 }
 
 // The element an event at `node` is dispatched at: a hit on a word is a hit
-// on the element holding it.
-// The element a hit node is in: its flat-tree parent element (what was laid
-// out), so text written straight into a shadow root answers its host and
-// slotted text its slot, as other browsers' hit tests answer.
+// on the element holding it in the flat tree (what was laid out), so text
+// written straight into a shadow root answers its host and slotted text its
+// slot, as other browsers' hit tests answer.
 static const os64_html_node_t *element_of(const os64_html_node_t *node)
 {
     while (node != NULL && node->kind != OS64_HTML_ELEMENT)

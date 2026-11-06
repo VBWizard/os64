@@ -237,7 +237,8 @@ typedef struct {
     // the far side.
     bool has_value_attribute;
     // It sits inside a subtree the page marked `hidden`, or outside the
-    // flat tree (a host's child no slot takes), so it is drawn nowhere and
+    // flat tree (under a host's child no slot takes, or a slot's own child
+    // while nodes are assigned to it), so it is drawn nowhere and
     // is still submitted — and is still its form's default button when it
     // comes first, which no cursor can reach.
     bool hidden_subtree;

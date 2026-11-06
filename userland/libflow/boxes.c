@@ -832,7 +832,7 @@ typedef struct {
 static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *stop,
                  Mix *m)
 {
-    for (const os64_html_node_t *c = first; c != stop && !(m->block && m->inline_content);
+    for (const os64_html_node_t *c = first; c != NULL && c != stop && !(m->block && m->inline_content);
          c = sib(b, c)) {
         if (c->kind == OS64_HTML_TEXT) {
             if (!foreign_text(c) && !hidden_by_details(c) && text_significant(b, c))
@@ -1134,7 +1134,7 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
     B *b = f->b;
     if (!descend(b))
         return;
-    for (const os64_html_node_t *c = first; c != stop && !b->stopped; c = sib(b, c)) {
+    for (const os64_html_node_t *c = first; c != NULL && c != stop && !b->stopped; c = sib(b, c)) {
         if (c->kind == OS64_HTML_TEXT) {
             if (foreign_text(c) || hidden_by_details(c))
                 continue;
@@ -1167,7 +1167,7 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
                                         anon_style(b, f->container->style, FLOW_DISPLAY_TABLE));
             }
             if (f->anon_table != NULL) {
-                table_range(b, f->anon_table, c, c->next, scope);
+                table_range(b, f->anon_table, c, next_of(b, c), scope);
                 mark_cut(b, f->anon_table);
             }
         } else if (block_level(d)) {
@@ -1229,7 +1229,7 @@ static bool loose(const B *b, Level level, const os64_html_node_t *n)
 static const os64_html_node_t *loose_end(const B *b, Level level, const os64_html_node_t *n,
                                          const os64_html_node_t *stop)
 {
-    while (n != stop && !structural(level, n, display_of(b, n)))
+    while (n != NULL && n != stop && !structural(level, n, display_of(b, n)))
         n = next_of(b, n);
     return n;
 }
@@ -1247,7 +1247,7 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
 {
     if (!descend(b))
         return;
-    for (const os64_html_node_t *c = first; c != stop && !b->stopped;) {
+    for (const os64_html_node_t *c = first; c != NULL && c != stop && !b->stopped;) {
         if (structural(AT_ROW, c, display_of(b, c))) {
             FBox *cell = new_box(b, row, FB_CELL, c, &styled(b, c)->style);
             position_box(b, cell, c, true);
@@ -1320,7 +1320,7 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
     if (!descend(b))
         return;
     FBox *anon_row = NULL;
-    for (const os64_html_node_t *c = first; c != stop && !b->stopped;) {
+    for (const os64_html_node_t *c = first; c != NULL && c != stop && !b->stopped;) {
         flow_display_t d = display_of(b, c);
         if (structural(level, c, d) && d != FLOW_DISPLAY_TABLE_CELL) {
             anon_row = NULL;

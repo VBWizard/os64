@@ -6,6 +6,9 @@ typedef struct {
     size_t parent;
     const FBox *box;
     bool changed, dirty, ambiguous, animated;
+    // Inside a host whose whole saved flat subtree the slot rule has marked
+    // (reuse_mark_host), so marking it again would walk it for nothing.
+    bool hosted;
 } FReuseNode;
 
 struct FReuseSnapshot {
@@ -72,32 +75,37 @@ static void reuse_mark(FReuseSnapshot *r, const os64_html_node_t *node)
     size_t i = reuse_find(r, node);
     if (i != SIZE_MAX) reuse_nodes(r)[i].changed = reuse_nodes(r)[i].dirty = true;
 }
-// SHADOW_DOM.md § 5's slot rule. A change inside a shadow tree, to a
-// host's children, or to a host's child (its `slot` attribute) can move an
-// assignment, which changes the host's flat children though nothing the
-// change names may be among them. The host whose flat children it touches,
-// or NULL for a change that touches none.
-static const os64_html_node_t *reuse_slot_host(const os64_html_node_t *target)
-{
-    if (target == NULL) return NULL;
-    if (target->shadow_root) return target;
-    if (target->parent && target->parent->shadow_root) return target->parent;
-    const os64_html_node_t *root = target;
-    while (root->parent) root = root->parent;
-    return os64_html_shadow_host(root);
-}
-// The host and everything saved under it changed, so nothing in its flat
-// subtree is reused: the first version of the rule, which leaves finer
-// reuse to a measured later step. A pre-order subtree is the run after its
-// root whose saved parents are at or past the root.
+// SHADOW_DOM.md § 5's slot rule. A host and everything saved under it
+// changed, so nothing in its flat subtree is reused: the first version of
+// the rule, which leaves finer reuse to a measured later step. A pre-order
+// subtree is the run after its root whose saved parents are at or past the
+// root. Each node it reaches is `hosted`, so a host already covered, by
+// an earlier change or by a host round it, is not walked again.
 static void reuse_mark_host(FReuseSnapshot *r, const os64_html_node_t *host)
 {
-    size_t h = reuse_find(r, host);
+    size_t h = host != NULL ? reuse_find(r, host) : SIZE_MAX;
     if (h == SIZE_MAX) return;
     FReuseNode *nodes = reuse_nodes(r);
-    nodes[h].changed = nodes[h].dirty = true;
+    if (nodes[h].hosted) return;
+    nodes[h].changed = nodes[h].dirty = nodes[h].hosted = true;
     for (size_t i = h + 1; i < r->count && nodes[i].parent != SIZE_MAX && nodes[i].parent >= h; ++i)
-        nodes[i].changed = nodes[i].dirty = true;
+        nodes[i].changed = nodes[i].dirty = nodes[i].hosted = true;
+}
+// Every host whose flat children a change at `target` can move: the host
+// `target` is (its children changed), the host it is a child of (it was
+// added, removed, or its `slot` attribute set), and the host of the shadow
+// tree it is in (a slot or anything round one changed). It over-marks on
+// purpose: any change there maps to those hosts, a host child's own text
+// or an attribute that is not `slot` included, which costs reuse and never
+// correctness.
+static void reuse_slot_rule(FReuseSnapshot *r, const os64_html_node_t *target)
+{
+    if (target == NULL) return;
+    if (target->shadow_root) reuse_mark_host(r, target);
+    if (target->parent && target->parent->shadow_root) reuse_mark_host(r, target->parent);
+    const os64_html_node_t *root = target;
+    while (root->parent) root = root->parent;
+    reuse_mark_host(r, os64_html_shadow_host(root));
 }
 static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
 {
@@ -114,7 +122,7 @@ static bool reuse_read(FReuseSnapshot *r, flow_reuse_stats_t *stats)
         reuse_mark(r, entry->target);
         for (size_t i = 0; i < entry->nadded; ++i) reuse_mark(r, entry->added[i]);
         for (size_t i = 0; i < entry->nremoved; ++i) reuse_mark(r, entry->removed[i]);
-        if (shadows) reuse_mark_host(r, reuse_slot_host(entry->target));
+        if (shadows) reuse_slot_rule(r, entry->target);
     }
     // Preorder index: the saved parent precedes its children, even if current
     // DOM links have moved those children elsewhere or disconnected them.

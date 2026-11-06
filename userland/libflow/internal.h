@@ -518,10 +518,11 @@ typedef struct {
     int32_t link;
     uint8_t decoration;
     FDecorationColors decoration_colors;
-    // How many of this element and its ancestors are lists (`ul ol menu
-    // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
-    // for its children, by the same bargain. And whether one of them is a
-    // `nobr`, which is what `nobr wbr` asks.
+    // How many of this element and its ancestors in the document's own tree
+    // (a selector's, not the flat tree's) are lists (`ul ol menu dir`),
+    // lists or `dl`s, and `li`s: the chapter's descendant selectors for its
+    // children, by the same bargain. And whether one of them is a `nobr`,
+    // which is what `nobr wbr` asks.
     int32_t lists, lists_or_dls, items;
     bool in_nobr;
     // Its `quotes` (inherited): the winner's value, its marks' pairs, or
