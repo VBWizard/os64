@@ -386,12 +386,20 @@ static const os64_html_node_t *first_legend(const os64_html_node_t *fieldset)
     return NULL;
 }
 
-static bool in_hidden_subtree(const os64_html_node_t *n)
+// Drawn nowhere: under an element the page marked `hidden` in the flat
+// tree (SHADOW_DOM.md § 5), which is what renders, or not in it at all —
+// the climb stops at a node that has a parent but no flat parent (a
+// host's child no slot takes, a slot's own child while nodes are assigned
+// to it).
+static bool in_hidden_subtree(const os64_html_document_t *doc, const os64_html_node_t *n)
 {
-    for (const os64_html_node_t *up = n; up != NULL; up = up->parent)
+    const os64_html_node_t *last = n;
+    for (const os64_html_node_t *up = n; up != NULL; up = os64_html_flat_parent(doc, up)) {
         if (up->kind == OS64_HTML_ELEMENT && p_has_attr(up, "hidden"))
             return true;
-    return false;
+        last = up;
+    }
+    return last->parent != NULL;
 }
 
 // ── The pieces of a form the attributes spell ───────────────────────────
@@ -957,7 +965,7 @@ static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_
     c->multiple = p_has_attr(n, "multiple");
     c->has_value_attribute = p_has_attr(n, "value");
     c->checked = p_has_attr(n, "checked");
-    c->hidden_subtree = in_hidden_subtree(n);
+    c->hidden_subtree = in_hidden_subtree(page->doc, n);
     c->has_datalist_ancestor = p_ancestor(n, OS64_HTML_TAG_DATALIST) != NULL;
     c->blocks_implicit = blocks_implicit(element, c->input);
     c->dirname = p_attr(n, "dirname");

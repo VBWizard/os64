@@ -85,6 +85,11 @@ bool yonder_settings_saved_scripts(void);
 // as on, and `*refused` (may be NULL) says so for the status line;
 // otherwise it is NULL.
 bool yonder_settings_saved_modern(const char **refused);
+// A developer's key with no row in the dialog: `shadow_dom = on` turns on
+// shadow trees' surface (os64_dom_options_t.shadow_trees, SHADOW_DOM.md
+// § 7) under the modern switch; anything else, or no key, leaves it off.
+// Read at start.
+bool yonder_settings_saved_shadow_dom(void);
 // THE COOKIES' SWITCH (cookies.h): `cookies = on | session | off`, without
 // case. Absent it is on; a value that is none of the three is read as on,
 // and `*refused` (may be NULL) says so for the status line; otherwise it

@@ -30,6 +30,7 @@
 #define CONF_ANIMATIONS "animations"
 #define CONF_MOTION "motion"
 #define CONF_MODERN "modern"
+#define CONF_SHADOW_DOM "shadow_dom"
 #define CONF_PROFILE "profile"
 #define CONF_DOWNLOADS "downloads"
 #define CONF_COOKIES "cookies"
@@ -169,6 +170,13 @@ bool yonder_settings_saved_modern(const char **refused)
             *refused = kRefused;
     }
     return true;
+}
+
+bool yonder_settings_saved_shadow_dom(void)
+{
+    char value[8];
+    return os64_conf_get(CONF_NAME, CONF_SHADOW_DOM, value, sizeof(value)) == 0 &&
+           os64_streq_nocase(value, "on");
 }
 
 bool yonder_settings_saved_scripts(void)

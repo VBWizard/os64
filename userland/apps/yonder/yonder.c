@@ -92,6 +92,8 @@ static bool s_layout_profile;
 // the styles their rules give them.
 static bool s_reduce_motion;
 static bool s_animations = true;
+// yonder.conf's `shadow_dom` developer key (settings.h), read at start.
+static bool s_shadow_dom;
 
 // PAGE STORAGE (storage.h): the window's store over the profile folder
 // (yonder.conf's `profile`), which every page's localStorage and
@@ -1224,13 +1226,13 @@ static size_t element_named(char *out, size_t cap, const char *before, const os6
 // none named): the element as a selector would name it (element_named),
 // the element holding it for a text — and the property a layout places,
 // when that was the reason.
-static void parts_what(char *out, size_t cap, const flow_parts_said_t *said)
+static void parts_what(const os64_html_document_t *doc, char *out, size_t cap, const flow_parts_said_t *said)
 {
     const os64_html_node_t *n = said->node;
     const char *text = "";
     if (n != NULL && n->kind != OS64_HTML_ELEMENT) {
         text = "text in ";
-        n = n->parent;
+        n = os64_html_flat_parent(doc, n);
     }
     size_t at = 0;
     out[0] = '\0';
@@ -1453,7 +1455,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         // Named only when a record can be written (yonder.conf's
         // diagnostics): the name is a string made at every refusal.
         if (s_diag.dir[0] != '\0')
-            parts_what(s_parts.what, sizeof(s_parts.what), &said);
+            parts_what(page_doc(p), s_parts.what, sizeof(s_parts.what), &said);
     }
     if (reclaim != NULL && reclaim != p) {
         flow_free(p->tree);
@@ -5780,13 +5782,16 @@ static void webfonts_chars(const Page *p)
                     s_web.chars[cp >> 6] |= 1ull << (cp & 63);
             }
         }
-        if (n->first_child != NULL && !webfonts_undrawn(n)) {
-            n = n->first_child;
+        // The flat tree's text: what renders, a shadow tree's and a slot's
+        // assigned text included.
+        const os64_html_node_t *down = os64_html_flat_first_child(doc, n);
+        if (down != NULL && !webfonts_undrawn(n)) {
+            n = down;
             continue;
         }
-        while (n != NULL && n->next == NULL)
-            n = n->parent;
-        n = n != NULL ? n->next : NULL;
+        while (n != NULL && os64_html_flat_next_sibling(doc, n) == NULL)
+            n = os64_html_flat_parent(doc, n);
+        n = n != NULL ? os64_html_flat_next_sibling(doc, n) : NULL;
     }
     uint16_t upto = 0;
     for (uint32_t w = 0; w < 0x110000 / 64; w++) {
@@ -9394,7 +9399,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
-        .diag = diag, .encrypted = encrypted, .modern = modern,
+        .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus};
@@ -11815,10 +11820,13 @@ static void inputs_drop(void)
 
 // The element an event at `node` is dispatched at: a hit on a word is a hit
 // on the element holding it.
+// The element a hit node is in: its flat-tree parent element (what was laid
+// out), so text written straight into a shadow root answers its host and
+// slotted text its slot, as other browsers' hit tests answer.
 static const os64_html_node_t *element_of(const os64_html_node_t *node)
 {
     while (node != NULL && node->kind != OS64_HTML_ELEMENT)
-        node = node->parent;
+        node = os64_html_flat_parent(page_doc(&g.page), node);
     return node;
 }
 
@@ -16523,6 +16531,7 @@ int main(int argc, char **argv)
     s_dark = yonder_settings_saved_dark();
     s_animations = yonder_settings_saved_animations();
     s_reduce_motion = yonder_settings_saved_reduce_motion();
+    s_shadow_dom = yonder_settings_saved_shadow_dom();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
     const char *modern_refused;

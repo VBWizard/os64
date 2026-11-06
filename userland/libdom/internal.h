@@ -769,11 +769,6 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
  * default was not prevented, 0 when it was, -1 with an exception pending
  * when the binding refused its own storage or the runtime failed under it. */
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node);
-/* DOM's "retarget A against B" (§ 4.8): A, unless A is in a shadow tree
- * whose root is not a shadow-including inclusive ancestor of B, when it is
- * that root's host, again until it is not. A NULL B (the window) retargets
- * A out of every shadow tree, into the tree its shadow-including root is. */
-const os64_html_node_t *d_retarget(const os64_html_node_t *a, const os64_html_node_t *b);
 /* DOM's "get the parent" for a node on an event's path (§ 2.9, § 4.8): a
  * node assigned to a slot goes to the slot; a shadow root to its host,
  * unless the event is not composed and the root is `first`, the root of

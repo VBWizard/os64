@@ -666,6 +666,24 @@ here.
 |---|---|---|
 | libdom event.c `d_event_parent`, `assigned`, `path_walk` (which replaces `activation_target` and `dispatch`'s climbs, and finds the activation target on the path it builds) | an event's path | the A.1 row's ruling, built: CROSSES by DOM's "get the parent" |
 | libdom pointer.c `up`, and `path_make` and `common` through it | a pointer's ancestors: boundary chains, the kept fallback, a click's common ancestor | FLAT: "get the parent" through slots, past a shadow root to its host, so no root is ever a pointer's node (the cold read of D2b) |
-| libdom event.c `d_retarget`, `shadow_including_inclusive_ancestor`, `in_shadow_tree`, `tree_root` | DOM's retargeting, and whether a node is in a shadow tree | CROSSES for the ancestor test; STOPS for the root whose host retargeting climbs to, which is the node's own tree's |
+| libhtml dom.c `os64_html_retarget` (D3 moved it there from libdom event.c, for yonder's offsetParent too); libdom event.c `in_shadow_tree`, `tree_root` | DOM's retargeting, and whether a node is in a shadow tree | CROSSES for the ancestor test; STOPS for the root whose host retargeting climbs to, which is the node's own tree's |
 | libdom shadow.c `tree_shadow_root`, and `shadow_member`'s and `attach_shadow`'s uses of it | the shadow root of a node's own tree (assignedSlot's closed test, activeElement's tree test) | STOPS: a node's own tree |
 | libdom shadow.c `flattened` | a slot's assigned nodes, flattened | FLAT: assigned nodes, a slot among them replaced by its own, else fallback children |
+
+### A.6 Walks D3 adds, and how it reads A.1–A.3's FLAT rows
+
+D3 moves the rows ruled FLAT onto the flat tree with these helpers, and
+reads one row more finely than A.3 wrote it.
+
+| Sites | Question | Ruling |
+|---|---|---|
+| libflow internal.h `f_flat_parent`; boxes.c `first_of`, `next_of`, `up_of`, and through them `text_style`, `blank_run`, `text_node`'s look ahead and `position_box`; flow.c `tree_doc`, `flat_after`; reuse_snapshot.inc `reuse_next` | the flat tree's links, for a document's nodes and libflow's synthetic ones | FLAT: libhtml's flat functions; a ::before, an ::after and their text climb by their own parent |
+| libflow reuse_snapshot.inc `reuse_slot_host`, `reuse_mark_host`, and `reuse_read`, which applies them | the host whose flat children a change touches (§ 5's slot rule) | STOPS for finding the host (a change's own tree's root, or the host it names); the host's saved flat subtree is marked whole |
+| libflow style.c `above`, `counter_list`, `open_element`, the walk in `f_style_build_reusing`, `f_style_beyond`, and the record lookups in `sheet` and `style_element` | inheritance, counters, the style walk | FLAT, as A.3 ruled |
+| libflow style.c `cell_table`, `blank`, `substantial_before`, `substantial_after`, `first_summary`, `margin_quirks`, and `hints`' and `style_element`'s tests of a parent's tag (a form inside table structure, `table > tr`, `colgroup` under `table`, `details > summary`) | HTML's hints and quirks that stand for the UA sheet's selectors | STOPS (D3's reading of A.3's `hints` and `cell_table`): a selector matches within one tree (§ 6), so these ask the document's own tree. The two answers differ only where a host's child is slotted or a root's child stands under a host, and there the selector's answer is the standard's |
+| libflow boxes.c `flow_svg_root`, `foreign_text`, `hidden_by_details`; flow.c `may_own_canvas` | an element's own namespace, a `details`' own text, the root's body child | STOPS: structural, not rendering |
+| libpage core.c `in_hidden_subtree` | drawn nowhere | FLAT, and a node the flat tree does not hold (a parent but no flat parent) is hidden: A.2's D3 to-do |
+| libdom resize.c `node_depth` | ResizeObserver's depth | FLAT (A.1) |
+| yonder geometry.c's `offsetParent` climb | `offsetParent` | FLAT, then retargeted against the element with `os64_html_retarget`, and the offsets taken from what it answers |
+| yonder yonder.c `element_of`, `parts_what`, `webfonts_chars` | a hit text's element, the record's name for it, the text a web font must cover | FLAT (A.3) |
+| libgarb cascade.c `custom_value`, `animation_names`; yonder svg.c `resource_transform` | inheritance of a cascaded value | FLAT, and moved with D4: until D4 the cascade styles no shadow tree, so there is nothing for them to inherit across |

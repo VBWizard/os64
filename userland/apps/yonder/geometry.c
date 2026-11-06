@@ -192,7 +192,8 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     const flow_box_t *parent = NULL;
     if (!is_root && !is_body) {
         bool static_position = first->style == NULL || first->style->position == FLOW_POSITION_STATIC;
-        for (const os64_html_node_t *at = fixed ? NULL : node->parent; at != NULL; at = at->parent) {
+        for (const os64_html_node_t *at = fixed ? NULL : os64_html_flat_parent(document, node); at != NULL;
+             at = os64_html_flat_parent(document, at)) {
             const flow_box_t *box = flow_box_for(tree, at);
             if (box == NULL || box->style == NULL) continue;
             if (at == document->body || box->style->position != FLOW_POSITION_STATIC ||
@@ -200,6 +201,14 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
                 parent = box;
                 break;
             }
+        }
+        // The climb is the flat tree's, and HTML answers with the ancestor
+        // retargeted against the element: one inside a shadow tree the
+        // element is not in (a slotted element's) is its host, whose box
+        // the offsets are then taken from (none when the host has none).
+        if (parent != NULL && parent->node != NULL) {
+            const os64_html_node_t *shown = os64_html_retarget(parent->node, node);
+            if (shown != parent->node) parent = flow_box_for(tree, shown);
         }
         out->offset_parent = parent != NULL ? parent->node : NULL;
         int64_t x, y;
