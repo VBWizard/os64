@@ -346,45 +346,22 @@ int d_root_options(JSContext *ctx, int argc, JSValueConst *argv)
     return truth;
 }
 
-/* normalize() (DOM § 4.4): among the node's descendants, an empty text
- * node is removed, and each run of adjacent text nodes becomes its first,
- * given the run's data. That node's data is set before the rest of its run
- * is removed, so a failure part way loses no text; at worst some of it is
- * there twice. */
+/* normalize() (DOM § 4.4): libhtml's verb (os64_html_normalize), which
+ * removes the descendants' empty Text nodes and merges each run of Text
+ * siblings into its first in the standard's order, moving live ranges as it
+ * goes (RANGE.md § 4). Merging keeps every parent's text, so no control's
+ * value changes (os64_page_node_normalize). Each Text it may take out — an
+ * empty one, or one after a Text sibling — records the document it leaves
+ * first, as d_remove does; the record is read only while the node is a
+ * root, so one kept in its tree is unharmed by it. */
 static JSValue normalize(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
 {
-    const os64_html_node_t *at = self->first_child;
-    while (at != NULL) {
-        if (at->kind != OS64_HTML_TEXT) {
-            at = d_walk_next(self, at);
-            continue;
-        }
-        if (at->text_len == 0) {
-            const os64_html_node_t *next = d_walk_next(self, at);
-            if (d_tree_change(dom, ctx, D_REMOVE, at->parent, at, NULL) < 0) return JS_EXCEPTION;
-            at = next;
-            continue;
-        }
-        size_t total = 0;
-        for (const os64_html_node_t *n = at; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next)
-            total += n->text_len;
-        if (total != at->text_len) {
-            char *whole = d_alloc(dom, total + 1);
-            if (whole == NULL) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
-            size_t used = 0;
-            for (const os64_html_node_t *n = at; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next) {
-                os64_memcpy(whole + used, n->text, n->text_len);
-                used += n->text_len;
-            }
-            int64_t status = os64_page_node_set_text(dom->state, (os64_html_node_t *)at, whole, total);
-            d_free(dom, whole);
-            if (status < 0) return d_html_error(ctx, status);
-        }
-        while (at->next != NULL && at->next->kind == OS64_HTML_TEXT)
-            if (d_tree_change(dom, ctx, D_REMOVE, at->parent, at->next, NULL) < 0) return JS_EXCEPTION;
-        at = d_walk_next(self, at);
-    }
-    return JS_UNDEFINED;
+    for (const os64_html_node_t *at = dom->documents != 0 ? self->first_child : NULL; at != NULL;
+         at = d_walk_next(self, at))
+        if (at->kind == OS64_HTML_TEXT && (at->text_len == 0 || (at->prev && at->prev->kind == OS64_HTML_TEXT)))
+            d_leaving(dom, at);
+    int64_t status = os64_page_node_normalize(dom->state, (os64_html_node_t *)self);
+    return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
 
 static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
@@ -1157,27 +1134,60 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
     return d_iterable(ctx, tokens, true);
 }
 
-/* ── Text's own members (DOM § 4.11) ─────────────────────────────────── */
+/* ── CharacterData's members (DOM § 4.10) ────────────────────────────── */
 
-/* The byte at which `offset` UTF-16 code units of `text` end, a CharacterData
- * offset being in code units and the tree's text UTF-8. False when `offset`
- * is past the end. An offset inside a pair (a character above U+FFFF) ends
- * after the pair, since the tree cannot hold half of one (DEBTS.md § Classic
- * browser scripting). */
-static bool text_offset(const char *text, size_t length, uint32_t offset, size_t *byte)
+/* length, substringData, appendData, insertData, deleteData, replaceData:
+ * offsets and counts in UTF-16 code units, the tree's text UTF-8, so each
+ * is libhtml's replace data (os64_html_replace_data, through libpage) or a
+ * read cut at libhtml's byte for a unit. An offset inside a surrogate pair
+ * snaps down to the pair's start: the tree cannot hold half of one
+ * (RANGE.md § 4; DIVERGENCES.md § The browser's script binding). */
+enum { C_LENGTH, C_SUBSTRING, C_APPEND, C_INSERT, C_DELETE, C_REPLACE };
+
+static JSValue character_data_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv,
+                                     int magic, JSValue *data)
 {
-    size_t at = 0;
-    uint32_t units = 0;
-    while (units < offset && at < length) {
-        unsigned char lead = (unsigned char)text[at];
-        size_t width = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
-        if (at + width > length) width = length - at;
-        units += width == 4 ? 2 : 1;
-        at += width;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    if (self->kind != OS64_HTML_TEXT && self->kind != OS64_HTML_COMMENT && self->kind != OS64_HTML_PI)
+        return JS_ThrowTypeError(ctx, "CharacterData member requires a character-data node");
+    if (magic == C_LENGTH) return JS_NewUint32(ctx, os64_html_node_length(self));
+    /* The arguments in IDL order: (offset, count, data), each present where
+     * the member takes it; unsigned longs wrap, as WebIDL converts them. All
+     * are converted before the data is read, since a conversion runs script
+     * that may change it. */
+    bool takes_offset = magic != C_APPEND, takes_count = magic == C_SUBSTRING || magic == C_DELETE ||
+                                                         magic == C_REPLACE;
+    bool takes_data = magic == C_APPEND || magic == C_INSERT || magic == C_REPLACE;
+    int needed = (int)takes_offset + (int)takes_count + (int)takes_data;
+    if (argc < needed) return JS_ThrowTypeError(ctx, "Missing argument");
+    uint32_t offset = 0, count = 0;
+    int at = 0;
+    if (takes_offset && JS_ToUint32(ctx, &offset, argv[at++]) < 0) return JS_EXCEPTION;
+    if (takes_count && JS_ToUint32(ctx, &count, argv[at++]) < 0) return JS_EXCEPTION;
+    DString string = {0};
+    if (takes_data && !d_string(dom, ctx, argv[at], &string)) return JS_EXCEPTION;
+    uint32_t length = os64_html_node_length(self);
+    if (!takes_offset) offset = length;
+    if (offset > length) {
+        d_string_free(dom, &string);
+        return d_error(ctx, "IndexSizeError", "The offset is past the data's end");
     }
-    *byte = at;
-    return units >= offset;
+    if (magic == C_SUBSTRING) {
+        size_t from = os64_html_utf16_byte(self->text, self->text_len, offset);
+        size_t to = count > length - offset ? self->text_len
+                                            : os64_html_utf16_byte(self->text, self->text_len, offset + count);
+        return JS_NewStringLen(ctx, self->text + from, to - from);
+    }
+    int64_t status = os64_page_node_replace_data(dom->state, (os64_html_node_t *)self, offset, count,
+                                                 string.data, string.length);
+    d_string_free(dom, &string);
+    return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
+
+/* ── Text's own members (DOM § 4.11) ─────────────────────────────────── */
 
 enum { T_WHOLE_TEXT, T_SPLIT_TEXT };
 
@@ -1212,28 +1222,16 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
         d_free(dom, whole);
         return result;
     }
-    /* splitText(offset): the data after `offset` becomes a new text node,
-     * the next sibling when there is a parent, and the node keeps the data
-     * before it. The node is shortened first and given its data back if
-     * the insertion fails, so a failure changes nothing. */
-    size_t byte;
-    if (!text_offset(self->text, self->text_len, offset, &byte))
-        return d_error(ctx, "IndexSizeError", "The offset is past the text's end");
-    int64_t status;
-    os64_html_node_t *tail = os64_html_create_text(dom->document, self->text + byte, self->text_len - byte, &status);
-    if (tail == NULL) return d_html_error(ctx, status);
+    /* splitText(offset): libhtml's verb (os64_html_split_text), in the
+     * standard's order — the new node inserted after this one when there is
+     * a parent, live ranges moved, then this node truncated — an offset
+     * inside a surrogate pair snapped down to the pair's start. The new
+     * node belongs to this node's document. */
+    os64_html_node_t *tail = NULL;
+    int64_t status = os64_page_node_split_text(dom->state, (os64_html_node_t *)self, offset, &tail);
+    if (status < 0) return d_html_error(ctx, status);
     d_made_in(dom, tail, d_node_document(dom, self));
-    char *kept = d_alloc(dom, self->text_len + 1);
-    if (kept == NULL) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
-    size_t kept_length = self->text_len;
-    os64_memcpy(kept, self->text, kept_length);
-    status = os64_page_node_set_text(dom->state, (os64_html_node_t *)self, kept, byte);
-    if (status >= 0 && self->parent != NULL) {
-        status = d_insert(dom, (os64_html_node_t *)self->parent, tail, (os64_html_node_t *)self->next);
-        if (status < 0) (void)os64_page_node_set_text(dom->state, (os64_html_node_t *)self, kept, kept_length);
-    }
-    d_free(dom, kept);
-    return status < 0 ? d_html_error(ctx, status) : d_wrap(dom, ctx, tail);
+    return d_wrap(dom, ctx, tail);
 }
 
 /* A template's `content` (HTML § 4.12.3): the fragment libhtml keeps its
@@ -1302,7 +1300,8 @@ static JSValue base_uri(JSContext *ctx, JSValueConst this_value, int argc, JSVal
 /* 0f's P1a, the Modern Web table's node row (INTERFACES_FORMS.md): Node's
  * getRootNode, which Vue's v-model asks, `normalize` and `baseURI`, and an
  * Attr's answer to each on Attr's prototype, whose shadow answers every
- * Node member for an Attr; Text's own `wholeText` and `splitText`; a
+ * Node member for an Attr; Text's own `wholeText` and `splitText`;
+ * CharacterData's `length` and its data methods (RANGE.md § 4); a
  * template's `content`; and an element's `localName`, `namespaceURI` and
  * `prefix`. Members of prototypes, so the row names nothing on window; the
  * DOM host's chain shape holds them (tools/test_dom_modern.inc). */
@@ -1314,6 +1313,18 @@ int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, "normalize", mixin_method, 0, D_NORMALIZE) < 0 ||
         d_accessor(dom, ctx, text, "wholeText", text_member, T_WHOLE_TEXT, false) < 0 ||
         d_method(dom, ctx, text, "splitText", text_member, 1, T_SPLIT_TEXT) < 0 ||
+        d_accessor(dom, ctx, dom->prototypes[D_PROTO_CHARACTER_DATA]->value, "length", character_data_member,
+                   C_LENGTH, false) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_CHARACTER_DATA]->value, "substringData",
+                 character_data_member, 2, C_SUBSTRING) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_CHARACTER_DATA]->value, "appendData", character_data_member,
+                 1, C_APPEND) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_CHARACTER_DATA]->value, "insertData", character_data_member,
+                 2, C_INSERT) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_CHARACTER_DATA]->value, "deleteData", character_data_member,
+                 2, C_DELETE) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_CHARACTER_DATA]->value, "replaceData",
+                 character_data_member, 3, C_REPLACE) < 0 ||
         d_accessor(dom, ctx, dom->prototypes[D_PROTO_TEMPLATE]->value, "content", template_content, 0, false) < 0)
         return -1;
     static const struct { const char *name; int magic; } kNames[] = {

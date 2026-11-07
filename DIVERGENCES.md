@@ -292,3 +292,12 @@ page's script can see them.
 - **`crypto` has no `subtle`** on an `https:` page, where browsers have
   SubtleCrypto: `getRandomValues` and `randomUUID` are whole, and pages
   detect `crypto.subtle` apart from them (WINDOW_DOCUMENT.md, ruling 1).
+- **An offset inside a character above U+FFFF means the character's
+  start.** CharacterData offsets count UTF-16 code units and such a
+  character is two of them; the tree holds UTF-8, which cannot hold half of
+  one. Where the standard would split the pair into two lone surrogates —
+  `splitText`, `insertData`, `deleteData`, `replaceData`, `substringData`,
+  and a live range's boundary — the offset, and the end a count reaches,
+  snap down to the pair's first unit: `splitText` puts the whole character
+  on the second side, and a deletion ending inside it leaves it whole
+  (RANGE.md § 4, `h_utf16_byte`).

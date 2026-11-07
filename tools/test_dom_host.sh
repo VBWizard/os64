@@ -41,7 +41,7 @@ objects=()
 for source in userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
     userland/libos64/text.c userland/libos64/text_cache.c userland/libos64/text_decode.c userland/libos64/text_bitmap.c \
     userland/libos64/bidi.c userland/libos64/url.c userland/libos64/arena.c tools/test_js_port_calendar.c tools/test_dom_host.c \
-    userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,shadow}.c \
+    userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,shadow,range}.c \
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \
     userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \

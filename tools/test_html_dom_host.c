@@ -3148,6 +3148,7 @@ static void t_reclaim_rules(void)
     check(live == 0, "reclamation rules teardown");
 }
 #include "test_html_changes.inc"
+#include "test_html_ranges.inc"
 
 int main(int argc, char **argv)
 {
@@ -3158,6 +3159,14 @@ int main(int argc, char **argv)
         return checks_failed ? 1 : 0;
     }
 #endif
+    if (argc == 2 && (!strcmp(argv[1], "--ranges") || !strcmp(argv[1], "--ranges-cost"))) {
+        if (!strcmp(argv[1], "--ranges"))
+            t_ranges();
+        else
+            t_ranges_cost();
+        printf("html ranges: %zu checks, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--form-input-count") == 0) {
         t_form_input_count();
         printf("html form-input count: %zu checks, %zu failed\n", checks_run, checks_failed);
@@ -3206,6 +3215,7 @@ int main(int argc, char **argv)
         t_shadow();
         t_slots();
         t_flat_walk_linear();
+        t_ranges();
         t_slotchange();
         t_shadow_more();
         t_change_log();

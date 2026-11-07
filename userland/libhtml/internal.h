@@ -110,6 +110,9 @@ typedef struct {
     bool slot_dirty_all; /* a mark was lost: the next report compares every shadow root */
     bool shadows;
     uint32_t serials;   /* the last node serial given out (HMeta.serial) */
+    /* The document's live ranges (range.c), or NULL: a mutation with none
+     * tests this one pointer and runs no range step. */
+    struct os64_html_range *ranges;
 } HDoc;
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
@@ -348,6 +351,20 @@ void d_unpin_collect(HDoc *d);
 void d_ref(HDoc *d, const HNode *node, bool parser, bool add);
 void d_linking(HDoc *d, HNode *parent, HNode *node);
 void d_unlinking(HDoc *d, HNode *node);
+/* Live ranges' steps (range.c, RANGE.md § 4), each run only when the
+ * document has a range: removing (before `node` is unlinked), inserting
+ * (before a node is linked into `parent` before `before`), replace data,
+ * split a Text node, and normalize's merge of `current` into `into`. */
+void d_ranges_unlinking(HDoc *d, HNode *node);
+void d_ranges_linking(HDoc *d, HNode *parent, HNode *before);
+void d_ranges_replaced(HDoc *d, HNode *node, uint32_t offset, uint32_t count, uint32_t length);
+void d_ranges_split(HDoc *d, HNode *node, HNode *tail, uint32_t offset);
+void d_ranges_merged(HDoc *d, HNode *into, HNode *current, uint32_t length);
+/* UTF-16 units over UTF-8 bytes (range.c): a string's length in units, and
+ * the byte where unit `unit` starts, snapped down to its code point's start
+ * so a surrogate pair is never split. */
+uint32_t h_utf16_length(const char *s, size_t n);
+size_t h_utf16_byte(const char *s, size_t n, uint32_t unit);
 void d_fatal(const char *sentence);
 size_t d_owned_bytes(const HNode *node);
 size_t d_pending_bytes(const HDoc *d);
@@ -441,7 +458,9 @@ static inline HNode *h_adjusted_current(os64_html_parser_t *p)
 }
 HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind);
 void h_detach(HDoc *d, HNode *n);
+void h_unlink(HDoc *d, HNode *n);
 void h_attach(HDoc *d, HNode *parent, HNode *before, HNode *n);
+void h_link(HDoc *d, HNode *parent, HNode *before, HNode *n);
 void h_tokenize(os64_html_parser_t *p, uint32_t cp);
 void h_emit(os64_html_parser_t *p);
 void h_tree(os64_html_parser_t *p, HToken *token);

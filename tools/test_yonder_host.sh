@@ -45,7 +45,7 @@ host_sources=(
    userland/libpage/upstream/ryu/ryu/d2s.c userland/libpage/submit.c userland/libpage/encode.c
    userland/libpage/refresh.c userland/libpage/activate.c userland/libhtml/core.c
    userland/libhtml/encoding.c userland/libhtml/tokenizer.c userland/libhtml/tree.c
-   userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c
+   userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c userland/libhtml/shadow.c userland/libhtml/range.c
    userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c)
 host_objects "$work"
 cc -fsanitize=address,undefined "${host_objs[@]}" -lm -o "$work/yonder_driver"
