@@ -1250,8 +1250,9 @@ static bool script_event(yonder_scripts_t *s, const Item *it, bool failed, os64_
 // A script a mutation took out of the document before its turn is skipped,
 // and fires nothing; HTML runs a removed external script all the same
 // (DEBTS.md). Its kind is asked again for a like reason, a language can
-// change, and a script no longer its kind is skipped as silently. A failed
-// script fires its `error` wherever its element is. The item is named by
+// change, and a ready script no longer its kind is skipped as silently. A
+// failed script fires its `error` wherever its element is and whatever its
+// type has become. The item is named by
 // its index: a script that connects another grows the table under this
 // call.
 static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out)
@@ -1636,10 +1637,11 @@ bool yonder_scripts_pointer_active(const yonder_scripts_t *s)
 }
 
 // One event, dispatched within whatever task the caller is running, which
-// counts and judges it: true when the page listens for it somewhere
-// (os64_dom_listens), which is when a host event is counted as a task. A
-// move of the readiness nothing listens for is dispatched and not counted.
-// Whether a listener actually ran is os64_dom_listener_calls' answer.
+// counts and judges it: true when the page listens for it somewhere, or for
+// the readystatechange its move of the readiness fires (os64_dom_listens),
+// which is when a host event is counted as a task. A move nothing listens
+// for is dispatched and not counted. Whether a listener actually ran is
+// os64_dom_listener_calls' answer.
 static bool dispatch_event(yonder_scripts_t *s, const os64_html_node_t *node, const os64_dom_event_t *event,
                            bool *prevented, os64_js_outcome_t *out)
 {

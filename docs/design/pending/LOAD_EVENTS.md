@@ -1,9 +1,10 @@
 # LOAD_EVENTS.md — `load` and `error` at link, style and script elements
 
 *Opus 5.5, 2026-11-06, from Fable's brief of the same day
-(`~/os64-opus-kit/briefs/LOAD_EVENTS_LINK_SCRIPT.md`). Fable reviews this
-before any code. § 4 lists where it departs from the brief and why; the
-rest is the design as I would build it.*
+(`~/os64-opus-kit/briefs/LOAD_EVENTS_LINK_SCRIPT.md`). Fable reviewed it
+before any code (his answers are § 6, his findings folded into § 3 and
+§ 7); § 3 is the design as built, and § 4 lists where it departs from the
+brief and why.*
 
 DEBTS rows this pays: Quick wins "A stylesheet `link` and a script element
 fire no `load` or `error`"; Classic browser scripting "A script element
@@ -40,7 +41,9 @@ arrives. What the entry module needs after that is unknown until it runs.
   the fetch failed or the response is not a usable sheet. A sheet whose
   `media` does not match is still fetched and still fires (yonder fetches
   it too: `media` decides only whether first paint waits for it,
-  `sheet_holds`). A failed `@import` leaves the link's event `load`. An
+  `sheet_holds`). A failed `@import` leaves the link's event `load`, which
+  HTML fires once the imports are done; yonder fires it when the link's own
+  sheet is parsed, before them (a DEBTS row). An
   `alternate` sheet is not fetched and fires nothing (libpage leaves it
   out). An href that does not parse fetches nothing and fires nothing.
   yonder's own rule beside it: a parsed href yonder will not fetch (a
@@ -77,7 +80,8 @@ through one internal helper (`script_event`):
 
 - **`error`**: an item that reaches its turn as `STATE_FAILED` (that is,
   `fail_item` put it there) and whose element is from an external file or
-  is a module. The failure is reported as it is today, then `error` fires.
+  is a module. `error` fires inside the task; the task's failure is
+  reported, as it is today, when `run_item` returns.
 - **`load`**: an item whose element is from an external file, after it
   ran (classic: after `os64_dom_script_ended` and
   `os64_dom_set_current_script(s->dom, NULL)`; module: after `run_module`
@@ -149,8 +153,15 @@ while the sheet table is being changed.
   sleep on one.
 - **Which host:** the page's own, else the one serving its serial
   (`page_scripts(p)` then `scripts_for(p->serial)`, which is what
-  `adoptions_host` already does). No host, as with scripts off: nothing is
-  owed.
+  `adoptions_host` already does). No host: nothing is owed, and the Sheet
+  keeps its verdict (`settled`, `failed`) untold. A stream has no host
+  until its first script stops the parser, or until it finishes (for its
+  handler attributes); both places that make one tell every sheet that
+  settled before it (`sheets_tell`), so an `onload` on a `link` before
+  the page's first script runs (the cold read's first finding). Those
+  events fire after that first script, so a listener it adds hears them,
+  where in other browsers a sheet settled before a script fired first.
+  With scripts off there is never a host, and nothing is owed.
 - **The verdict sites:**
   - `sheet_ready` owes `load`, so every road to the cascade owes it:
     `sheet_arrived` for a sheet that came, `sheet_inline`'s parse, and the
@@ -320,8 +331,11 @@ a left-out sheet fires `error`.
   10. 200 `style` elements inserted by one script on a page with a window
       `load` listener are all passed over within a handful of turns, and
       the page's own timer still runs (Fable's finding 1).
-- **Allocation sweep** over `yonder_scripts_owe` (the ring's growth and
-  the hold), proven with a hand mutant.
+- **`yonder_scripts_owe`'s one allocation refused** (the harness's
+  `fail_at`): nothing kept, nothing held, the next owe kept; and the ring
+  grown and compacted after a drain that stopped part way, keeping its
+  order. A sheet that lands while the page streams, before it has
+  scripts, is told when they are made, at both places that make them.
 - **WPT:** `the-script-element/module`'s exclusion "element's load and
   error events" lifted and its pages run; the classic
   `the-script-element/` pages that test `load`/`error` added; whatever

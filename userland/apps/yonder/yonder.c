@@ -651,11 +651,15 @@ typedef struct Sheet {
     const char *media;              // a sheet the page names: its element's; NULL otherwise
     int32_t importer, import_index; // -1 for a sheet the page names; else its @import
     char *url;                      // where it came from, its @imports' base; NULL for a `style`
-    // Its element has been owed its `load` or `error` for the address it
-    // asked for (`asked`, before redirects; NULL for a `style`). A table
-    // that replaces another copies it by element and address, so a reparse
-    // or a refetch tells the element nothing twice (LOAD_EVENTS.md § 3.3).
-    bool told;
+    // Its element's verdict: whether the sheet is in the cascade or failed
+    // (`settled`, `failed`), and whether its scripts have taken the `load`
+    // or `error` that says so (`told`). A sheet that settles before its
+    // page has scripts is told when they are made (sheets_tell). A table
+    // that replaces another copies `told` by element and the address asked
+    // for (`asked`, before redirects; NULL for a `style`, whose text is
+    // compared instead), so a reparse or a refetch tells the element
+    // nothing twice (LOAD_EVENTS.md § 3.3).
+    bool settled, failed, told;
     char *asked;
     garb_import_t *imports;         // once ready: its @imports, and each one's entry or -1
     int32_t *child;
@@ -4981,18 +4985,32 @@ static void coming_rejudge(void)
 static void sheet_ready(Page *p, int32_t e);
 
 // A sheet's verdict owed to its element as `load`, or `error` when it will
-// not be in the cascade, once for the address it asked for, by the scripts
-// serving its page (LOAD_EVENTS.md § 3.2). An `@import`'s or a constructed
-// sheet names no element. A page laid out for a measurement, inside a
-// running script, owes nothing: its own page reads the same sheet and owes
-// it then, never inside the script that inserted it.
+// not be in the cascade, once, by the scripts serving its page
+// (LOAD_EVENTS.md § 3.2). An `@import`'s or a constructed sheet names no
+// element. A page laid out for a measurement, inside a running script,
+// owes nothing: its own page reads the same sheet and owes it then, never
+// inside the script that inserted it. A page whose scripts are not made yet
+// (a stream before its first script) keeps the verdict for sheets_tell.
 static void sheet_owe(Page *p, Sheet *sh, bool failed)
 {
     if (sh->node == NULL || sh->told || p->measuring)
         return;
-    sh->told = true;
+    sh->settled = true;
+    sh->failed = failed;
     yonder_scripts_t *host = page_scripts(p);
-    (void)yonder_scripts_owe(host != NULL ? host : scripts_for(p->serial), sh->node, failed);
+    sh->told = yonder_scripts_owe(host != NULL ? host : scripts_for(p->serial), sh->node, failed);
+}
+
+// The page's scripts were just made: each sheet that settled before them is
+// told now, so an `onload` on a `link` or a `style` before the page's first
+// script runs. The events fire as tasks after the script the scripts were
+// made for, so a listener that script adds hears them too, where in other
+// browsers a sheet settled before a script fired before it ran.
+static void sheets_tell(Page *p)
+{
+    for (int32_t e = 0; e < p->nsheets; e++)
+        if (p->sheets[e].settled && !p->sheets[e].told)
+            sheet_owe(p, &p->sheets[e], p->sheets[e].failed);
 }
 
 // A linked sheet's address sent to a worker, or its parse taken from the
@@ -12791,6 +12809,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
+        } else {
+            sheets_tell(&g.stream.page);
         }
         stream_scripts_entry();
     }
@@ -13029,6 +13049,7 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
             status_rest("Out of memory for the page's scripts; it is read without them.");
             return YONDER_STOP_RESUME;
         }
+        sheets_tell(&g.stream.page);
         stream_scripts_entry();
     }
     return yonder_scripts_parser_stop(g.stream.scripts, script);

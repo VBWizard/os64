@@ -71,7 +71,9 @@ static void load_handler_only_case(void) {
  * element's error but never its load. Across a rebuild (a timer changes
  * the tree) nothing is told twice: not the reused parses, not the failed
  * sheet fetched again and failing again. An href changed is a new fetch,
- * and its element is told again. */
+ * and its element is told again; so is a style whose text changed. A style
+ * a script inserts and then measures, which the measuring page parses
+ * inside that script, is told once, by its own page. */
 static void load_sheets_case(void) {
     loop_page(LOAD_LOG "<style id=s1>p{}</style><link id=d rel=stylesheet href='data:text/css,p{}'>"
         "<link id=a rel=stylesheet href=a.css><link id=gone rel=stylesheet href=gone.css>"
@@ -79,7 +81,10 @@ static void load_sheets_case(void) {
         "document.head.appendChild(st);after=1;"
         "document.addEventListener('load',e=>{if(e.target.id==='s2')note('s2 after '+after)},true);"
         "setTimeout(()=>{document.body.appendChild(document.createElement('div'));note('timer')},1000);"
-        "setTimeout(()=>{document.getElementById('a').href='b.css'},2000);</script>");
+        "setTimeout(()=>{document.getElementById('a').href='b.css'},2000);"
+        "setTimeout(()=>{var m=document.createElement('style');m.id='s3';m.textContent='#out{width:10px}';"
+        "document.head.appendChild(m);note('measured '+(document.getElementById('out').offsetWidth>0));"
+        "document.getElementById('s1').textContent='p{color:green}'},3000);</script>");
     check(load_settle() && nsheet_jobs==2,"load events: the two fetchable sheets are sent for");
     check(sheet_land("/a.css","p{color:blue}") && sheet_land("/gone.css",NULL) && load_settle() &&
           g.page.tree!=NULL && script_rebuild() && load_settle(),"load events: the sheets' page arrives");
@@ -94,7 +99,7 @@ static void load_sheets_case(void) {
     now_ms+=1000;
     check(load_settle() && script_rebuild() && load_settle(),"load events: a timer changes the tree, and it is laid out again");
     /* The failed sheet was not reused: it is fetched again, and fails again. */
-    if(nsheet_jobs>0) check(sheet_land("/gone.css",NULL) && load_settle(),"load events: the failed sheet is fetched again");
+    check(nsheet_jobs==1 && sheet_land("/gone.css",NULL) && load_settle(),"load events: the failed sheet is fetched again");
     out=element_text("out");
     char expect[1100];
     snprintf(expect,sizeof(expect),"%s|timer",before);
@@ -102,6 +107,12 @@ static void load_sheets_case(void) {
     now_ms+=1000;
     check(load_settle() && script_rebuild() && load_settle() && sheet_land("/b.css","p{}") && load_settle() &&
           count_in(element_text("out"),"load LINK a")==2,"load events: an href changed is told again");
+    now_ms+=1000;
+    check(load_settle() && script_rebuild() && load_settle(),"load events: a timer inserts and measures a style");
+    out=element_text("out");
+    check(count_in(out,"measured true")==1 && count_in(out,"load STYLE s3")==1,
+          "load events: a style a script measured is told once, after the script, by its own page");
+    check(count_in(out,"load STYLE s1")==2,"load events: a style whose text changed is told again");
     loop_drop();
 }
 
@@ -169,9 +180,73 @@ static void load_many_styles_case(void) {
     loop_drop();
 }
 
+/* The cold read's first finding: a sheet that settles while the page is
+ * still streaming, before anything has made its scripts, is told when they
+ * are made: by the first script the parser stops at, or by the finished
+ * page for its handler attributes. Its onload runs either way. */
+static void load_before_scripts_case(void) {
+    for(int scripted=0;scripted<2;scripted++) {
+        /* The page arrives in two parts, the sheet landing between them. */
+        stream_window();
+        g.scripts_on=true; g.script_ms=5000; now_ms=100; g.modern=true;
+        start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+        way_head_t h=stream_head("text/html","",false);
+        yonder_mail_post_head(g.stream.mail,&h);
+        char *first=pad_page("<link id=l rel=stylesheet media=print href=early.css onload=\"this.media='all'\"><p>a</p>");
+        stream_post_body((const uint8_t *)first,strlen(first),YONDER_STREAM_CHUNK);
+        free(first);
+        for(int turns=0;nsheet_jobs==0 && turns<10;turns++) (void)stream_turn();
+        check(nsheet_jobs==1 && g.stream.active && g.stream.scripts==NULL,
+              "load events: the sheet is out while the page streams, before it has scripts");
+        check(sheet_land("/early.css","p{color:red}") && g.stream.active && g.stream.scripts==NULL,
+              "load events: the sheet lands before the page has scripts");
+        const char *rest=scripted ? "<p>b</p><script>var late=1</script><p>c</p>" : "<p>b</p>";
+        stream_post_body((const uint8_t *)rest,strlen(rest),YONDER_STREAM_CHUNK);
+        stream_post_verdict(true,OS64_FETCH_OK,"");
+        check(load_settle() && attr_is(probe_id("l"),"media","all"),
+              scripted ? "load events: a sheet settled before the first script is told when that script makes them"
+                       : "load events: a sheet settled before a script-less page finished is told when the page makes "
+                         "its scripts for the handler");
+        loop_drop();
+    }
+}
+
+/* yonder_scripts_owe's one allocation refused: nothing kept and nothing
+ * held, and the next owe is kept. Then the ring grows past its first
+ * size, and is compacted when a drain stopped part way (a heard event in
+ * the middle) and it fills: every event still fires, in order, once. */
+static void load_owe_ring_case(void) {
+    probe_page("<p id=out></p><style id=heard onload=\"var o=document.getElementById('out');"
+               "o.textContent=o.textContent+'h'\"></style><style id=quiet></style>",true);
+    yonder_scripts_t *s=g.page.scripts;
+    os64_html_node_t *heard=probe_id("heard"), *quiet=probe_id("quiet");
+    size_t was=live;
+    fail_at=attempts+1;
+    check(!yonder_scripts_owe(s,quiet,false) && !yonder_scripts_owed_pending(s) && live==was,
+          "load events: an owe refused for want of memory keeps nothing");
+    fail_at=0;
+    check(yonder_scripts_owe(s,quiet,false) && yonder_scripts_owed_pending(s),"load events: the next owe is kept");
+    for(int i=0;i<4;i++) (void)yonder_scripts_owe(s,quiet,false);
+    (void)yonder_scripts_owe(s,heard,false);
+    for(int i=0;i<10;i++) (void)yonder_scripts_owe(s,quiet,false);
+    os64_js_outcome_t out;
+    check(yonder_scripts_owed_fire(s,&out) && out.status==OS64_JS_OK && probe_text_is("out","h") &&
+          yonder_scripts_owed_pending(s),"load events: a drain stops at the first heard event, the rest still owed");
+    for(int i=0;i<3;i++) (void)yonder_scripts_owe(s,quiet,false);
+    (void)yonder_scripts_owe(s,heard,false);
+    for(int i=0;i<30;i++) (void)yonder_scripts_owe(s,quiet,false);
+    check(yonder_scripts_owed_fire(s,&out) && probe_text_is("out","hh") && yonder_scripts_owed_pending(s),
+          "load events: compacted and grown, the ring keeps its order: the second heard event is next");
+    check(!yonder_scripts_owed_fire(s,&out) && !yonder_scripts_owed_pending(s) && probe_text_is("out","hh"),
+          "load events: the quiet rest are passed over in one drain, which ran no task");
+    probe_drop();
+}
+
 static void load_event_cases(void) {
     load_loader_case();
     load_handler_only_case();
+    load_before_scripts_case();
+    load_owe_ring_case();
     load_sheets_case();
     load_scripts_case();
     load_modules_case();
