@@ -113,19 +113,24 @@ size_t yonder_text_rects(const os64_html_document_t *document, const flow_tree_t
         // A justified line lays each word out as a box of its own and the
         // space between two in no box: bytes the selection reaches in that
         // gap take its room, from the word before's right edge to this
-        // one's left.
+        // one's left. The two share a line and so a frame, so the gap is
+        // made in their own coordinates and taken out through the matrices
+        // as the slice below is: under a rotation the words' painted edges
+        // no longer bound it.
         const flow_box_t *before = prev;
         prev = box;
         uint32_t gap = before != NULL ? before->begin + before->length : begin;
         if (!point && before != NULL && before->parent == box->parent && gap < begin &&
             (pf > gap ? pf : gap) < (pt < begin ? pt : begin)) {
-            os64_gui_rect_t l = flow_box_doc_rect(before, scroll), r = flow_box_doc_rect(box, scroll);
-            int32_t left = l.x + l.w;
+            int32_t left = before->rect.x + before->rect.w;
+            os64_gui_rect_t local = {left, before->rect.y, box->rect.x > left ? box->rect.x - left : 0,
+                                     before->rect.h};
+            os64_gui_rect_t rect = flow_box_doc_rect_of(box, local, scroll);
             if (count < cap) {
-                out[4 * count] = (left - scroll.x) * scale;
-                out[4 * count + 1] = (l.y - scroll.y) * scale;
-                out[4 * count + 2] = (r.x > left ? r.x - left : 0) * scale;
-                out[4 * count + 3] = l.h * scale;
+                out[4 * count] = (rect.x - scroll.x) * scale;
+                out[4 * count + 1] = (rect.y - scroll.y) * scale;
+                out[4 * count + 2] = rect.w * scale;
+                out[4 * count + 3] = rect.h * scale;
             }
             count++;
         }
