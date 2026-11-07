@@ -47,6 +47,10 @@ static const DModernRow kModern[] = {
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
+    /* CDATASection and ProcessingInstruction, over the row above's Text
+     * and CharacterData, with Document's createCDATASection and
+     * createProcessingInstruction (data_nodes.c). */
+    {(const char *const[]){"CDATASection", "ProcessingInstruction", NULL}, d_data_install},
     {(const char *const[]){"scrollX", "pageXOffset", "scrollY", "pageYOffset", "innerWidth",
                            "innerHeight", "outerWidth", "outerHeight", "scroll", "scrollTo",
                            "scrollBy", "onscroll", "onresize", "focus", "blur", NULL},

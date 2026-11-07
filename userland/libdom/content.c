@@ -118,7 +118,7 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
         d_free(dom, buffer);
         return result;
     }
-    if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT)
+    if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT || node->kind == OS64_HTML_PI)
         return JS_NewStringLen(ctx, node->text != NULL ? node->text : "", node->text_len);
     if (property == D_DATA) return JS_ThrowTypeError(ctx, "data requires a character-data node");
     if (property == D_NODE_VALUE || node->kind == OS64_HTML_DOCUMENT || node->kind == OS64_HTML_DOCTYPE)
@@ -160,7 +160,8 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
                       int property, JSValueConst value)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
-    if (property == D_DATA && node->kind != OS64_HTML_TEXT && node->kind != OS64_HTML_COMMENT)
+    if (property == D_DATA && node->kind != OS64_HTML_TEXT && node->kind != OS64_HTML_COMMENT &&
+        node->kind != OS64_HTML_PI)
         return JS_ThrowTypeError(ctx, "data requires a character-data node");
     /* A ShadowRoot's innerHTML parses with its host as the context. */
     const os64_html_node_t *context = property == D_INNER_HTML && os64_html_shadow_host(node) != NULL
@@ -179,7 +180,8 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     JS_FreeValue(ctx, empty);
     if (!converted) return JS_EXCEPTION;
     int64_t status = OS64_HTML_OK;
-    if (property == D_NODE_VALUE && node->kind != OS64_HTML_TEXT && node->kind != OS64_HTML_COMMENT) {
+    if (property == D_NODE_VALUE && node->kind != OS64_HTML_TEXT && node->kind != OS64_HTML_COMMENT &&
+        node->kind != OS64_HTML_PI) {
         d_string_free(dom, &string);
         return JS_UNDEFINED;
     }
@@ -190,7 +192,7 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
         if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;
         else if (fragment != NULL) status = d_replace_content(dom, node->template_contents != NULL ?
                                           node->template_contents : (os64_html_node_t *)node, fragment);
-    } else if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT)
+    } else if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT || node->kind == OS64_HTML_PI)
         status = os64_page_node_set_text(dom->state, (os64_html_node_t *)node, string.data, string.length);
     else if (node->kind == OS64_HTML_ELEMENT || node->kind == OS64_HTML_FRAGMENT) {
         os64_html_node_t *replacement = NULL;

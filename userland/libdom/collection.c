@@ -89,6 +89,19 @@ static bool table_member(const DQuery *query, const os64_html_node_t *node)
     }
 }
 
+/* Whether element `node`'s qualified name (prefix, ':', local name; the
+ * local name alone with no prefix) is `name`. */
+static bool qualified_is(const os64_html_node_t *node, const char *name)
+{
+    if (node->prefix != NULL) {
+        size_t prefix = os64_strlen(node->prefix);
+        if (os64_strlen(name) <= prefix || os64_memcmp(name, node->prefix, prefix) != 0 || name[prefix] != ':')
+            return false;
+        name += prefix + 1;
+    }
+    return os64_strcmp(node->name, name) == 0;
+}
+
 static bool matches(const DQuery *query, const os64_html_node_t *node)
 {
     if (query->elements && node->kind != OS64_HTML_ELEMENT) return false;
@@ -112,7 +125,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
     if (query->named != NULL && !d_named_match(node, query->named)) return false;
     if (query->name == NULL || os64_strcmp(query->name, "*") == 0) return true;
     return node->kind == OS64_HTML_ELEMENT && node->name != NULL &&
-        os64_strcmp(node->name, node->ns == OS64_HTML_NS_HTML ? query->folded : query->name) == 0;
+        qualified_is(node, node->ns == OS64_HTML_NS_HTML ? query->folded : query->name);
 }
 
 /* The next node a query looks at after `at` (NULL: the first): the select's

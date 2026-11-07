@@ -1239,6 +1239,75 @@ os64_html_node_t *os64_html_create_comment(os64_html_document_t *doc, const char
 {
     return data_new(doc, COMMENT, utf8, len, status);
 }
+os64_html_node_t *os64_html_create_cdata(os64_html_document_t *doc, const char *utf8, size_t len,
+                                         int64_t *status)
+{
+    HNode *n = data_new(doc, TEXT, utf8, len, status);
+    if (n)
+        n->cdata = true;
+    return n;
+}
+/* A string copied into the document's permanent chunks, as names are kept. */
+static const char *name_copy(HDoc *d, const char *s, int64_t *why)
+{
+    size_t len = h_len(s);
+    char *copy = d_permanent(d, len + 1, why);
+    if (copy)
+        for (size_t i = 0; i <= len; i++)
+            copy[i] = s[i];
+    return copy;
+}
+os64_html_node_t *os64_html_create_pi(os64_html_document_t *doc, const char *target, const char *utf8,
+                                      size_t len, int64_t *status)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !target || !*target) {
+        say(status, OS64_HTML_BAD_ARGUMENT);
+        return NULL;
+    }
+    if (!d_text_ok(target, h_len(target))) {
+        say(status, OS64_HTML_BAD_TEXT);
+        return NULL;
+    }
+    int64_t why = OS64_HTML_OK;
+    HNode *n = data_new(doc, PI, utf8, len, &why);
+    if (n && !(n->name = name_copy(d, target, &why)))
+        n = NULL;
+    say(status, why);
+    return n;
+}
+os64_html_node_t *os64_html_create_element_ns(os64_html_document_t *doc, const char *namespace_uri,
+                                              const char *prefix, const char *local, int64_t *status)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !local || !*local || (prefix && !*prefix)) {
+        say(status, OS64_HTML_BAD_ARGUMENT);
+        return NULL;
+    }
+    if (!d_text_ok(local, h_len(local)) || (prefix && !d_text_ok(prefix, h_len(prefix))) ||
+        (namespace_uri && !d_text_ok(namespace_uri, h_len(namespace_uri)))) {
+        say(status, OS64_HTML_BAD_TEXT);
+        return NULL;
+    }
+    os64_html_ns_t ns = !namespace_uri                                          ? OS64_HTML_NS_NONE
+                      : h_eq(namespace_uri, "http://www.w3.org/1999/xhtml")       ? OS64_HTML_NS_HTML
+                      : h_eq(namespace_uri, "http://www.w3.org/2000/svg")         ? OS64_HTML_NS_SVG
+                      : h_eq(namespace_uri, "http://www.w3.org/1998/Math/MathML") ? OS64_HTML_NS_MATHML
+                                                                                 : OS64_HTML_NS_OTHER;
+    int64_t why = OS64_HTML_OK;
+    HNode *n = ns == OS64_HTML_NS_HTML || ns == OS64_HTML_NS_SVG || ns == OS64_HTML_NS_MATHML
+                   ? os64_html_create_element(doc, ns, local, &why) : node_new(d, ELEMENT, &why);
+    if (n && ns != OS64_HTML_NS_HTML && ns != OS64_HTML_NS_SVG && ns != OS64_HTML_NS_MATHML) {
+        n->ns = ns;
+        if (!(n->name = name_copy(d, local, &why)) ||
+            (ns == OS64_HTML_NS_OTHER && !(n->namespace_uri = name_copy(d, namespace_uri, &why))))
+            n = NULL;
+    }
+    if (n && prefix && !(n->prefix = name_copy(d, prefix, &why)))
+        n = NULL;
+    say(status, why);
+    return n;
+}
 os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *status)
 {
     HDoc *d = (HDoc *)doc;
@@ -1744,6 +1813,9 @@ int64_t os64_html_split_text(os64_html_document_t *doc, HNode *n, uint32_t offse
         h_free(d, kept);
         return why;
     }
+    /* A CDATA section's tail is one too, as other browsers make it (the
+     * standard says "a new Text node"). */
+    tail->cdata = n->cdata;
     /* DOM § 4.11: insert the new node, move the ranges, then truncate. */
     if (n->parent) {
         why = os64_html_insert(doc, n->parent, tail, n->next);
@@ -1761,9 +1833,10 @@ int64_t os64_html_split_text(os64_html_document_t *doc, HNode *n, uint32_t offse
     return OS64_HTML_OK;
 }
 
+/* DOM's "exclusive Text node": a Text node that is no CDATA section. */
 static bool exclusive_text(const HNode *n)
 {
-    return n && n->kind == TEXT;
+    return n && n->kind == TEXT && !n->cdata;
 }
 
 /* The node after `x` in `root`'s tree order, not entering a template's
@@ -2019,6 +2092,7 @@ static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
         n->text = bytes;
         n->text_len = from->text_len;
         *h_word(n) = from->text_len + 1;
+        n->cdata = from->cdata;
         return n;
     }
     HNode *n = node_new(d, from->kind, why);
