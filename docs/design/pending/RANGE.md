@@ -53,7 +53,8 @@ SHADOW_DOM.md § 2 reached the same answer for the same reason.
 
 So: the whole Range interface (§ 5), its rects (§ 7), and the Selection's
 range members (§ 9) are behind **one libdom switch, `options.ranges`**,
-off until the last slice turns it on in yonder, as `shadow_trees` was.
+which R4 turned on in yonder under the modern switch (`ranges = off` in
+yonder.conf turns it off), as `shadow_trees` is.
 The switched names are `Range`, `AbstractRange`, `StaticRange`,
 `document.createRange` and the Selection's range members, and **off means
 absent**, not present and throwing: `typeof Range` and `'Range' in window`
@@ -332,15 +333,27 @@ and an empty list, as the standard says.
 
 ## 9. The page Selection
 
-Today `getSelection()` answers a fixed "None" object (selection.c). With
-ranges the Selection becomes real, as a model: it holds zero or one live
-range (`os64_html_range_t`) and a direction, and its members are the
+Without ranges `getSelection()` answers a fixed "None" object
+(selection.c). With them the Selection is real, as a model (range.c): it
+holds zero or one Range object, kept on an object the binding retains,
+and a direction, and its members are the
 Selection API's: `rangeCount`, `getRangeAt` (the same Range object each
 time), `addRange` (ignored when one is already there, as browsers do),
 `removeRange`, `removeAllRanges`/`empty`, `collapse`/`setPosition`,
 `collapseToStart/End`, `extend`, `setBaseAndExtent`, `selectAllChildren`,
 `containsNode`, `deleteFromDocument`, `toString`, and the anchor/focus
-readers, `isCollapsed`, `type`, `direction`.
+readers, `isCollapsed`, `type`, `direction`. Each member checks the point
+it is handed in the standard's own order (`extend` asks whether the node
+is in the document before whether the selection is empty;
+`setBaseAndExtent` checks both offsets before either document), an
+Attr is a node in no document (a member handed one does nothing, where a
+Range refuses it, § 12), and the anchor and focus read null and 0 when
+the page has moved the range it added out of the document tree. A member
+reads the selection again after converting its arguments, since an
+offset's `valueOf` is the page's code. `deleteFromDocument` is
+[CEReactions] (tools/ce_reactions.py reads selection-api.idl beside
+DOM's, HTML's and CSSOM's).
+`getComposedRanges` and `modify` are DEBTS rows.
 
 What it is not, and says so in DEBTS: **yonder draws no page-text
 selection** (it keeps none, selection.c's header), so a selection a script
@@ -353,20 +366,25 @@ their own edits (the framework that keeps `focusedElem` and
 ## 10. Proof
 
 - **WPT dom/ranges**: `tools/wpt_fetch.sh` gains `dom/ranges`, run
-  through `tools/test_yonder_wpt_host.sh dom/ranges --ranges` (the runner
-  turns on the switch yonder's settings leave off). Its algorithm and
+  through `tools/test_yonder_wpt_host.sh dom/ranges` (the runner turns
+  ranges on, as yonder does since R4). Its algorithm and
   mutation pages — Range-set, compare, cloneContents, extractContents,
   deleteContents, insertNode, surroundContents and the mutations, the
   live-range steps' real examination — build their trees with
   dom/common.js, which needs `new Document()`, `createCDATASection`,
   `createProcessingInstruction` and an XML document's elements in no
   namespace. The slice after R2 added those (Chris's ruling, 2026-11-06),
-  and the directory went from 38 passes to 35,113; `[required]` holds a
-  test of each page that runs, `[passing]` every pass. What stays out:
-  Selection's `addRange` (R4), shadow trees (off in the runner), a range
-  in an Attr (DEBTS), five pages that run their tests from an iframe the
-  runner does not load, and three mutation pages (dataChange, deleteData,
-  replaceData) that never report within the runner's budget.
+  and the directory went from 38 passes to 35,113, and to 35,667 when R4's
+  Selection let the mutation pages select their ranges; `[required]` holds
+  a test of each page that runs, `[passing]` every pass. What stays out:
+  shadow trees (off in the runner), a range in an Attr (DEBTS), the
+  tentative OpaqueRange, five pages that run their tests from an iframe
+  the runner does not load, and three mutation pages (dataChange,
+  deleteData, replaceData) that never report within the runner's budget.
+- **WPT selection** (R4): 33,501 passes across addRange, collapse,
+  extend, selectAllChildren, setBaseAndExtent and the rest, the core
+  pages whole; what stays out is editing (`execCommand`, contenteditable),
+  `selectionchange`, shadow trees, and the pages run from an iframe.
 - **libhtml, a reference model**: a host test that applies random
   mutations (the existing random walk) to a tree holding random ranges and
   checks every boundary after every step against a model that recomputes

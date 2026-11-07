@@ -3538,8 +3538,16 @@ MutationObserver-callback-order.window.html	Mutation observers are notified in t
 MutationObserver-callback-order.window.html	The mutation observer microtask is only queued once a record is queued for an observer
 MutationObserver-callback-tricky.html	Calling observe in callback should not lead to more calls
 MutationObserver-callback-tricky.html	Disconnect and re-observe in callback should not lead to more calls
+MutationObserver-characterData.html	Range (r70) is created
+MutationObserver-characterData.html	Range (r71) is created
+MutationObserver-characterData.html	Range (r80) is created
+MutationObserver-characterData.html	Range (r81) is created
 MutationObserver-characterData.html	characterData Comment: data mutations
 MutationObserver-characterData.html	characterData ProcessingInstruction: data mutations
+MutationObserver-characterData.html	characterData Range.deleteContents: child and data removal mutation
+MutationObserver-characterData.html	characterData Range.deleteContents: child and data removal mutation (2)
+MutationObserver-characterData.html	characterData Range.extractContents: child and data removal mutation
+MutationObserver-characterData.html	characterData Range.extractContents: child and data removal mutation (2)
 MutationObserver-characterData.html	characterData Text.appendData: empty string mutation
 MutationObserver-characterData.html	characterData Text.appendData: null string mutation
 MutationObserver-characterData.html	characterData Text.appendData: simple mutation
@@ -3553,6 +3561,13 @@ MutationObserver-characterData.html	characterData Text.insertData: simple mutati
 MutationObserver-characterData.html	characterData Text.replaceData: empty mutation
 MutationObserver-characterData.html	characterData Text.replaceData: simple mutation
 MutationObserver-characterData.html	characterData/characterDataOldValue alone Text.data: simple mutation
+MutationObserver-childList.html	Range (r100) is created
+MutationObserver-childList.html	Range (r70) is created
+MutationObserver-childList.html	Range (r71) is created
+MutationObserver-childList.html	Range (r80) is created
+MutationObserver-childList.html	Range (r81) is created
+MutationObserver-childList.html	Range (r90) is created
+MutationObserver-childList.html	Range (r91) is created
 MutationObserver-childList.html	childList Node.appendChild: addition mutation
 MutationObserver-childList.html	childList Node.appendChild: addition outside document tree mutation
 MutationObserver-childList.html	childList Node.appendChild: fragment addition mutations
@@ -3576,6 +3591,13 @@ MutationObserver-childList.html	childList Node.replaceChild: self internal repla
 MutationObserver-childList.html	childList Node.textContent: empty string mutation
 MutationObserver-childList.html	childList Node.textContent: no previous content mutation
 MutationObserver-childList.html	childList Node.textContent: textContent no mutation
+MutationObserver-childList.html	childList Range.deleteContents: child and data removal mutation
+MutationObserver-childList.html	childList Range.deleteContents: child removal mutation
+MutationObserver-childList.html	childList Range.extractContents: child and data removal mutation
+MutationObserver-childList.html	childList Range.extractContents: child removal mutation
+MutationObserver-childList.html	childList Range.insertNode: child insertion mutation
+MutationObserver-childList.html	childList Range.insertNode: children insertion mutation
+MutationObserver-childList.html	childList Range.surroundContents: children removal and addition mutation
 MutationObserver-disconnect.html	disconnect discarded some mutations
 MutationObserver-disconnect.html	subtree mutations
 MutationObserver-document.html	parser insertion mutations
@@ -6776,6 +6798,8 @@ Node-nodeValue.html	DocumentType.nodeValue
 Node-nodeValue.html	Element.nodeValue
 Node-nodeValue.html	ProcessingInstruction.nodeValue
 Node-nodeValue.html	Text.nodeValue
+Node-normalize-2.html	normalize should move range's end boundary point into t1
+Node-normalize-2.html	normalize should move range's start boundary point into t1
 Node-normalize.html	Empty text nodes
 Node-normalize.html	Empty text nodes separated by a non-empty text node
 Node-normalize.html	Node.normalize()

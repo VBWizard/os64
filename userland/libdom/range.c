@@ -55,7 +55,15 @@ struct DRanges {
     DRange *list;
     bool has_dead;
     JSClassID range_class, static_class;
+    /* The page Selection's model (§ 9): `held` keeps its Range object as
+     * property "r" (undefined for none), an object the binding retains,
+     * so drain lets it go, with no prototype, so no accessor a page puts
+     * on Object.prototype sees or answers for it; its direction, a D_DIR_. */
+    DValue *held;
+    uint8_t direction;
 };
+
+enum { D_DIR_NONE, D_DIR_FORWARD, D_DIR_BACKWARD };
 
 static JSClassID range_slot, static_slot;
 
@@ -1162,6 +1170,320 @@ static void static_finalizer(JSRuntime *rt, JSValue value)
     record_dies(JS_GetOpaque(value, os64_js_class_id(&static_slot)));
 }
 
+/* ── The page Selection, a model (RANGE.md § 9; the Selection API) ───── */
+
+/* With ranges, window.getSelection()'s Selection holds zero or one Range
+ * and a direction, and its members are the Selection API's, on the
+ * prototype selection.c made (which leaves its "None" members off then).
+ * Setting the selection makes a new Range at the window's document (the standard's
+ * "set the selection's range"), except addRange, which keeps the page's
+ * own. Its anchor is the range's start and its focus the end, the other way
+ * round when backward. yonder draws no page-text selection and fires no
+ * selectionchange (DEBTS.md): a script's selection is a model only, which
+ * is what the scripts that save and restore one around their own edits
+ * ask of it. */
+
+enum {
+    S_ANCHOR_NODE, S_ANCHOR_OFFSET, S_FOCUS_NODE, S_FOCUS_OFFSET, S_COLLAPSED, S_COUNT, S_TYPE, S_DIRECTION,
+    S_GET, S_ADD, S_REMOVE, S_REMOVE_ALL, S_COLLAPSE, S_TO_START, S_TO_END, S_EXTEND, S_BASE_EXTENT,
+    S_SELECT_ALL, S_DELETE, S_CONTAINS, S_TO_STRING
+};
+
+static JSValue selection_range(os64_dom_t *dom, JSContext *ctx)
+{
+    return JS_GetPropertyStr(ctx, dom->ranges->held->value, "r");
+}
+
+/* The selection as it stands into `range` (a reference the caller frees;
+ * the one it held is freed first), its Range, its bounds and whether it is
+ * backward. A member reads it again after it converts its arguments: an
+ * offset's valueOf is the page's code, which may change the selection or
+ * let go of the nodes the last read named. 0, or -1 thrown. */
+static int selection_read(os64_dom_t *dom, JSContext *ctx, JSValue *range, DRange **r, Bounds *b, bool *backward)
+{
+    JS_FreeValue(ctx, *range);
+    *range = selection_range(dom, ctx);
+    *r = NULL;
+    *b = (Bounds){0};
+    *backward = dom->ranges->direction == D_DIR_BACKWARD;
+    if (JS_IsException(*range)) {
+        *range = JS_UNDEFINED;
+        return -1;
+    }
+    if (!JS_IsUndefined(*range)) *r = JS_GetOpaque(*range, dom->ranges->range_class);
+    if (*r != NULL) *b = bounds_of(*r);
+    return 0;
+}
+
+/* The selection's range becomes `range` (a Range object, taken; undefined
+ * for none) and its direction `direction`. */
+static int selection_set(os64_dom_t *dom, JSContext *ctx, JSValue range, uint8_t direction)
+{
+    dom->ranges->direction = JS_IsUndefined(range) ? D_DIR_NONE : direction;
+    return JS_SetPropertyStr(ctx, dom->ranges->held->value, "r", range) < 0 ? -1 : 0;
+}
+
+/* A new Range at the window's document with both points given; JS_EXCEPTION
+ * with the set's refusal thrown. */
+static JSValue selection_new_range(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *sn, uint32_t so,
+                                   const os64_html_node_t *en, uint32_t eo)
+{
+    JSValue object = range_new(dom, ctx, JS_UNDEFINED, dom->document->document);
+    DRange *r = JS_IsException(object) ? NULL : JS_GetOpaque(object, dom->ranges->range_class);
+    if (r == NULL) return object;
+    if (set_both(ctx, r, sn, so) < 0 || (en != sn || eo != so ? set_point(ctx, r, 1, en, eo) : 0) < 0) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    return object;
+}
+
+/* A point a member is handed, converted: its node, NULL for an Attr (no
+ * node of the tree, and so never in the window's document), its offset,
+ * and the node's length, an Attr's 0. Each member checks them in its own
+ * order, as the standard does. 0, or -1 thrown. */
+static int selection_take(os64_dom_t *dom, JSContext *ctx, JSValueConst node_value, JSValueConst offset_value,
+                          const os64_html_node_t **node, uint32_t *offset, uint32_t *length)
+{
+    DAttrView view;
+    int attr = d_attr_view(dom, ctx, node_value, &view);
+    if (attr < 0) return -1;
+    *node = NULL;
+    if (attr != 1 && (*node = d_node(dom, ctx, node_value)) == NULL) return -1;
+    *offset = 0;
+    if (!JS_IsUndefined(offset_value) && JS_ToUint32(ctx, offset, offset_value) < 0) return -1;
+    *length = *node != NULL ? os64_html_node_length(*node) : 0;
+    return 0;
+}
+
+/* Whether the window's document is a shadow-including inclusive ancestor
+ * of `node`: a member handed a node anywhere else does nothing. */
+static bool selection_in_document(os64_dom_t *dom, const os64_html_node_t *node)
+{
+    return node != NULL && os64_html_shadow_including_root(node) == dom->document->document;
+}
+
+/* The checks "set the start or end" makes of a point, for a member about
+ * to set one: 0, or -1 thrown. */
+static int selection_settable(JSContext *ctx, const os64_html_node_t *node, uint32_t offset, uint32_t length)
+{
+    if (node != NULL && node->kind == OS64_HTML_DOCTYPE) return throw_status(ctx, OS64_HTML_INVALID_NODE_TYPE);
+    return offset > length ? throw_status(ctx, OS64_HTML_INDEX_SIZE) : 0;
+}
+
+static JSValue selection_ranges_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                       JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (!d_same_object(self, dom->selection)) return JS_ThrowTypeError(ctx, "Expected a Selection");
+    JSValue range = JS_UNDEFINED;
+    DRange *r;
+    Bounds b;
+    bool backward;
+    if (selection_read(dom, ctx, &range, &r, &b, &backward) < 0) return JS_EXCEPTION;
+    JSValue result = JS_UNDEFINED;
+    switch (magic) {
+    case S_ANCHOR_NODE: case S_FOCUS_NODE: case S_ANCHOR_OFFSET: case S_FOCUS_OFFSET: {
+        /* Null and 0 for a point not in the document tree: the range is
+         * the page's own after addRange, and the page may move it. */
+        bool anchor = magic == S_ANCHOR_NODE || magic == S_ANCHOR_OFFSET;
+        const os64_html_node_t *n = r == NULL ? NULL : anchor != backward ? b.start : b.end;
+        uint32_t o = anchor != backward ? b.start_offset : b.end_offset;
+        if (n != NULL && d_tree_root(n) != dom->document->document) n = NULL;
+        result = magic == S_ANCHOR_NODE || magic == S_FOCUS_NODE ? n == NULL ? JS_NULL : d_wrap(dom, ctx, n)
+                                                                 : JS_NewUint32(ctx, n == NULL ? 0 : o);
+        break;
+    }
+    case S_COLLAPSED: result = JS_NewBool(ctx, r == NULL || (b.start == b.end && b.start_offset == b.end_offset)); break;
+    case S_COUNT: result = JS_NewUint32(ctx, r != NULL); break;
+    case S_TYPE:
+        result = JS_NewString(ctx, r == NULL ? "None" : b.start == b.end && b.start_offset == b.end_offset ? "Caret"
+                                                                                                          : "Range");
+        break;
+    case S_DIRECTION:
+        result = JS_NewString(ctx, dom->ranges->direction == D_DIR_FORWARD ? "forward"
+                                 : dom->ranges->direction == D_DIR_BACKWARD ? "backward" : "none");
+        break;
+    case S_GET: {
+        uint32_t index;
+        if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing index"); break; }
+        if (JS_ToUint32(ctx, &index, argv[0]) < 0 || selection_read(dom, ctx, &range, &r, &b, &backward) < 0) {
+            result = JS_EXCEPTION;
+            break;
+        }
+        result = r == NULL || index != 0 ? d_error(ctx, "IndexSizeError", "The selection holds no such range")
+                                         : JS_DupValue(ctx, range);
+        break;
+    }
+    case S_ADD: {
+        /* addRange: a range of the window document's tree, kept as it is,
+         * when the selection holds none; otherwise nothing. */
+        DRange *given = argc > 0 ? JS_GetOpaque(argv[0], dom->ranges->range_class) : NULL;
+        if (given == NULL) { result = JS_ThrowTypeError(ctx, "addRange needs a Range"); break; }
+        Bounds g = bounds_of(given);
+        if (r == NULL && d_tree_root(g.start) == dom->document->document &&
+            selection_set(dom, ctx, JS_DupValue(ctx, argv[0]), D_DIR_FORWARD) < 0)
+            result = JS_EXCEPTION;
+        break;
+    }
+    case S_REMOVE: {
+        DRange *given = argc > 0 ? JS_GetOpaque(argv[0], dom->ranges->range_class) : NULL;
+        if (given == NULL) { result = JS_ThrowTypeError(ctx, "removeRange needs a Range"); break; }
+        if (given != r) result = d_error(ctx, "NotFoundError", "The range is not the selection's");
+        else if (selection_set(dom, ctx, JS_UNDEFINED, D_DIR_NONE) < 0) result = JS_EXCEPTION;
+        break;
+    }
+    case S_REMOVE_ALL:
+        if (selection_set(dom, ctx, JS_UNDEFINED, D_DIR_NONE) < 0) result = JS_EXCEPTION;
+        break;
+    case S_COLLAPSE: {
+        /* collapse(node, offset) and setPosition: null empties it. */
+        if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing node"); break; }
+        if (JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+            if (selection_set(dom, ctx, JS_UNDEFINED, D_DIR_NONE) < 0) result = JS_EXCEPTION;
+            break;
+        }
+        const os64_html_node_t *n;
+        uint32_t o, length;
+        if (selection_take(dom, ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, &n, &o, &length) < 0 ||
+            selection_settable(ctx, n, o, length) < 0) {
+            result = JS_EXCEPTION;
+            break;
+        }
+        if (!selection_in_document(dom, n)) break;
+        JSValue made = selection_new_range(dom, ctx, n, o, n, o);
+        if (JS_IsException(made) || selection_set(dom, ctx, made, D_DIR_FORWARD) < 0) result = JS_EXCEPTION;
+        break;
+    }
+    case S_TO_START: case S_TO_END: {
+        if (r == NULL) { result = d_error(ctx, "InvalidStateError", "The selection is empty"); break; }
+        const os64_html_node_t *n = magic == S_TO_START ? b.start : b.end;
+        uint32_t o = magic == S_TO_START ? b.start_offset : b.end_offset;
+        JSValue made = selection_new_range(dom, ctx, n, o, n, o);
+        if (JS_IsException(made) || selection_set(dom, ctx, made, D_DIR_FORWARD) < 0) result = JS_EXCEPTION;
+        break;
+    }
+    case S_EXTEND: {
+        if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing node"); break; }
+        const os64_html_node_t *n;
+        uint32_t o, length;
+        if (selection_take(dom, ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, &n, &o, &length) < 0 ||
+            selection_read(dom, ctx, &range, &r, &b, &backward) < 0) {
+            result = JS_EXCEPTION;
+            break;
+        }
+        if (!selection_in_document(dom, n)) break;
+        if (r == NULL) { result = d_error(ctx, "InvalidStateError", "The selection is empty"); break; }
+        if (selection_settable(ctx, n, o, length) < 0) { result = JS_EXCEPTION; break; }
+        const os64_html_node_t *an = backward ? b.end : b.start;
+        uint32_t ao = backward ? b.end_offset : b.start_offset;
+        bool focus_first = d_tree_root(an) == d_tree_root(n) && position(n, o, an, ao) < 0;
+        JSValue made = d_tree_root(an) != d_tree_root(n) ? selection_new_range(dom, ctx, n, o, n, o)
+                     : focus_first ? selection_new_range(dom, ctx, n, o, an, ao)
+                                   : selection_new_range(dom, ctx, an, ao, n, o);
+        if (JS_IsException(made) || selection_set(dom, ctx, made, focus_first ? D_DIR_BACKWARD : D_DIR_FORWARD) < 0)
+            result = JS_EXCEPTION;
+        break;
+    }
+    case S_BASE_EXTENT: {
+        if (argc < 4) { result = JS_ThrowTypeError(ctx, "setBaseAndExtent needs four arguments"); break; }
+        const os64_html_node_t *an, *fn;
+        uint32_t ao, fo, al, fl;
+        if (selection_take(dom, ctx, argv[0], argv[1], &an, &ao, &al) < 0 ||
+            selection_take(dom, ctx, argv[2], argv[3], &fn, &fo, &fl) < 0) {
+            result = JS_EXCEPTION;
+            break;
+        }
+        if (ao > al || fo > fl) { throw_status(ctx, OS64_HTML_INDEX_SIZE); result = JS_EXCEPTION; break; }
+        if (!selection_in_document(dom, an) || !selection_in_document(dom, fn)) break;
+        if (selection_settable(ctx, an, ao, al) < 0 || selection_settable(ctx, fn, fo, fl) < 0) {
+            result = JS_EXCEPTION;
+            break;
+        }
+        bool focus_first = d_tree_root(an) == d_tree_root(fn) && position(fn, fo, an, ao) < 0;
+        JSValue made = focus_first ? selection_new_range(dom, ctx, fn, fo, an, ao)
+                                   : selection_new_range(dom, ctx, an, ao, fn, fo);
+        if (JS_IsException(made) || selection_set(dom, ctx, made, focus_first ? D_DIR_BACKWARD : D_DIR_FORWARD) < 0)
+            result = JS_EXCEPTION;
+        break;
+    }
+    case S_SELECT_ALL: {
+        if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing node"); break; }
+        const os64_html_node_t *n;
+        uint32_t o, length;
+        if (selection_take(dom, ctx, argv[0], JS_UNDEFINED, &n, &o, &length) < 0 ||
+            selection_settable(ctx, n, 0, 0) < 0) {
+            result = JS_EXCEPTION;
+            break;
+        }
+        /* The node's own root, not its shadow-including one: a node in a
+         * shadow tree is not selected, unlike collapse's point. */
+        if (n == NULL || d_tree_root(n) != dom->document->document) break;
+        uint32_t children = 0;
+        for (const os64_html_node_t *c = n->first_child; c != NULL; c = c->next) children++;
+        JSValue made = selection_new_range(dom, ctx, n, 0, n, children);
+        if (JS_IsException(made) || selection_set(dom, ctx, made, D_DIR_FORWARD) < 0) result = JS_EXCEPTION;
+        break;
+    }
+    case S_DELETE:
+        if (r != NULL && delete_contents(dom, ctx, r) < 0) result = JS_EXCEPTION;
+        break;
+    case S_CONTAINS: {
+        if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing node"); break; }
+        /* False when empty or when the node's root is not the document
+         * (an Attr's root is itself). */
+        const os64_html_node_t *n;
+        uint32_t o, length;
+        if (selection_take(dom, ctx, argv[0], JS_UNDEFINED, &n, &o, &length) < 0) { result = JS_EXCEPTION; break; }
+        bool partial = argc > 1 && JS_ToBool(ctx, argv[1]);
+        if (r == NULL || n == NULL || d_tree_root(n) != dom->document->document) { result = JS_FALSE; break; }
+        result = JS_NewBool(ctx, partial
+            ? position(b.start, b.start_offset, n, length) <= 0 && position(b.end, b.end_offset, n, 0) >= 0
+            : position(b.start, b.start_offset, n, 0) <= 0 && position(b.end, b.end_offset, n, length) >= 0);
+        break;
+    }
+    case S_TO_STRING: result = r == NULL ? JS_NewString(ctx, "") : stringify(dom, ctx, r); break;
+    default: break;
+    }
+    JS_FreeValue(ctx, range);
+    return result;
+}
+
+/* The Selection API's members on the Selection's prototype, which
+ * selection.c made and left bare with ranges on, and the object that holds
+ * its range. */
+static int selection_install(os64_dom_t *dom, JSContext *ctx)
+{
+    if (dom->selection == NULL) return 0;
+    dom->ranges->held = d_retain(dom, ctx, JS_NewObjectProto(ctx, JS_NULL));
+    if (dom->ranges->held == NULL) return -1;
+    JSValue prototype = JS_GetPrototype(ctx, dom->selection->value);
+    if (JS_IsException(prototype)) return -1;
+    static const struct { const char *name; int magic; } kReads[] = {
+        {"anchorNode", S_ANCHOR_NODE}, {"anchorOffset", S_ANCHOR_OFFSET}, {"focusNode", S_FOCUS_NODE},
+        {"focusOffset", S_FOCUS_OFFSET}, {"isCollapsed", S_COLLAPSED}, {"rangeCount", S_COUNT},
+        {"type", S_TYPE}, {"direction", S_DIRECTION},
+    };
+    static const struct { const char *name; int magic, argc; } kMethods[] = {
+        {"getRangeAt", S_GET, 1}, {"addRange", S_ADD, 1}, {"removeRange", S_REMOVE, 1},
+        {"removeAllRanges", S_REMOVE_ALL, 0}, {"empty", S_REMOVE_ALL, 0}, {"collapse", S_COLLAPSE, 1},
+        {"setPosition", S_COLLAPSE, 1}, {"collapseToStart", S_TO_START, 0}, {"collapseToEnd", S_TO_END, 0},
+        {"extend", S_EXTEND, 1}, {"setBaseAndExtent", S_BASE_EXTENT, 4}, {"selectAllChildren", S_SELECT_ALL, 1},
+        {"deleteFromDocument", S_DELETE, 0}, {"containsNode", S_CONTAINS, 1}, {"toString", S_TO_STRING, 0},
+    };
+    /* d_accessor and d_method_named answer a negative number on failure
+     * and anything else on success. */
+    int result = 0;
+    for (size_t i = 0; result >= 0 && i < sizeof(kReads) / sizeof(kReads[0]); i++)
+        result = d_accessor(dom, ctx, prototype, kReads[i].name, selection_ranges_member, kReads[i].magic, false);
+    for (size_t i = 0; result >= 0 && i < sizeof(kMethods) / sizeof(kMethods[0]); i++)
+        result = d_method_named(dom, ctx, prototype, kMethods[i].name, selection_ranges_member, kMethods[i].argc,
+                                kMethods[i].magic);
+    JS_FreeValue(ctx, prototype);
+    return result < 0 ? -1 : 0;
+}
+
 /* ── The install ─────────────────────────────────────────────────────── */
 
 static int define_interface(JSContext *ctx, JSValueConst global, const char *name, int length,
@@ -1252,7 +1574,9 @@ int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, abstract_interface);
     JS_FreeValue(ctx, range_interface);
     if (!defined) return -1;
-    return d_method_named(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createRange", create_range, 0, 0);
+    if (d_method_named(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createRange", create_range, 0, 0) < 0)
+        return -1;
+    return selection_install(dom, ctx);
 }
 
 void d_ranges_free(os64_dom_t *dom)

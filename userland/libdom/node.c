@@ -200,16 +200,16 @@ int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *n
 
 /* A tree change a script asked for: D_APPEND/D_INSERT put `child` under
  * `parent` before `other` (NULL: last), D_REPLACE puts it where `other` is,
- * D_REPLACE_CHILDREN puts it in place of all `parent`'s children, D_REMOVE
- * takes it out. Scripts the move may connect are found before it,
- * while a fragment still holds its children, and handed to the host after
- * it. 0, or -1 with the exception thrown. */
+ * D_REPLACE_CHILDREN puts it (or nothing, when NULL) in place of all
+ * `parent`'s children, D_REMOVE takes it out. Scripts the move may connect
+ * are found before it, while a fragment still holds its children, and
+ * handed to the host after it. 0, or -1 with the exception thrown. */
 int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_t *parent,
             const os64_html_node_t *child, const os64_html_node_t *other)
 {
     const os64_html_node_t *few[8], **scripts = few;
     size_t found = 0;
-    if (op != D_REMOVE && dom->options.script_connected != NULL) {
+    if (op != D_REMOVE && child != NULL && dom->options.script_connected != NULL) {
         found = d_script_collect(child, few, 8);
         if (found > 8) {
             scripts = d_alloc(dom, found * sizeof(*scripts));
