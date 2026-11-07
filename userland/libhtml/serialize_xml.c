@@ -6,8 +6,9 @@
  * Every element names its namespace where it differs from the one it
  * inherits (an HTML element at the top says xmlns="http://www.w3.org/1999/xhtml"),
  * a namespaced attribute takes the latest prefix declared for its
- * namespace, else its own prefix when the map binds that prefix to
- * nothing, else a generated "ns<N>", and the namespace prefix map is scoped
+ * namespace that no nearer declaration has rebound, else its own prefix
+ * when the map binds that prefix to nothing, else a generated "ns<N>" that
+ * spells no prefix in force, and the namespace prefix map is scoped
  * to the element that declares into it: its descendants see the
  * declaration, its siblings do not. An empty element is written
  * self-closing ("<b/>"), save an HTML element that is not void
@@ -24,7 +25,11 @@
  * above keeps it, which is what lets an SVG's xlink:href come back through
  * the HTML parser as xlink:href rather than as a plain "ns1:href". And it
  * drops a root's xmlns="" when its own namespace is none, where WPT's
- * "prefix bound to an empty namespace URI" case keeps it.
+ * "prefix bound to an empty namespace URI" case keeps it. Two WPT cases
+ * record the standard's prose writing output that reads back differently
+ * (a prefix a descendant rebound still offered, a generated ns1 declared
+ * beside an element's own xmlns:ns1); this does what Chromium does
+ * instead, which round-trips.
  *
  * The walk keeps no recursion: a stack of open elements, each with the
  * namespace its children inherit and how much of the map it owns, and the
@@ -182,12 +187,67 @@ static void attr_parts(const HAttr *a, const char **prefix, size_t *prefix_len, 
         }
 }
 
+/* "ns<n>" into `out` (room for 12), its length. */
+static size_t generated_spelling(uint32_t n, char *out)
+{
+    char digits[10];
+    size_t at = sizeof(digits), length = 2;
+    do {
+        digits[--at] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n);
+    out[0] = 'n';
+    out[1] = 's';
+    for (size_t i = at; i < sizeof(digits); i++)
+        out[length++] = digits[i];
+    return length;
+}
+
+/* Whether a declaration's prefix is spelled `prefix`: a generated one is
+ * "ns<n>", so an element's own `ns1` and a generated ns1 are one prefix. */
 static bool same_prefix(const XDecl *d, const char *prefix, size_t len)
 {
-    if (d->generated || !prefix || d->prefix_len != len)
+    if (!prefix)
+        return false;
+    char spelling[12];
+    const char *have = d->prefix;
+    size_t have_len = d->prefix_len;
+    if (d->generated) {
+        have_len = generated_spelling(d->generated, spelling);
+        have = spelling;
+    }
+    if (have_len != len)
         return false;
     for (size_t i = 0; i < len; i++)
-        if (d->prefix[i] != prefix[i])
+        if (have[i] != prefix[i])
+            return false;
+    return true;
+}
+
+static bool same_spelling(const XDecl *a, const XDecl *b)
+{
+    if (a->generated && b->generated)
+        return a->generated == b->generated;
+    return a->generated ? same_prefix(a, b->prefix, b->prefix_len) : same_prefix(b, a->prefix, a->prefix_len);
+}
+
+/* The latest declaration of a prefix spelled `prefix`: what the prefix
+ * means where the writer is, since a later one shadows an earlier; -1 for
+ * an unbound prefix. */
+static ptrdiff_t x_binding(const XWriter *w, const char *prefix, size_t len)
+{
+    for (size_t i = w->count; i-- > 0;)
+        if (same_prefix(&w->map[i], prefix, len))
+            return (ptrdiff_t)i;
+    return -1;
+}
+
+/* Whether declaration `i` is still in force: no later one rebinds its
+ * prefix. */
+static bool x_in_force(const XWriter *w, size_t i)
+{
+    for (size_t j = w->count; --j > i;)
+        if (same_spelling(&w->map[j], &w->map[i]))
             return false;
     return true;
 }
@@ -209,26 +269,35 @@ static bool x_declare(XWriter *w, const char *ns, const char *prefix, size_t pre
     return true;
 }
 
-/* "Retrieve a preferred prefix string": the declaration for `ns` whose
- * prefix is `preferred`, else the latest declaration for `ns`; -1 when the
- * map has none. */
+/* "Retrieve a preferred prefix string", as the browsers do it: `preferred`
+ * when it is bound to `ns` where the writer is, else the latest declaration
+ * for `ns` still in force; -1 when there is none. A declaration a
+ * descendant shadows is not offered, or what it writes would read back in
+ * the shadowing namespace (it is in force again once that element closes
+ * and truncates the map). */
 static ptrdiff_t x_preferred(const XWriter *w, const char *preferred, size_t preferred_len, const char *ns)
 {
-    ptrdiff_t latest = -1;
-    for (size_t i = 0; i < w->count; i++)
-        if (h_eq(w->map[i].ns, ns)) {
-            if (same_prefix(&w->map[i], preferred, preferred_len))
-                return (ptrdiff_t)i;
-            latest = (ptrdiff_t)i;
-        }
-    return latest;
+    ptrdiff_t bound = preferred ? x_binding(w, preferred, preferred_len) : -1;
+    if (bound >= 0 && h_eq(w->map[bound].ns, ns))
+        return bound;
+    for (size_t i = w->count; i-- > 0;)
+        if (h_eq(w->map[i].ns, ns) && x_in_force(w, i))
+            return (ptrdiff_t)i;
+    return -1;
 }
 
-/* "Generate a prefix": ns<N> for `ns`, declared; its index in the map, or
- * -1 out of memory. */
+/* "Generate a prefix": the next ns<N> no declaration in force spells, for
+ * `ns`, declared; its index in the map, or -1 out of memory. Skipping a
+ * spelling already bound is the browsers' answer to a collision (an
+ * element's own xmlns:ns1) that the standard's prose would write twice. */
 static ptrdiff_t x_generate(XWriter *w, const char *ns)
 {
-    return x_declare(w, ns, NULL, 0, w->next_index++, false) ? (ptrdiff_t)w->count - 1 : -1;
+    char spelling[12];
+    uint32_t n;
+    do {
+        n = w->next_index++;
+    } while (x_binding(w, spelling, generated_spelling(n, spelling)) >= 0);
+    return x_declare(w, ns, NULL, 0, n, false) ? (ptrdiff_t)w->count - 1 : -1;
 }
 
 static void x_prefix(XWriter *w, const char *prefix, size_t len, uint32_t generated)
