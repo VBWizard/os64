@@ -159,6 +159,16 @@ help/field/document behavior. The Interface and Document font roles remain
 independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
 and its validation.
 
+Document navigation comes from the shared textview: Ctrl+Home/End reach
+its start/end and scroll the caret into view; Ctrl+Left/Right move by word;
+Shift extends those movements into a selection; Ctrl+A selects the whole
+document. These commands also work in the read-only guide. Plain Home/End
+remain line-local. Word motion groups ASCII letters/digits/underscore,
+whitespace and punctuation; non-ASCII text travels with words and destinations
+snap to the text engine's cluster boundaries. Textfields share word motion.
+Both editors draw a capped caret with a contrasting outline around its theme
+colour, clipped to the editing area.
+
 The toolbar and its icon buttons are in libos64. Build from the repository root with
 `make -C userland "$PWD/userland/bin/scribe"` and deploy both
 `userland/bin/scribe` and `userland/bin/libos64.so` through the normal program

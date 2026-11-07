@@ -987,7 +987,7 @@ void os64_ui_listbox_scroll_to(os64_ui_t *ui, os64_ui_listbox_t *list, size_t to
 // caret; printable keys insert; Backspace/Delete, Left/Right/Home/End move
 // and erase; drag or Shift+motion selects, Ctrl+A/C/X/V selects all/copies/
 // cuts/pastes. Enter fires on_submit, Esc fires on_cancel. Long content
-// scrolls horizontally to keep the caret in view.
+// scrolls horizontally to keep the caret in view. Ctrl+Left/Right move by word.
 typedef struct os64_ui_textfield os64_ui_textfield_t;
 struct os64_ui_textfield
 {
@@ -1040,6 +1040,9 @@ int64_t os64_ui_textfield_copy(const os64_ui_textfield_t *tf);
 size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf);
 
 // ── ui_textview — a viewport over a text buffer ─────────────────────────────
+// Home/End move within a line; Ctrl+Home/End reach the document ends.
+// Ctrl+Left/Right move by word; Shift extends motion into a selection.
+// Ctrl+A selects the document, including in a read-only view.
 // THE PLAIN-TEXT RENDERER (SCRIBE.md's format seam): one model+view pair
 // among possible several. The view owns the viewport, cursor, and
 // selection; the MODEL is the app's, handed in behind this vtable — which
