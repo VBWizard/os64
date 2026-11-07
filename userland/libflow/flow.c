@@ -1614,6 +1614,9 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
         b->text = fr->text + fr->begin;
         b->length = fr->end - fr->begin;
         b->begin = (fr->item != NULL ? fr->item->offset : 0) + fr->begin;
+        b->item_begin = fr->item != NULL ? fr->item->offset : 0;
+        b->source = fr->item != NULL ? fr->item->source : 0;
+        b->source_space = fr->item != NULL && fr->item->source_space;
     } else {
         b->control = fr->item->control;
         b->replaced = fr->item->replaced;
@@ -3734,6 +3737,39 @@ const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
 {
     return flow_hit_counted(tree, x, y, scroll, NULL);
+}
+
+bool flow_text_processed(const flow_box_t *b, size_t source, uint32_t *processed)
+{
+    if (b == NULL || processed == NULL || b->kind != FLOW_BOX_TEXT || b->node == NULL ||
+        b->node->kind != OS64_HTML_TEXT || b->style == NULL)
+        return false;
+    const os64_html_node_t *n = b->node;
+    if (source > n->text_len)
+        source = n->text_len;
+    if (source <= b->source) {
+        *processed = b->item_begin;
+        return true;
+    }
+    // Preserved white space keeps every byte: the processed text is the
+    // source from where the item began. Collapsing white space is
+    // f_collapse_white over the source from there, counted.
+    if (!f_ws_collapses(b->style->white_space)) {
+        size_t moved = source - b->source;
+        *processed = b->item_begin + (uint32_t)(moved < UINT32_MAX - b->item_begin ? moved : UINT32_MAX - b->item_begin);
+        return true;
+    }
+    uint32_t count = 0;
+    bool space = b->source_space;
+    for (size_t i = b->source; i < source; i++) {
+        char c = n->text[i];
+        bool white = c == ' ' || c == '\t' || c == '\n' || c == '\r';
+        if (!white || !space)
+            count++;
+        space = white;
+    }
+    *processed = b->item_begin + count;
+    return true;
 }
 
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)

@@ -708,8 +708,149 @@ enum {
     M_COMMON, M_SET_START, M_SET_END, M_START_BEFORE, M_START_AFTER, M_END_BEFORE, M_END_AFTER,
     M_COLLAPSE, M_SELECT, M_SELECT_CONTENTS, M_COMPARE, M_DELETE, M_EXTRACT, M_CLONE_CONTENTS,
     M_INSERT, M_SURROUND, M_CLONE_RANGE, M_DETACH, M_IN_RANGE, M_COMPARE_POINT, M_INTERSECTS,
-    M_TO_STRING, M_CONTEXTUAL
+    M_TO_STRING, M_CONTEXTUAL, M_CLIENT_RECTS, M_BOUNDING
 };
+
+/* ── A range's rects (CSSOM View § 6.1; RANGE.md § 7) ────────────────── */
+
+void os64_dom_set_text_rects(os64_dom_t *dom, os64_dom_text_rects_provider_t provider, void *opaque)
+{
+    if (dom == NULL || dom->closed) return;
+    dom->text_rects = provider;
+    dom->text_rects_opaque = opaque;
+}
+
+typedef struct {
+    os64_dom_t *dom;
+    double *v;          /* x, y, width, height, four by four */
+    size_t count, cap;
+} Rects;
+
+static int rects_room(Rects *r, size_t more)
+{
+    if (r->count + more <= r->cap) return 0;
+    size_t cap = r->cap ? r->cap * 2 : 16;
+    while (cap < r->count + more) cap *= 2;
+    double *v = d_alloc(r->dom, cap * 4 * sizeof(double));
+    if (v == NULL) return -1;
+    if (r->v != NULL) {
+        os64_memcpy(v, r->v, r->count * 4 * sizeof(double));
+        d_free(r->dom, r->v);
+    }
+    r->v = v;
+    r->cap = cap;
+    return 0;
+}
+
+static uint64_t rect_add_sat(uint64_t a, uint64_t b)
+{
+    return b > UINT64_MAX - a ? UINT64_MAX : a + b;
+}
+
+/* The rects of bytes [from, to) of Text node `n`, from the host. */
+static int text_rects(JSContext *ctx, Rects *r, const os64_html_node_t *n, size_t from, size_t to)
+{
+    os64_dom_t *dom = r->dom;
+    if (dom->text_rects == NULL) return 0;
+    double few[4 * 8];
+    os64_dom_geometry_stats_t cost = {0};
+    size_t count = dom->text_rects(dom->text_rects_opaque, n, from, to, few, 8, &cost);
+    const double *source = few;
+    double *more = NULL;
+    if (count > 8) {
+        more = d_alloc(dom, count * 4 * sizeof(double));
+        if (more == NULL) {
+            d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
+            return -1;
+        }
+        os64_dom_geometry_stats_t again = {0};
+        size_t got = dom->text_rects(dom->text_rects_opaque, n, from, to, more, count, &again);
+        cost.layouts = rect_add_sat(cost.layouts, again.layouts);
+        cost.elapsed_us = rect_add_sat(cost.elapsed_us, again.elapsed_us);
+        count = got < count ? got : count;
+        source = more;
+    }
+    dom->geometry_stats.layouts = rect_add_sat(dom->geometry_stats.layouts, cost.layouts);
+    dom->geometry_stats.elapsed_us = rect_add_sat(dom->geometry_stats.elapsed_us, cost.elapsed_us);
+    int result = rects_room(r, count) < 0 ? (d_error(ctx, "QuotaExceededError", "DOM range quota exceeded"), -1) : 0;
+    if (result == 0) {
+        os64_memcpy(r->v + r->count * 4, source, count * 4 * sizeof(double));
+        r->count += count;
+    }
+    d_free(dom, more);
+    return result;
+}
+
+/* The range's client rects in tree order: each element it selects whose
+ * parent it does not select, that element's border box (an element's
+ * getClientRects); each Text node it selects or partly selects, the rects
+ * of the selected part of its text, a collapsed range's zero-width one
+ * included. Generated content and markers name their element, not a Text
+ * node, and add nothing. -1 with the exception thrown. */
+static int range_rects(os64_dom_t *dom, JSContext *ctx, const DRange *range, Rects *r)
+{
+    Bounds b = bounds_of(range);
+    const os64_html_node_t *n = b.start;
+    bool end_done = false;
+    for (;;) {
+        if (n->kind == OS64_HTML_TEXT && (n == b.start || n == b.end || contained(&b, n))) {
+            size_t from = n == b.start ? os64_html_utf16_byte(n->text, n->text_len, b.start_offset) : 0;
+            size_t to = n == b.end ? os64_html_utf16_byte(n->text, n->text_len, b.end_offset) : n->text_len;
+            if (to < from) to = from;
+            if (text_rects(ctx, r, n, from, to) < 0) return -1;
+            end_done = end_done || n == b.end;
+        } else if (n->kind == OS64_HTML_ELEMENT && contained(&b, n) &&
+                   (n->parent == NULL || !contained(&b, n->parent))) {
+            os64_dom_geometry_t box;
+            if (!d_geometry_read(dom, ctx, n, &box)) return -1;
+            if (box.boxed) {
+                if (rects_room(r, 1) < 0) {
+                    d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
+                    return -1;
+                }
+                double *v = r->v + r->count++ * 4;
+                v[0] = box.x;
+                v[1] = box.y;
+                v[2] = box.width;
+                v[3] = box.height;
+            }
+        }
+        if (n->first_child != NULL) {
+            n = n->first_child;
+        } else {
+            while (n != NULL && n->next == NULL) n = n->parent;
+            if (n == NULL) break;
+            n = n->next;
+        }
+        if (position(n, 0, b.end, b.end_offset) >= 0) break;
+    }
+    /* An end Text node at offset 0 is never reached by the walk, which
+     * stops at a node not before the end: it is partly selected all the
+     * same, its zero-width rect the answer. */
+    if (!end_done && b.end->kind == OS64_HTML_TEXT && b.end != b.start && b.end_offset == 0)
+        return text_rects(ctx, r, b.end, 0, 0);
+    return 0;
+}
+
+/* getBoundingClientRect: the union of the rects with width and height, the
+ * first rect when none has both, a zero rect when there are none. */
+static JSValue bounding(os64_dom_t *dom, JSContext *ctx, const Rects *r)
+{
+    if (r->count == 0) return d_rect_new(dom, ctx, false, 0, 0, 0, 0);
+    double left = 0, top = 0, right = 0, bottom = 0;
+    bool any = false;
+    for (size_t i = 0; i < r->count; i++) {
+        const double *v = r->v + i * 4;
+        if (v[2] == 0 || v[3] == 0) continue;
+        if (!any || v[0] < left) left = v[0];
+        if (!any || v[1] < top) top = v[1];
+        if (!any || v[0] + v[2] > right) right = v[0] + v[2];
+        if (!any || v[1] + v[3] > bottom) bottom = v[1] + v[3];
+        any = true;
+    }
+    if (!any) return d_rect_new(dom, ctx, false, r->v[0], r->v[1], r->v[2], r->v[3]);
+    return d_rect_new(dom, ctx, false, left, top, right - left, bottom - top);
+}
 
 static int offset_argument(JSContext *ctx, int argc, JSValueConst *argv, int at, uint32_t *offset)
 {
@@ -802,6 +943,14 @@ static JSValue range_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     }
     case M_DETACH: return JS_UNDEFINED;
     case M_TO_STRING: return stringify(dom, ctx, r);
+    case M_CLIENT_RECTS: case M_BOUNDING: {
+        Rects rects = {.dom = dom};
+        JSValue result = range_rects(dom, ctx, r, &rects) < 0 ? JS_EXCEPTION
+                       : magic == M_CLIENT_RECTS ? d_rect_list_new(dom, ctx, rects.v, rects.count)
+                                                 : bounding(dom, ctx, &rects);
+        d_free(dom, rects.v);
+        return result;
+    }
     case M_CLONE_RANGE: {
         JSValue copy = range_new(dom, ctx, JS_UNDEFINED, dom->document->document);
         DRange *c = JS_IsException(copy) ? NULL : JS_GetOpaque(copy, dom->ranges->range_class);
@@ -1075,7 +1224,8 @@ int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"insertNode", M_INSERT, 1}, {"surroundContents", M_SURROUND, 1}, {"cloneRange", M_CLONE_RANGE, 0},
         {"detach", M_DETACH, 0}, {"isPointInRange", M_IN_RANGE, 2}, {"comparePoint", M_COMPARE_POINT, 2},
         {"intersectsNode", M_INTERSECTS, 1}, {"toString", M_TO_STRING, 0},
-        {"createContextualFragment", M_CONTEXTUAL, 1},
+        {"createContextualFragment", M_CONTEXTUAL, 1}, {"getClientRects", M_CLIENT_RECTS, 0},
+        {"getBoundingClientRect", M_BOUNDING, 0},
     };
     for (size_t i = 0; i < sizeof(kMethods) / sizeof(kMethods[0]); i++)
         if (d_method_named(dom, ctx, range->value, kMethods[i].name, range_member, kMethods[i].argc,

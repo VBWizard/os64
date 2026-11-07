@@ -199,6 +199,22 @@ static JSValue client_rects(JSContext *ctx, JSValueConst self, int argc, JSValue
     return list;
 }
 
+JSValue d_rect_list_new(os64_dom_t *dom, JSContext *ctx, const double *rects, size_t count)
+{
+    if (count > UINT32_MAX - 1) return d_error(ctx, "QuotaExceededError", "DOM rect list quota exceeded");
+    JSValue list = JS_NewObjectClass(ctx, (int)os64_js_class_id(&list_slot));
+    if (JS_IsException(list)) return list;
+    for (size_t i = 0; i < count; i++) {
+        JSValue rect = d_rect_new(dom, ctx, false, rects[4 * i], rects[4 * i + 1], rects[4 * i + 2], rects[4 * i + 3]);
+        if (JS_IsException(rect) || JS_DefinePropertyValueUint32(ctx, list, (uint32_t)i, rect, JS_PROP_ENUMERABLE) < 0) {
+            JS_FreeValue(ctx, list);
+            return JS_EXCEPTION;
+        }
+    }
+    JS_SetOpaque(list, (void *)(uintptr_t)(count + 1));
+    return list;
+}
+
 static int list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSClassID id = os64_js_class_id(&list_slot);

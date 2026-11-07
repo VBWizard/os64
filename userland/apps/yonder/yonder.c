@@ -9658,6 +9658,8 @@ static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stat
 static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
                                 os64_dom_geometry_stats_t *cost);
 static size_t script_hit(void *, double, double, const os64_html_node_t **, size_t, os64_dom_geometry_stats_t *);
+static size_t script_text_rects(void *, const os64_html_node_t *, size_t, size_t, double *, size_t,
+                                os64_dom_geometry_stats_t *);
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
@@ -9724,7 +9726,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .kept_module = script_kept_module,
-        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .hit = script_hit,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .hit = script_hit, .text_rects = script_text_rects,
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
@@ -10960,6 +10962,38 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
             if (count < cap)
                 out[count] = n;
             count++;
+        }
+    }
+    int64_t ended = os64_micros();
+    cost->layouts = geometry_layout_total - before;
+    cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return count;
+}
+
+// A range's text rects (RANGE.md § 7), whose opaque is its page's document:
+// the layout made current as script_geometry makes it, then
+// yonder_text_rects over the page on screen at its scroll, or over a page
+// measured beside it.
+static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size_t from, size_t to,
+                                double *out, size_t cap, os64_dom_geometry_stats_t *cost)
+{
+    const os64_html_document_t *doc = opaque;
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    size_t count = 0;
+    if (began >= 0 && os64_html_owns_node(doc, node)) {
+        if (doc == page_doc(&g.page)) {
+            bool ready = script_rebuild();
+            if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                          g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed))
+                ready = relayout(true);
+            if (ready)
+                count = yonder_text_rects(doc, g.page.tree, node, from, to, g.zoom, (flow_point_t){g.sx, g.sy},
+                                          out, cap);
+        } else if (measured_for(doc, width, height)) {
+            count = yonder_text_rects(doc, s_measured.tree, node, from, to, g.zoom, (flow_point_t){0, 0}, out, cap);
         }
     }
     int64_t ended = os64_micros();

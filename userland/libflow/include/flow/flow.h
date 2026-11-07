@@ -1091,6 +1091,12 @@ struct flow_box {
     // marks, an `rt`'s parentheses, a picture's alt), and `begin` indexes
     // nothing of the node's.
     uint32_t begin;
+    // TEXT from a node: what flow_text_processed replays a source byte
+    // through — the source byte its item's processing began at, the
+    // processed offset that item starts at (`begin` less the box's place in
+    // the item), and whether white space was collapsing there.
+    uint32_t source, item_begin;
+    bool source_space;
     // What of this box may be drawn: ancestor overflow padding clips and
     // positioned legacy clip rectangles, met on the axes they clip. When
     // `clipped` is false nothing clips it and `clip` means nothing. In a
@@ -1749,6 +1755,13 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
 // flow_hit_counted answers the same and says, in `*cuts`, how many cuts
 // it worked.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
+// The processed offset (`begin`'s units) of source byte `source` of a TEXT
+// box's node's data, as white-space processing made it (RANGE.md § 7): the
+// box's item's collapse replayed from where it began, under the box's own
+// white-space mode; a byte before the item is the item's start. False for
+// a box that is no TEXT box of a Text node (generated text indexes no
+// node's data). The answer may fall outside the box: the caller clips it.
+bool flow_text_processed(const flow_box_t *box, size_t source, uint32_t *processed);
 const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
                                    uint64_t *cuts);
 
