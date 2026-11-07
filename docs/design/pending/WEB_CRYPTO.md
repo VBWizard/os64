@@ -133,8 +133,10 @@ does not know.
 - **Promises settle "in parallel"**: the spec computes off the event loop
   and queues a task to settle. See § 5.
 - **Inputs** are `BufferSource`: an ArrayBuffer or any view, its bytes
-  *copied* at the call (the spec's "get a copy of the bytes held by"), so
-  a page that changes the buffer afterwards cannot change the result.
+  copied once the algorithm is normalized (the spec's "get a copy of the
+  bytes held by", which WPT's `digest/` holds after normalization: a name
+  getter that refills or detaches the buffer is seen), so a page that
+  changes the buffer after the call cannot change the result.
 
 ## 4. Where it lives
 
@@ -145,9 +147,12 @@ does not know.
   tier 1: each method's arguments are a table (`kMethods`: name, required
   count, the IDL type of each, the operation its algorithm normalizes
   for), so tiers 2 and 3 add steps, not conversions; `importKey`'s
-  `keyData` is told a BufferSource or not, and an object that is not one
-  is taken as the JsonWebKey without its members read, since no format
-  reads them before tier 2 builds JWK. The interfaces' members, and
+  `keyData`, when it is no BufferSource, is converted as the JsonWebKey
+  dictionary on the spot, every member in order, as WebIDL converts a
+  dictionary argument, so its getters run before the algorithm is
+  normalized, and a usage sequence is converted item by item as it is
+  iterated. KeyFormat and KeyUsage are Level 2's enumerations; the draft's
+  newer formats and usages go with its newer algorithms. The interfaces' members, and
   Crypto's, are shaped as WebIDL makes them (operations enumerable,
   accessors named "get x") by `d_idl_members`, which `window.c` already
   did for Window's own members and now shares. It joins
@@ -252,10 +257,10 @@ does not know.
   second, and a page cannot make it worse than its own heap allows. Tier
   1's PR measures it on the P5 with `/tests/digestbench`, which times
   `subtle_core.c` itself over the BearSSL objects libdom links, at sizes
-  up to 192 MiB (the script heap is 256 MiB). It is a program and not a
-  page because a page in `/tests/pages` is a `file:` page, which libway
-  does not count a secure context (DEBTS), so `crypto.subtle` is absent
-  there. **Measured:** (the P5's numbers go here).
+  up to 192 MiB (the script heap is 256 MiB), and reports the numbers. It
+  is a program and not a page because a page in `/tests/pages` is a
+  `file:` page, which libway does not count a secure context (DEBTS), so
+  `crypto.subtle` is absent there.
 - **RSA key generation blocks the page** for as long as it takes (a 2048-bit
   key is the slow case; to be measured on the P5 in tier 3). One host in
   the corpus generates RSA keys at all. If the P5 says it is too slow,
@@ -274,18 +279,21 @@ does not know.
   `[Exposed=(Window,Worker)]`, and a worker-based challenge calls
   `crypto.subtle` first thing; WORKERS.md gives the rows table `[Exposed]`
   bits, and the row is marked when they exist. BearSSL is safe across
-  threads as used here: every context is the caller's, and the AES-NI and
-  PCLMUL getters probe the CPU on every call.
+  threads as used here: every context is the caller's, and its fast-path
+  getters keep no state (in a build that has those paths, they probe the
+  CPU on each call).
 
 ## 6. Proof
 
 - **WPT `WebCryptoAPI`**, through the runner, with
   `tools/wpt/expected/WebCryptoAPI.txt` gaining each tier's tests as
   `[required]` (they fail with the modern switch off) and its exclusions
-  named with reasons: `digest/`, `idlharness`, `crypto_key_cached_slots`,
-  `normalize-algorithm-name` and `export-key-error-order` in tier 1;
-  `encrypt_decrypt/`, `sign_verify/` (HMAC), `import_export/` and
-  `generateKey/` (the symmetric files), `wrapKey_unwrapKey/` in tier 2;
+  named with reasons: `digest/`, `idlharness` and
+  `normalize-algorithm-name` in tier 1; `crypto_key_cached_slots`,
+  `export-key-error-order` (both need a key), `encrypt_decrypt/`,
+  `sign_verify/` (HMAC), `import_export/` and `generateKey/` (the
+  symmetric files) in tier 2; `wrapKey_unwrapKey/` in tier 3, whose
+  files wrap with AES-KW and RSA-OAEP;
   the rest of those directories and `derive_bits_keys/` in tier 3. The
   tier-1 run also proves the methods it does not build answer
   NotSupportedError, not TypeError, after normalization.
@@ -295,8 +303,9 @@ does not know.
   round trips of keys made by a browser. Two families SP 800-38A does not
   cover: AES-CTR's counter wrapping at `length` bits (WPT's
   `aes_ctr_vectors.js` has the cases), and CBC's padding (a whole block
-  of padding, a bad final byte, a bad interior byte). Both of the AES and
-  GHASH arms, the AES-NI one and the portable one, run every vector. Hand mutants on the glue (an IV
+  of padding, a bad final byte, a bad interior byte). The portable AES
+  and GHASH are the arms this build has (§ 4); a build that turned on the
+  AES-NI and PCLMUL paths would run every vector through both. Hand mutants on the glue (an IV
   ignored, a tag not checked, a usage not enforced, a byte not copied)
   must fail.
 - **The pages of § 1, replayed** (tier 1): the transaction id is real

@@ -1360,15 +1360,16 @@ WEB_CRYPTO.md): `SubtleCrypto` and `CryptoKey`, [SecureContext], so a page
 that is not a secure context has neither interface nor `crypto.subtle`.
 All twelve methods are here; what they can do is `subtle_core.c`'s
 registry, and an algorithm it does not hold is NotSupportedError, a
-browser's answer for one it does not know. Today that is `digest`, with
-SHA-1, SHA-256, SHA-384 and SHA-512; WEB_CRYPTO.md § 2's tiers add the
-rest, and DEBTS.md books them. Each method converts its arguments as
-WebIDL does (a CryptoKey argument is told by its class, a BufferSource by
+browser's answer for one it does not know. The registry holds `digest`'s
+SHA-1, SHA-256, SHA-384 and SHA-512; DEBTS.md books the rest, by
+WEB_CRYPTO.md § 2's tiers. Each method converts its arguments as WebIDL
+does (a CryptoKey argument is told by its class, a BufferSource by
 `d_buffer_source` and refused when resizable, a KeyFormat and each KeyUsage
-against their enumerations), normalizes its algorithm (§ 18.4.4: a string
-is the name; an object's `name` is read as the Algorithm dictionary and
-again as the algorithm's own, so a getter there runs twice, as in a
-browser), and only then reads the bytes it was given. **Every failure is a
+against Level 2's enumerations, a usage sequence item by item as it is
+iterated, and a JsonWebKey every member in order), normalizes its
+algorithm (§ 18.4.4: a string is the name; an object's `name` is read as
+the Algorithm dictionary and again as the algorithm's own, so a getter
+there runs twice), and only then reads the bytes it was given. **Every failure is a
 rejection, never a throw**, as WebIDL makes one for a promise-returning
 operation: the work is done on the call and the promise returned already
 settled (`d_promise_settled`), which is DIVERGENCES.md's row, and why a

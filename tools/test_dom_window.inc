@@ -419,6 +419,39 @@ static void dom_window_subtle_cases(void)
         "for(let i=0;i<Math.max(log.length,want.length);i++)"
         "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",
         "subtle: answered in order");
+    /* WebIDL's shapes and conversions: members enumerable and named, a name
+     * converted with ToString, a usage sequence item by item, a JsonWebKey
+     * converted with the arguments (before the algorithm's name is read),
+     * and Level 2's enumerations. */
+    dom_script(&f, STORAGE_ASSERT SUBTLE_JS
+        "globalThis.log=[];{const s=crypto.subtle,abc=new TextEncoder().encode('abc');"
+        "for(const [P,m] of [[SubtleCrypto.prototype,'digest'],[SubtleCrypto.prototype,'unwrapKey'],"
+        "[Crypto.prototype,'getRandomValues'],[Crypto.prototype,'randomUUID']])"
+        "assert(Object.getOwnPropertyDescriptor(P,m).enumerable,m+' is enumerable');"
+        "for(const [P,a] of [[Crypto.prototype,'subtle'],[CryptoKey.prototype,'type'],[CryptoKey.prototype,'usages']]){"
+        "const d=Object.getOwnPropertyDescriptor(P,a);assert(d.enumerable&&d.get.name==='get '+a,a+'\\'s getter')}"
+        "assert(!Object.getOwnPropertyDescriptor(SubtleCrypto.prototype,'constructor').enumerable,'constructor is not');"
+        "s.digest({name:{toString(){return 'SHA-256'}}},abc).then(b=>log.push('tostring:'+hex(b).slice(0,8)));"
+        "function*g(){yield 'nope';log.push('pulled');yield 'sign'}"
+        "rejects(s.generateKey('AES-GCM',true,g()),'TypeError','a bad usage ends the iteration');"
+        "rejects(s.importKey('jwk',{get kty(){throw new RangeError('k')}},'AES-GCM',true,[]),'RangeError','a JWK getter');"
+        "rejects(s.importKey('raw',{key_ops:5},'AES-GCM',true,[]),'TypeError','a JWK member of the wrong type');"
+        "rejects(s.importKey('jwk',{oth:[5]},'AES-GCM',true,[]),'TypeError','oth holds dictionaries');"
+        "const order=[];"
+        "rejects(s.importKey('jwk',{get alg(){order.push('alg')},get kty(){order.push('kty')}},"
+        "{get name(){order.push('name');return 'AES-GCM'}},true,{*[Symbol.iterator](){order.push('usages')}}),"
+        "'NotSupportedError','the JWK is converted with the arguments');"
+        "assert(order.join()==='alg,kty,usages,name','conversion order '+order.join());"
+        "rejects(s.importKey('raw-secret',abc,'HMAC',true,['sign']),'TypeError','a newer draft\\'s format');"
+        "rejects(s.generateKey('AES-GCM',true,['encapsulateKey']),'TypeError','a newer draft\\'s usage');}",
+        "subtle: WebIDL's shapes and conversions");
+    dom_script(&f, STORAGE_ASSERT
+        "{const want=['tostring:ba7816bf','a bad usage ends the iteration: ok','a JWK getter: ok',"
+        "'a JWK member of the wrong type: ok','oth holds dictionaries: ok','the JWK is converted with the arguments: ok',"
+        "'a newer draft\\'s format: ok','a newer draft\\'s usage: ok'];"
+        "for(let i=0;i<Math.max(log.length,want.length);i++)"
+        "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",
+        "subtle: the conversions answered, and nothing pulled past a bad usage");
     fixture_free(&f);
 }
 

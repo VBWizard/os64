@@ -84,14 +84,14 @@ static const struct {
                       SUBTLE_OP_UNWRAP_KEY},
 };
 
-/* KeyFormat and KeyUsage as the IDL enumerates them (the draft's raw-*
- * formats and encapsulation usages included: what the IDL admits, an
- * algorithm may still refuse). */
-static const char *const kFormats[] = {"raw-public", "raw-private", "raw-seed", "raw-secret", "raw", "spki",
-                                       "pkcs8", "jwk"};
+/* KeyFormat and KeyUsage as Web Cryptography Level 2 enumerates them,
+ * which is what pages meet in other browsers. The draft's newer formats
+ * (raw-secret and the rest) and its encapsulation usages belong to its
+ * newer algorithms, which are not here (DEBTS), and a Level 2 browser
+ * refuses them as it refuses any other string: a TypeError. */
+static const char *const kFormats[] = {"raw", "spki", "pkcs8", "jwk"};
 static const char *const kUsages[] = {"encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits",
-                                      "wrapKey", "unwrapKey", "encapsulateKey", "encapsulateBits",
-                                      "decapsulateKey", "decapsulateBits"};
+                                      "wrapKey", "unwrapKey"};
 
 /* A CryptoKey's slots. A key is made by generateKey, importKey, deriveKey
  * or unwrapKey under an algorithm the registry holds for that operation,
@@ -160,6 +160,82 @@ static int enforce_unsigned_long(JSContext *ctx, JSValueConst value, uint32_t *o
     return 0;
 }
 
+/* One KeyUsage of a sequence, converted as the iterator yields it, before
+ * the next is asked for (WebIDL's sequence conversion): a string that is
+ * no usage ends the iteration there. */
+static int usage_item(void *opaque, JSContext *ctx, JSValueConst item)
+{
+    int usage = enumeration(ctx, item, kUsages, sizeof(kUsages) / sizeof(kUsages[0]), "KeyUsage");
+    if (usage < 0) return -1;
+    *(uint32_t *)opaque |= 1u << usage;
+    return 0;
+}
+
+/* THE JSONWEBKEY DICTIONARY, converted as WebIDL converts a dictionary
+ * argument: each member read and converted in lexicographic order, while
+ * the arguments are, so its getters run before the algorithm is
+ * normalized and a member of the wrong type is a TypeError there. No step
+ * keeps what the members hold: the JWK format is the one that reads them,
+ * and it is not built (DEBTS.md, "crypto.subtle does only digest"). */
+static int string_item(void *opaque, JSContext *ctx, JSValueConst item)
+{
+    (void)opaque;
+    JSValue text = JS_ToString(ctx, item);
+    if (JS_IsException(text)) return -1;
+    JS_FreeValue(ctx, text);
+    return 0;
+}
+
+/* One RsaOtherPrimesInfo of `oth`: a dictionary whose members, d, r and t,
+ * are strings. */
+static int other_prime_item(void *opaque, JSContext *ctx, JSValueConst item)
+{
+    (void)opaque;
+    static const char *const kMembers[] = {"d", "r", "t"};
+    if (JS_IsUndefined(item) || JS_IsNull(item)) return 0;
+    if (!JS_IsObject(item)) {
+        JS_ThrowTypeError(ctx, "A JsonWebKey's oth holds dictionaries");
+        return -1;
+    }
+    for (size_t i = 0; i < sizeof(kMembers) / sizeof(kMembers[0]); i++) {
+        JSValue member = JS_GetPropertyStr(ctx, item, kMembers[i]);
+        if (JS_IsException(member)) return -1;
+        int status = JS_IsUndefined(member) ? 0 : string_item(NULL, ctx, member);
+        JS_FreeValue(ctx, member);
+        if (status < 0) return -1;
+    }
+    return 0;
+}
+
+static int json_web_key(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    if (JS_IsUndefined(value) || JS_IsNull(value)) return 0;
+    static const struct {
+        const char *name;
+        char kind; /* 's' DOMString, 'b' boolean, 'l' sequence<DOMString>, 'o' sequence<RsaOtherPrimesInfo> */
+    } kMembers[] = {
+        {"alg", 's'}, {"crv", 's'}, {"d", 's'}, {"dp", 's'}, {"dq", 's'}, {"e", 's'},
+        {"ext", 'b'}, {"k", 's'}, {"key_ops", 'l'}, {"kty", 's'}, {"n", 's'}, {"oth", 'o'},
+        {"p", 's'}, {"q", 's'}, {"qi", 's'}, {"use", 's'}, {"x", 's'}, {"y", 's'},
+    };
+    for (size_t i = 0; i < sizeof(kMembers) / sizeof(kMembers[0]); i++) {
+        JSValue member = JS_GetPropertyStr(ctx, value, kMembers[i].name);
+        if (JS_IsException(member)) return -1;
+        int status = 0;
+        if (!JS_IsUndefined(member)) {
+            switch (kMembers[i].kind) {
+            case 's': status = string_item(NULL, ctx, member); break;
+            case 'b': (void)JS_ToBool(ctx, member); break;
+            case 'l': status = d_sequence_each(dom, ctx, member, JS_UNDEFINED, string_item, NULL); break;
+            default: status = d_sequence_each(dom, ctx, member, JS_UNDEFINED, other_prime_item, NULL); break;
+            }
+        }
+        JS_FreeValue(ctx, member);
+        if (status < 0) return -1;
+    }
+    return 0;
+}
+
 static int buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value, int method, int index)
 {
     const uint8_t *bytes;
@@ -214,29 +290,17 @@ static int convert(os64_dom_t *dom, JSContext *ctx, int method, int argc, JSValu
         case A_BOOLEAN:
             c->extractable = JS_ToBool(ctx, v);
             break;
-        case A_USAGES: {
-            JSValue *items;
-            size_t count;
-            if (d_sequence(dom, ctx, v, D_SEQUENCE_MAX, &items, &count) < 0) return -1;
-            int bad = 0;
-            for (size_t k = 0; k < count && !bad; k++) {
-                int usage = enumeration(ctx, items[k], kUsages, sizeof(kUsages) / sizeof(kUsages[0]), "KeyUsage");
-                if (usage < 0) bad = 1;
-                else c->usages |= 1u << usage;
-            }
-            d_sequence_free(ctx, items, count);
-            if (bad) return -1;
+        case A_USAGES:
+            if (d_sequence_each(dom, ctx, v, JS_UNDEFINED, usage_item, &c->usages) < 0) return -1;
             break;
-        }
         case A_FORMAT:
             c->format = enumeration(ctx, v, kFormats, sizeof(kFormats) / sizeof(kFormats[0]), "KeyFormat");
             if (c->format < 0) return -1;
             break;
         case A_KEY_DATA: {
             /* (BufferSource or JsonWebKey): a buffer source is one; any
-             * other object, undefined or null is the dictionary, whose
-             * members are read where a format reads them (the JWK format
-             * does, and is not built: DEBTS.md); anything else neither. */
+             * other object, undefined or null is the dictionary, converted
+             * here (json_web_key); anything else neither. */
             const uint8_t *bytes;
             size_t length;
             int kind = JS_IsObject(v) ? d_buffer_source(dom, ctx, v, &bytes, &length) : 0;
@@ -246,6 +310,8 @@ static int convert(os64_dom_t *dom, JSContext *ctx, int method, int argc, JSValu
                 c->buffers[c->buffer_count++] = v;
             } else if (!JS_IsObject(v) && !JS_IsUndefined(v) && !JS_IsNull(v)) {
                 arg_error(ctx, method, i, "BufferSource or JsonWebKey");
+                return -1;
+            } else if (json_web_key(dom, ctx, v) < 0) {
                 return -1;
             }
             break;
@@ -267,7 +333,8 @@ static int convert(os64_dom_t *dom, JSContext *ctx, int method, int argc, JSValu
  * is missing), the name matched ASCII case-insensitively (NotSupportedError
  * when nothing matches), and then the dictionary the algorithm's
  * parameters convert to, whose reads run in its members' order and so
- * read `name` again: a getter there runs twice, as it does in a browser. */
+ * read `name` again: § 18.4.4 converts the object twice, so a getter
+ * there runs twice. */
 static int name_of(JSContext *ctx, JSValueConst algorithm, char **text, size_t *length)
 {
     JSValue name = JS_GetPropertyStr(ctx, algorithm, "name");

@@ -293,10 +293,11 @@ page's script can see them.
   task.** Web Cryptography does its work "in parallel" and settles from a
   queued task; yonder does the work on the call and returns a promise
   already settled, as `Blob.text()` does, so a page sees the answer one
-  microtask later rather than one task later. Its consequence, also a
-  divergence: a BufferSource argument is read where it lies once the
-  algorithm is normalized, never copied, since no page code runs between
-  the read and the answer (`subtle.c`; WEB_CRYPTO.md § 5).
+  microtask later rather than one task later. Its consequence, which no
+  page can tell: a BufferSource argument is read where it lies rather
+  than copied, read after the algorithm is normalized as the spec copies
+  it, since no page code runs between the read and the answer (`subtle.c`;
+  WEB_CRYPTO.md § 5).
 - **An offset inside a character above U+FFFF means the character's
   start.** CharacterData offsets count UTF-16 code units and such a
   character is two of them; the tree holds UTF-8, which cannot hold half of
