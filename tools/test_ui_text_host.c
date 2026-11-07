@@ -2379,19 +2379,19 @@ static void one_rendering_per_paint(void)
         CHECK(ui_test_same(&after, run));      /* the next: all run */
     }
 
-    /* The view's own numbers, for the record: in that bitmap paint the
-     * caret starts after five cells and the highlight ends with é's second
-     * cell, 2 + 40 and 2 + 39 with the view's inset of 2. */
+    /* At the row's middle, the stem starts after five bitmap cells.
+     * Its one-pixel outline covers the selection's last pixel; the caps
+     * at the row's ends extend farther without moving the insertion point. */
     ui_test_paint_view(UI_TEST_REFUSED_ONCE, once, NULL);
     int32_t caret_x = -1, lit_right = -1;
-    for (int32_t y = 2; y < 18; ++y)
+    for (int32_t y = 9; y < 11; ++y)
         for (int32_t x = 2; x < 298; ++x) {
             uint32_t p = once->px[y * SURF_W + x];
             if (p == 0xffff0000 && (caret_x < 0 || x < caret_x)) caret_x = x;
             if (p == 0xff0000ff && x > lit_right) lit_right = x;
         }
     CHECK(caret_x == 2 + 40);
-    CHECK(lit_right == 2 + 39);
+    CHECK(lit_right == 2 + 38);
     current = "";
 }
 
@@ -2830,6 +2830,26 @@ static void editors_without_a_face(const char *dir)
     ctx.surf = c.s;
     tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
     CHECK(c.px[16 * SURF_W + 4 + 24] == ui.theme.text_caret);  /* after 3 cells */
+
+    /* A caret matching the field still has a visible outline; its caps
+     * identify the insertion point. Edge clipping keeps the border intact. */
+    uint32_t saved_caret = ui.theme.text_caret;
+    for (unsigned light = 0; light < 2; ++light) {
+        ui.theme.field_bg = ui.theme.text_caret = light ? 0xffffffff : 0xff000000;
+        uint32_t contrast = light ? 0xff000000 : 0xffffffff;
+        canvas_init(&c, 0xff123456); ctx.surf = c.s;
+        tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
+        CHECK(c.px[16 * SURF_W + 27] == contrast);
+        CHECK(c.px[9 * SURF_W + 26] == ui.theme.text_caret);
+        CHECK(c.px[10 * SURF_W + 25] == contrast);
+        CHECK(c.px[16 * SURF_W + 150] == 0xff123456);
+        tf.cursor = 0;
+        tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
+        CHECK(c.px[16 * SURF_W + 3] == ui.theme.field_bg);
+        tf.cursor = 3;
+    }
+    ui.theme.text_caret = saved_caret;
+    ui.theme.field_bg = 0;
 
     /* A click inside é's two cells goes to the nearer of its edges. */
     os64_ui_textfield_set(&ui, &tf, "\xc3\xa9t");            /* edges 0, 16, 24 */
