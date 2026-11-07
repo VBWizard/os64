@@ -125,7 +125,9 @@ typedef struct {
     bool shadow_trees;
     /* DOM Range (docs/design/pending/RANGE.md § 2), with `modern`: set,
      * AbstractRange, Range and StaticRange on window and the document's
-     * createRange exist; clear, none of them does, so a page that tests
+     * createRange exist, and the page Selection is a model with the
+     * Selection API's members (RANGE.md § 9); clear, none of them does and the
+     * Selection is the fixed empty one (selection.c), so a page that tests
      * `typeof document.createRange` takes its fallback rather than meeting
      * a Range with members missing. One switch for the same reason as
      * shadow trees'. Clear in the defaults. */

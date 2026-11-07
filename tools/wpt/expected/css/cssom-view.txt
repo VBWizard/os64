@@ -184,6 +184,7 @@ scrollingElement.html	needs iframe: every case is a document in one
 CaretPosition-001.html	Element at (400, 100)
 CaretPosition-001.html	Element at (400, 900)
 DOMRectList.html	Element getClientRects()
+DOMRectList.html	Range getClientRects()
 GetBoundingRect.html	getBoundingClientRect
 HTMLBody-ScrollArea_quirksmode.html	Ensure that body element is loaded.
 HTMLBody-ScrollArea_quirksmode.html	Ensure that style.overflowY can be set properly.
@@ -302,6 +303,7 @@ elementsFromPoint.html	Return first element that is the target for hit testing
 elementsFromPoint.html	co-ordinates larger than the viewport
 getBoundingClientRect-empty-inline-002.html	width
 getBoundingClientRect-empty-inline-002.html	x
+getBoundingClientRect-newline.html	Range.getBoundingClientRect() should return the first position of the next line when the collapsed range is a newline character
 getBoundingClientRect-scroll.html	getBoundingClientRect for a scrolled display none box
 getBoundingClientRect-zoom.html	getBoundingClientRect for elements with css zoom
 getBoundingClientRect-zoom.html	getBoundingClientRect for elements with css zoom 1
@@ -462,6 +464,8 @@ idlharness.html	Partial interface Window: member names are unique
 idlharness.html	Partial interface Window: original interface defined
 idlharness.html	Partial interface Window[2]: member names are unique
 idlharness.html	Partial interface Window[3]: member names are unique
+idlharness.html	Range interface: new Range() must inherit property "getBoundingClientRect()" with the proper type
+idlharness.html	Range interface: new Range() must inherit property "getClientRects()" with the proper type
 idlharness.html	Screen interface object length
 idlharness.html	Screen interface object name
 idlharness.html	Screen interface: existence and properties of interface object
@@ -571,6 +575,7 @@ offsetTopLeftInScrollableParent.html	Margins on child and parent, border on chil
 parsing/scroll-behavior-invalid.html	e.style['scroll-behavior'] = "auto smooth" should not set the property value
 parsing/scroll-behavior-invalid.html	e.style['scroll-behavior'] = "auto, smooth" should not set the property value
 parsing/scroll-behavior-invalid.html	e.style['scroll-behavior'] = "normal" should not set the property value
+range-bounding-client-rect-with-nested-text.html	getClientRects should return non-empty rectangles for nested text nodes
 resize-event-on-initial-layout-001.html	resize events are not fired on the initial layout
 resize-event-on-initial-layout-002.html	resize events are not fired on the initial layout
 scroll-no-layout-box.html	scrolling an element with no CSS layout box should have no effect

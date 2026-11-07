@@ -183,7 +183,7 @@ bool yonder_settings_saved_shadow_dom(void)
 bool yonder_settings_saved_ranges(void)
 {
     char value[8];
-    return os64_conf_get(CONF_NAME, CONF_RANGES, value, sizeof(value)) == 0 && os64_streq_nocase(value, "on");
+    return os64_conf_get(CONF_NAME, CONF_RANGES, value, sizeof(value)) != 0 || !os64_streq_nocase(value, "off");
 }
 
 bool yonder_settings_saved_scripts(void)

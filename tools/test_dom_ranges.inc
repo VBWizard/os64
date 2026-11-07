@@ -175,6 +175,9 @@ static void dom_range_contextual_cases(void)
         "dt.textContent='ab';dr.selectNodeContents(dt);assert(dr.cloneContents().ownerDocument===d&&"
         "dr.extractContents().ownerDocument===d,'cloned and extracted contents are their document\\'s');"
         "var lone=d.createTextNode('ab');assert(lone.splitText(1).ownerDocument===d,'a parentless split tail too');"
+        "var sp=document.body.appendChild(document.createElement('p'));sp.textContent='ab';var sr=new Range();"
+        "sr.selectNodeContents(sp);var wrap=document.createElement('em');wrap.textContent='old';sr.surroundContents(wrap);"
+        "assert(sp.innerHTML==='<em>ab</em>','surroundContents empties its new parent with the host hearing scripts');"
         "globalThis.built=[];customElements.define('x-range',class extends HTMLElement{constructor(){super();"
         "built.push(this);this.ready=true}});var cf=r.createContextualFragment('<x-range></x-range>');"
         "assert(cf.firstChild.ready===true&&built.length===1,'a defined custom element is upgraded at once');",
@@ -333,6 +336,100 @@ static void dom_hit_cases(void)
     fixture_free(&f);
 }
 
+/* The page Selection as a model (range.c, RANGE.md § 9). */
+static void dom_range_selection_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (fixture_ready(&f)) {
+        dom_script(&f, RANGE_ASSERT "var s=getSelection();assert(s.rangeCount===0&&s.type==='None'&&!('addRange' in s),"
+                   "'without ranges, the None selection');", "selection-off");
+        fixture_free(&f);
+    }
+    os64_dom_options_t options = range_options();
+    options.shadow_trees = true;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, RANGE_ASSERT
+        "var s=getSelection();assert(s===document.getSelection()&&s.rangeCount===0&&s.type==='None'&&s.isCollapsed,'empty');"
+        "var p=document.createElement('p');p.innerHTML='ab<b>cd</b>ef';document.body.appendChild(p);"
+        "var t=p.firstChild,e=p.lastChild,r=document.createRange();r.setStart(t,1);r.setEnd(e,1);"
+        "s.addRange(r);assert(s.rangeCount===1&&s.getRangeAt(0)===r&&s.type==='Range'&&!s.isCollapsed,'addRange keeps it');"
+        "assert(s.anchorNode===t&&s.anchorOffset===1&&s.focusNode===e&&s.focusOffset===1,'anchor and focus');"
+        "assert(s.toString()==='bcde','toString');assert(s.containsNode(p.childNodes[1])&&!s.containsNode(p)&&"
+        "s.containsNode(p,true),'containsNode');"
+        "var other=document.createRange();s.addRange(other);assert(s.getRangeAt(0)===r,'a second addRange is ignored');"
+        "var bad=false;try{s.getRangeAt(1)}catch(x){bad=x.name==='IndexSizeError'}assert(bad,'getRangeAt past the count');"
+        "bad=false;try{s.removeRange(other)}catch(x){bad=x.name==='NotFoundError'}assert(bad,'removeRange of another');"
+        "s.removeRange(r);assert(s.rangeCount===0,'removeRange');"
+        "s.collapse(e,1);assert(s.type==='Caret'&&s.anchorNode===e&&s.getRangeAt(0).collapsed,'collapse');"
+        "s.extend(t,0);assert(s.direction==='backward'&&s.anchorNode===e&&s.anchorOffset===1&&s.focusNode===t&&"
+        "s.focusOffset===0&&s.toString()==='abcde','extend backward');"
+        "s.collapseToStart();assert(s.anchorNode===t&&s.anchorOffset===0&&s.isCollapsed,'collapseToStart');"
+        "s.setBaseAndExtent(e,2,t,1);assert(s.direction==='backward'&&s.toString()==='bcdef','setBaseAndExtent');"
+        "s.selectAllChildren(p);assert(s.anchorNode===p&&s.focusOffset===3&&s.direction==='forward','selectAllChildren');"
+        "s.setPosition(null);assert(s.rangeCount===0,'setPosition(null) empties it');"
+        "bad=false;try{s.collapseToEnd()}catch(x){bad=x.name==='InvalidStateError'}assert(bad,'collapseToEnd of none');"
+        "bad=false;try{s.collapse(t,9)}catch(x){bad=x.name==='IndexSizeError'}assert(bad,'an offset past the end');"
+        "var d=document.implementation.createHTMLDocument('');s.collapse(d.body,0);assert(s.rangeCount===0,"
+        "'a point in another document does nothing');"
+        "s.selectAllChildren(p.childNodes[1]);s.deleteFromDocument();assert(p.innerHTML==='ab<b></b>ef','deleteFromDocument');"
+        "s.empty();assert(s.rangeCount===0);"
+        /* Each member checks its point in the standard's order: extend asks
+         * whether the node is in the document before whether the selection
+         * is empty, and an Attr is a node in no document, not a refusal. */
+        "bad='';try{s.extend(document.doctype,0)}catch(x){bad=x.name}assert(bad==='InvalidStateError','extend of none');"
+        "s.extend(d.body,0);assert(s.rangeCount===0,'extend to another document does nothing, even empty');"
+        "var at=document.createAttribute('x');s.collapse(at,0);s.selectAllChildren(at);s.setBaseAndExtent(at,0,t,0);"
+        "assert(s.rangeCount===0&&!s.containsNode(at),'an Attr is a node in no document');"
+        "bad='';try{s.collapse(at,1)}catch(x){bad=x.name}assert(bad==='IndexSizeError','an Attr\\'s length is 0');"
+        "s.collapse(t,0);bad='';try{s.extend(document.doctype,0)}catch(x){bad=x.name}"
+        "assert(bad==='InvalidNodeTypeError','extend to a doctype');"
+        "bad='';try{s.setBaseAndExtent(document.doctype,0,t,0)}catch(x){bad=x.name}"
+        "assert(bad==='InvalidNodeTypeError','setBaseAndExtent from a doctype');"
+        "bad='';try{s.setBaseAndExtent(t,9,d.body,0)}catch(x){bad=x.name}"
+        "assert(bad==='IndexSizeError','setBaseAndExtent checks offsets before documents');",
+        "selection-model");
+    /* The page's code inside a member, and the page's hold on its range. */
+    dom_script(&f, RANGE_ASSERT
+        "var s=getSelection(),p=document.body.appendChild(document.createElement('p'));p.textContent='abc';"
+        "s.collapse(p.firstChild,1);s.extend(p,{valueOf(){p.textContent='';return 0}});"
+        "assert(s.anchorNode===p&&s.focusNode===p,'extend reads the selection after the offset\\'s valueOf');"
+        "var bad='';try{s.extend(p,{valueOf(){s.removeAllRanges();return 0}})}catch(x){bad=x.name}"
+        "assert(bad==='InvalidStateError','a valueOf that empties the selection empties it for extend');"
+        "s.collapse(p,0);bad='';try{s.getRangeAt({valueOf(){s.removeAllRanges();return 0}})}catch(x){bad=x.name}"
+        "assert(bad==='IndexSizeError','and for getRangeAt');"
+        "s.collapse(p,0);s.collapse(undefined);assert(s.rangeCount===0,'collapse(undefined) is collapse(null)');"
+        "var u=p.appendChild(new Text('a'));s.setBaseAndExtent(u,2,u,{valueOf(){u.data='abc';return 3}});"
+        "assert(s.anchorOffset===2&&s.focusOffset===3,'lengths are read once every offset is converted');"
+        "bad='';try{s.collapse(null,{valueOf(){throw Error('stop')}})}catch(x){bad=x.message}"
+        "assert(bad==='stop'&&s.rangeCount===1,'collapse(null) converts its offset first');s.removeAllRanges();"
+        "s.collapse(p,0);s.setPosition(undefined);assert(s.rangeCount===0,'and setPosition(undefined)');"
+        "var r=document.createRange();r.selectNodeContents(p);s.addRange(r);r.selectNodeContents(document.createElement('i'));"
+        "assert(s.rangeCount===1&&s.anchorNode===null&&s.anchorOffset===0&&s.focusNode===null,"
+        "'a range the page moved out of the document has no anchor or focus');s.removeAllRanges();"
+        "var host=document.body.appendChild(document.createElement('div')),root=host.attachShadow({mode:'open'});"
+        "root.innerHTML='<b>x</b>';s.selectAllChildren(root.firstChild);assert(s.rangeCount===0,"
+        "'selectAllChildren of a node in a shadow tree does nothing');"
+        "s.collapse(root.firstChild,0);assert(s.rangeCount===1,'collapse to one does select');s.removeAllRanges();"
+        "globalThis.order=[];customElements.define('x-sel',class extends HTMLElement{disconnectedCallback(){order.push('gone')}});"
+        "var q=document.body.appendChild(document.createElement('div'));q.innerHTML='<x-sel></x-sel>';"
+        "s.selectAllChildren(q);s.deleteFromDocument();order.push('returned');"
+        "assert(order.join()==='gone,returned','deleteFromDocument runs its reactions before it returns: '+order);",
+        "selection-page-code");
+    fixture_free(&f);
+    /* A page that puts an accessor on Object.prototype before it ever
+     * selects: the selection is held where no prototype reaches. */
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, RANGE_ASSERT
+        "var seen=0;Object.defineProperty(Object.prototype,'r',{configurable:true,get(){seen++},set(v){seen++}});"
+        "var s=getSelection(),p=document.body.appendChild(document.createElement('p'));"
+        "s.collapse(p,0);var kept=s.rangeCount===1&&s.getRangeAt(0).startContainer===p;delete Object.prototype.r;"
+        "assert(kept&&seen===0,'an accessor on Object.prototype neither sees nor answers for the selection');",
+        "selection-prototype");
+    fixture_free(&f);
+}
+
 static void dom_range_cases(void)
 {
     dom_range_switch_cases();
@@ -343,4 +440,5 @@ static void dom_range_cases(void)
     dom_range_lifetime_cases();
     dom_range_context_cases();
     dom_hit_cases();
+    dom_range_selection_cases();
 }
