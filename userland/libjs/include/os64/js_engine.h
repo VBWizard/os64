@@ -43,10 +43,13 @@ os64_js_status_t os64_js_call(os64_js_runtime_t *runtime, const char *caller_abi
                               os64_js_outcome_t *outcome);
 /* A microtask checkpoint inside the open task: drains runnable jobs under
  * the task's deadline and cap, reporting the first job exception and
- * carrying on, then judges unhandled rejections (without a script host). */
+ * carrying on, then judges unhandled rejections (without a script host).
+ * With no job exception, its outcome may be a module's late failure
+ * (CONTRACT.md § Modules: owed to the call that surfaced it). */
 os64_js_status_t os64_js_checkpoint(os64_js_runtime_t *runtime, const char *caller_abi,
                                     os64_js_outcome_t *outcome);
-/* A final checkpoint, then the task is closed and eval/run are accepted. */
+/* A final checkpoint, then the task is closed and eval/run are accepted;
+ * its outcome may be a module's late failure, as a checkpoint's may. */
 os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const char *caller_abi,
                                   os64_js_outcome_t *outcome);
 /* Whether a job queued now (JS_EnqueueJob) will be drained by the turn
@@ -160,7 +163,9 @@ os64_js_status_t os64_js_module_requests(os64_js_runtime_t *runtime, const char 
  * EXCEPTION when resolving or linking threw (an import nobody could load,
  * an export that is not there), or when the evaluation failed at once.
  * Either failure goes to the script host's `exception`, never to
- * `rejected`. */
+ * `rejected`. An evaluation still pending is watched: when it fails later,
+ * the host's `exception` hears it then, and the outcome of the call whose
+ * jobs surfaced it carries it (CONTRACT.md § Modules). */
 os64_js_status_t os64_js_module_run(os64_js_runtime_t *runtime, const char *caller_abi,
                                     os64_js_module_t *module, os64_js_outcome_t *outcome);
 typedef enum {

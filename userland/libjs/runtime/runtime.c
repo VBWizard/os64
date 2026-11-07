@@ -294,13 +294,21 @@ static JSValue module_rejected(JSContext *context, JSValueConst self, int argc, 
  * rejection handler of libjs's own, through the engine's own `then`, so its
  * failure is heard whatever else handles the promise: an import() of the
  * module puts a handler on it too, and then the tracker never hears it.
- * `then` reads the promise's species, which a page may have replaced: a
- * watch whose `then` threw is not attached, and the tracker hears the
- * module fail as it hears any unhandled evaluation. (A refused allocation
- * here ends the runtime, as one anywhere does.) */
+ * `then` reads the promise's `constructor` and that constructor's species,
+ * which a page can replace, and so could run the page's code here, or
+ * throw and leave the module unwatched. The evaluation's promise is the
+ * engine's own and no script ever holds it (an import() is answered with a
+ * promise of its own), so it is given an own `constructor` of undefined
+ * first, which makes `then` take the realm's Promise and ask the page
+ * nothing. (A refused allocation here ends the runtime, as one anywhere
+ * does.) */
 static void module_watch(os64_js_runtime_t *runtime, JSValueConst promise)
 {
     JSContext *context = runtime->context;
+    if (JS_DefinePropertyValueStr(context, promise, "constructor", JS_UNDEFINED, JS_PROP_CONFIGURABLE) < 0) {
+        discard_exception(context);
+        return;
+    }
     JSValue heard = JS_NewCFunctionData(context, module_rejected, 1, 0, 1, &promise);
     if (JS_IsException(heard)) {
         discard_exception(context);
@@ -340,19 +348,14 @@ static void module_owed_fold(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
 /* The engine's tracker: a promise rejected with no handler, or a handler
  * added to one. A handler for a promise this table no longer holds, which a
  * host took (os64_js_take_rejection), is the host's to hear of. A module's
- * evaluation is its handle's (module_failed), never an unhandled rejection:
- * watched, it has a handler and never comes here; unwatched (module_watch's
- * `then` threw), this is where its failure is heard. */
+ * evaluation never comes here as one: one that fails at once is taken back
+ * by os64_js_module_run as the module's failure, and one still pending is
+ * watched (module_watch), so it has a handler. */
 static void rejection(JSContext *context, JSValueConst promise,
                       JSValueConst reason, JS_BOOL handled, void *opaque)
 {
     os64_js_runtime_t *runtime = opaque;
     if (observe(runtime)) return;
-    struct os64_js_module *module = handled ? NULL : module_of(runtime, promise);
-    if (module != NULL) {
-        module_failed(runtime, context, module, reason, true);
-        return;
-    }
     Rejection **place = rejection_place(runtime, JS_VALUE_GET_PTR(promise));
     if (place != NULL) {
         if (handled) {

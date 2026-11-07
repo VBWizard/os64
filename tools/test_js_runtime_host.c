@@ -1917,6 +1917,39 @@ static void module_sweep_cases(void)
     printf("libjs modules: %zu allocations swept\n", inventory);
 }
 
+/* A page that replaced Promise's species with a getter that counts:
+ * watching a module reads it no more than running it does (its
+ * evaluation's promise has an own `constructor` of undefined), and the
+ * late failure is reported all the same. */
+static void module_species_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome, closing;
+    os64_js_runtime_t *runtime = task_fixture(&config,
+        "globalThis.reads = 0;"
+        "Object.defineProperty(Promise, Symbol.species, {get() { reads++; return Promise; }});");
+    if (!runtime) return;
+    const os64_js_script_host_t host = {&host_heard, host_exception, host_handled_hook, host_rejected_hook};
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK, "species host set");
+    os64_js_module_t *module = module_compile(runtime, "https://m.test/species.js",
+        "await new Promise((_, j) => globalThis.failSpecies = () => j(Error('species')));", &outcome);
+    host_heard[0] = '\0';
+    check(module != NULL && module_task(runtime, module, &outcome) == OS64_JS_OK, "a watched module runs");
+    JSValue reads = task_global(runtime, "reads");
+    // The engine reads it once for the module's own await, watched or not
+    // (the count with module_watch left out); the watch adds no read.
+    check(JS_IsNumber(reads) && JS_VALUE_GET_INT(reads) == 1, "watching it asked the page's species nothing");
+    task_free(runtime, reads);
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "fail", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "failSpecies", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_EXCEPTION &&
+          !strcmp(closing.source_name, "https://m.test/species.js") && !strcmp(host_heard, "exception:Error: species"),
+          "and its late failure is reported once");
+    os64_js_destroy(runtime);
+    fixture_runtime = NULL;
+    task_context = NULL;
+}
+
 /* A watched module's life (module_watch): run while it awaits, then failed
  * from a later task. True when that task's outcome reported the failure
  * under the module's name. */
@@ -2503,6 +2536,7 @@ int main(int argc, char **argv)
     script_host_cases();
     module_cases();
     module_sweep_cases();
+    module_species_cases();
     module_watch_sweep_cases();
     bytecode_cases();
     module_bytecode_cases();

@@ -70,10 +70,15 @@ failure into the outcome of the call that surfaced it.**
   script ran (`intrinsic_then`; a runtime that cannot read it is not
   made, which keeps construction's allocation sweep exact). That also
   covers the DEBTS neighbour, where an `import()` made the promise handled
-  and the tracker stayed silent. The tracker's module case stays: `then`
-  reads the promise's species, which a page can replace, and a watch whose
-  `then` threw is not attached, so the tracker hears that one. (A refused
-  allocation there ends the runtime, as one anywhere does.)
+  and the tracker stayed silent. `then` asks the promise's `constructor`
+  for its species, which a page can replace, and so could run the page's
+  code inside the run or throw and leave the module unwatched (the cold
+  read's second finding): the evaluation's promise is the engine's own and
+  no script holds it, so it is given an own `constructor` of undefined
+  first, and `then` takes the realm's Promise without asking the page. A
+  pending evaluation is therefore always watched (a refused allocation
+  ends the runtime, as one anywhere does), and the tracker's module case
+  has nothing left to catch, and goes.
 - The reaction runs as a job, inside whatever libjs call is draining jobs
   at the time (a task's end, a checkpoint, a dispatch). It calls
   `module_failed` as today (the failure kept on the handle, the error
@@ -86,10 +91,15 @@ failure into the outcome of the call that surfaced it.**
   it surfaced in. Only a call that ran jobs or checkpointed folds: a
   task's begin never does, since its outcome decides whether the task runs
   at all. A second owed failure waits for the next such call, in the order
-  they failed (each owed failure is numbered), so none is lost and none is
-  reported twice. (The draft sent the second through libdom's
+  they failed (each owed failure is numbered), so each is in exactly one
+  libjs outcome. (The draft sent the second through libdom's
   `options.failed`; libjs cannot reach it, and carrying it keeps one
-  path.)
+  path.) What a host keeps of them is its own policy: libdom and yonder
+  keep one failure a task, the first, as they do for a task's exceptions,
+  so a second late failure in a task that already failed is heard by the
+  window's error event and reaches no FAILED line (the cold read's first
+  finding; a DEBTS row, beside the same gap for a task's second
+  exception).
 - A module that rejects synchronously is unchanged: `os64_js_module_run`
   sees the promise already rejected and reports it in its own outcome, as
   now, and marks nothing owed.
@@ -100,11 +110,15 @@ module failure from the errors whose failure is already in an outcome
 there would report those twice. libjs knows which one has no call of its
 own.
 
-**What the record will say:** `FAILED script <module address>: not a
-function, at <file>:<line>:<column>` (the message and place the module
-failure has always carried in `module_state`), on the task during which it
-surfaced, with the status line beside it, as for any script. The replay of
-the social network's page now says exactly that, at the `Intl.Segmenter`
+**What the record will say:** `FAILED script <address>: not a function,
+at <file>:<line>:<column>` (the message and the place the module failure
+has always carried in `module_state`), on the task during which it
+surfaced, with the status line beside it, as for any script. The address
+is that task's script when it has one (the module's own, when it fails in
+its own task; another script's, when it surfaces in that one), and the
+module's when the task has no script (an event, a timer); the place in the
+message names the module either way. The replay of the social network's
+page says it under the entry module's address, at the `Intl.Segmenter`
 construction.
 
 ## 4. Proof

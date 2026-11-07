@@ -569,13 +569,19 @@ wrapper's module entry (`js_engine.h`) is built on that:
   the wrapper attaches a rejection handler of its own through the engine's
   `then`, read at construction before any script ran (a page may replace
   the one it can reach), so its failure is heard even when an `import()`
-  of it has handled the promise and the tracker stays silent; the tracker
-  still hears an unwatched one (a watch whose `then` threw). A failure
-  heard after the run returned has no call of its own, so it is **owed**
-  to the outcome of the call whose jobs surfaced it, as an EXCEPTION
-  naming the module, when that outcome is still OK; another waits for the
-  next call that runs jobs or checkpoints (never a task's begin), in the
-  order they failed, so each is reported once. Patch 0012 also makes
+  of it has handled the promise and the tracker stays silent. `then` asks
+  the promise's `constructor` for its species, which a page can replace;
+  the evaluation's promise is the engine's own and no script holds it, so
+  the wrapper gives it an own `constructor` of undefined first, and
+  watching asks the page nothing. A failure heard after the run returned
+  has no call of its own, so it is **owed** to the outcome of the call
+  whose jobs surfaced it, as an EXCEPTION naming the module, when that
+  outcome is still OK; another waits for the next call that runs jobs or
+  checkpoints (never a task's begin), in the order they failed, so each is
+  in exactly one outcome. Any call that drains jobs can therefore answer
+  EXCEPTION for a module that is not its own. A host that keeps one
+  failure a task keeps the first: a second late failure in a task that
+  already failed is heard by the host's `exception` and no further. Patch 0012 also makes
   handled the inner promise of a module body the engine takes as the
   module's error, which the tracker otherwise heard as a second, unhandled
   rejection.
@@ -606,7 +612,8 @@ a rejection; a top-level await pending after its
 task and fulfilled, or rejected in a later one and that call's outcome,
 reported once; a late failure an `import()` also waits on; two late
 failures surfaced by one call, the first its outcome and the second the
-next call's; and a failed resolve
+next call's; a page's counting species getter, which watching a module
+reads no more than running it does; and a failed resolve
 reached again, by a graph sharing a module whose import failed and, for a
 cycle whose entry failed, by a later graph and by `import()`. The module
 sweep fails
