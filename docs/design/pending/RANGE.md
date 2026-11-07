@@ -311,9 +311,9 @@ A point inside the viewport but on bare canvas answers **the root
 element**, never null (the canvas is the root's box): `element_hit`
 answers nothing there for the pointer, and the provider answers the root
 in its place, so `elementsFromPoint` on bare canvas is the root alone and
-every other list ends in it. Like the geometry provider, the hit provider serves the
-document it is asked about: a call on a frame's document hit-tests in
-that frame's viewport, in its coordinates.
+every other list ends in it. The provider serves the page on screen and a
+page measured beside it (as the geometry provider does); a frame's
+document answers null and an empty list (DEBTS).
 
 `elementsFromPoint` needs every box at the point in paint order, which
 libflow does not have. R3a answers the topmost hit and its flat-tree

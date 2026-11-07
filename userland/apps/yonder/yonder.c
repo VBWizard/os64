@@ -12192,11 +12192,20 @@ static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html
             return area;
         }
     }
+    const os64_html_node_t *element = owner != NULL ? element_of(owner->node) : NULL;
     if (link != NULL) {
         const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
         *link = l != NULL ? l->node : NULL;
+        // A box no node made carries no link of its own (a line's is none):
+        // the link is the one the element it answers is in, so a click
+        // beside a block link's text follows it.
+        for (const os64_html_node_t *n = element; *link == NULL && b->node == NULL && n != NULL;
+             n = os64_html_flat_parent(page_doc(&g.page), n))
+            if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML &&
+                (n->tag == OS64_HTML_TAG_A || n->tag == OS64_HTML_TAG_AREA) && os64_html_attr(n, "href") != NULL)
+                *link = n;
     }
-    return owner != NULL ? element_of(owner->node) : NULL;
+    return element;
 }
 
 static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link)

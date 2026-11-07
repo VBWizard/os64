@@ -257,7 +257,7 @@ static void dom_range_context_cases(void)
 /* elementFromPoint and elementsFromPoint (libdom/hit.c) over a fake hit
  * provider: what it answers, retargeted against the root asked. */
 static const os64_html_node_t *hit_answer[8];
-static size_t hit_count, hit_calls;
+static size_t hit_count, hit_listed, hit_calls;
 static double hit_x, hit_y;
 
 static size_t fake_hit(void *opaque, double x, double y, const os64_html_node_t **out, size_t cap,
@@ -268,8 +268,10 @@ static size_t fake_hit(void *opaque, double x, double y, const os64_html_node_t 
     hit_x = x;
     hit_y = y;
     cost->layouts = 1;
-    for (size_t i = 0; i < hit_count && i < cap; i++) out[i] = hit_answer[i];
-    return hit_count;
+    /* hit_listed answers past the 8 held repeat the last: a deep list. */
+    size_t listed = hit_listed > hit_count ? hit_listed : hit_count;
+    for (size_t i = 0; i < listed && i < cap; i++) out[i] = hit_answer[i < hit_count ? i : hit_count - 1];
+    return listed;
 }
 
 static void dom_hit_cases(void)
@@ -319,6 +321,15 @@ static void dom_hit_cases(void)
     hit_answer[0] = light;
     dom_script(&f, RANGE_ASSERT "assert(document.elementFromPoint(5,5).id==='light'&&root.elementFromPoint(5,5).id==='light',"
                "'a light-tree hit answers itself to both');", "hit-light");
+    /* A list longer than the first ask's room is asked again, and both
+     * asks' layouts are charged. */
+    hit_listed = 70;
+    os64_dom_geometry_stats(f.binding, true);
+    hit_calls = 0;
+    dom_script(&f, RANGE_ASSERT "assert(document.elementsFromPoint(5,5).length===1,'the repeats folded');", "hit-deep");
+    os64_dom_geometry_stats_t stats = os64_dom_geometry_stats(f.binding, false);
+    check(hit_calls == 2 && stats.layouts == 2, "hit: a re-ask charges both asks' layouts");
+    hit_listed = 0;
     fixture_free(&f);
 }
 

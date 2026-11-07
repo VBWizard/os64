@@ -5310,10 +5310,18 @@ static void hit_cases(void)
     check(passed!=NULL && os64_streq(passed->value,"yes"), "hit script reaches every assertion");
     const os64_html_node_t *out[8];
     os64_dom_geometry_stats_t cost={0};
+    probe_drop();
+    // A click beside a block link's text follows the link: the line box
+    // hit there carries none, so the element answered gives it.
+    probe_page("<!doctype html><style>html,body{margin:0}a{display:block;width:300px}</style>"
+        "<a id=go href=/next>x</a><div id=box style='position:absolute;left:20px;top:30px;width:100px;height:40px'>x</div>",true);
+    const os64_html_node_t *link=NULL;
+    const os64_html_node_t *at=element_hit(g.view.bounds.x+250,g.view.bounds.y+5,&link,NULL);
+    check(at==probe_id("go") && link==probe_id("go"), "hit: beside a block link's text is the link");
     g.zoom=2000;
     check(lay_out_page(&g.page,800,600), "hit zoom layout");
     size_t n=script_hit(g.page.way.doc,25,35,out,8,&cost);
-    check(n==4 && out[0]==probe_id("box"), "hit: a zoomed page answers the same CSS-pixel point");
+    check(n==3 && out[0]==probe_id("box"), "hit: a zoomed page answers the same CSS-pixel point");
     g.zoom=1000;
     probe_drop();
 }

@@ -60,18 +60,27 @@ static JSValue from_point(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     size_t count = 0;
     bool window = os64_html_shadow_including_root(root) == dom->document->document;
     if (window && dom->hit != NULL) {
-        os64_dom_geometry_stats_t cost = {0};
+        /* Each ask's cost is its own and both are charged: the first is the
+         * one that makes the layout current. */
+        os64_dom_geometry_stats_t cost = {0}, again_cost = {0};
         count = dom->hit(dom->hit_opaque, xy[0], xy[1], few, 64, &cost);
+        bool refused = false;
         if (count > 64 && magic == H_ALL) {
             out = d_alloc(dom, count * sizeof(*out));
-            if (out == NULL) return d_error(ctx, "QuotaExceededError", "DOM hit quota exceeded");
-            size_t again = dom->hit(dom->hit_opaque, xy[0], xy[1], out, count, &cost);
-            count = again < count ? again : count;
+            if (out == NULL) {
+                refused = true;
+                out = few;
+            } else {
+                size_t again = dom->hit(dom->hit_opaque, xy[0], xy[1], out, count, &again_cost);
+                count = again < count ? again : count;
+            }
         } else if (count > 64) {
             count = 64;
         }
-        dom->geometry_stats.layouts = add_sat(dom->geometry_stats.layouts, cost.layouts);
-        dom->geometry_stats.elapsed_us = add_sat(dom->geometry_stats.elapsed_us, cost.elapsed_us);
+        dom->geometry_stats.layouts = add_sat(dom->geometry_stats.layouts, add_sat(cost.layouts, again_cost.layouts));
+        dom->geometry_stats.elapsed_us =
+            add_sat(dom->geometry_stats.elapsed_us, add_sat(cost.elapsed_us, again_cost.elapsed_us));
+        if (refused) return d_error(ctx, "QuotaExceededError", "DOM hit quota exceeded");
     }
     JSValue result;
     if (magic == H_ONE) {
