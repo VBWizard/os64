@@ -2,13 +2,12 @@
 
 /* `crypto` (Web Cryptography's Crypto interface): getRandomValues and
  * randomUUID, over the host's entropy (options.entropy; yonder's is
- * /dev/random, through libtls's door). `subtle` is absent: SubtleCrypto is
- * a design of its own, and pages detect it apart from getRandomValues
- * (WINDOW_DOCUMENT.md, ruling 1), so a secure page's crypto lacks the one
- * member a browser's has, and what it has is whole. randomUUID is
- * [SecureContext]: it exists only in a secure context, as the window's
+ * /dev/random, through libtls's door), and `subtle`, SubtleCrypto and
+ * CryptoKey, which are subtle.c's (WEB_CRYPTO.md). randomUUID and subtle are
+ * [SecureContext]: they exist only in a secure context, as the window's
  * browsing context answers it (browsing.c's d_secure_context, the answer
- * isSecureContext reads).
+ * isSecureContext reads), and so do the SubtleCrypto and CryptoKey
+ * interfaces.
  *
  * THE BYTES ARE THE HOST'S OR NONE. A hook that fails throws an
  * OperationError, and nothing it wrote reaches the page: it writes into
@@ -64,6 +63,18 @@ static int resizable_view(os64_dom_t *dom, JSContext *ctx, JSValueConst array, i
     if (JS_IsException(buffer)) return -1;
     JSValue resizable = JS_Call(ctx, dom->crypto_getters[1]->value, buffer, 0, NULL);
     JS_FreeValue(ctx, buffer);
+    if (JS_IsException(resizable)) return -1;
+    int answer = JS_ToBool(ctx, resizable);
+    JS_FreeValue(ctx, resizable);
+    return answer;
+}
+
+int d_resizable_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    int kind = d_view_kind(dom, ctx, value);
+    if (kind == -2) return -1;
+    if (kind >= 0) return resizable_view(dom, ctx, value, kind);
+    JSValue resizable = JS_Call(ctx, dom->crypto_getters[1]->value, value, 0, NULL);
     if (JS_IsException(resizable)) return -1;
     int answer = JS_ToBool(ctx, resizable);
     JS_FreeValue(ctx, resizable);
@@ -198,5 +209,7 @@ int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->crypto = d_retain(dom, ctx, crypto);
     if (dom->crypto == NULL) return -1;
     JS_SetOpaque(crypto, &crypto_mark);
+    if (d_secure_context(dom) && d_subtle_install(dom, ctx, global, prototype) < 0) return -1;
+    if (d_idl_members(ctx, prototype) < 0) return -1;
     return d_accessor(dom, ctx, global, "crypto", crypto_member, W_CRYPTO, false);
 }

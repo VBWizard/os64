@@ -30,7 +30,7 @@ yonder_host_build() {
         -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
         -Iuserland/libflow/include -Iuserland/libgarb/include -Iuserland/libway/include
         -Iuserland/libfetch/include -Iuserland/libimage/include -Iuserland/libwebp/include -Iuserland/libgzip/include
-        -Iuserland/libtls/include -Iuserland/libflow -Iuserland/apps/yonder
+        -Iuserland/libtls/include -Iuserland/libtls/upstream/inc -Iuserland/libflow -Iuserland/apps/yonder
         -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iuserland/libos64
         -Iabi/include -Itools -Itools/fonts
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
@@ -51,7 +51,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
-        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle,animation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit}.c \
+        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,subtle,subtle_core,report,document,frames,clone,message,idle,animation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit}.c \
         userland/apps/yonder/{scripts,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,download,download_job}.c \
         "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
@@ -70,6 +70,15 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         if [[ "$source" == userland/libdom/* ]]; then private=(-Dd_alloc=dom_fixture_private_alloc); fi
         if [ "$source" = "$unit" ]; then private=("$@"); fi
         host_compile "$source" "$object" "${private[@]}"
+        objects+=("$object")
+    done
+    # The BearSSL sources crypto.subtle calls, as libtls configures them
+    # (tools/subtle_bearssl.sh): libdom links their objects privately.
+    . tools/subtle_bearssl.sh
+    for source in "${SUBTLE_BEARSSL_SOURCES[@]}"; do
+        object="$work/bearssl-$(basename "$source" .c).o"
+        cc -O1 -g -std=gnu11 -fsanitize=address,undefined -fno-sanitize-recover=all "${SUBTLE_BEARSSL_FLAGS[@]}" \
+            -c "$source" -o "$object" || return 2
         objects+=("$object")
     done
     # Geometry and optional real-font probes use the production adapters.

@@ -9,7 +9,7 @@ cleanup() {
 trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto report document frames clone message idle animation pointer options selection importmap controls elements tables \
+    browsing crypto subtle subtle_core report document frames clone message idle animation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
     sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
@@ -32,7 +32,7 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
     -Iuserland/libsvg/include -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libxml/include -Iuserland/libpage/include
     -Iuserland/libgarb/include -Iuserland/libway/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
-    -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
+    -Iuserland/libtls/upstream/inc -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
     '-DGARB_MODERN_PROBE="animation-name"')
 # The probe marks a property the Modern Web arc did not add, so the binding's
 # side of the mark (a style member that goes with the switch) has one to
@@ -61,13 +61,22 @@ done
 # allocator name is distinct because these DSOs share one host executable.
 for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
-    browsing crypto report document frames clone message idle animation pointer options selection importmap controls elements tables \
+    browsing crypto subtle subtle_core report document frames clone message idle animation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
     sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \
         -Dos64_malloc_size=dom_host_malloc_size -c "userland/libdom/$name.c" -o "$object"
+    objects+=("$object")
+done
+# The BearSSL sources crypto.subtle calls, as libtls configures them
+# (tools/subtle_bearssl.sh): libdom links their objects privately.
+. tools/subtle_bearssl.sh
+for source in "${SUBTLE_BEARSSL_SOURCES[@]}"; do
+    object="$work/bearssl-$(basename "$source" .c).o"
+    cc -O2 -g -std=gnu11 -fsanitize=address,undefined -fno-sanitize-recover=all "${SUBTLE_BEARSSL_FLAGS[@]}" \
+        -c "$source" -o "$object"
     objects+=("$object")
 done
 mapfile -t ft_sources < <(python3 -c '

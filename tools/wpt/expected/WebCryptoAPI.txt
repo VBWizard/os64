@@ -40,174 +40,1185 @@ getRandomValues.any.html	Subclass of Uint8ClampedArray
 randomUUID.https.any.html	namespace format
 randomUUID.https.any.html	variant set
 randomUUID.https.any.html	version set
+# WEB_CRYPTO.md tier 1: crypto.subtle, SubtleCrypto and CryptoKey whole, every
+# algorithm normalized (nothing beyond digest registered, so a known name
+# for any other operation is NotSupportedError), and digest. Each fails with
+# the switch off, which takes crypto away.
+digest/digest.https.any.html	AES-GCM with empty
+digest/digest.https.any.html	AES-GCM with long
+digest/digest.https.any.html	AES-GCM with medium
+digest/digest.https.any.html	AES-GCM with short
+digest/digest.https.any.html	AES-KW with empty
+digest/digest.https.any.html	AES-KW with long
+digest/digest.https.any.html	AES-KW with medium
+digest/digest.https.any.html	AES-KW with short
+digest/digest.https.any.html	PBKDF2 with empty
+digest/digest.https.any.html	PBKDF2 with long
+digest/digest.https.any.html	PBKDF2 with medium
+digest/digest.https.any.html	PBKDF2 with short
+digest/digest.https.any.html	RSA-OAEP with empty
+digest/digest.https.any.html	RSA-OAEP with long
+digest/digest.https.any.html	RSA-OAEP with medium
+digest/digest.https.any.html	RSA-OAEP with short
+digest/digest.https.any.html	SHA-1 with empty source data
+digest/digest.https.any.html	SHA-1 with long source data
+digest/digest.https.any.html	SHA-1 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-1 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-1 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-1 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-1 with medium source data
+digest/digest.https.any.html	SHA-1 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-1 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-1 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-1 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-1 with short source data
+digest/digest.https.any.html	SHA-1 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-1 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-1 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-1 with short source data and transferred buffer during call
+digest/digest.https.any.html	SHA-256 with empty source data
+digest/digest.https.any.html	SHA-256 with long source data
+digest/digest.https.any.html	SHA-256 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-256 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-256 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-256 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-256 with medium source data
+digest/digest.https.any.html	SHA-256 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-256 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-256 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-256 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-256 with short source data
+digest/digest.https.any.html	SHA-256 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-256 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-256 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-256 with short source data and transferred buffer during call
+digest/digest.https.any.html	SHA-384 with empty source data
+digest/digest.https.any.html	SHA-384 with long source data
+digest/digest.https.any.html	SHA-384 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-384 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-384 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-384 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-384 with medium source data
+digest/digest.https.any.html	SHA-384 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-384 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-384 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-384 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-384 with short source data
+digest/digest.https.any.html	SHA-384 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-384 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-384 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-384 with short source data and transferred buffer during call
+digest/digest.https.any.html	SHA-512 with empty source data
+digest/digest.https.any.html	SHA-512 with long source data
+digest/digest.https.any.html	SHA-512 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-512 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-512 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-512 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-512 with medium source data
+digest/digest.https.any.html	SHA-512 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-512 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-512 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-512 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-512 with short source data
+digest/digest.https.any.html	SHA-512 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-512 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-512 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-512 with short source data and transferred buffer during call
+digest/digest.https.any.html	Sha-1 with empty source data
+digest/digest.https.any.html	Sha-1 with long source data
+digest/digest.https.any.html	Sha-1 with medium source data
+digest/digest.https.any.html	Sha-1 with short source data
+digest/digest.https.any.html	Sha-256 with empty source data
+digest/digest.https.any.html	Sha-256 with long source data
+digest/digest.https.any.html	Sha-256 with medium source data
+digest/digest.https.any.html	Sha-256 with short source data
+digest/digest.https.any.html	Sha-384 with empty source data
+digest/digest.https.any.html	Sha-384 with long source data
+digest/digest.https.any.html	Sha-384 with medium source data
+digest/digest.https.any.html	Sha-384 with short source data
+digest/digest.https.any.html	Sha-512 with empty source data
+digest/digest.https.any.html	Sha-512 with long source data
+digest/digest.https.any.html	Sha-512 with medium source data
+digest/digest.https.any.html	Sha-512 with short source data
+digest/digest.https.any.html	empty algorithm object with empty
+digest/digest.https.any.html	empty algorithm object with long
+digest/digest.https.any.html	empty algorithm object with medium
+digest/digest.https.any.html	empty algorithm object with short
+digest/digest.https.any.html	sha-1 with empty source data
+digest/digest.https.any.html	sha-1 with long source data
+digest/digest.https.any.html	sha-1 with medium source data
+digest/digest.https.any.html	sha-1 with short source data
+digest/digest.https.any.html	sha-256 with empty source data
+digest/digest.https.any.html	sha-256 with long source data
+digest/digest.https.any.html	sha-256 with medium source data
+digest/digest.https.any.html	sha-256 with short source data
+digest/digest.https.any.html	sha-384 with empty source data
+digest/digest.https.any.html	sha-384 with long source data
+digest/digest.https.any.html	sha-384 with medium source data
+digest/digest.https.any.html	sha-384 with short source data
+digest/digest.https.any.html	sha-512 with empty source data
+digest/digest.https.any.html	sha-512 with long source data
+digest/digest.https.any.html	sha-512 with medium source data
+digest/digest.https.any.html	sha-512 with short source data
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [sign])
+idlharness.https.any.html	Crypto interface: attribute subtle
+idlharness.https.any.html	Crypto interface: crypto must inherit property "subtle" with the proper type
+idlharness.https.any.html	CryptoKey interface object length
+idlharness.https.any.html	CryptoKey interface object name
+idlharness.https.any.html	CryptoKey interface: attribute algorithm
+idlharness.https.any.html	CryptoKey interface: attribute extractable
+idlharness.https.any.html	CryptoKey interface: attribute type
+idlharness.https.any.html	CryptoKey interface: attribute usages
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface object
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface prototype object
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.any.html	Stringification of crypto.subtle
+idlharness.https.any.html	SubtleCrypto interface object length
+idlharness.https.any.html	SubtleCrypto interface object name
+idlharness.https.any.html	SubtleCrypto interface: calling decrypt(AlgorithmIdentifier, CryptoKey, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling deriveBits(AlgorithmIdentifier, CryptoKey, optional unsigned long?) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling deriveKey(AlgorithmIdentifier, CryptoKey, AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling digest(AlgorithmIdentifier, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling encrypt(AlgorithmIdentifier, CryptoKey, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling exportKey(KeyFormat, CryptoKey) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling generateKey(AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling importKey(KeyFormat, (BufferSource or JsonWebKey), AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling sign(AlgorithmIdentifier, CryptoKey, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling unwrapKey(KeyFormat, BufferSource, CryptoKey, AlgorithmIdentifier, AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling verify(AlgorithmIdentifier, CryptoKey, BufferSource, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling wrapKey(KeyFormat, CryptoKey, CryptoKey, AlgorithmIdentifier) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "decrypt(AlgorithmIdentifier, CryptoKey, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "deriveBits(AlgorithmIdentifier, CryptoKey, optional unsigned long?)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "deriveKey(AlgorithmIdentifier, CryptoKey, AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "digest(AlgorithmIdentifier, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "encrypt(AlgorithmIdentifier, CryptoKey, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "exportKey(KeyFormat, CryptoKey)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "generateKey(AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "importKey(KeyFormat, (BufferSource or JsonWebKey), AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "sign(AlgorithmIdentifier, CryptoKey, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "unwrapKey(KeyFormat, BufferSource, CryptoKey, AlgorithmIdentifier, AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "verify(AlgorithmIdentifier, CryptoKey, BufferSource, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "wrapKey(KeyFormat, CryptoKey, CryptoKey, AlgorithmIdentifier)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface object
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface prototype object
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.any.html	SubtleCrypto interface: operation decrypt(AlgorithmIdentifier, CryptoKey, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation deriveBits(AlgorithmIdentifier, CryptoKey, optional unsigned long?)
+idlharness.https.any.html	SubtleCrypto interface: operation deriveKey(AlgorithmIdentifier, CryptoKey, AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation digest(AlgorithmIdentifier, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation encrypt(AlgorithmIdentifier, CryptoKey, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation exportKey(KeyFormat, CryptoKey)
+idlharness.https.any.html	SubtleCrypto interface: operation generateKey(AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation importKey(KeyFormat, (BufferSource or JsonWebKey), AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation sign(AlgorithmIdentifier, CryptoKey, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation unwrapKey(KeyFormat, BufferSource, CryptoKey, AlgorithmIdentifier, AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation verify(AlgorithmIdentifier, CryptoKey, BufferSource, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation wrapKey(KeyFormat, CryptoKey, CryptoKey, AlgorithmIdentifier)
+idlharness.https.any.html	SubtleCrypto must be primary interface of crypto.subtle
+import_export/crashtests/importKey-unsettled-promise.https.any.html	WebCryptoAPI: Assure promise returned by importKey is settled.
+normalize-algorithm-name.https.any.html	"AES-<U+212A>W" does not match "AES-KW"
+normalize-algorithm-name.https.any.html	"RSASSA-P<U+212A>CS1-V1_5" does not match "RSASSA-PKCS1-V1_5"
+secure_context/crypto-subtle-secure-context-available.https.sub.html	Secure context window has access to crypto.subtle
+
 [excluded]
-algorithm-discards-context.https.window.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-crypto_key_cached_slots.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/cfrg_curves_bits_curve25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/cfrg_curves_keys_curve25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/derive_key_and_encrypt.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/derived_bits_length.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/ecdh_bits.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/ecdh_keys.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/hkdf.https.any.html?1-1000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/hkdf.https.any.html?1001-2000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/hkdf.https.any.html?2001-3000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/hkdf.https.any.html?3001-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?1-1000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?1001-2000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?2001-3000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?3001-4000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?4001-5000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?5001-6000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?6001-7000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?7001-8000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-derive_bits_keys/pbkdf2.https.any.html?8001-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-digest/digest.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-encrypt_decrypt/aes_cbc.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-encrypt_decrypt/aes_ctr.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-encrypt_decrypt/aes_gcm.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-encrypt_decrypt/aes_gcm_256_iv.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-encrypt_decrypt/rsa_oaep.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-export-key-error-order.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_AES-CBC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_AES-CTR.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_AES-GCM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_AES-KW.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_ECDH.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_ECDSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_HMAC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_RSA-OAEP.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_RSA-PSS.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_RSASSA-PKCS1-v1_5.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/failures_bad_algorithm.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_AES-CBC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_AES-CTR.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_AES-GCM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_AES-KW.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_ECDH.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_ECDSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_HMAC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?1-10	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?101-110	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?11-20	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?111-120	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?121-130	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?131-140	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?141-150	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?151-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?21-30	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?31-40	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?41-50	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?51-60	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?61-70	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?71-80	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?81-90	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-OAEP.https.any.html?91-100	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-PSS.https.any.html?1-10	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-PSS.https.any.html?11-20	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-PSS.https.any.html?21-30	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSA-PSS.https.any.html?31-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?1-10	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?11-20	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?21-30	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?31-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-generateKey/successes_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-historical.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-idlharness.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/crashtests/importKey-unsettled-promise.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/ec_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/ec_importKey_failures_ECDH.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/ec_importKey_failures_ECDSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/okp_fixed_length.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/okp_importKey_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/okp_importKey_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/okp_importKey_failures_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/okp_importKey_failures_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/okp_malformed_asn1.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/rsa_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-import_export/symmetric_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/derive_bits_keys/argon2.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/digest/cshake.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/digest/kangarootwelve.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/digest/sha3.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/digest/turboshake.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/encap_decap/encap_decap_bits.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/encap_decap/encap_decap_keys.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/encrypt_decrypt/aes_ocb.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/encrypt_decrypt/chacha20_poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/failures_AES-OCB.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/failures_Hybrid-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/failures_ML-DSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/failures_ML-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/failures_chacha20_poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/failures_kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/successes_AES-OCB.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/successes_Hybrid-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/successes_ML-DSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/successes_ML-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/successes_chacha20_poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/generateKey/successes_kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/getPublicKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/idlharness.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/AES-OCB_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/Argon2_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/ChaCha20-Poly1305_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/Hybrid-KEM_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/KMAC_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/ML-DSA_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/ML-KEM_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/import_export/raw_format_aliases.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/serialization/aes-ocb.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/serialization/chacha20-poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/serialization/hybridkem.https.window.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/serialization/kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/serialization/mldsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/serialization/mlkem.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/sign_verify/kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/sign_verify/mldsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/supports-modern.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-modern-algos/supports.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-normalize-algorithm-name.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/derive_bits_keys/cfrg_curves_bits_curve448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/derive_bits_keys/cfrg_curves_keys_curve448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/generateKey/failures_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/generateKey/failures_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/generateKey/successes_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/generateKey/successes_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/idlharness.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/import_export/okp_importKey_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/import_export/okp_importKey_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/import_export/okp_importKey_failures_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/import_export/okp_importKey_failures_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/serialization/ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/serialization/x448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure-curves/sign_verify/eddsa_curve448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-secure_context/crypto-subtle-secure-context-available.https.sub.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/aes-cbc.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/aes-ctr.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/aes-gcm.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/aes-kw.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/ecdh.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/ecdsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/hmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/rsa-oaep.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/rsa-pss.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/rsassa-pkcs1-v1_5.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-serialization/x25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-sharedarraybuffer.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-sign_verify/ecdsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-sign_verify/eddsa_curve25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-sign_verify/eddsa_small_order_points.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-sign_verify/hmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-sign_verify/rsa_pkcs.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-sign_verify/rsa_pss.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-wrapKey_unwrapKey/aes_kw_unwrapKey_failures.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
-wrapKey_unwrapKey/wrapKey_unwrapKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+algorithm-discards-context.https.window.html	frames, which this browser does not have (IFRAME.md)
+crypto_key_cached_slots.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+derive_bits_keys/cfrg_curves_bits_curve25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+derive_bits_keys/cfrg_curves_keys_curve25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+derive_bits_keys/derive_key_and_encrypt.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/derived_bits_length.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/ecdh_bits.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/ecdh_keys.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/hkdf.https.any.html?1-1000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/hkdf.https.any.html?1001-2000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/hkdf.https.any.html?2001-3000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/hkdf.https.any.html?3001-last	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?1-1000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?1001-2000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?2001-3000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?3001-4000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?4001-5000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?5001-6000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?6001-7000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?7001-8000	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+derive_bits_keys/pbkdf2.https.any.html?8001-last	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+encrypt_decrypt/aes_cbc.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+encrypt_decrypt/aes_ctr.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+encrypt_decrypt/aes_gcm.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+encrypt_decrypt/aes_gcm_256_iv.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+encrypt_decrypt/rsa_oaep.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+export-key-error-order.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/failures_AES-CBC.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/failures_AES-CTR.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/failures_AES-GCM.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/failures_AES-KW.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/failures_ECDH.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/failures_ECDSA.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/failures_Ed25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/failures_HMAC.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/failures_RSA-OAEP.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/failures_RSA-PSS.https.any.html	RSA-PSS, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/failures_RSASSA-PKCS1-v1_5.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/failures_X25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/successes_AES-CBC.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/successes_AES-CTR.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/successes_AES-GCM.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/successes_AES-KW.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_ECDH.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_ECDSA.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_Ed25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/successes_HMAC.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+generateKey/successes_RSA-OAEP.https.any.html?1-10	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?101-110	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?11-20	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?111-120	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?121-130	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?131-140	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?141-150	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?151-last	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?21-30	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?31-40	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?41-50	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?51-60	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?61-70	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?71-80	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?81-90	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-OAEP.https.any.html?91-100	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSA-PSS.https.any.html?1-10	RSA-PSS, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/successes_RSA-PSS.https.any.html?11-20	RSA-PSS, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/successes_RSA-PSS.https.any.html?21-30	RSA-PSS, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/successes_RSA-PSS.https.any.html?31-last	RSA-PSS, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?1-10	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?11-20	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?21-30	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?31-last	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+generateKey/successes_X25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+import_export/ec_importKey.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+import_export/ec_importKey_failures_ECDH.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+import_export/ec_importKey_failures_ECDSA.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+import_export/okp_fixed_length.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+import_export/okp_importKey_Ed25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+import_export/okp_importKey_X25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+import_export/okp_importKey_failures_Ed25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+import_export/okp_importKey_failures_X25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+import_export/okp_malformed_asn1.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+import_export/rsa_importKey.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+import_export/symmetric_importKey.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+modern-algos/derive_bits_keys/argon2.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/digest/cshake.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/digest/kangarootwelve.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/digest/sha3.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/digest/turboshake.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/encap_decap/encap_decap_bits.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/encap_decap/encap_decap_keys.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/encrypt_decrypt/aes_ocb.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/encrypt_decrypt/chacha20_poly1305.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/failures_AES-OCB.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/failures_Hybrid-KEM.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/failures_ML-DSA.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/failures_ML-KEM.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/failures_chacha20_poly1305.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/failures_kmac.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/successes_AES-OCB.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/successes_Hybrid-KEM.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/successes_ML-DSA.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/successes_ML-KEM.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/successes_chacha20_poly1305.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/generateKey/successes_kmac.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/getPublicKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/idlharness.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/AES-OCB_importKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/Argon2_importKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/ChaCha20-Poly1305_importKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/Hybrid-KEM_importKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/KMAC_importKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/ML-DSA_importKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/ML-KEM_importKey.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/import_export/raw_format_aliases.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/serialization/aes-ocb.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/serialization/chacha20-poly1305.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/serialization/hybridkem.https.window.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/serialization/kmac.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/serialization/mldsa.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/serialization/mlkem.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/sign_verify/kmac.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/sign_verify/mldsa.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/supports-modern.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+modern-algos/supports.https.any.html	the draft's newer algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/derive_bits_keys/cfrg_curves_bits_curve448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/derive_bits_keys/cfrg_curves_keys_curve448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/generateKey/failures_Ed448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/generateKey/failures_X448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/generateKey/successes_Ed448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/generateKey/successes_X448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/idlharness.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/import_export/okp_importKey_Ed448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/import_export/okp_importKey_X448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/import_export/okp_importKey_failures_Ed448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/import_export/okp_importKey_failures_X448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/serialization/ed448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/serialization/x448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+secure-curves/sign_verify/eddsa_curve448.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+serialization/aes-cbc.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/aes-ctr.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/aes-gcm.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/aes-kw.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/ecdh.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/ecdsa.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/ed25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+serialization/hmac.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/rsa-oaep.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/rsa-pss.https.any.html	RSA-PSS, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+serialization/rsassa-pkcs1-v1_5.https.any.html	a CryptoKey's structured clone (WEB_CRYPTO.md § 5; DEBTS)
+serialization/x25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+sharedarraybuffer.https.any.html	a shared WebAssembly.Memory, which this browser does not have
+sign_verify/ecdsa.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+sign_verify/eddsa_curve25519.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+sign_verify/eddsa_small_order_points.https.any.html	Ed25519, X25519 and the curve448 algorithms, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+sign_verify/hmac.https.any.html	AES-GCM, AES-CTR, AES-CBC and HMAC, WEB_CRYPTO.md's tier 2
+sign_verify/rsa_pkcs.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+sign_verify/rsa_pss.https.any.html	RSA-PSS, outside WEB_CRYPTO.md's tiers (ruled; DEBTS)
+wrapKey_unwrapKey/aes_kw_unwrapKey_failures.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+wrapKey_unwrapKey/wrapKey_unwrapKey.https.any.html	ECDH, ECDSA, the RSA family, HKDF, PBKDF2 and AES-KW, WEB_CRYPTO.md's tier 3
+
 [passing]
+digest/digest.https.any.html	AES-GCM with empty
+digest/digest.https.any.html	AES-GCM with long
+digest/digest.https.any.html	AES-GCM with medium
+digest/digest.https.any.html	AES-GCM with short
+digest/digest.https.any.html	AES-KW with empty
+digest/digest.https.any.html	AES-KW with long
+digest/digest.https.any.html	AES-KW with medium
+digest/digest.https.any.html	AES-KW with short
+digest/digest.https.any.html	PBKDF2 with empty
+digest/digest.https.any.html	PBKDF2 with long
+digest/digest.https.any.html	PBKDF2 with medium
+digest/digest.https.any.html	PBKDF2 with short
+digest/digest.https.any.html	RSA-OAEP with empty
+digest/digest.https.any.html	RSA-OAEP with long
+digest/digest.https.any.html	RSA-OAEP with medium
+digest/digest.https.any.html	RSA-OAEP with short
+digest/digest.https.any.html	SHA-1 with empty source data
+digest/digest.https.any.html	SHA-1 with long source data
+digest/digest.https.any.html	SHA-1 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-1 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-1 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-1 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-1 with medium source data
+digest/digest.https.any.html	SHA-1 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-1 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-1 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-1 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-1 with short source data
+digest/digest.https.any.html	SHA-1 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-1 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-1 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-1 with short source data and transferred buffer during call
+digest/digest.https.any.html	SHA-256 with empty source data
+digest/digest.https.any.html	SHA-256 with long source data
+digest/digest.https.any.html	SHA-256 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-256 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-256 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-256 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-256 with medium source data
+digest/digest.https.any.html	SHA-256 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-256 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-256 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-256 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-256 with short source data
+digest/digest.https.any.html	SHA-256 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-256 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-256 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-256 with short source data and transferred buffer during call
+digest/digest.https.any.html	SHA-384 with empty source data
+digest/digest.https.any.html	SHA-384 with long source data
+digest/digest.https.any.html	SHA-384 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-384 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-384 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-384 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-384 with medium source data
+digest/digest.https.any.html	SHA-384 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-384 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-384 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-384 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-384 with short source data
+digest/digest.https.any.html	SHA-384 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-384 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-384 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-384 with short source data and transferred buffer during call
+digest/digest.https.any.html	SHA-512 with empty source data
+digest/digest.https.any.html	SHA-512 with long source data
+digest/digest.https.any.html	SHA-512 with long source data and altered buffer after call
+digest/digest.https.any.html	SHA-512 with long source data and altered buffer during call
+digest/digest.https.any.html	SHA-512 with long source data and transferred buffer after call
+digest/digest.https.any.html	SHA-512 with long source data and transferred buffer during call
+digest/digest.https.any.html	SHA-512 with medium source data
+digest/digest.https.any.html	SHA-512 with medium source data and altered buffer after call
+digest/digest.https.any.html	SHA-512 with medium source data and altered buffer during call
+digest/digest.https.any.html	SHA-512 with medium source data and transferred buffer after call
+digest/digest.https.any.html	SHA-512 with medium source data and transferred buffer during call
+digest/digest.https.any.html	SHA-512 with short source data
+digest/digest.https.any.html	SHA-512 with short source data and altered buffer after call
+digest/digest.https.any.html	SHA-512 with short source data and altered buffer during call
+digest/digest.https.any.html	SHA-512 with short source data and transferred buffer after call
+digest/digest.https.any.html	SHA-512 with short source data and transferred buffer during call
+digest/digest.https.any.html	Sha-1 with empty source data
+digest/digest.https.any.html	Sha-1 with long source data
+digest/digest.https.any.html	Sha-1 with medium source data
+digest/digest.https.any.html	Sha-1 with short source data
+digest/digest.https.any.html	Sha-256 with empty source data
+digest/digest.https.any.html	Sha-256 with long source data
+digest/digest.https.any.html	Sha-256 with medium source data
+digest/digest.https.any.html	Sha-256 with short source data
+digest/digest.https.any.html	Sha-384 with empty source data
+digest/digest.https.any.html	Sha-384 with long source data
+digest/digest.https.any.html	Sha-384 with medium source data
+digest/digest.https.any.html	Sha-384 with short source data
+digest/digest.https.any.html	Sha-512 with empty source data
+digest/digest.https.any.html	Sha-512 with long source data
+digest/digest.https.any.html	Sha-512 with medium source data
+digest/digest.https.any.html	Sha-512 with short source data
+digest/digest.https.any.html	empty algorithm object with empty
+digest/digest.https.any.html	empty algorithm object with long
+digest/digest.https.any.html	empty algorithm object with medium
+digest/digest.https.any.html	empty algorithm object with short
+digest/digest.https.any.html	sha-1 with empty source data
+digest/digest.https.any.html	sha-1 with long source data
+digest/digest.https.any.html	sha-1 with medium source data
+digest/digest.https.any.html	sha-1 with short source data
+digest/digest.https.any.html	sha-256 with empty source data
+digest/digest.https.any.html	sha-256 with long source data
+digest/digest.https.any.html	sha-256 with medium source data
+digest/digest.https.any.html	sha-256 with short source data
+digest/digest.https.any.html	sha-384 with empty source data
+digest/digest.https.any.html	sha-384 with long source data
+digest/digest.https.any.html	sha-384 with medium source data
+digest/digest.https.any.html	sha-384 with short source data
+digest/digest.https.any.html	sha-512 with empty source data
+digest/digest.https.any.html	sha-512 with long source data
+digest/digest.https.any.html	sha-512 with medium source data
+digest/digest.https.any.html	sha-512 with short source data
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey(AES, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: MD5, name: HMAC}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA, modulusLength: 2048, name: RSA-PSS, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({hash: SHA-256, modulusLength: 2048, name: RSA, publicExponent: {0: 1, 1: 0, 2: 1}}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CFB}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES-CMAC}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({length: 128, name: AES}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: AES}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Bad algorithm: generateKey({name: EC, namedCurve: P521}, true, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, 7, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, RED, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, false, [sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [decrypt, sign, deriveBits, decrypt, sign, deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits, sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits, sign])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [deriveBits])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [sign, decrypt])
+generateKey/failures_bad_algorithm.https.any.html	Empty algorithm: generateKey({}, true, [sign])
 getRandomValues.any.html	DataView
 getRandomValues.any.html	Float arrays
 getRandomValues.any.html	Float16 arrays
@@ -238,6 +1249,94 @@ getRandomValues.any.html	Subclass of Uint16Array
 getRandomValues.any.html	Subclass of Uint32Array
 getRandomValues.any.html	Subclass of Uint8Array
 getRandomValues.any.html	Subclass of Uint8ClampedArray
+historical.any.html	Non-secure context window does not have access to CryptoKey
+historical.any.html	Non-secure context window does not have access to SubtleCrypto
+historical.any.html	Non-secure context window does not have access to crypto.subtle
+idlharness.https.any.html	Crypto interface object length
+idlharness.https.any.html	Crypto interface object name
+idlharness.https.any.html	Crypto interface: attribute subtle
+idlharness.https.any.html	Crypto interface: calling getRandomValues(ArrayBufferView) on crypto with too few arguments must throw TypeError
+idlharness.https.any.html	Crypto interface: crypto must inherit property "getRandomValues(ArrayBufferView)" with the proper type
+idlharness.https.any.html	Crypto interface: crypto must inherit property "randomUUID()" with the proper type
+idlharness.https.any.html	Crypto interface: crypto must inherit property "subtle" with the proper type
+idlharness.https.any.html	Crypto interface: existence and properties of interface object
+idlharness.https.any.html	Crypto interface: existence and properties of interface prototype object
+idlharness.https.any.html	Crypto interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.any.html	Crypto interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.any.html	Crypto interface: operation getRandomValues(ArrayBufferView)
+idlharness.https.any.html	Crypto interface: operation randomUUID()
+idlharness.https.any.html	Crypto must be primary interface of crypto
+idlharness.https.any.html	CryptoKey interface object length
+idlharness.https.any.html	CryptoKey interface object name
+idlharness.https.any.html	CryptoKey interface: attribute algorithm
+idlharness.https.any.html	CryptoKey interface: attribute extractable
+idlharness.https.any.html	CryptoKey interface: attribute type
+idlharness.https.any.html	CryptoKey interface: attribute usages
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface object
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface prototype object
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.any.html	CryptoKey interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.any.html	Partial interface Window: member names are unique
+idlharness.https.any.html	Partial interface mixin WindowOrWorkerGlobalScope: member names are unique
+idlharness.https.any.html	Partial interface mixin WindowOrWorkerGlobalScope: original interface mixin defined
+idlharness.https.any.html	Stringification of crypto
+idlharness.https.any.html	Stringification of crypto.subtle
+idlharness.https.any.html	SubtleCrypto interface object length
+idlharness.https.any.html	SubtleCrypto interface object name
+idlharness.https.any.html	SubtleCrypto interface: calling decrypt(AlgorithmIdentifier, CryptoKey, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling deriveBits(AlgorithmIdentifier, CryptoKey, optional unsigned long?) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling deriveKey(AlgorithmIdentifier, CryptoKey, AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling digest(AlgorithmIdentifier, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling encrypt(AlgorithmIdentifier, CryptoKey, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling exportKey(KeyFormat, CryptoKey) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling generateKey(AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling importKey(KeyFormat, (BufferSource or JsonWebKey), AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling sign(AlgorithmIdentifier, CryptoKey, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling unwrapKey(KeyFormat, BufferSource, CryptoKey, AlgorithmIdentifier, AlgorithmIdentifier, boolean, sequence<KeyUsage>) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling verify(AlgorithmIdentifier, CryptoKey, BufferSource, BufferSource) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: calling wrapKey(KeyFormat, CryptoKey, CryptoKey, AlgorithmIdentifier) on crypto.subtle with too few arguments must throw TypeError
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "decrypt(AlgorithmIdentifier, CryptoKey, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "deriveBits(AlgorithmIdentifier, CryptoKey, optional unsigned long?)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "deriveKey(AlgorithmIdentifier, CryptoKey, AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "digest(AlgorithmIdentifier, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "encrypt(AlgorithmIdentifier, CryptoKey, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "exportKey(KeyFormat, CryptoKey)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "generateKey(AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "importKey(KeyFormat, (BufferSource or JsonWebKey), AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "sign(AlgorithmIdentifier, CryptoKey, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "unwrapKey(KeyFormat, BufferSource, CryptoKey, AlgorithmIdentifier, AlgorithmIdentifier, boolean, sequence<KeyUsage>)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "verify(AlgorithmIdentifier, CryptoKey, BufferSource, BufferSource)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: crypto.subtle must inherit property "wrapKey(KeyFormat, CryptoKey, CryptoKey, AlgorithmIdentifier)" with the proper type
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface object
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface prototype object
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.any.html	SubtleCrypto interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.any.html	SubtleCrypto interface: operation decrypt(AlgorithmIdentifier, CryptoKey, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation deriveBits(AlgorithmIdentifier, CryptoKey, optional unsigned long?)
+idlharness.https.any.html	SubtleCrypto interface: operation deriveKey(AlgorithmIdentifier, CryptoKey, AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation digest(AlgorithmIdentifier, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation encrypt(AlgorithmIdentifier, CryptoKey, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation exportKey(KeyFormat, CryptoKey)
+idlharness.https.any.html	SubtleCrypto interface: operation generateKey(AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation importKey(KeyFormat, (BufferSource or JsonWebKey), AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation sign(AlgorithmIdentifier, CryptoKey, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation unwrapKey(KeyFormat, BufferSource, CryptoKey, AlgorithmIdentifier, AlgorithmIdentifier, boolean, sequence<KeyUsage>)
+idlharness.https.any.html	SubtleCrypto interface: operation verify(AlgorithmIdentifier, CryptoKey, BufferSource, BufferSource)
+idlharness.https.any.html	SubtleCrypto interface: operation wrapKey(KeyFormat, CryptoKey, CryptoKey, AlgorithmIdentifier)
+idlharness.https.any.html	SubtleCrypto must be primary interface of crypto.subtle
+idlharness.https.any.html	Window includes AnimationFrameProvider: member names are unique
+idlharness.https.any.html	Window includes GlobalEventHandlers: member names are unique
+idlharness.https.any.html	Window includes WindowEventHandlers: member names are unique
+idlharness.https.any.html	Window includes WindowLocalStorage: member names are unique
+idlharness.https.any.html	Window includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.https.any.html	Window includes WindowSessionStorage: member names are unique
+idlharness.https.any.html	WorkerGlobalScope includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.https.any.html	idl_test setup
+idlharness.https.any.html	idl_test validation
+import_export/crashtests/importKey-unsettled-promise.https.any.html	WebCryptoAPI: Assure promise returned by importKey is settled.
+normalize-algorithm-name.https.any.html	"AES-<U+212A>W" does not match "AES-KW"
+normalize-algorithm-name.https.any.html	"RSASSA-P<U+212A>CS1-V1_5" does not match "RSASSA-PKCS1-V1_5"
 randomUUID.https.any.html	namespace format
 randomUUID.https.any.html	variant set
 randomUUID.https.any.html	version set
+secure_context/crypto-subtle-secure-context-available.https.sub.html	Secure context window has access to crypto.subtle

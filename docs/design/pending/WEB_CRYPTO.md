@@ -139,9 +139,18 @@ does not know.
 ## 4. Where it lives
 
 - **`userland/libdom/subtle.c`**, the binding: the `SubtleCrypto` and
-  `CryptoKey` interfaces, normalization, the BufferSource copies, JWK as
+  `CryptoKey` interfaces, normalization, the BufferSource reads, JWK as
   the dictionary WebIDL makes of it (a JWK is an object to `importKey`
-  and from `exportKey`, never JSON text), and the promises. It joins
+  and from `exportKey`, never JSON text), and the promises. As built in
+  tier 1: each method's arguments are a table (`kMethods`: name, required
+  count, the IDL type of each, the operation its algorithm normalizes
+  for), so tiers 2 and 3 add steps, not conversions; `importKey`'s
+  `keyData` is told a BufferSource or not, and an object that is not one
+  is taken as the JsonWebKey without its members read, since no format
+  reads them before tier 2 builds JWK. The interfaces' members, and
+  Crypto's, are shaped as WebIDL makes them (operations enumerable,
+  accessors named "get x") by `d_idl_members`, which `window.c` already
+  did for Window's own members and now shares. It joins
   `crypto.c`'s install (`d_crypto_install`), under the same secure-context
   test, and the modern switch takes it away with the rest of P1-W.
 - **`userland/libdom/subtle_core.c`**, pure: given a normalized request
@@ -156,12 +165,15 @@ does not know.
   and EC key generation on P-256/384/521, RSA OAEP, PKCS#1 v1.5 and PSS
   sign and verify and key generation, and PKCS#8 private keys decoded and
   encoded. Constant-time, tested upstream, and the code every https
-  connection already trusts. The fast paths are chosen at run time the
-  way libtls chooses them: `br_aes_x86ni_*_get_vtable()` and
-  `br_ghash_pclmul_get()` answer NULL on a CPU without the instructions,
-  and the portable `ct64` AES and `ghash_ctmul64` serve then (the host
-  harness runs both arms). P-521 has only the portable `br_ec_prime_i31`,
-  slow enough to note and fast enough to use.
+  connection already trusts. **os64 builds BearSSL as a scalar baseline**
+  (`libtls/port/config.h`: `BR_AES_X86NI 0`, `BR_SSE2 0`, `BR_INT128 0`),
+  so the AES-NI and PCLMUL getters (`br_aes_x86ni_*_get_vtable()`,
+  `br_ghash_pclmul_get()`) answer NULL and the portable `ct64` AES and
+  `ghash_ctmul64` are what run, here as in libtls; the code asks the
+  getters anyway, so a build that turns them on takes them. P-521 has only
+  the portable `br_ec_prime_i31`, slow enough to note and fast enough to
+  use. (The review assumed the fast paths were live; the configuration
+  says otherwise.)
 - **Ours, over BearSSL's AES block**, because WebCrypto's modes are not
   BearSSL's as written:
   - **One block at a time** goes through `br_aes_*_cbcenc_run` and
@@ -200,7 +212,8 @@ does not know.
   kilobytes (`BR_RSA_KBUF_PRIV_SIZE`, `BR_RSA_KBUF_PUB_SIZE`), so the
   binding allocates it and `subtle_core.c` keeps "no allocation of its
   own". `br_rsa_i62_keygen_get()` answers NULL without 64-bit multiply
-  support, and `i31` serves then, as libtls already picks. The public
+  support, which os64's configuration leaves off (`BR_INT128`,
+  `BR_UMUL128`), so `i31` serves, as libtls already picks. The public
   exponent is a `uint32_t` there and a BigInteger in WebCrypto: one that
   does not fit is an OperationError, which the spec allows for an
   exponent an implementation does not support, and every page passes
@@ -237,8 +250,12 @@ does not know.
   (256 MiB), and SHA-256 or AES-GCM in BearSSL's portable code is on the
   order of a few hundred MB/s on the P5, so the worst call is under a
   second, and a page cannot make it worse than its own heap allows. Tier
-  1's PR measures a 256 MiB `digest` on the P5 and writes the number
-  here.
+  1's PR measures it on the P5 with `/tests/digestbench`, which times
+  `subtle_core.c` itself over the BearSSL objects libdom links, at sizes
+  up to 192 MiB (the script heap is 256 MiB). It is a program and not a
+  page because a page in `/tests/pages` is a `file:` page, which libway
+  does not count a secure context (DEBTS), so `crypto.subtle` is absent
+  there. **Measured:** (the P5's numbers go here).
 - **RSA key generation blocks the page** for as long as it takes (a 2048-bit
   key is the slow case; to be measured on the P5 in tier 3). One host in
   the corpus generates RSA keys at all. If the P5 says it is too slow,
@@ -249,6 +266,10 @@ does not know.
   already takes platform objects (Blob, File, DOMException, ImageData),
   so the row is small, a key's three slots and a byte copy; DEBTS, sized
   S. No corpus page posts a key.
+- **A `file:` page has no `crypto.subtle`**, because libway does not count
+  it a secure context (a file URL's origin is opaque), where Chrome and
+  Firefox both do. That is libway's rule and older than this design, and a
+  DEBTS row; it is why the timing in § 5 is a program.
 - **Window only, for now.** `crypto` and `subtle` are
   `[Exposed=(Window,Worker)]`, and a worker-based challenge calls
   `crypto.subtle` first thing; WORKERS.md gives the rows table `[Exposed]`
@@ -281,6 +302,28 @@ does not know.
 - **The pages of § 1, replayed** (tier 1): the transaction id is real
   and the dialog's request goes out with it. What the server answers is
   the P5's to show.
+
+**Tier 1, as proved (2026-11-07):**
+- `tools/test_subtle_core_host.sh`: 66 checks against FIPS 180-2's
+  vectors for all four hashes (the empty message, "abc", the 448-bit
+  message, a million "a") and the registry's matching; it also fails when
+  `library.mk`'s BearSSL list and the harnesses' copy differ.
+- WPT WebCryptoAPI: 597 of 610 pass on the pages tier 1 runs (`digest/`,
+  `idlharness`, `normalize-algorithm-name`, `generateKey/failures_bad_algorithm`,
+  `importKey-unsettled-promise`, `historical`, the secure-context page,
+  and `getRandomValues`/`randomUUID` as before); 536 of them are
+  `[required]` and none passes with the modern switch off. The 13 left:
+  getRandomValues' nine "Large length" (QuotaExceededError's interface,
+  booked before this), the two names that need tier 3's `importKey`, the
+  worker case, and `window.crypto`'s getter taking any receiver (booked).
+  Every other page names its tier, or why it is out, in the exclusions.
+- The DOM host's window and modern subsets, with tier 1's cases
+  (`tools/test_dom_window.inc`: the interfaces, digest over every buffer
+  source, every failure a rejection, the name read twice, the buffer read
+  after it, absence on an insecure page).
+- The social network's sign-in page, replayed from its P5 record with
+  this build: every request carries a real transaction id, the same bytes
+  the JavaScript SHA-256 stand-in produced.
 - **Chrome as the referee** where WPT is silent: the error a given misuse
   gets, captured as INTL.md's capture page does it, only if a case comes
   up.

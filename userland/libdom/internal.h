@@ -552,6 +552,7 @@ struct os64_dom {
     /* The engine's typed-array `buffer` getter and ArrayBuffer's
      * `resizable` getter, taken before any page ran (crypto.c). */
     DValue *crypto_getters[2];
+    DValue *subtle; /* crypto.subtle's one SubtleCrypto (subtle.c) */
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;
@@ -1208,6 +1209,18 @@ int d_interface_class(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSCl
  * classes could not be learned. Nothing of the value is read. */
 #define D_VIEW_DATA_VIEW 12
 int d_view_kind(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* Whether a BufferSource's buffer is resizable (crypto.c), which WebIDL
+ * refuses for an argument without [AllowResizable]: 1, 0, or -1 with an
+ * exception pending. Read through the engine's own getters. */
+int d_resizable_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* WebIDL's shape for an interface's members, in place on its prototype
+ * (window.c): each own operation enumerable, as d_method makes none, and
+ * each attribute's functions named "get x" and "set x", as d_accessor makes
+ * them nameless. `constructor` and symbol-keyed properties keep theirs. */
+int d_idl_members(JSContext *ctx, JSValueConst prototype);
+/* crypto.subtle, SubtleCrypto and CryptoKey on `crypto_prototype`
+ * (subtle.c); crypto.c calls it on a secure page only. */
+int d_subtle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSValueConst crypto_prototype);
 /* DOCUMENTS OF THEIR OWN (implementation.c). document.implementation and
  * DOMImplementation's prototype, which every page has (classic), and the
  * DocumentType members. */
