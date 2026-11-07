@@ -30,7 +30,7 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
     '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"' '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
-    -Iuserland/libsvg/include -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
+    -Iuserland/libsvg/include -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libxml/include -Iuserland/libpage/include
     -Iuserland/libgarb/include -Iuserland/libway/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
     -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
     '-DGARB_MODERN_PROBE="animation-name"')
@@ -41,7 +41,7 @@ objects=()
 for source in userland/libjs/runtime/runtime.c userland/libjs/intl/intl.c userland/libos64/str.c userland/libos64/fmt.c \
     userland/libos64/text.c userland/libos64/text_cache.c userland/libos64/text_decode.c userland/libos64/text_bitmap.c \
     userland/libos64/bidi.c userland/libos64/url.c userland/libos64/arena.c tools/test_js_port_calendar.c tools/test_dom_host.c \
-    userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,shadow,range}.c \
+    userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,shadow,range}.c userland/libxml/xml.c \
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \
     userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \

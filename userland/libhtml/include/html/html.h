@@ -78,8 +78,8 @@ typedef struct os64_html_node {
     const char *prefix, *namespace_uri; /* Owned XML spellings; NULL when absent. */
     bool xml_document; /* Owning arena is an XML document, including detached nodes. */
     /* A TEXT node that is a CDATA section (DOM's CDATASection, nodeType 4):
-     * text in every other respect, except that normalize and wholeText
-     * leave it out of a run of text. Set only by os64_html_create_cdata,
+     * text in every other respect, except that normalize leaves it out of a
+     * run of text (DOM's "exclusive Text node"). Set only by os64_html_create_cdata,
      * and carried by clone and split_text. */
     bool cdata;
     /* An element's custom state, an os64_html_ce_t (below). Only

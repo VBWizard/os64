@@ -104,4 +104,9 @@ XML_API xml_location_t xml_error_location(const xml_parser_t *);
 /* A borrowed label, retained after UNSUPPORTED_ENCODING until destroy. */
 XML_API xml_slice_t xml_encoding(const xml_parser_t *);
 XML_API const char *xml_status_name(xml_status_t);
+/* Whether `size` bytes of UTF-8 are one XML Name (XML 1.0 § 2.3: a
+ * NameStartChar, then NameChars, by code point), as the parser reads one;
+ * false for invalid UTF-8 or none. What DOM asks of a processing
+ * instruction's target. */
+XML_API bool xml_name_valid(const char *utf8, size_t size);
 #endif

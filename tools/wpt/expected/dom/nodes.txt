@@ -1903,8 +1903,11 @@ Document-createProcessingInstruction.html	Should get a ProcessingInstruction for
 Document-createProcessingInstruction.html	Should get a ProcessingInstruction for target "xml:fail" and data "x".
 Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target "0" and data "x".
 Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target "A" and data "?>".
+Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target "A×" and data "x".
 Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target "\\\\A" and data "x".
 Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target "\\f" and data "x".
+Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target "·A" and data "x".
+Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target "×A" and data "x".
 Document-createProcessingInstruction.html	Should throw an INVALID_CHARACTER_ERR for target 0 and data "x".
 Document-createTextNode.html	createTextNode("-b")
 Document-createTextNode.html	createTextNode("\\v")

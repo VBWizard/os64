@@ -1235,21 +1235,18 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
     if (self == NULL) return JS_EXCEPTION;
     if (self->kind != OS64_HTML_TEXT) return JS_ThrowTypeError(ctx, "Text member requires a text node");
     if (magic == T_WHOLE_TEXT) {
-        /* The data of the node and the contiguous exclusive Text nodes
-         * beside it (DOM § 4.11: Text siblings that are no CDATA section),
-         * in order. */
+        /* The data of the contiguous Text nodes it is among (DOM § 4.11),
+         * in order: CDATA sections are Text nodes too, so they count; only
+         * normalize leaves them out of a run. */
         const os64_html_node_t *first = self;
-        while (first->prev != NULL && first->prev->kind == OS64_HTML_TEXT && !first->prev->cdata)
-            first = first->prev;
+        while (first->prev != NULL && first->prev->kind == OS64_HTML_TEXT) first = first->prev;
         size_t total = 0;
-        for (const os64_html_node_t *n = first; n != NULL && (n == self || (n->kind == OS64_HTML_TEXT && !n->cdata));
-             n = n->next)
+        for (const os64_html_node_t *n = first; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next)
             total += n->text_len;
         char *whole = d_alloc(dom, total + 1);
         if (whole == NULL) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
         size_t used = 0;
-        for (const os64_html_node_t *n = first; n != NULL && (n == self || (n->kind == OS64_HTML_TEXT && !n->cdata));
-             n = n->next) {
+        for (const os64_html_node_t *n = first; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next) {
             os64_memcpy(whole + used, n->text, n->text_len);
             used += n->text_len;
         }

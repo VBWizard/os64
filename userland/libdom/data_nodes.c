@@ -1,4 +1,5 @@
 #include "internal.h"
+#include <xml/xml.h>
 
 /* CDATASection AND ProcessingInstruction (DOM § 4.12, § 4.13), and the
  * Document members that make them, createCDATASection and
@@ -30,21 +31,6 @@ int d_data_prototypes(os64_dom_t *dom, JSContext *ctx)
     dom->pi_proto = d_retain(dom, ctx, JS_NewObjectProto(ctx, dom->prototypes[D_PROTO_CHARACTER_DATA]->value));
     if (dom->pi_proto == NULL) return -1;
     return d_accessor(dom, ctx, dom->pi_proto->value, "target", data_member, C_TARGET, false);
-}
-
-/* XML's Name production, as a processing instruction's target must match
- * it: a letter, '_' or ':' first, then those, digits, '-' and '.'; a byte
- * past ASCII is taken as one of the Unicode name characters XML admits. */
-static bool xml_name(const char *text)
-{
-    const unsigned char *at = (const unsigned char *)text;
-    if (*at == 0) return false;
-    for (bool first = true; *at != 0; at++, first = false) {
-        unsigned char c = *at;
-        bool start = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == ':' || c >= 0x80;
-        if (!start && (first || !((c >= '0' && c <= '9') || c == '-' || c == '.'))) return false;
-    }
-    return true;
 }
 
 static bool contains(const char *data, size_t length, const char *needle)
@@ -91,7 +77,7 @@ static JSValue data_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     } else {
         /* createProcessingInstruction: a target matching XML's Name, data
          * without "?>", in any document. */
-        if (!xml_name(first.data))
+        if (!xml_name_valid(first.data, first.length))
             result = d_error(ctx, "InvalidCharacterError", "A processing instruction's target is an XML name");
         else if (contains(second.data, second.length, "?>"))
             result = d_error(ctx, "InvalidCharacterError", "A processing instruction's data cannot hold \"?>\"");
