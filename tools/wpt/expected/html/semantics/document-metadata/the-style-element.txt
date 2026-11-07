@@ -27,10 +27,18 @@ mutations.window.html	Mutating the style element: inserting an empty DocumentFra
 no-browsing-context.html	Inserting an importing style without a browsing context does not throw
 no-browsing-context.html	no impact on getComputedStyle
 non-parser-created-doc.html	CSS API should work on non-parser-created documents
+non-parser-style.html	Non-parser-inserted style elements should still work
 sheet-with-disconnected-style.html	After removing a style element, it should have a null sheet property
 sheet-with-disconnected-style.html	Never-connected style elements should have a null sheet property
 sheet-with-empty-style.html	The sheet property should work even with an empty style element
+style-load-after-mutate.html	The 'load' event on the style element should still fire after mutation
+style_load_async.html	style load should be async
+style_media.html	The style information must be applied to the environment specified by the media attribute
+style_media_change.html	change media value dynamically
+style_media_change.html	removing media attribute
 style_non_matching_media.html	HTML Test: Non-matching media type should have stylesheet
+style_type_change.html	Change type from invalid type to valid type
+style_type_change.html	Change type from valid type to invalid type
 style_type_change.html	Check initial styleSheets length type
 style_type_html.html	With a charset parameter in the type attribute, the style should not apply
 style_type_html.html	With a mixed-case type attribute, the style should apply

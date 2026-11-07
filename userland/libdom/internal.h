@@ -449,6 +449,8 @@ struct os64_dom {
     DValue *event_target_prototype, *window_prototype;
     bool sweep_pending;
     DListener *invoking;
+    /* Listeners a host's dispatch has called, ever (os64_dom_listener_calls). */
+    uint64_t listener_calls;
     /* The import map os64_dom_import_map is parsing, while it does
      * (importmap.c). */
     struct DImportParse *import_parse;

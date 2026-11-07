@@ -11135,6 +11135,7 @@ static void clipped_control_cases(void) {
 #include "test_yonder_modules.inc"
 #include "test_yonder_window.inc"
 #include "test_yonder_document.inc"
+#include "test_yonder_load_events.inc"
 
 /* The window's name: the page's title through fit_title. A control
  * character the page spells is a '?', never a byte the kernel would log
@@ -11623,6 +11624,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) request_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) module_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) load_event_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) bytecode_cases();

@@ -26,6 +26,19 @@
 typedef struct yonder_scripts yonder_scripts_t;
 bool yonder_scripts_images_pending(const yonder_scripts_t *);
 bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
+// A `link` or `style` element's sheet, judged by the window: `load` (or
+// `error` when `failed`) owed to the element, fired as a task of its own
+// and never inside the call that owed it; the node is held until then, and
+// fired at even if it has left the document. False when it was not kept
+// (no host, no memory, or a page whose scripts are finished): the window
+// counts the element as not told. The window owes each element once per
+// sheet: per address it asked for, or for a `style`, per text.
+bool yonder_scripts_owe(yonder_scripts_t *, const os64_html_node_t *, bool failed);
+bool yonder_scripts_owed_pending(const yonder_scripts_t *);
+// The owed events, oldest first, until one is heard: true when a task ran
+// (a listener heard one, or the runtime one needed could not be made), and
+// `*out` is that task's outcome.
+bool yonder_scripts_owed_fire(yonder_scripts_t *, os64_js_outcome_t *);
 bool yonder_scripts_canvas_bitmap(yonder_scripts_t *, const os64_html_node_t *, canvas_bitmap_t *);
 void yonder_scripts_canvas_visit_damage(yonder_scripts_t *,os64_dom_canvas_damage_fn,void *);
 void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
