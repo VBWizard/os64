@@ -818,11 +818,11 @@ int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *doc
     return 1;
 }
 
-int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *copy)
+int d_custom_upgrade_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root)
 {
-    if (dom->custom == NULL || dom->custom->definitions == NULL || !d_window_document(dom, copy)) return 0;
+    if (dom->custom == NULL || dom->custom->definitions == NULL || !d_window_document(dom, root)) return 0;
     if (d_reactions_push(dom, ctx) < 0) return -1;
-    for (const os64_html_node_t *at = copy; at != NULL; at = os64_html_shadow_including_next(copy, at))
+    for (const os64_html_node_t *at = root; at != NULL; at = os64_html_shadow_including_next(root, at))
         if (at->kind == OS64_HTML_ELEMENT) try_upgrade(dom, at);
     return d_reactions_pop(dom, ctx);
 }
@@ -1283,7 +1283,8 @@ static JSValue registry_member(JSContext *ctx, JSValueConst self, int argc, JSVa
 /* ── [CEReactions] (cut b2) ──────────────────────────────────────────── *
  *
  * Every [CEReactions] member the standard's IDL names (tools/ce_reactions.py
- * writes the table from WPT's dom.idl, html.idl and cssom.idl) is wrapped by
+ * writes the table from WPT's dom.idl, html.idl, cssom.idl and
+ * selection-api.idl) is wrapped by
  * one trampoline at install: it pushes an element queue, calls the member,
  * and pops the queue, which runs what the member queued before it returns,
  * and though it threw (d_reactions_pop). A method's function is replaced;

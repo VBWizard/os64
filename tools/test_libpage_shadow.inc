@@ -14,6 +14,23 @@ static os64_html_node_t *shadow_input(os64_html_document_t *doc, os64_html_node_
     return n;
 }
 
+typedef struct {
+    int32_t n;
+    char ids[8];
+    const os64_html_node_t *scopes[8];
+} ShadowSheetsSeen;
+
+static bool shadow_sheet_seen(void *ctx, const os64_page_sheet_t *s)
+{
+    ShadowSheetsSeen *seen = ctx;
+    const os64_html_attr_t *id = os64_html_attr(s->node, "id");
+    if (seen->n < 8) {
+        seen->ids[seen->n] = id != NULL && id->value != NULL ? id->value[0] : '?';
+        seen->scopes[seen->n++] = s->scope;
+    }
+    return true;
+}
+
 static void shadow_cases(void)
 {
     // A radio group is per tree: two instances of one component, each with
@@ -129,5 +146,44 @@ static void shadow_cases(void)
         if (!a || b) fail(name, "after reinsertion: first %d, second %d", a, b);
     }
     os64_page_state_free(state);
+    os64_html_document_free(doc);
+
+    // A shadow tree's sheets are the page's too, in shadow-including order
+    // (the host's tree before its children), each naming its tree, in the
+    // model and in os64_page_sheets_in alike (SHADOW_DOM.md § 6).
+    name = "shadow: the sheet list carries a shadow tree's sheets and their tree";
+    checks++;
+    doc = parse("<head><style id=a></style></head><body><div id=h><style id=c></style></div>"
+                "<style id=d></style>", "utf-8");
+    host = doc != NULL ? doc->body->first_child : NULL;
+    root = host != NULL ? os64_html_attach_shadow(doc, host, OS64_HTML_SHADOW_OPEN, NULL) : NULL;
+    if (root == NULL) {
+        fail(name, "the fixture: no shadow root");
+    } else {
+        os64_html_node_t *b = os64_html_create_element(doc, OS64_HTML_NS_HTML, "style", NULL);
+        os64_html_set_attr(doc, b, "id", "b", 1);
+        os64_html_insert(doc, root, b, NULL);
+        const char *want_ids = "abcd";
+        const os64_html_node_t *want_scope[4] = {doc->document, root, doc->document, doc->document};
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+        int32_t n = page ? os64_page_nsheets(page) : -1;
+        if (n != 4) {
+            fail(name, "the model lists %d sheets, not 4", (int)n);
+        } else {
+            for (int32_t i = 0; i < 4; i++) {
+                const os64_page_sheet_t *s = os64_page_sheet(page, i);
+                const os64_html_attr_t *id = os64_html_attr(s->node, "id");
+                if (id == NULL || id->value[0] != want_ids[i] || s->scope != want_scope[i])
+                    fail(name, "model sheet %d is #%s in %s", (int)i, id ? id->value : "?",
+                         s->scope == root ? "the shadow tree" : "the document");
+            }
+        }
+        os64_page_free(page);
+        ShadowSheetsSeen seen = {0};
+        int32_t listed = os64_page_sheets_in(doc, kPage, shadow_sheet_seen, &seen);
+        if (listed != 4 || memcmp(seen.ids, want_ids, 4) != 0 ||
+            memcmp(seen.scopes, want_scope, sizeof(want_scope)) != 0)
+            fail(name, "sheets_in listed %d: %.*s", (int)listed, (int)seen.n, seen.ids);
+    }
     os64_html_document_free(doc);
 }

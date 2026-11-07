@@ -50,6 +50,10 @@ typedef struct {
     // response's, after its redirects (yonder_scripts_fetched): where the
     // script came from is what HTML mutes it by and names it by.
     char *address;
+    // HTML's "from an external file": prepared with a `src` attribute,
+    // fetchable or not. Such a script fires `load` at its element after it
+    // ran, and `error` when it failed (script_event).
+    bool external;
     // A module script (modules.h): its graph's entry in the page's map,
     // FETCHING until the whole graph is compiled. A module is never
     // MODE_BLOCKING nor MODE_INLINE: HTML defers a parser-inserted one and
@@ -64,6 +68,12 @@ typedef struct {
     bool importmap;
     char *base;
 } Item;
+
+// A sheet's `load` or `error`, owed to its element (yonder_scripts_owe).
+typedef struct {
+    const os64_html_node_t *node;
+    bool failed;
+} Owed;
 
 struct yonder_scripts {
     os64_html_document_t *doc;
@@ -102,6 +112,11 @@ struct yonder_scripts {
     // script "as soon as possible", which is the order it landed in).
     uint32_t *ready;
     uint32_t ready_head, ready_count;
+    // Sheets' events the window owes their elements, fired from
+    // `owed[owed_next]` up to `owed_count` in the order owed, each node held
+    // until it is fired (LOAD_EVENTS.md § 3.2).
+    Owed *owed;
+    uint32_t owed_next, owed_count, owed_cap;
     uint32_t defer_next;            // the next `defer` item to consider, by index
     uint32_t inline_count;          // names an inline script: #inline-<n>
     uint32_t address_count;         // names a link's script: javascript:#inline-<n>
@@ -514,6 +529,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_dom_options_t options = os64_dom_default_options();
     options.modern = s->options.modern;
     options.shadow_trees = s->options.shadow_trees;
+    options.ranges = s->options.ranges;
     options.alert = s->options.alert;
     options.alert_opaque = s->options.opaque;
     options.url = s->url;
@@ -537,6 +553,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
     os64_dom_set_svg_hit(s->dom, s->options.svg_hit, s->options.opaque);
+    os64_dom_set_hit(s->dom, s->options.hit, s->options.opaque);
+    os64_dom_set_text_rects(s->dom, s->options.text_rects, s->options.opaque);
     os64_dom_set_intersections(s->dom, s->options.intersections, s->options.opaque);
     os64_dom_set_resizes(s->dom, s->options.resizes, s->options.opaque);
     if (s->options.view.read != NULL)
@@ -652,6 +670,9 @@ void yonder_scripts_free(yonder_scripts_t *s)
     }
     os64_free(s->items);
     os64_free(s->ready);
+    for (uint32_t i = s->owed_next; i < s->owed_count; i++)
+        os64_html_release(s->doc, s->owed[i].node);
+    os64_free(s->owed);
     yonder_modules_free(s->modules);
     os64_free(s->entry_state);
     os64_free(s->referrer);
@@ -755,11 +776,13 @@ static bool inline_source(yonder_scripts_t *s, Item *it)
 }
 
 // A `src` script's fetch, its address resolved against the document's base.
-// False when there is no address to fetch: HTML then fires `error` at the
-// element, which nothing here listens to, and runs nothing.
+// False when there is no address to fetch (an empty `src` among them): the
+// caller fails the item, which then fires `error` at its element in its
+// turn, and runs nothing.
 static bool src_fetch(yonder_scripts_t *s, Item *it)
 {
     const os64_html_attr_t *src = os64_html_attr(it->node, "src");
+    it->external = true;
     char url[OS64_DOM_URL_MAX];
     os64_strcopy(it->name, sizeof(it->name), src != NULL ? src->value : "script");
     it->address = keep(src != NULL ? src->value : NULL);
@@ -924,6 +947,7 @@ static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, 
     int32_t entry;
     const os64_html_attr_t *src = os64_html_attr(script, "src");
     if (src != NULL) {
+        it->external = true;
         // A data: module at any length (os64_page_resolve_in_alloc): it
         // carries its source in its address.
         char *url = src->value[0] != '\0' ? os64_page_resolve_in_alloc(s->doc, s->url, src->value) : NULL;
@@ -956,15 +980,15 @@ static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, 
 // An import map script prepared (HTML's "prepare the script element",
 // importmap branch): its text and the document's base URL taken now, to be
 // registered when it runs (import_map_run). HTML fetches no import map: one
-// with `src` is a failure of its own, reported in its place (HTML's error
-// event at the element is a script element's, which yonder fires for none:
-// DEBTS.md).
+// with `src` is a failure of its own, reported in its place, and fires
+// `error` at its element there (script_event).
 static Item *import_map_prepare(yonder_scripts_t *s, const os64_html_node_t *script, bool parser)
 {
     Item *it = item_new(s, script, parser ? MODE_BLOCKING : MODE_INLINE);
     if (it == NULL)
         return NULL;
     it->importmap = true;
+    it->external = os64_html_attr(script, "src") != NULL;
     // The item is named by its index from here, as a module's is. The
     // runtime and its binding are made now, as a module script makes them,
     // so the element is marked started even when it is the page's first
@@ -1176,7 +1200,8 @@ bool yonder_scripts_blocking_ready(const yonder_scripts_t *s)
 // never muted, with no document.currentScript (HTML gives a module none);
 // the task's checkpoint drains what its evaluation queued, and what it
 // left owed (its exception's error event) is settled after, as a classic
-// script's is. An evaluation that awaits goes on in later tasks.
+// script's is. An evaluation that awaits goes on in later tasks. The task
+// is judged by the caller, after the element's own event (script_event).
 static void run_module(yonder_scripts_t *s, int32_t entry, const char *name, os64_js_outcome_t *out)
 {
     char engine_name[32];
@@ -1196,14 +1221,43 @@ static void run_module(yonder_scripts_t *s, int32_t entry, const char *name, os6
     s->task_us = began >= 0 && ended >= began ? ended - began : -1;
     os64_strcopy(out->source_name, OS64_JS_SOURCE_NAME_CAP, name);
     os64_dom_script_ended(s->dom, name, out);
-    judged(s, out);
 }
 
-// One script, as one task. A script a mutation took out of the document
-// before its turn is skipped: HTML runs a script only while it is connected
-// to the document that prepared it. Its kind is asked again for the same
-// reason a language can change. The item is named by its index: a script
-// that connects another grows the table under this call.
+static bool dispatch_event(yonder_scripts_t *s, const os64_html_node_t *node, const os64_dom_event_t *event,
+                           bool *prevented, os64_js_outcome_t *out);
+
+// HTML's "execute the script element" ends with the element's own event:
+// `error` when there was no script to run (its fetch failed, its module
+// graph did not settle, an import map with `src`), else `load` once a
+// script from an external file has run, whether or not it threw. It is
+// part of the script's task, after the run's microtasks, so a listener
+// sees what the script did and the next script has not begun, and its
+// outcome is folded into the task's: the script's own failure stays the
+// task's, a handler's that follows a clean run becomes it. An inline
+// classic script has neither event; a module's failure is `error` whatever
+// its source. A run whose outcome is sticky fires nothing, since the
+// judgment after it retires the runtime. True when a listener ran.
+static bool script_event(yonder_scripts_t *s, const Item *it, bool failed, os64_js_outcome_t *out)
+{
+    if (s->dead || it->node == NULL || sticky(out->status) || !(it->external || (failed && it->module)))
+        return false;
+    const os64_dom_event_t event = {.type = failed ? "error" : "load"};
+    os64_js_outcome_t own;
+    uint64_t calls = os64_dom_listener_calls(s->dom);
+    (void)dispatch_event(s, it->node, &event, NULL, &own);
+    os64_dom_outcome_fold(out, &own);
+    return os64_dom_listener_calls(s->dom) != calls;
+}
+
+// One script, as one task, its element's own event in it (script_event).
+// A script a mutation took out of the document before its turn is skipped,
+// and fires nothing; HTML runs a removed external script all the same
+// (DEBTS.md). Its kind is asked again for a like reason, a language can
+// change, and a ready script no longer its kind is skipped as silently. A
+// failed script fires its `error` wherever its element is and whatever its
+// type has become. The item is named by
+// its index: a script that connects another grows the table under this
+// call.
 static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
@@ -1226,9 +1280,15 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         out->status = OS64_JS_EXCEPTION;
         os64_strcopy(out->message, sizeof(out->message), it->why);
         os64_strcopy(out->source_name, sizeof(out->source_name), name);
+        // A failure nobody heard ran nothing, and is not counted as a task;
+        // a runtime its handler could not have made is retired already.
+        if ((script_event(s, it, true, out) || sticky(out->status)) && !s->dead)
+            judged(s, out);
     }
     if (runs && it->module && ensure_runtime(s, out)) {
         run_module(s, it->entry, name, out);
+        script_event(s, &s->items[index], false, out);
+        judged(s, out);
     } else if (runs && it->importmap) {
         // The map is the window's, kept with its module map, which is
         // made with the runtime that parses it.
@@ -1297,6 +1357,7 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         // and an error a nested dispatch reported (libdom's report.c).
         os64_dom_script_ended(s->dom, name, out);
         os64_dom_set_current_script(s->dom, NULL);
+        script_event(s, &s->items[index], false, out);
         judged(s, out);
     } else if (runs) {
         os64_strcopy(out->source_name, sizeof(out->source_name), name);
@@ -1578,6 +1639,46 @@ bool yonder_scripts_pointer_active(const yonder_scripts_t *s)
     return s && !s->dead && os64_dom_pointer_active(s->dom);
 }
 
+// One event, dispatched within whatever task the caller is running, which
+// counts and judges it: true when the page listens for it somewhere, or for
+// the readystatechange its move of the readiness fires (os64_dom_listens),
+// which is when a host event is counted as a task. A move nothing listens
+// for is dispatched and not counted. Whether a listener actually ran is
+// os64_dom_listener_calls' answer.
+static bool dispatch_event(yonder_scripts_t *s, const os64_html_node_t *node, const os64_dom_event_t *event,
+                           bool *prevented, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (prevented != NULL)
+        *prevented = false;
+    if (s->dead)
+        return false;
+    // The document's readiness moves with the dispatch, heard or not; a
+    // binding made by it below is made with the readiness it leaves. One
+    // that already hears it moves its own by the same rule, and fires
+    // readystatechange, so a move is dispatched even when nothing listens
+    // to the event itself.
+    os64_dom_readiness_t was = s->readiness;
+    s->readiness = os64_dom_readiness_after(was, s->doc, node, event->type);
+    // A page that never ran a script still runs its handler attributes:
+    // their runtime is made by the first event one of them names.
+    if (s->dom == NULL) {
+        if ((handler_types(s) & os64_dom_handler_bit(event->type)) == 0)
+            return false;
+        if (!ensure_runtime(s, out)) {
+            retire(s);
+            return false;
+        }
+    }
+    bool moved = s->readiness != was;
+    bool heard = os64_dom_listens(s->dom, event->type) ||
+                 (moved && s->options.modern && os64_dom_listens(s->dom, "readystatechange"));
+    if (!heard && !moved)
+        return false;
+    os64_dom_dispatch(s->dom, node, event, prevented, out);
+    return heard;
+}
+
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_node_t *node,
                                          const os64_dom_event_t *event, bool *prevented,
                                          os64_js_outcome_t *out)
@@ -1592,31 +1693,8 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     if (s == NULL || s->dead)
         return OS64_JS_OK;
     s->written = 0;
-    // The document's readiness moves with the dispatch, heard or not; a
-    // binding made by it below is made with the readiness it leaves. One
-    // that already hears it moves its own by the same rule, and fires
-    // readystatechange, so a move is dispatched even when nothing listens
-    // to the event itself.
-    os64_dom_readiness_t was = s->readiness;
-    s->readiness = os64_dom_readiness_after(was, s->doc, node, event->type);
-    // A page that never ran a script still runs its handler attributes:
-    // their runtime is made by the first event one of them names.
-    if (s->dom == NULL) {
-        if ((handler_types(s) & os64_dom_handler_bit(event->type)) == 0)
-            return OS64_JS_OK;
-        if (!ensure_runtime(s, out)) {
-            retire(s);
-            return out->status;
-        }
-    }
-    bool moved = s->readiness != was;
-    bool heard = os64_dom_listens(s->dom, event->type) ||
-                 (moved && s->options.modern && os64_dom_listens(s->dom, "readystatechange"));
-    if (!heard && !moved)
-        return OS64_JS_OK;
-    os64_dom_dispatch(s->dom, node, event, prevented, out);
     // A move nothing heard ran no task, and is not counted as one.
-    if (heard)
+    if (dispatch_event(s, node, event, prevented, out))
         judged(s, out);
     return out->status;
 }
@@ -2191,6 +2269,12 @@ const os64_dom_timing_t *yonder_scripts_timing(const yonder_scripts_t *s)
     return s != NULL ? &s->timing : NULL;
 }
 
+size_t yonder_scripts_adopted(const yonder_scripts_t *s, const os64_html_node_t *root,
+                              os64_dom_adopted_sheet_t *out, size_t cap)
+{
+    return s != NULL && s->dom != NULL ? os64_dom_adopted(s->dom, root, out, cap) : 0;
+}
+
 uint64_t yonder_scripts_storage_due(const yonder_scripts_t *s)
 {
     return s != NULL && s->dom != NULL ? os64_dom_storage_due(s->dom) : UINT64_MAX;
@@ -2236,4 +2320,64 @@ bool yonder_scripts_image_fire(yonder_scripts_t *s,os64_js_outcome_t *out)
     if(!s||s->dead||!os64_dom_image_event(s->dom,&node,&failed,true))return false;
     os64_dom_event_t event={.type=failed?"error":"load"};bool prevented=false;
     yonder_scripts_dispatch(s,node,&event,&prevented,out);return true;
+}
+
+bool yonder_scripts_owe(yonder_scripts_t *s, const os64_html_node_t *node, bool failed)
+{
+    if (s == NULL || s->dead || node == NULL)
+        return false;
+    if (s->owed_count == s->owed_cap && s->owed_next > 0) {
+        s->owed_count -= s->owed_next;
+        os64_memmove(s->owed, s->owed + s->owed_next, s->owed_count * sizeof(*s->owed));
+        s->owed_next = 0;
+    }
+    if (s->owed_count == s->owed_cap) {
+        if (s->owed_cap > UINT32_MAX / 2)
+            return false;
+        uint32_t cap = s->owed_cap != 0 ? s->owed_cap * 2 : 16;
+        Owed *owed = os64_realloc(s->owed, cap * sizeof(*owed));
+        if (owed == NULL)
+            return false;
+        s->owed = owed;
+        s->owed_cap = cap;
+    }
+    os64_html_hold(s->doc, node);
+    s->owed[s->owed_count++] = (Owed){node, failed};
+    return true;
+}
+
+bool yonder_scripts_owed_pending(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && s->owed_next < s->owed_count;
+}
+
+// Owed events go oldest first until one is heard: a heard one is a task,
+// so a turn runs at most one, while one no listener is called for runs no
+// script and costs a dispatch, and a script that inserts a `style` per
+// component owes hundreds at once (LOAD_EVENTS.md § 3.2). Heard means a
+// listener ran, not that the page listens for the type somewhere: one
+// window `load` listener would make every element's `load` a turn of its
+// own. A dispatch that failed (a runtime that could not be made for a
+// handler attribute, a limit) is a task too, so its failure is reported.
+bool yonder_scripts_owed_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    while (s != NULL && !s->dead && s->owed_next < s->owed_count) {
+        Owed one = s->owed[s->owed_next++];
+        s->task_address = NULL;
+        s->task_us = -1;
+        s->written = 0;
+        const os64_dom_event_t event = {.type = one.failed ? "error" : "load"};
+        uint64_t calls = os64_dom_listener_calls(s->dom);
+        (void)dispatch_event(s, one.node, &event, NULL, out);
+        os64_html_release(s->doc, one.node);
+        if (s->owed_next == s->owed_count)
+            s->owed_next = s->owed_count = 0;
+        if (os64_dom_listener_calls(s->dom) != calls || out->status != OS64_JS_OK) {
+            if (!s->dead)               // a runtime that could not be made is retired already
+                judged(s, out);
+            return true;
+        }
+    }
+    return false;
 }

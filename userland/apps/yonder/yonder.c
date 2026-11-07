@@ -95,6 +95,8 @@ static bool s_reduce_motion;
 static bool s_animations = true;
 // yonder.conf's `shadow_dom` developer key (settings.h), read at start.
 static bool s_shadow_dom;
+// yonder.conf's `ranges` developer key (settings.h), read at start.
+static bool s_ranges;
 
 // PAGE STORAGE (storage.h): the window's store over the profile folder
 // (yonder.conf's `profile`), which every page's localStorage and
@@ -651,9 +653,25 @@ typedef struct Sheet {
     const char *media;              // a sheet the page names: its element's; NULL otherwise
     int32_t importer, import_index; // -1 for a sheet the page names; else its @import
     char *url;                      // where it came from, its @imports' base; NULL for a `style`
+    // Its element's verdict: whether the sheet is in the cascade or failed
+    // (`settled`, `failed`), and whether its scripts have taken the `load`
+    // or `error` that says so (`told`). A sheet that settles before its
+    // page has scripts is told when they are made (sheets_tell). A table
+    // that replaces another copies `told` by element and the address asked
+    // for (`asked`, before redirects; NULL for a `style`, whose text is
+    // compared instead), so a reparse or a refetch tells the element
+    // nothing twice (LOAD_EVENTS.md § 3.3).
+    bool settled, failed, told;
+    char *asked;
     garb_import_t *imports;         // once ready: its @imports, and each one's entry or -1
     int32_t *child;
     int32_t nimports;
+    // A constructed sheet a tree has adopted (os64_dom_adopted), known by its
+    // text (its source's `inline_text`): one entry serves every sheet with
+    // that text, however many instances of a component each make their
+    // own. It has no node, and no @imports are fetched for it (CSSOM drops
+    // them).
+    bool constructed;
 } Sheet;
 
 // Where a person scrolled a box, by its element: a layout starts every box
@@ -873,6 +891,7 @@ static void sheet_table_free(const os64_html_document_t *doc, Sheet *sheets, int
             os64_free(source);
         }
         os64_free(sheets[i].url);
+        os64_free(sheets[i].asked);
         os64_free(sheets[i].imports);
         os64_free(sheets[i].child);
     }
@@ -1021,8 +1040,21 @@ static void page_clear(Page *p)
 static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
 {
     for (int32_t e = 0; e < p->nsheets; e++)
-        if (p->sheets[e].node == node && p->sheets[e].importer < 0)
+        if (p->sheets[e].node == node && p->sheets[e].importer < 0 && !p->sheets[e].constructed)
             return e;
+    return -1;
+}
+
+// The table's entry for a constructed sheet of `length` bytes of `text`,
+// -1 when it has none.
+static int32_t sheet_constructed(const Page *p, const char *text, size_t length)
+{
+    for (int32_t e = 0; e < p->nsheets; e++) {
+        const SheetParse *source = p->sheets[e].source;
+        if (p->sheets[e].constructed && source != NULL && source->inline_text != NULL &&
+            source->inline_len == length && os64_memcmp(source->inline_text, text, length) == 0)
+            return e;
+    }
     return -1;
 }
 
@@ -1325,6 +1357,119 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
     return tree;
 }
 
+static yonder_scripts_t *page_scripts(const Page *p);
+static yonder_scripts_t *scripts_for(uint64_t serial);
+static const yonder_scripts_t *adoptions_host(const Page *p);
+static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, const os64_html_node_t *x);
+
+// The cascade's scopes (SHADOW_DOM.md § 6): every (cascade input, tree)
+// pair, in the order the inputs go in — a sheet the model lists in the tree
+// it is in, a constructed sheet in each tree that adopted it, so one sheet
+// may be in hundreds — then grouped by tree, in the order each tree's first
+// sheet came, each tree's inputs in `list`. Held for one layout's cascade,
+// which copies what it keeps.
+typedef struct {
+    int32_t *at;
+    const os64_html_node_t **roots;
+    int32_t m, cap;
+    garb_scope_in_t *scopes;
+    int32_t *list;
+    int32_t nscopes;
+} PageScopes;
+
+static void page_scopes_free(PageScopes *s)
+{
+    os64_free(s->at);
+    os64_free(s->roots);
+    os64_free(s->scopes);
+    os64_free(s->list);
+    os64_memset(s, 0, sizeof(*s));
+}
+
+static bool page_scopes_add(PageScopes *s, int32_t at, const os64_html_node_t *root)
+{
+    if (s->m == s->cap) {
+        int32_t cap = s->cap != 0 ? s->cap * 2 : 64;
+        int32_t *more_at = os64_realloc(s->at, (size_t)cap * sizeof(*more_at));
+        if (more_at == NULL)
+            return false;
+        s->at = more_at;
+        const os64_html_node_t **more_roots = os64_realloc(s->roots, (size_t)cap * sizeof(*more_roots));
+        if (more_roots == NULL)
+            return false;
+        s->roots = more_roots;
+        s->cap = cap;
+    }
+    s->at[s->m] = at;
+    s->roots[s->m++] = root;
+    return true;
+}
+
+// Groups the pairs by tree in one pass over them, a tree's index found by
+// hashing its root. False when there was no memory.
+static bool page_scopes_group(PageScopes *s)
+{
+    if (s->m == 0)
+        return true;
+    uint32_t slots = 16;
+    while (slots < (uint32_t)s->m * 2)
+        slots *= 2;
+    int32_t *table = os64_malloc(slots * sizeof(*table)), *of = os64_malloc((size_t)s->m * sizeof(*of));
+    s->scopes = os64_calloc((size_t)s->m, sizeof(*s->scopes));
+    s->list = os64_malloc((size_t)s->m * sizeof(*s->list));
+    if (table == NULL || of == NULL || s->scopes == NULL || s->list == NULL) {
+        os64_free(table);
+        os64_free(of);
+        return false;
+    }
+    for (uint32_t i = 0; i < slots; i++)
+        table[i] = -1;
+    for (int32_t i = 0; i < s->m; i++) {
+        uint32_t h = (uint32_t)(((uintptr_t)s->roots[i] >> 4) * 2654435761u) & (slots - 1);
+        while (table[h] >= 0 && s->scopes[table[h]].root != s->roots[i])
+            h = (h + 1) & (slots - 1);
+        if (table[h] < 0) {
+            table[h] = s->nscopes;
+            s->scopes[s->nscopes++].root = s->roots[i];
+        }
+        of[i] = table[h];
+        s->scopes[of[i]].n++;
+    }
+    int32_t used = 0;
+    for (int32_t k = 0; k < s->nscopes; k++) {
+        s->scopes[k].sheets = s->list + used;
+        used += s->scopes[k].n;
+        s->scopes[k].n = 0;
+    }
+    for (int32_t i = 0; i < s->m; i++) {
+        garb_scope_in_t *scope = &s->scopes[of[i]];
+        s->list[(scope->sheets - s->list) + scope->n++] = s->at[i];
+    }
+    os64_free(table);
+    os64_free(of);
+    return true;
+}
+
+// Every sheet `root` adopted, into `*buffer`, grown as the list needs
+// (`*cap` its room; the caller frees it): however many entries a root's
+// array holds, since entries of one text share one table entry and the
+// table's cap is on distinct texts. How many were written: with no memory
+// to grow, those that fit.
+static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node_t *root,
+                           os64_dom_adopted_sheet_t **buffer, size_t *cap)
+{
+    size_t n = yonder_scripts_adopted(scripts, root, *buffer, *cap);
+    if (n > *cap) {
+        os64_dom_adopted_sheet_t *more = os64_realloc(*buffer, n * sizeof(*more));
+        if (more != NULL) {
+            *buffer = more;
+            *cap = n;
+            n = yonder_scripts_adopted(scripts, root, *buffer, *cap);
+        }
+    }
+    return n < *cap ? n : *cap;
+}
+
 static void measured_fallback(Page *p);
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
@@ -1338,20 +1483,55 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     int64_t began = s_layout_profile && layout_profile_diag(p) ? os64_micros() : -1;
     garb_sheet_in_t in[SHEETS_MAX];
     int32_t n = 0;
+    PageScopes ps = {0};
+    bool paired = true;
     const os64_page_t *model = page_model(p);
     for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
-        int32_t e = sheet_of(p, os64_page_sheet(model, i)->node);
-        if (e >= 0) (void)sheet_emit(p, e, in, entry, &n);
+        const os64_page_sheet_t *one = os64_page_sheet(model, i);
+        int32_t e = sheet_of(p, one->node);
+        int32_t emitted = e >= 0 ? sheet_emit(p, e, in, entry, &n) : -1;
+        if (emitted >= 0)
+            paired = paired && page_scopes_add(&ps, emitted, one->scope);
     }
+    // Each tree's adopted sheets after every sheet the model lists, each
+    // input once however many trees adopt it (CSSOM's final style sheets:
+    // a tree's own, then its adopted ones).
+    const os64_html_document_t *doc = page_doc(p);
+    const yonder_scripts_t *scripts = adoptions_host(p);
+    int32_t input_of[SHEETS_MAX];
+    for (int32_t e = 0; e < SHEETS_MAX; e++)
+        input_of[e] = -1;
+    os64_dom_adopted_sheet_t *adopted = NULL;
+    size_t adopted_cap = 0;
+    for (const os64_html_node_t *root = doc != NULL && doc->document != NULL && scripts != NULL
+             ? adopting_root(doc, NULL) : NULL; root; root = adopting_root(doc, root)) {
+        size_t count = adopted_read(scripts, root, &adopted, &adopted_cap);
+        for (size_t i = 0; i < count; i++) {
+            int32_t e = sheet_constructed(p, adopted[i].text, adopted[i].length);
+            if (e < 0)
+                continue;
+            if (input_of[e] < 0)
+                input_of[e] = sheet_emit(p, e, in, entry, &n);
+            if (input_of[e] >= 0)
+                paired = paired && page_scopes_add(&ps, input_of[e], root);
+        }
+    }
+    os64_free(adopted);
+    // With no memory for the scopes there is no cascade, as with no memory
+    // for the cascade itself: given none, it would style the document with
+    // every tree's sheets.
+    bool scoped = paired && page_scopes_group(&ps);
     uint64_t prior_updates = garb_cascade_updates(cascade);
     // A live page can explicitly invalidate its sheets. A staged table
     // instead proves that its immutable inputs still match the source.
-    bool updated = (!p->sheets_changed || p->reuse_sheets) &&
-                   garb_cascade_matches(cascade, in, n, view) && garb_cascade_update(cascade);
+    bool updated = scoped && (!p->sheets_changed || p->reuse_sheets) &&
+                   garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view) &&
+                   garb_cascade_update(cascade);
     if (!updated) {
         measured_fallback(p);
-        cascade = garb_cascade(in, n, page_doc(p), view);
+        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view, NULL) : NULL;
     }
+    page_scopes_free(&ps);
     if (s_layout_profile && layout_profile_diag(p)) {
         yonder_layout_stats_t sample = {.refusals = cascade == NULL,
             .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates};
@@ -4804,10 +4984,42 @@ static void coming_rejudge(void)
         coming_show();
 }
 
-// Sends a sheet's address to a worker. One that cannot be fetched stays
-// out of the cascade, and the page is drawn without it.
 static void sheet_ready(Page *p, int32_t e);
 
+// A sheet's verdict owed to its element as `load`, or `error` when it will
+// not be in the cascade, once, by the scripts serving its page
+// (LOAD_EVENTS.md § 3.2). An `@import`'s or a constructed sheet names no
+// element. A page laid out for a measurement, inside a running script,
+// owes nothing: its own page reads the same sheet and owes it then, never
+// inside the script that inserted it. A page whose scripts are not made yet
+// (a stream before its first script) keeps the verdict for sheets_tell.
+static void sheet_owe(Page *p, Sheet *sh, bool failed)
+{
+    if (sh->node == NULL || sh->told || p->measuring)
+        return;
+    sh->settled = true;
+    sh->failed = failed;
+    yonder_scripts_t *host = page_scripts(p);
+    sh->told = yonder_scripts_owe(host != NULL ? host : scripts_for(p->serial), sh->node, failed);
+}
+
+// The page's scripts were just made: each sheet that settled before them is
+// told now, so an `onload` on a `link` or a `style` before the page's first
+// script runs. The events fire as tasks after the script the scripts were
+// made for, so a listener that script adds hears them too, where in other
+// browsers a sheet settled before a script fired before it ran.
+static void sheets_tell(Page *p)
+{
+    for (int32_t e = 0; e < p->nsheets; e++)
+        if (p->sheets[e].settled && !p->sheets[e].told)
+            sheet_owe(p, &p->sheets[e], p->sheets[e].failed);
+}
+
+// A linked sheet's address sent to a worker, or its parse taken from the
+// table this one replaces. One yonder will not fetch (a scheme it does not
+// fetch sheets from, no memory, a pool that will not take it) stays out of
+// the cascade, the page is drawn without it, and its element is told
+// `error`, since no verdict would ever come for it.
 static void sheet_fetch(Page *p, Sheet *sh, const char *url)
 {
     sh->url = copy_text(url);
@@ -4829,8 +5041,10 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
                       (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0));
     yonder_sheet_job_t *job = fetchable && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
-    if (job == NULL)
+    if (job == NULL) {
+        sheet_owe(p, sh, true);
         return;
+    }
     const os64_html_document_t *doc = page_doc(p);
     job->kind = YONDER_JOB_SHEET;
     job->page = p->serial;
@@ -4850,7 +5064,8 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
     sh->id = os64_work_submit(g.pool, &work);
     if (sh->id == 0) {
-        os64_free(job);         // the table is full: the page goes without it
+        os64_free(job);         // the pool will not take it: the page goes without it
+        sheet_owe(p, sh, true);
         return;
     }
     sh->waiting = true;
@@ -4858,20 +5073,22 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
         p->sheets_waiting++;
 }
 
-// A sheet is ready: it joins the cascade, and its @imports are sent for,
-// each resolved against the sheet's own address — a `style` element's
-// against the page's base — and none that is already on the chain of
-// sheets importing it, which would import itself for ever.
+// A sheet is ready: it joins the cascade, its element is owed its `load`
+// (whatever its @imports do), and its @imports are sent for, each resolved
+// against the sheet's own address — a `style` element's against the page's
+// base — and none that is already on the chain of sheets importing it,
+// which would import itself for ever.
 static void sheet_ready(Page *p, int32_t e)
 {
     Sheet *sh = &p->sheets[e];
     sh->ready = true;
     p->sheets_ready++;
     p->sheets_changed = true;
+    sheet_owe(p, sh, false);
     int32_t n = garb_sheet_imports(&sh->source->parsed, NULL, 0);
     if (n > SHEET_IMPORTS_MAX)
         n = SHEET_IMPORTS_MAX;
-    if (n == 0)
+    if (n == 0 || sh->constructed)
         return;
     // A `style` element's against the page's base: the model's, or for the
     // stream's page, which has no model, the one a model would have. With
@@ -4937,15 +5154,23 @@ static void sheet_inline(Page *p, Sheet *sh)
             return;
         }
     }
+    // A sheet left out (no memory, or text that will not parse) is a
+    // failure its element is told of.
     SheetParse *source = os64_calloc(1, sizeof(*source));
-    if (!source) return;
+    if (!source) {
+        sheet_owe(p, sh, true);
+        return;
+    }
     source->refs = 1;
     sh->source = source;
     size_t len = 0;
     for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
         if (x->kind == OS64_HTML_TEXT) len += x->text_len;
     source->inline_text = os64_malloc(len + 1);
-    if (!source->inline_text) return;
+    if (!source->inline_text) {
+        sheet_owe(p, sh, true);
+        return;
+    }
     for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
         if (x->kind == OS64_HTML_TEXT) {
             os64_memcpy(source->inline_text + source->inline_len, x->text, x->text_len);
@@ -4954,14 +5179,20 @@ static void sheet_inline(Page *p, Sheet *sh)
     source->inline_text[len] = '\0';
     if (garb_parse_sheet_text(source->inline_text, len, &source->parsed) == GARB_OK)
         sheet_ready(p, (int32_t)(sh - p->sheets));
+    else
+        sheet_owe(p, sh, true);
 }
 
 // A sheet the page names, if the table does not have it yet: a `style`
 // element's parsed here, a linked one sent for. A page whose table the
 // stream began has most of them already (stream_sheets); a sheet is
 // fetched once in a page's life. A sheet that will not parse — too big, or
-// no memory — is left out, and the page is drawn without it. False once
-// the table is full.
+// no memory — is left out, the page is drawn without it, and its element
+// is told `error`. Whether its element has been told is carried from the
+// table this one replaces, ready or failed (LOAD_EVENTS.md § 3.3): a link's
+// by element and the address it asked for, a `style`'s by element and its
+// text, since HTML makes a `style` a new sheet, and fires again, when its
+// text changes. False once the table is full.
 static bool sheet_add(void *page, const os64_page_sheet_t *one)
 {
     Page *p = page;
@@ -4970,6 +5201,15 @@ static bool sheet_add(void *page, const os64_page_sheet_t *one)
     Sheet *sh = sheet_new(p, one->node, one->media, -1, -1);
     if (sh == NULL)
         return false;               // the table is full
+    sh->asked = one->linked ? copy_text(one->href.url) : NULL;
+    int32_t was = p->reuse_sheets != NULL ? sheet_of(p->reuse_sheets, one->node) : -1;
+    if (was >= 0) {
+        const Sheet *old = &p->reuse_sheets->sheets[was];
+        sh->told = old->told && (one->linked ? old->asked != NULL && sh->asked != NULL &&
+                                                   os64_streq(old->asked, sh->asked)
+                                             : old->asked == NULL && (old->source == NULL ||
+                                                   sheet_inline_matches(old->source, one->node)));
+    }
     if (one->linked) {
         sheet_fetch(p, sh, one->href.url);
     } else {
@@ -4978,13 +5218,96 @@ static bool sheet_add(void *page, const os64_page_sheet_t *one)
     return true;
 }
 
-// The rest of the page's sheets, from its own model.
+// The script host whose binding holds `p`'s adoptions: its own (page_scripts),
+// or for a copy of a page laid out beside it (a measurement), the host its
+// serial names. NULL with none.
+static const yonder_scripts_t *adoptions_host(const Page *p)
+{
+    const yonder_scripts_t *own = page_scripts(p);
+    return own != NULL ? own : scripts_for(p->serial);
+}
+
+// The roots whose adoptions count, in shadow-including order: the document
+// node and every connected shadow root. `x` NULL starts; NULL after the last.
+static const os64_html_node_t *adopting_root(const os64_html_document_t *doc, const os64_html_node_t *x)
+{
+    if (x == NULL)
+        return doc->document;
+    if (!os64_html_has_shadow_roots(doc))
+        return NULL;
+    do
+        x = os64_html_shadow_including_next(doc->document, x);
+    while (x != NULL && os64_html_shadow_host(x) == NULL);
+    return x;
+}
+
+// A constructed sheet a tree adopted (SHADOW_DOM.md § 12, D4b), if the
+// table has no entry for its text: the replaced table's parse of that text
+// when it had one, or parsed now, its text kept to be known by. A sheet
+// whose text will not parse, or that there is no memory for, is left out,
+// as a `style`'s is. False once the table is full.
+static bool sheet_adopt(Page *p, const os64_dom_adopted_sheet_t *one)
+{
+    if (sheet_constructed(p, one->text, one->length) >= 0)
+        return true;
+    Sheet *sh = sheet_new(p, NULL, NULL, -1, -1);
+    if (sh == NULL)
+        return false;
+    sh->constructed = true;
+    int32_t e = (int32_t)(sh - p->sheets);
+    int32_t old = p->reuse_sheets ? sheet_constructed(p->reuse_sheets, one->text, one->length) : -1;
+    Sheet *from = old >= 0 ? &p->reuse_sheets->sheets[old] : NULL;
+    if (from != NULL && from->ready && from->source->refs < UINT32_MAX) {
+        sh->source = from->source;
+        ++sh->source->refs;
+        sheet_ready(p, e);
+        return true;
+    }
+    SheetParse *source = os64_calloc(1, sizeof(*source));
+    char *text = source != NULL ? os64_malloc(one->length + 1) : NULL;
+    if (text == NULL) {
+        os64_free(source);
+        return true;
+    }
+    os64_memcpy(text, one->text, one->length);
+    text[one->length] = '\0';
+    source->refs = 1;
+    source->inline_text = text;
+    source->inline_len = one->length;
+    sh->source = source;
+    if (garb_parse_sheet_text(text, one->length, &source->parsed) == GARB_OK)
+        sheet_ready(p, e);
+    return true;
+}
+
+// The constructed sheets the page's trees adopted, after the sheets its
+// model lists, every adoption read: one whose text the table already has
+// costs nothing, and a full table leaves out only new texts. A sheet that
+// will not parse is left out, as a `style`'s is.
+static void sheets_adopted(Page *p)
+{
+    const os64_html_document_t *doc = page_doc(p);
+    const yonder_scripts_t *scripts = adoptions_host(p);
+    if (doc == NULL || doc->document == NULL || scripts == NULL)
+        return;
+    os64_dom_adopted_sheet_t *list = NULL;
+    size_t cap = 0;
+    for (const os64_html_node_t *root = adopting_root(doc, NULL); root; root = adopting_root(doc, root)) {
+        size_t n = adopted_read(scripts, root, &list, &cap);
+        for (size_t i = 0; i < n; i++)
+            (void)sheet_adopt(p, &list[i]);
+    }
+    os64_free(list);
+}
+
+// The rest of the page's sheets: its model's, then its trees' adopted ones.
 static void sheets_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
     for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++)
         if (!sheet_add(p, os64_page_sheet(model, i)))
-            break;
+            return;
+    sheets_adopted(p);
 }
 
 // The page is going: what it is still waiting for is not wanted.
@@ -5046,9 +5369,14 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     sh->id = 0;
     if (sh->holds)
         p->sheets_waiting--;
-    if (got != NULL && got->ok) {
+    if (got == NULL || !got->ok) {
+        sheet_owe(p, sh, true);
+    } else {
         sh->source = os64_calloc(1, sizeof(*sh->source));
-        if (!sh->source) return;
+        if (!sh->source) {
+            sheet_owe(p, sh, true);
+            return;
+        }
         sh->source->refs = 1;
         sh->source->parsed = got->parsed;
         os64_memset(&got->parsed, 0, sizeof(got->parsed));
@@ -9329,6 +9657,9 @@ static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
 static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
                                 os64_dom_geometry_stats_t *cost);
+static size_t script_hit(void *, double, double, const os64_html_node_t **, size_t, os64_dom_geometry_stats_t *);
+static size_t script_text_rects(void *, const os64_html_node_t *, size_t, size_t, double *, size_t,
+                                os64_dom_geometry_stats_t *);
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
@@ -9395,13 +9726,13 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .kept_module = script_kept_module,
-        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .hit = script_hit, .text_rects = script_text_rects,
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
-        .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom,
+        .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom, .ranges = s_ranges,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus};
@@ -10495,6 +10826,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     const char *what = "script";
     bool ran = yonder_scripts_step(host, &out);
     if (!ran) { what="image"; ran=yonder_scripts_image_fire(host,&out); }
+    if (!ran) { what="sheet"; ran=yonder_scripts_owed_fire(host,&out); }
     if (!ran)
         ran = queued_task(host, &what, &out);
     if (!ran)
@@ -10505,7 +10837,8 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 }
 
 // Whether a host has a task to run now: a history event owed its page, a
-// script ready, image event ready, a message posted, or a timer due. An idle callback is no
+// script ready, an image's or a sheet's event owed, a message posted, or a
+// timer due. An idle callback is no
 // task owed: the shown page's turn runs one only when nothing else is
 // (script_turn).
 static bool scripts_owed(const yonder_scripts_t *host)
@@ -10513,7 +10846,8 @@ static bool scripts_owed(const yonder_scripts_t *host)
     const Page *p = page_of_host(host);
     uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
-           yonder_scripts_images_pending(host) || yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now ||
+           yonder_scripts_images_pending(host) || yonder_scripts_owed_pending(host) ||
+           yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now ||
            yonder_scripts_intersections_due(host);
 }
 
@@ -10568,6 +10902,104 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
     return ready && ended >= began;
+}
+
+static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html_node_t **link,
+                                           const os64_html_node_t **boxed);
+
+// A document's root element: its first element child.
+static const os64_html_node_t *root_element(const os64_html_document_t *doc)
+{
+    for (const os64_html_node_t *c = doc->document->first_child; c != NULL; c = c->next)
+        if (c->kind == OS64_HTML_ELEMENT)
+            return c;
+    return NULL;
+}
+
+// elementFromPoint's hit provider (RANGE.md § 8), whose opaque is its page's
+// document: the point, CSS pixels of the viewport, taken to device pixels
+// through the zoom; the layout made current as script_geometry makes it;
+// then the element the pointer would hit there (element_hit, an image map's
+// area included) for the page on screen, or the element holding the box
+// flow_hit finds for a page measured beside it; then that element's
+// flat-tree ancestors. Bare canvas inside the viewport is the root
+// element's, as a box the root's canvas is.
+static size_t script_hit(void *opaque, double x, double y, const os64_html_node_t **out, size_t cap,
+                         os64_dom_geometry_stats_t *cost)
+{
+    const os64_html_document_t *doc = opaque;
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    double scale = (g.zoom != 0 ? g.zoom : 1000) / 1000.0, dx = x * scale, dy = y * scale;
+    bool inside = began >= 0 && dx >= 0 && dy >= 0 && dx < width && dy < height;
+    bool ready = false;
+    const os64_html_node_t *hit = NULL;
+    if (inside && doc == page_doc(&g.page)) {
+        ready = script_rebuild();
+        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                      g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed))
+            ready = relayout(true);
+        if (ready)
+            hit = element_hit(g.view.bounds.x + (int32_t)dx, g.view.bounds.y + (int32_t)dy, NULL, NULL);
+    } else if (inside && measured_for(doc, width, height)) {
+        ready = true;
+        const flow_box_t *b = flow_hit(s_measured.tree, (int32_t)dx, (int32_t)dy, (flow_point_t){0, 0});
+        while (b != NULL && b->node == NULL)
+            b = b->parent;
+        hit = b != NULL ? b->node : NULL;
+        while (hit != NULL && hit->kind != OS64_HTML_ELEMENT)
+            hit = os64_html_flat_parent(doc, hit);
+    }
+    size_t count = 0;
+    if (ready) {
+        if (hit == NULL)
+            hit = root_element(doc);
+        for (const os64_html_node_t *n = hit; n != NULL; n = os64_html_flat_parent(doc, n)) {
+            if (n->kind != OS64_HTML_ELEMENT)
+                continue;
+            if (count < cap)
+                out[count] = n;
+            count++;
+        }
+    }
+    int64_t ended = os64_micros();
+    cost->layouts = geometry_layout_total - before;
+    cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return count;
+}
+
+// A range's text rects (RANGE.md § 7), whose opaque is its page's document:
+// the layout made current as script_geometry makes it, then
+// yonder_text_rects over the page on screen at its scroll, or over a page
+// measured beside it.
+static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size_t from, size_t to,
+                                double *out, size_t cap, os64_dom_geometry_stats_t *cost)
+{
+    const os64_html_document_t *doc = opaque;
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    size_t count = 0;
+    if (began >= 0 && os64_html_owns_node(doc, node)) {
+        if (doc == page_doc(&g.page)) {
+            bool ready = script_rebuild();
+            if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                          g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed))
+                ready = relayout(true);
+            if (ready)
+                count = yonder_text_rects(doc, g.page.tree, node, from, to, g.zoom, (flow_point_t){g.sx, g.sy},
+                                          out, cap);
+        } else if (measured_for(doc, width, height)) {
+            count = yonder_text_rects(doc, s_measured.tree, node, from, to, g.zoom, (flow_point_t){0, 0}, out, cap);
+        }
+    }
+    int64_t ended = os64_micros();
+    cost->layouts = geometry_layout_total - before;
+    cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return count;
 }
 
 // ── Intersection observations (INTERSECTION_OBSERVER.md) ────────────────
@@ -11600,6 +12032,10 @@ static bool script_turn(void)
         what = "image";
         ran = yonder_scripts_image_fire(g.page.scripts, &out);
     }
+    if (!ran) {
+        what = "sheet";
+        ran = yonder_scripts_owed_fire(g.page.scripts, &out);
+    }
     // The intersection observers' delivery task, which the last rendering
     // step queued (intersections_turn).
     if (!ran) {
@@ -11848,8 +12284,14 @@ static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html
     const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     if (b == NULL)
         return NULL;
+    // A box no node made (a line, an anonymous block) is its nearest
+    // nodeful ancestor's: the point beside a line's text is in the block
+    // whose line it is, as other browsers' hit tests answer.
+    const flow_box_t *owner = b;
+    while (owner != NULL && owner->node == NULL)
+        owner = owner->parent;
     if (boxed != NULL)
-        *boxed = element_of(b->node);
+        *boxed = owner != NULL ? element_of(owner->node) : NULL;
     // Where in the picture: the point taken into the box, through any
     // transform it is drawn through, and then into the content box the
     // painter draws the picture in. That is yonder_box_edge's, not the
@@ -11867,11 +12309,20 @@ static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html
             return area;
         }
     }
+    const os64_html_node_t *element = owner != NULL ? element_of(owner->node) : NULL;
     if (link != NULL) {
         const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
         *link = l != NULL ? l->node : NULL;
+        // A box no node made carries no link of its own (a line's is none):
+        // the link is the one the element it answers is in, so a click
+        // beside a block link's text follows it.
+        for (const os64_html_node_t *n = element; *link == NULL && b->node == NULL && n != NULL;
+             n = os64_html_flat_parent(page_doc(&g.page), n))
+            if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML &&
+                (n->tag == OS64_HTML_TAG_A || n->tag == OS64_HTML_TAG_AREA) && os64_html_attr(n, "href") != NULL)
+                *link = n;
     }
-    return element_of(b->node);
+    return element;
 }
 
 static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link)
@@ -12476,6 +12927,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
+        } else {
+            sheets_tell(&g.stream.page);
         }
         stream_scripts_entry();
     }
@@ -12714,6 +13167,7 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
             status_rest("Out of memory for the page's scripts; it is read without them.");
             return YONDER_STOP_RESUME;
         }
+        sheets_tell(&g.stream.page);
         stream_scripts_entry();
     }
     return yonder_scripts_parser_stop(g.stream.scripts, script);
@@ -12823,8 +13277,10 @@ static Page *stream_page(void)
 // entry for, by libpage's own rule and order (os64_page_sheets_in, a walk
 // of the tree, which costs a fraction of a model). A `style` element is
 // parsed now; a `link` is fetched under the stream's serial. A walk that
-// had no memory leaves them to the next look. The same looks find the
-// module preloads, once the page has a script host to hold their modules.
+// had no memory leaves them to the next look. The constructed sheets its
+// scripts have adopted so far are taken too (sheets_adopted). The same
+// looks find the module preloads, once the page has a script host to hold
+// their modules.
 static void stream_sheets(void)
 {
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
@@ -12833,6 +13289,7 @@ static void stream_sheets(void)
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
     int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, stream_sheet_add, p);
+    sheets_adopted(p);
     yonder_scripts_preload(g.stream.scripts);
     if (s_script_audit) {
         char line[128];
@@ -16547,6 +17004,7 @@ int main(int argc, char **argv)
     s_animations = yonder_settings_saved_animations();
     s_reduce_motion = yonder_settings_saved_reduce_motion();
     s_shadow_dom = yonder_settings_saved_shadow_dom();
+    s_ranges = yonder_settings_saved_ranges();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
     const char *modern_refused;

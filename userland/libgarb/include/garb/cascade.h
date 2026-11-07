@@ -115,6 +115,19 @@ typedef struct {
 // sheet is the same after any number of cascades as before the first.
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env);
+// A tree's style sheets (SHADOW_DOM.md § 6): `root` — the document node, or
+// a shadow root — and the indices in garb_cascade's `sheets` of the sheets
+// that apply in that tree. An imported sheet applies wherever its importer
+// does, listed or not, and an index naming no sheet names nothing. The list
+// says WHICH sheets apply, not in what order: within a tree, rules rank in
+// the order of `sheets`. A tree no scope names has no author sheet; two
+// scopes naming one root apply the sheets of both.
+typedef struct {
+    const os64_html_node_t *root;
+    const int32_t *sheets;
+    int32_t n;
+} garb_scope_in_t;
+
 // Independent arena caps for an owner with a smaller working allowance.
 // attribute_bytes bounds each retained style-attribute parse and the temporary
 // presentation-value parse. attributes bounds their retained count. Scratch,
@@ -126,6 +139,17 @@ typedef struct {
 garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *, int32_t,
                                      const os64_html_document_t *, garb_env_t,
                                      garb_cascade_limits_t);
+// A cascade over the document's tree and every connected shadow tree, each
+// tree styled by the sheets its scope names (SHADOW_DOM.md § 6): matched in
+// that tree, a shadow host reached by `:host` from its own tree's sheets,
+// a slotted element by `::slotted()` from each slot's, and declarations
+// from different trees ranked by context before specificity. `limits` NULL
+// is garb_cascade's. The scopes are copied; the doors without them pass
+// none, and with none every sheet applies in the document's tree.
+garb_cascade_t *garb_cascade_scoped(const garb_sheet_in_t *sheets, int32_t n,
+                                    const garb_scope_in_t *scopes, int32_t nscopes,
+                                    const os64_html_document_t *doc, garb_env_t env,
+                                    const garb_cascade_limits_t *limits);
 // The default cap on what a cascade reads of its sheets together: their rules'
 // blocks, selectors and values go into one arena held to this, beside the
 // cascade's own state (held to GARB_ARENA_MAX), and a cascade that reaches
@@ -143,6 +167,11 @@ bool garb_cascade_incomplete(const garb_cascade_t *c);
 // The sheet objects themselves (not just their arenas) must stay alive.
 bool garb_cascade_matches(const garb_cascade_t *cascade, const garb_sheet_in_t *sheets,
                           int32_t count, garb_env_t env);
+// The same, and the scopes as garb_cascade_scoped was given them: the same
+// roots in the same order, each naming the same indices in the same order.
+bool garb_cascade_matches_scoped(const garb_cascade_t *cascade, const garb_sheet_in_t *sheets,
+                                 int32_t count, const garb_scope_in_t *scopes, int32_t nscopes,
+                                 garb_env_t env);
 // One reference per owner; free releases it. Updates are shared and callers
 // serialize them with reads. Retaining does not retain the input sheets.
 bool garb_cascade_retain(garb_cascade_t *cascade);
@@ -327,7 +356,8 @@ typedef void *(*garb_grow_t)(void *ctx, void *old, size_t old_size, size_t new_s
 // buffer, with nothing left held.
 char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t grow, void *ctx);
 
-// Every element's winners as text, in document order: `tag#id: prop:
+// Every element's winners as text, in shadow-including order (a host's
+// shadow tree before its children): `tag#id: prop:
 // value; ...`, its ::before's and ::after's after it (`tag#id::before:
 // ...`), for the harness and a probe. Like snprintf.
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,

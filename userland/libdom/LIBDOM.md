@@ -151,7 +151,8 @@ connect runs and a moved control keeps its form:
   `tabIndex` (0 for an element that takes focus without one, else -1), a
   script's `src` and a link's and an anchor's `href` (resolved against the
   document's base, and as written when it does not resolve), a script's
-  `type`, `defer` and `noModule`, and a link's `rel`. Script, anchor and
+  `type`, `defer` and `noModule`, and a link's `rel`, `media` and `type`.
+  Script, anchor and
   link elements have prototypes of their own for these. `hidden`, `lang`,
   `dir` and `title` are HTMLElement's, and `tabIndex` and `dataset`
   HTMLElement's and SVGElement's, as HTML places them, not Element's: a
@@ -354,7 +355,14 @@ Two callers, two shapes. **The host** (`os64_dom_dispatch`) opens a libjs
 task, runs each listener as one `os64_js_call` followed by a checkpoint, and
 closes the task once what it left owed is settled (§ P2a's rows); its
 outcome is the task's first exception or unhandled rejection, a sticky
-status when the runtime died under it, or a nested error (below).
+status when the runtime died under it, or a nested error (below). It
+counts each listener and handler it calls (`os64_dom_listener_calls`), so
+a host can tell an event something heard from one that nothing on its
+path listened for, which `os64_dom_listens` (the page listens for the
+type somewhere) cannot: yonder drains its owed sheet events by it
+(LOAD_EVENTS.md). The rule that folds two outcomes into one is exported
+too (`os64_dom_outcome_fold`), for a host that dispatches inside a task of
+its own, as yonder fires a script element's `load` inside its script's.
 **A script** (`dispatchEvent`) runs the listeners as nested engine calls with
 no checkpoint between them, which is what DOM.md asks: a checkpoint follows a
 callback that returns with no script on the stack. A nested listener's error
@@ -853,6 +861,17 @@ callbacks: the slots whose assigned nodes changed since they last reported
 waits for the next notify. A clone queues the notify too, since its slots'
 first assignment comes from no change the dispatcher saw. The event path is
 § Events'.
+
+Constructed sheets and adoption (`adopted.c`, SHADOW_DOM.md § 12, D4b) come
+with the same switch: `new CSSStyleSheet()`, `replace` (a Promise of the
+sheet) and `replaceSync`, which keep the text and a generation for the host
+and refuse a sheet a node owns; and `adoptedStyleSheets` on the document and
+a shadow root — one array per root, a Proxy over a plain array from an
+embedded factory, whose traps check each value going in (a constructed sheet,
+else TypeError or NotAllowedError) and report each change. A change moves the
+document's version (`os64_html_touch` at the root, and at every root adopting
+a replaced sheet), since an adoption moves no node and the host restyles on
+the version; the host reads a root's sheets with `os64_dom_adopted`.
 
 ## The CSS namespace
 

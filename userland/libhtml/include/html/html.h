@@ -23,7 +23,9 @@ typedef enum {
     OS64_HTML_BAD_TEXT = -8,       /* not UTF-8, or it holds a NUL */
     OS64_HTML_ROOT_REQUIRED = -9,  /* the document would lose its html element */
     OS64_HTML_BAD_ARGUMENT = -10,
-    OS64_HTML_NOT_SUPPORTED = -11  /* what the DOM Standard refuses as NotSupportedError */
+    OS64_HTML_NOT_SUPPORTED = -11, /* what the DOM Standard refuses as NotSupportedError */
+    OS64_HTML_INVALID_NODE_TYPE = -12, /* a doctype as a range's boundary: InvalidNodeTypeError */
+    OS64_HTML_INDEX_SIZE = -13     /* an offset past a node's length: IndexSizeError */
 } os64_html_status_t;
 
 /* Exit badge for a broken node-hold or snapshot-pin lifetime contract,
@@ -75,6 +77,11 @@ typedef struct os64_html_node {
     const char *name; /* Local element name; PI target; doctype name. */
     const char *prefix, *namespace_uri; /* Owned XML spellings; NULL when absent. */
     bool xml_document; /* Owning arena is an XML document, including detached nodes. */
+    /* A TEXT node that is a CDATA section (DOM's CDATASection, nodeType 4):
+     * text in every other respect, except that normalize leaves it out of a
+     * run of text (DOM's "exclusive Text node"). Set only by os64_html_create_cdata,
+     * and carried by clone and split_text. */
+    bool cdata;
     /* An element's custom state, an os64_html_ce_t (below). Only
      * os64_html_set_ce changes it. */
     uint8_t ce;
@@ -350,6 +357,23 @@ os64_html_node_t *os64_html_create_text(os64_html_document_t *doc, const char *u
 os64_html_node_t *os64_html_create_comment(os64_html_document_t *doc, const char *utf8, size_t len,
                                            int64_t *status);
 os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *status);
+/* A CDATA section: a TEXT node with `cdata` set. Its data is the caller's to
+ * check (DOM refuses "]]>" in it); libhtml checks only that it is text. */
+os64_html_node_t *os64_html_create_cdata(os64_html_document_t *doc, const char *utf8, size_t len,
+                                         int64_t *status);
+/* A processing instruction: `target` its name, `utf8` its data. The target's
+ * Name production and "?>" in the data are the caller's to check. */
+os64_html_node_t *os64_html_create_pi(os64_html_document_t *doc, const char *target, const char *utf8,
+                                      size_t len, int64_t *status);
+/* An element in any namespace, as DOM's createElementNS makes one:
+ * `namespace_uri` NULL for none, `prefix` NULL for none, `local` its local
+ * name, each copied. The HTML, SVG and MathML namespaces get their kinds
+ * (an HTML element its tag, a template its contents); any other is
+ * OS64_HTML_NS_OTHER, keeping the URI, and none is OS64_HTML_NS_NONE, as the
+ * XML builder makes them. The name rules are the caller's (DOM's validate
+ * and extract). */
+os64_html_node_t *os64_html_create_element_ns(os64_html_document_t *doc, const char *namespace_uri,
+                                              const char *prefix, const char *local, int64_t *status);
 /* A SECOND DOCUMENT, as DOMImplementation makes one (DOM § 4.5.1): a
  * DOCUMENT node, empty, that lives in `doc`'s arena and carries its mark,
  * so a node moves between it and `doc`'s own tree as any of `doc`'s nodes
@@ -457,11 +481,13 @@ typedef enum {
     OS64_HTML_CHANGE_CHILDREN = 1, /* target's children changed */
     OS64_HTML_CHANGE_ATTR,         /* an attribute of target was set or removed */
     OS64_HTML_CHANGE_TEXT,         /* target's text was replaced or appended to */
-    /* An element's custom state changed (os64_html_set_ce). The standard
-     * records no mutation for it, so no listener is told. The kind is for a
-     * log of the document's changes (RELAYOUT.md), whose every entry stands
-     * for a move of the version: this change moves it because `:defined`
-     * reads the state. */
+    /* Something the cascade reads changed at target though no node did: an
+     * element's custom state (os64_html_set_ce, which `:defined` reads), or
+     * a tree's adopted style sheets (os64_html_touch, target the document
+     * node or a shadow root). The standard records no mutation for either,
+     * so no listener is told. The kind is for a log of the document's
+     * changes (RELAYOUT.md), whose every entry stands for a move of the
+     * version. */
     OS64_HTML_CHANGE_STATE
 } os64_html_change_kind_t;
 
@@ -553,6 +579,67 @@ typedef enum {
 } os64_html_ce_t;
 int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
 bool os64_html_custom_name(const char *name);
+
+/* `touch` says something a reader of the document's version depends on
+ * changed at `node` though no node did: it moves the version and logs a
+ * STATE change of `node`, telling no listener, as `set_ce` does. The
+ * consumer is a tree's adopted style sheets (SHADOW_DOM.md § 12, D4b):
+ * `node` is the document node or a shadow root whose sheets changed. A node
+ * of `doc` only; anything else is OS64_HTML_BAD_ARGUMENT. */
+int64_t os64_html_touch(os64_html_document_t *doc, os64_html_node_t *node);
+
+/* ── LIVE RANGES (docs/design/pending/RANGE.md § 3, § 4) ───────────────
+ *
+ * A live range is two boundary points, start (0) and end (1), each a node
+ * and an offset: UTF-16 code units into a Text, Comment or PI node's data,
+ * a child index into any other node. Every mutation of the document keeps
+ * every range right, by the DOM Standard's steps for inserting, removing,
+ * replacing data, splitting a Text node and normalizing, run inside the
+ * verbs that make them, the parser's included. A range holds both its
+ * boundary nodes, so a subtree it points into is not reclaimed under it;
+ * every range must be freed before its document is.
+ *
+ * `range_new` places both points at (the document, 0). `range_set` places
+ * one: a doctype is INVALID_NODE_TYPE, an offset past the node's length
+ * INDEX_SIZE; an offset between a surrogate pair's halves is snapped down to
+ * the pair's start, since the data is UTF-8 and a pair is never split. It
+ * checks nothing about the other point: comparing points, and collapsing a
+ * range whose start would pass its end, is the caller's algorithm.
+ *
+ * `node_length` is the DOM's "length": the data's UTF-16 units for Text,
+ * Comment and PI, 0 for a doctype, the number of children otherwise.
+ *
+ * The data verbs, offsets and counts in UTF-16 units, each snapped down to
+ * a code point's start, a count past the end taken as reaching it, an
+ * offset past the length INDEX_SIZE; each logs a TEXT change with the old
+ * data, as `set_text` does:
+ * - `replace_data` is the standard's replace data: `count` units at
+ *   `offset` become `utf8` (Text, Comment, PI). `set_text` is replace data
+ *   of the whole length, and carries the same range steps.
+ * - `split_text` is Text's splitText: the data from `offset` on becomes a
+ *   new Text node, inserted after the node when it has a parent (an insert,
+ *   logged as one), then the node is truncated; the new node in `*out`.
+ * - `normalize` is Node's normalize over `node`'s descendants: an empty
+ *   Text node is removed, contiguous Text siblings are merged into the
+ *   first (an append to it, then the removal of the rest). */
+typedef struct os64_html_range os64_html_range_t;
+os64_html_range_t *os64_html_range_new(os64_html_document_t *doc);
+void os64_html_range_free(os64_html_range_t *range);
+int64_t os64_html_range_set(os64_html_range_t *range, int which, os64_html_node_t *node, uint32_t offset);
+void os64_html_range_get(const os64_html_range_t *range, int which, const os64_html_node_t **node,
+                         uint32_t *offset);
+uint32_t os64_html_node_length(const os64_html_node_t *node);
+/* UTF-16 units over UTF-8 text, as the data verbs count them: a string's
+ * length in units, and the byte where unit `unit` starts — snapped down to
+ * its code point's start, so a surrogate pair is never split; `len` for a
+ * unit at or past the end. */
+uint32_t os64_html_utf16_length(const char *utf8, size_t len);
+size_t os64_html_utf16_byte(const char *utf8, size_t len, uint32_t unit);
+int64_t os64_html_replace_data(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
+                               uint32_t count, const char *utf8, size_t len);
+int64_t os64_html_split_text(os64_html_document_t *doc, os64_html_node_t *node, uint32_t offset,
+                             os64_html_node_t **out);
+int64_t os64_html_normalize(os64_html_document_t *doc, os64_html_node_t *node);
 
 /* ── SHADOW TREES (docs/design/pending/SHADOW_DOM.md § 3) ──────────────
  *

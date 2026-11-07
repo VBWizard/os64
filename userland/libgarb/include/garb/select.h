@@ -2,8 +2,18 @@
 #define GARB_SELECT_H
 
 // Selectors (GARB.md): Level 3, and Level 4's :is(), :where(), :not() with a
-// list, and :has() — parsed from a rule's prelude, weighed, and matched
-// against libhtml's tree. Pure: a tree and a selector in, an answer out.
+// list, and :has(), and CSS Scoping's :host, :host() and ::slotted() —
+// parsed from a rule's prelude, weighed, and matched against libhtml's
+// tree. Pure: a tree and a selector in, an answer out.
+//
+// SHADOW TREES (SHADOW_DOM.md § 6). A combinator never leaves the tree its
+// element is in, with one exception: a shadow root's child has the root's
+// HOST above it, featureless, matched only by a compound made of nothing
+// but :host and :host(S) (S tested against the host as an ordinary
+// element), with nothing above it or beside it. So `:host(.open) .panel`
+// matches inside a component and `.page .panel` there never reaches the
+// page. Which sheets apply in which tree is the cascade's question, not
+// this file's.
 //
 // WHAT NEVER MATCHES, and why. The user-action pseudo-classes (:hover,
 // :active, :focus, :focus-within, :focus-visible), :target and
@@ -37,6 +47,9 @@ typedef enum {
     GARB_PSEUDO_PLACEHOLDER,
     GARB_PSEUDO_SELECTION,
     GARB_PSEUDO_BACKDROP,
+    // ::slotted(S): an element assigned to the slot the rest of the
+    // selector matches, and matching S (garb_selector_matches_slotted).
+    GARB_PSEUDO_SLOTTED,
 } garb_pseudo_t;
 
 // A selector list from a style rule's prelude, into `owner`'s arena. NULL
@@ -70,6 +83,19 @@ bool garb_selector_matches(const garb_selectors_t *list, int32_t i,
 // `:root`, as a style sheet's selectors are.
 bool garb_selector_matches_in(const garb_selectors_t *list, int32_t i,
                               const os64_html_node_t *element, const os64_html_node_t *scope);
+// Whether the i-th selector matches shadow host `host` as its shadow tree's
+// selectors see it: featureless, so only a selector whose subject compound
+// is all :host and :host(S) can.
+bool garb_selector_matches_host(const garb_selectors_t *list, int32_t i,
+                                const os64_html_node_t *host);
+// Whether the i-th selector, ending in ::slotted(S), matches `element` through
+// `slot`: the selector matches the slot and S matches the element. Whether
+// the element is assigned to the slot is the caller's to know.
+bool garb_selector_matches_slotted(const garb_selectors_t *list, int32_t i,
+                                   const os64_html_node_t *slot, const os64_html_node_t *element);
+// Whether the i-th selector's subject compound holds :host or :host(S): a
+// rule for a shadow host, consulted when its shadow tree's sheets style it.
+bool garb_selector_names_host(const garb_selectors_t *list, int32_t i);
 
 // What the rule hash files a selector under (GARB.md § The cost): the id
 // of its rightmost compound, else a class, else the element name, else

@@ -10,6 +10,18 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
     const flow_tree_t *tree, const os64_html_node_t *node, int32_t width,
     int32_t height, uint32_t zoom, flow_point_t scroll, os64_dom_geometry_t *out);
 
+/* A range's text rects (os64_dom_text_rects_provider_t) read off an
+ * already-current layout laid out at `zoom` and shown at `scroll`: each
+ * TEXT box `node` laid out whose processed bytes meet bytes [from, to) of
+ * its data (flow_text_processed), measured with the box's run's carets (a
+ * selected cluster whole) and taken out through the box's transforms, in
+ * viewport CSS pixels as a snapshot's rect is; a justified line's gap
+ * between two of its word boxes where the selection reaches into it; `from == to` answers the one
+ * zero-width rect at that point. The count there is; up to `cap` written. */
+size_t yonder_text_rects(const os64_html_document_t *document, const flow_tree_t *tree,
+    const os64_html_node_t *node, size_t from, size_t to, uint32_t zoom, flow_point_t scroll,
+    double *out, size_t cap);
+
 /* The intersection observations' batch (os64_dom_intersections_provider_t)
  * answered from an already-current layout, laid out at `zoom` and shown at
  * `scroll`: one walk of the boxes for every asked element's bounds, then

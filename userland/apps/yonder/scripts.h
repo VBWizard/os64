@@ -26,6 +26,19 @@
 typedef struct yonder_scripts yonder_scripts_t;
 bool yonder_scripts_images_pending(const yonder_scripts_t *);
 bool yonder_scripts_image_fire(yonder_scripts_t *,os64_js_outcome_t *);
+// A `link` or `style` element's sheet, judged by the window: `load` (or
+// `error` when `failed`) owed to the element, fired as a task of its own
+// and never inside the call that owed it; the node is held until then, and
+// fired at even if it has left the document. False when it was not kept
+// (no host, no memory, or a page whose scripts are finished): the window
+// counts the element as not told. The window owes each element once per
+// sheet: per address it asked for, or for a `style`, per text.
+bool yonder_scripts_owe(yonder_scripts_t *, const os64_html_node_t *, bool failed);
+bool yonder_scripts_owed_pending(const yonder_scripts_t *);
+// The owed events, oldest first, until one is heard: true when a task ran
+// (a listener heard one, or the runtime one needed could not be made), and
+// `*out` is that task's outcome.
+bool yonder_scripts_owed_fire(yonder_scripts_t *, os64_js_outcome_t *);
 bool yonder_scripts_canvas_bitmap(yonder_scripts_t *, const os64_html_node_t *, canvas_bitmap_t *);
 void yonder_scripts_canvas_visit_damage(yonder_scripts_t *,os64_dom_canvas_damage_fn,void *);
 void yonder_scripts_canvas_painted(yonder_scripts_t *, const os64_html_node_t *);
@@ -61,6 +74,12 @@ typedef struct {
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
     os64_dom_svg_hit_provider_t svg_hit;
+    // elementFromPoint's hit provider (dom.h), given `opaque`. NULL: every
+    // point answers null.
+    os64_dom_hit_provider_t hit;
+    // A range's text rects (dom.h), given `opaque`. NULL: a range's text
+    // adds no rect.
+    os64_dom_text_rects_provider_t text_rects;
     // The intersection observations' batch (INTERSECTION_OBSERVER.md),
     // given `opaque`: answered only from a layout already current, false
     // when there is none. NULL: the page's observers never observe.
@@ -94,6 +113,9 @@ typedef struct {
     // Shadow trees' surface (os64_dom_options_t.shadow_trees), which takes
     // `modern` too.
     bool shadow_trees;
+    // DOM Range's surface (os64_dom_options_t.ranges), which takes `modern`
+    // too.
+    bool ranges;
     // Where the page's localStorage and sessionStorage are kept (storage.h),
     // borrowed for the host's life; NULL keeps them for the page's life.
     yonder_storage_t *storage;
@@ -433,6 +455,10 @@ void yonder_scripts_mark(yonder_scripts_t *scripts, os64_dom_milestone_t which, 
 // The page's navigation timing as far as its milestones have been told it;
 // NULL for no host.
 const os64_dom_timing_t *yonder_scripts_timing(const yonder_scripts_t *scripts);
+// The constructed sheets `root` has adopted (os64_dom_adopted); none for no
+// host.
+size_t yonder_scripts_adopted(const yonder_scripts_t *scripts, const os64_html_node_t *root,
+                              os64_dom_adopted_sheet_t *out, size_t cap);
 // The page's storage (dom.h § Web storage): every task the host runs ends
 // with os64_dom_storage_settle, which commits what is due; `due` is when
 // the next commit is (UINT64_MAX for none, yonder_now_ms' clock), and

@@ -390,8 +390,128 @@ static void dom_shadow_pointer_cases(void)
     fixture_free(&f);
 }
 
+/* SHADOW_DOM.md § 12, D4b: constructed sheets and adoptedStyleSheets
+ * (libdom/adopted.c) — the script's view, and the host's (os64_dom_adopted,
+ * the version an adoption moves). */
+static void dom_shadow_adopted_cases(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    DomFixture f = fixture_new(&options);
+    if (fixture_ready(&f)) {
+        dom_script(&f, SHADOW_ASSERT
+            "assert(throwsName(function(){new CSSStyleSheet()},'TypeError'),'not constructible with the switch off');"
+            "assert(!('adoptedStyleSheets' in document)&&!('replaceSync' in CSSStyleSheet.prototype),'no adoption');",
+            "adopted-off");
+        fixture_free(&f);
+    }
+    options.shadow_trees = true;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, SHADOW_ASSERT
+        "var s=new CSSStyleSheet();assert(s instanceof CSSStyleSheet&&s instanceof StyleSheet,'constructs');"
+        "assert(s.ownerNode===null&&s.href===null&&s.type==='text/css'&&s.disabled===false,'a constructed sheet');"
+        "assert(s.replaceSync('p{color:red}')===undefined,'replaceSync');"
+        "var st=document.createElement('style');document.head.appendChild(st);"
+        "assert(throwsName(function(){st.sheet.replaceSync('x')},'NotAllowedError'),'a node\\'s sheet refuses');"
+        "var a=document.adoptedStyleSheets;assert(Array.isArray(a)&&a.length===0,'an empty array');"
+        "assert(document.adoptedStyleSheets===a,'the same array each read');"
+        "document.adoptedStyleSheets=[s];assert(a.length===1&&a[0]===s,'assignment fills the array');"
+        "assert(throwsName(function(){document.adoptedStyleSheets=[st.sheet]},'NotAllowedError'),'a node\\'s sheet');"
+        "assert(throwsName(function(){document.adoptedStyleSheets=[{}]},'TypeError'),'not a sheet');"
+        "assert(throwsName(function(){document.adoptedStyleSheets=7},'TypeError'),'not a sequence');"
+        "assert(a.length===1&&a[0]===s,'a refused assignment changes nothing');"
+        "assert(throwsName(function(){a.push({})},'TypeError'),'push checks');"
+        "var t=new CSSStyleSheet();t.replaceSync('i{}');a.push(t);assert(a.length===2,'push adopts');"
+        "var h=document.createElement('div');document.body.appendChild(h);var r=h.attachShadow({mode:'open'});"
+        "r.adoptedStyleSheets=[t,s];assert(r.adoptedStyleSheets.length===2&&r.adoptedStyleSheets[0]===t,'a root\\'s own');"
+        "globalThis.replaced=null;s.replace('b{}').then(function(v){globalThis.replaced=v});"
+        /* replace does not throw: it rejects. */
+        "globalThis.rejected=null;var pr=st.sheet.replace('x');assert(pr instanceof Promise,'a refused replace is a Promise');"
+        "pr.catch(function(e){globalThis.rejected=e.name});"
+        /* An observable array: no holes, no accessors, never frozen. */
+        "var o=r.adoptedStyleSheets;'use strict';"
+        "assert(!Reflect.set(o,5,s)&&o.length===2,'no index past the length');"
+        "assert(!Reflect.set(o,'length',9)&&o.length===2,'length does not grow');"
+        "assert(!Reflect.deleteProperty(o,0)&&o.length===2,'only the last index deletes');"
+        "assert(Reflect.deleteProperty(o,1)&&o.length===1&&o[0]===t,'the last index deletes');"
+        "assert(!Reflect.defineProperty(o,0,{get:function(){return s}}),'no accessor at an index');"
+        "assert(throwsName(function(){Object.freeze(o)},'TypeError')&&Object.isExtensible(o),'never frozen');"
+        "assert(Reflect.set(o,'length',0)&&o.length===0,'length shrinks');"
+        /* Only the document a sheet was made for adopts it. */
+        "var other=document.implementation.createHTMLDocument('');"
+        "assert(throwsName(function(){other.adoptedStyleSheets=[s]},'NotAllowedError'),'another document refuses');"
+        /* The array's intrinsics are its own: a page's replacements change nothing. */
+        "var keep=Array.from;Array.from=function(){throw Error('page')};"
+        "r.adoptedStyleSheets=[s];Array.from=keep;assert(r.adoptedStyleSheets[0]===s,'Array.from replaced');",
+        "adopted-script");
+    dom_script(&f, SHADOW_ASSERT "assert(globalThis.replaced!==null,'replace resolves with the sheet');"
+               "assert(globalThis.rejected==='NotAllowedError','a refused replace rejects with NotAllowedError');",
+               "adopted-replace");
+    /* The host's view: each root's sheets in order, their text and
+     * generation; an adoption and a replace each move the version. */
+    const os64_html_node_t *doc = f.document->document;
+    os64_dom_adopted_sheet_t got[4];
+    size_t n = os64_dom_adopted(f.binding, doc, got, 4);
+    check(n == 2 && got[0].length == 3 && memcmp(got[0].text, "b{}", 3) == 0 && got[0].generation == 2 &&
+          got[1].length == 3 && memcmp(got[1].text, "i{}", 3) == 0 && got[0].key != got[1].key,
+          "adopted: the document's sheets, their text and generation");
+    const os64_html_node_t *host = f.document->body->last_child;
+    size_t nr = host != NULL && host->shadow_root != NULL ? os64_dom_adopted(f.binding, host->shadow_root, got, 4) : 0;
+    check(nr == 1 && got[0].length == 3 && memcmp(got[0].text, "b{}", 3) == 0,
+          "adopted: a shadow root's sheets, as its array last left them");
+    uint64_t before = os64_html_version(f.document);
+    dom_script(&f, "document.adoptedStyleSheets[0].replaceSync('q{}');", "adopted-touch-text");
+    uint64_t after_text = os64_html_version(f.document);
+    dom_script(&f, "document.adoptedStyleSheets.pop();", "adopted-touch-list");
+    check(after_text > before && os64_html_version(f.document) > after_text,
+          "adopted: a replace and an adoption each move the version");
+    check(os64_dom_adopted(f.binding, doc, got, 4) == 1, "adopted: pop takes a sheet out");
+    fixture_free(&f);
+}
+
+/* Every allocation an adoption makes, failed in turn: whatever the page is
+ * told, the array its script sees and the list the host reads stay one
+ * list (Codex #488: the list's room is taken before the array changes). */
+static void dom_shadow_adopted_sweep(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.shadow_trees = true;
+    static const char kSetup[] =
+        "globalThis.sheets=[];for(var i=0;i<9;i++){var s=new CSSStyleSheet();s.replaceSync('p{}');sheets.push(s)}"
+        "document.adoptedStyleSheets=sheets.slice(0,8);";
+    static const char kStep[] = "try{document.adoptedStyleSheets.push(sheets[8])}catch(e){}";
+    static const char kRead[] = "document.body.setAttribute('data-n',String(document.adoptedStyleSheets.length));";
+    os64_js_outcome_t outcome;
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, kSetup, "adopted-sweep-setup");
+    size_t start = dom_attempts;
+    dom_script(&f, kStep, "adopted-sweep-measure");
+    size_t count = dom_attempts - start;
+    fixture_free(&f);
+    check(count > 0, "adopted sweep: a push allocates");
+    for (size_t cut = 1; cut <= count; cut++) {
+        f = fixture_new(&options);
+        if (!fixture_ready(&f)) break;
+        dom_script(&f, kSetup, "adopted-sweep-setup");
+        dom_fail_at = dom_attempts + cut;
+        (void)os64_js_run(f.runtime, kStep, sizeof(kStep) - 1, "adopted-sweep-step", &outcome);
+        dom_fail_at = 0;
+        dom_sweeps++;
+        if (os64_js_run(f.runtime, kRead, sizeof(kRead) - 1, "adopted-sweep-read", &outcome) == OS64_JS_OK) {
+            const os64_html_attr_t *seen = os64_html_attr(f.document->body, "data-n");
+            size_t script = seen != NULL ? (size_t)strtoul(seen->value, NULL, 10) : 0;
+            size_t host = os64_dom_adopted(f.binding, f.document->document, NULL, 0);
+            check(seen != NULL && script == host, "adopted sweep: the script's array and the host's list agree");
+        }
+        fixture_free(&f);
+    }
+}
+
 static void dom_shadow_cases(void)
 {
+    dom_shadow_adopted_cases();
+    dom_shadow_adopted_sweep();
     dom_shadow_switch_cases();
     dom_shadow_surface_cases();
     dom_shadow_event_cases();

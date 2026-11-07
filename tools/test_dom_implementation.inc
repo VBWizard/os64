@@ -228,6 +228,12 @@ static void implementation_owner_cases(void)
         "p.remove();assert(p.ownerDocument===d,'and taken out, still there');"
         "document.body.appendChild(p);assert(p.ownerDocument===document);"
         "document.body.removeChild(p);assert(p.ownerDocument===document,'taken out of the page, the page\\'s');"
+        "var s=d.createElement('s');d.body.appendChild(s);s.appendChild(d.createTextNode('a'));"
+        "var merged=document.createTextNode('b'),empty=document.createTextNode('');"
+        "s.appendChild(merged);s.appendChild(empty);"
+        "s.normalize();assert(merged.parentNode===null&&empty.parentNode===null&&s.firstChild.data==='ab');"
+        "assert(merged.ownerDocument===d&&empty.ownerDocument===d,'taken out by normalize, still there');"
+        "var tail=s.firstChild.splitText(1);assert(tail.ownerDocument===d&&tail.parentNode===s,'split there');"
         "var q=d.createElement('q');var r=d.createElement('r');q.appendChild(r);"
         "assert(r.ownerDocument===d,'under a node made there');"
         "var copy=q.cloneNode(true);assert(copy.ownerDocument===d&&copy.firstChild.ownerDocument===d,'a copy');"
@@ -418,22 +424,28 @@ static void implementation_document_cases(void)
         "var I=document.implementation,HTML='http://www.w3.org/1999/xhtml',SVG='http://www.w3.org/2000/svg';"
         "var e=I.createDocument(null,'');assert(e instanceof Document&&e.childNodes.length===0&&e.documentElement===null);"
         "assert(I.createDocument('','',null).childNodes.length===0&&I.createDocument(null,null).childNodes.length===0);"
-        "var x=I.createDocument(HTML,'html');assert(x.documentElement.nodeName==='HTML'&&x.childNodes.length===1);"
+        "var x=I.createDocument(HTML,'html');assert(x.documentElement.nodeName==='html'&&x.childNodes.length===1,"
+        "'an XHTML document keeps its HTML elements\\' names as written');"
         "assert(x.documentElement.ownerDocument===x,'its root is its own');"
         "var t=I.createDocumentType('svg','-//W3C//DTD SVG 1.1//EN','http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd');"
         "var s=I.createDocument(SVG,'svg',t);"
         "assert(s.firstChild===t&&s.doctype===t&&s.documentElement.nodeName==='svg'&&t.ownerDocument===s);"
         "assert(s.head===null&&s.body===null&&s.location===null,'an SVG document has no head or body');"
-        "assert(I.createDocument(HTML,'template').documentElement.nodeName==='TEMPLATE');",
+        "assert(I.createDocument(HTML,'template').documentElement.nodeName==='template');",
         "createDocument: with no root, a root, and a doctype before it");
     dom_script(&f, IMPL_ASSERT
         "var I=document.implementation,HTML='http://www.w3.org/1999/xhtml',SVG='http://www.w3.org/2000/svg';"
         "var x=I.createDocument(HTML,'');var kept=x.createElement('DiV');"
         "assert(kept.outerHTML.indexOf('<DiV')===0,'an XML document keeps the case');"
-        "throws('NotSupportedError',()=>I.createDocument(SVG,'').createElement('g'));"
-        "throws('NotSupportedError',()=>I.createDocument(null,'').createElement('g'));"
-        "throws('NotSupportedError',()=>I.createDocument(null,'root'));"
-        "throws('NotSupportedError',()=>I.createDocument('urn:other','root'));"
+        "var g=I.createDocument(SVG,'').createElement('g');assert(g.namespaceURI===null&&g.localName==='g','an SVG document\\'s createElement makes no namespace');"
+        "var n=I.createDocument(null,'').createElement('Root');assert(n.namespaceURI===null&&n.tagName==='Root'&&n.prefix===null,"
+        "'an XML document\\'s, the case kept');"
+        "assert(I.createDocument(null,'root').documentElement.namespaceURI===null,'createDocument in no namespace');"
+        "var o=I.createDocument('urn:other','p:root').documentElement;"
+        "assert(o.namespaceURI==='urn:other'&&o.prefix==='p'&&o.localName==='root'&&o.tagName==='p:root','another namespace, a prefix');"
+        "var q=document.createElementNS(SVG,'s:rect');assert(q.prefix==='s'&&q.localName==='rect'&&q.tagName==='s:rect','a prefixed SVG element');"
+        "var h=document.createElementNS(HTML,'h:div');assert(h.prefix==='h'&&h.tagName==='H:DIV'&&h instanceof HTMLDivElement,'a prefixed HTML element');"
+        "assert(document.createElementNS(null,'free').namespaceURI===null,'createElementNS in no namespace');"
         "throws('NamespaceError',()=>I.createDocument(null,'a:b'));"
         "throws('NamespaceError',()=>I.createDocument(HTML,'xml:b'));"
         "throws('NamespaceError',()=>I.createDocument(HTML,'xmlns'));"
@@ -538,11 +550,57 @@ static void implementation_control_type_cases(void)
     fixture_free(&f);
 }
 
+/* new Document(), CDATASection and ProcessingInstruction (data_nodes.c):
+ * what WPT's dom/common.js builds its test trees from. */
+static void implementation_data_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, IMPL_ASSERT
+        "var d=new Document();assert(d instanceof Document&&d.childNodes.length===0&&d.documentElement===null,'empty');"
+        "class Mine extends Document{};assert(new Mine() instanceof Mine,'a subclass');"
+        "var e=d.createElement('Mixed');assert(e.namespaceURI===null&&e.tagName==='Mixed','no namespace, case kept');"
+        "var c=d.createCDATASection('1234');assert(c instanceof CDATASection&&c instanceof Text&&c.nodeType===4&&"
+        "c.nodeName==='#cdata-section'&&c.data==='1234'&&c.ownerDocument===d,'a CDATA section');"
+        "assert(Object.getPrototypeOf(CDATASection.prototype)===Text.prototype&&Object.getPrototypeOf(CDATASection)===Text);"
+        "throws('NotSupportedError',()=>document.createCDATASection('x'));"
+        "throws('InvalidCharacterError',()=>d.createCDATASection('a]]>b'));"
+        "throws('TypeError',()=>new CDATASection());"
+        "var p=document.createProcessingInstruction('xml-stylesheet','href=\"a\"');"
+        "assert(p instanceof ProcessingInstruction&&p instanceof CharacterData&&p.nodeType===7&&p.target==='xml-stylesheet'&&"
+        "p.nodeName==='xml-stylesheet'&&p.data==='href=\"a\"'&&p.length===8,'a processing instruction, in an HTML document too');"
+        "throws('InvalidCharacterError',()=>document.createProcessingInstruction('1x','d'));"
+        "throws('InvalidCharacterError',()=>document.createProcessingInstruction('x','?>'));"
+        "throws('InvalidCharacterError',()=>document.createProcessingInstruction('\\u00d7',''));"
+        "throws('InvalidCharacterError',()=>document.createProcessingInstruction('\\u00b7x',''));"
+        "assert(document.createProcessingInstruction('x\\u00b7\\u00e9','').target==='x\\u00b7\\u00e9','Unicode name characters by code point');"
+        "var host=document.createElement('p');document.body.appendChild(host);"
+        "host.appendChild(c.cloneNode());assert(host.firstChild.nodeType===4,'a clone keeps the kind');"
+        "var w=document.createTreeWalker(host,NodeFilter.SHOW_CDATA_SECTION);assert(w.nextNode()===host.firstChild,"
+        "'SHOW_CDATA_SECTION shows it');"
+        "host.appendChild(new Text('a'));host.insertBefore(new Text('z'),host.firstChild);"
+        "assert(host.childNodes[2].wholeText==='z1234a'&&host.childNodes[1].wholeText==='z1234a','wholeText runs through a CDATA section');"
+        "host.normalize();assert(host.childNodes.length===3&&host.childNodes[1].nodeType===4,'normalize leaves it alone');"
+        "var tail=host.childNodes[1].splitText(2);assert(tail.nodeType===4&&tail.data==='34','its split tail is one too');"
+        "host.appendChild(p);assert(host.lastChild===p&&p.parentNode===host,'a PI goes in a tree');"
+        "assert(!d.createCDATASection('x').isEqualNode(d.createTextNode('x')),'a CDATA section equals no Text');"
+        "var z=document.createElementNS(null,'z');z.innerHTML='<b>y</b>';"
+        "assert(z.firstChild.localName==='b'&&z.textContent==='y','innerHTML in no namespace parses');"
+        "var X='http://www.w3.org/1999/xhtml',d2=new Document();d2.appendChild(d2.createElementNS(X,'DIV'));"
+        "assert(d2.getElementsByTagName('DIV').length===1&&d2.getElementsByTagName('div').length===0,"
+        "'an XML document matches an HTML element\\'s name as written');"
+        "assert(document.createElementNS(X,'x:div').outerHTML==='<div></div>','a known namespace serializes its local name');"
+        "assert(d.createElementNS('urn:o','o:k').outerHTML==='<o:k></o:k>','another one its qualified name');",
+        "new Document(), CDATASection, ProcessingInstruction");
+    fixture_free(&f);
+}
+
 static void dom_implementation_cases(void)
 {
     implementation_shape_cases();
     implementation_html_document_cases();
     implementation_owner_cases();
+    implementation_data_cases();
     implementation_import_adopt_cases();
     implementation_windowless_cases();
     implementation_reflection_cases();

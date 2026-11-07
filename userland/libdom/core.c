@@ -75,6 +75,8 @@ JSValue d_html_error(JSContext *ctx, int64_t status)
         name = "HierarchyRequestError";
     else if (status == OS64_HTML_NOT_FOUND) name = "NotFoundError";
     else if (status == OS64_HTML_NOT_SUPPORTED) name = "NotSupportedError";
+    else if (status == OS64_HTML_INVALID_NODE_TYPE) name = "InvalidNodeTypeError";
+    else if (status == OS64_HTML_INDEX_SIZE) name = "IndexSizeError";
     else if (status <= OS64_HTML_TOO_LARGE && status >= OS64_HTML_WORK_EXHAUSTED)
         name = "QuotaExceededError";
     return d_error(ctx, name, os64_html_status_name(status));
@@ -514,6 +516,8 @@ void os64_dom_free(os64_dom_t *dom)
     d_intersections_free(dom);
     d_resizes_free(dom);
     d_walkers_free(dom);
+    d_ranges_free(dom);
+    if (dom->body_context != NULL) os64_html_release(dom->document, dom->body_context);
     d_performance_free(dom);
     d_kept_free_all(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
@@ -521,6 +525,7 @@ void os64_dom_free(os64_dom_t *dom)
         d_event_free(dom, entry);
         d_attr_free(dom, entry);
         d_canvas_free(entry);
+        d_adopted_free(dom, entry);
         d_free(dom, entry->output_default);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);

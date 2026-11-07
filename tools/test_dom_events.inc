@@ -884,10 +884,62 @@ static void dom_event_path_cases(void)
     fixture_free(&f);
 }
 
+/* An element's load and error as the host fires them for a sheet or a
+ * script (LOAD_EVENTS.md): trusted, not bubbling, not cancelable. DOM's
+ * "get the parent" stops a load at the document, so a capture listener on
+ * document hears it and one on window does not; an error reaches window
+ * too. The element's onload runs, and os64_dom_listener_calls counts what
+ * ran, where os64_dom_listens says only that the page listens somewhere. */
+static void dom_element_load_cases(void)
+{
+    DomFixture f = event_fixture("<!doctype html><html><head>"
+        "<link id=sheet rel=stylesheet href=a.css media=print onload=\"log.push('onload '+this.media);this.media='all'\">"
+        "</head><body><p id=para></p></body></html>", "http://example.test/page.html");
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, DOM_ASSERT "globalThis.log=[];"
+        "function mark(n){return e=>log.push(n+' '+e.type+' '+e.eventPhase+' '+e.bubbles+' '+e.cancelable+' '+e.isTrusted)}"
+        "globalThis.dc=mark('dc');globalThis.db=mark('db');"
+        "window.addEventListener('load',mark('wc'),true);window.addEventListener('error',mark('wc'),true);"
+        "document.addEventListener('load',dc,true);document.addEventListener('error',dc,true);"
+        "document.addEventListener('load',db);document.addEventListener('error',db);",
+        "element-load-setup.js");
+    bool prevented = true;
+    os64_js_outcome_t outcome;
+    os64_dom_event_t load = plain_event("load", false, false), error = plain_event("error", false, false);
+    uint64_t calls = os64_dom_listener_calls(f.binding);
+    check(os64_dom_dispatch(f.binding, native_id(f.document->document, "sheet"), &load, &prevented, &outcome) ==
+              OS64_JS_OK && !prevented && os64_dom_listener_calls(f.binding) == calls + 2,
+          "an element's load runs two listeners: document's capture and the element's onload");
+    dom_script(&f, DOM_ASSERT LOG_IS("'dc load 1 false false true|onload print'")
+        "assert(document.getElementById('sheet').getAttribute('media')==='all','link.media reflects');"
+        "assert(document.getElementById('sheet').type==='','link.type reflects, empty when absent');",
+        "element-load.js");
+    calls = os64_dom_listener_calls(f.binding);
+    check(os64_dom_dispatch(f.binding, native_id(f.document->document, "sheet"), &error, &prevented, &outcome) ==
+              OS64_JS_OK && os64_dom_listener_calls(f.binding) == calls + 2,
+          "an element's error runs window's capture listener and document's");
+    dom_script(&f, LOG_IS("'wc error 1 false false true|dc error 1 false false true'"), "element-error.js");
+    calls = os64_dom_listener_calls(f.binding);
+    check(os64_dom_dispatch(f.binding, native_id(f.document->document, "para"), &error, &prevented, &outcome) ==
+              OS64_JS_OK && os64_dom_listener_calls(f.binding) == calls + 2,
+          "an error at an element with no handler of its own runs only the capture listeners");
+    dom_script(&f, LOG_IS("'wc error 1 false false true|dc error 1 false false true'")
+        "document.removeEventListener('load',dc,true);document.removeEventListener('load',db);",
+        "element-quiet.js");
+    calls = os64_dom_listener_calls(f.binding);
+    check(os64_dom_listens(f.binding, "load") &&
+              os64_dom_dispatch(f.binding, native_id(f.document->document, "para"), &load, &prevented, &outcome) ==
+              OS64_JS_OK && os64_dom_listener_calls(f.binding) == calls,
+          "a page that listens for load on window runs nothing for an element's load");
+    dom_script(&f, LOG_IS("''"), "element-quiet-log.js");
+    fixture_free(&f);
+}
+
 static void dom_event_cases(void)
 {
     dom_resolve_matches_page();
     dom_event_dispatch_cases();
+    dom_element_load_cases();
     dom_event_path_cases();
     dom_event_handler_cases();
     dom_event_window_order_cases();

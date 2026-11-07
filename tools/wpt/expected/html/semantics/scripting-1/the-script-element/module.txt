@@ -5,11 +5,11 @@
 [required]
 # Slice 3: ES modules (modules.c over libjs's module entry). Each fails
 # with the switch off; the two passes not listed here pass either way,
-# each a test that an import fails. What still fails: a script
-# element's load and error events, async=false ordering, import maps,
-# modulepreload, import.meta.resolve, JSON and CSS modules, workers
-# and frames (DEBTS.md § ES modules), and pages that need a .py handler
-# or a server's delay, which this runner has not.
+# each a test that an import fails. What still fails: async=false
+# ordering, import maps, modulepreload, import.meta.resolve, JSON and
+# CSS modules, workers and frames (DEBTS.md § ES modules), and pages
+# that need a .py handler or a server's delay, which this runner has
+# not (the load-error-events pages' scripts come from one).
 charset-02.html	UTF-16 module script with UTF-16BE BOM
 charset-02.html	UTF-16 module script with UTF-16LE BOM
 currentScript-null.html	currentScript on script type=module should be all null
@@ -116,7 +116,11 @@ dynamic-import/inline-event-handler.html	dynamic import should work when trigger
 [passing]
 charset-02.html	UTF-16 module script with UTF-16BE BOM
 charset-02.html	UTF-16 module script with UTF-16LE BOM
+choice-of-error-1.html	Parse errors in different files should be reported depending on different roots
+choice-of-error-2.html	Instantiation errors in different files should be reported depending on different roots
+choice-of-error-3.html	Evaluation errors are cached in intermediate module scripts
 currentScript-null.html	currentScript on script type=module should be all null
+custom-element-exception.html	Test that exceptions from the constructor of a custom element inside a module are propagated as expected.\n
 duplicated-imports-1.html	Duplicated imports with the same specifier
 duplicated-imports-2.html	Duplicated imports with the different specifier
 dynamic-import/code-cache-base-url.html	alpha - eval
@@ -166,11 +170,16 @@ dynamic-import/string-compilation-nonce-module.html	the Function constructor mus
 dynamic-import/string-compilation-of-promise-result.html	Evaled the script via Function, failed import
 dynamic-import/string-compilation-of-promise-result.html	Evaled the script via eval, failed import
 error-and-slow-dependency.html	module graph with a syntax error should not evaulate but should not crash UA.
+error-type-1.html	network error has higher priority than parse error
+error-type-2.html	parse error has higher priority than instantiation error
+error-type-3.html	instantiation error has higher priority than evaluation error
 execorder.html	Interlaced module/non-module script execution (parsed, async-ordered)
 execorder.html	Unordered module script execution (dynamic, unordered #1)
 execorder.html	Unordered module script execution (dynamic, unordered #2)
 execorder.html	Unordered module script execution (parsed, unordered #1)
 execorder.html	Unordered module script execution (parsed, unordered #2)
+fetch-error-1.html	Test that failure to fetch root leads to error event on script.
+fetch-error-2.html	Test that failure to fetch dependency leads to error event on script.
 import-meta/import-meta-url.html	import.meta.url in a dependent external script
 import-meta/import-meta-url.html	import.meta.url in a root external script
 import-meta/import-meta-url.html	import.meta.url in a root inline script
@@ -184,6 +193,11 @@ inline-async-inserted-execorder.html	Inline async="" module scripts execute or t
 inline-async-onload.html	Inline async module script vs. onload
 inline-defer-onload.html	Inline defer module script vs. onload
 inline-no-async-onload.html	Inline module script vs. onload
+instantiation-error-4.html	Test that loading a graph in which a module is already errored results in an error.
+instantiation-error-5.html	Test that loading a graph in which a module is already errored results an error.
+instantiation-error-6.html	Test that ambiguous star exports lead to an instantiation error and that the correct module is blamed.
+instantiation-error-7.html	Test that ambiguous star exports lead to an instantiation error, even when discovered through a star export, and that the correct module is blamed.
+integrity.html	The integrity attribute must be verified on the top-level of a module and allow it to execute when it matches
 integrity.html	The integrity attribute must have no affect on inline module scripts
 late-namespace-request.html	Test the situation where a module is instantiated without the need for a namespace object, but later on a different module requests the namespace.
 late-star-export-request.html	Test the situation where a module is instantiated without a use of its star-exports, but later on a different module requests them.

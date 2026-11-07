@@ -141,7 +141,7 @@ the same arrangement with three differences:
   insertion's walk that queues `connectedCallback` and tries upgrades
   (custom.c), `customElements.define`'s walk of the document (a lazily
   defined element whose instances already sit inside other components'
-  shadow trees must upgrade), `d_custom_cloned`, and the removal walk that
+  shadow trees must upgrade), `d_custom_upgrade_new`, and the removal walk that
   queues `disconnectedCallback`. Outside libdom: whatever enumerates a
   page — pictures and frames to fetch, scripts to run, the sheet list
   (§ 6), form controls, Tab order, find, selection. Some descents must
@@ -298,10 +298,12 @@ This sits above specificity, which only compares within one context.
 slot, which inherits from its own flat parent, so a component's `color`
 reaches the text it wraps.
 
-**Constructed sheets.** `new CSSStyleSheet()`, `replaceSync`, `replace`
-(a Promise) and the CSSOM members libdom's sheets already have (`cssRules`,
-`insertRule`, `deleteRule`). A constructed sheet has no owner node and no
-`@import` (CSSOM: `replace` and `replaceSync` drop them).
+**Constructed sheets.** `new CSSStyleSheet()`, `replaceSync` and `replace`
+(a Promise). A constructed sheet has no owner node and no `@import`
+(CSSOM: `replace` and `replaceSync` drop them). libdom's sheets carry no
+rule members today (`cssRules`, `insertRule`, `deleteRule`); whether D4b
+adds them is its own question, answered by what the census finds calling
+them.
 `adoptedStyleSheets` is an observable array: assigning or editing it
 reorders the scope's sheets and requests a cascade.
 
@@ -310,6 +312,83 @@ libgarb's part: the scopes list and its filter, `:host`, `:host()` and
 context step in the cascade's comparison. The cascade
 already walks the document to match; it walks every connected shadow tree
 too, which is the cascade's share of the flat-tree change.
+
+**How the cascade does it (D4a).**
+- *Input.* `garb_scope_in_t` is a tree's root (the document node or a
+  shadow root) and the indices of the sheets it names. A new entry point
+  takes the sheets and the scopes together, and `garb_cascade_matches`
+  gains a scoped twin that compares the scopes too. The entry points
+  that take no scopes are the old cascade: every sheet applies in the
+  document's tree. An imported sheet applies wherever its importer does
+  and is not listed. A scope's list says WHICH sheets apply, not in what
+  order: within one tree, rules rank in the sheets' order in the array,
+  which yonder builds in shadow-including order (so a tree's own sheets
+  rank in tree order). D4b's `adoptedStyleSheets` order is yonder's to
+  express through the array.
+- *The walk.* Matching, slot sizing, the removed-subtree reaping and the
+  added-subtree slots all go in shadow-including order (the cascade's
+  own `si_next`: a host, then its shadow tree, then its children, with a
+  way to skip a subtree that marking needs). That order puts every element
+  after its flat parent (its parent, its host, or the slot it is assigned
+  to), which is what lets an element take its custom properties from its
+  flat parent in one pass. Each element's slot keeps its tree's scope (-1
+  when no sheet applies there), taken from its parent's slot, or looked up
+  once per shadow root.
+- *The filter.* A bucket entry whose rule's sheet does not apply in the
+  element's scope is passed over before its selector is tried: one bit
+  per (scope, sheet).
+- *The featureless host.* Climbing for a combinator from a shadow root's
+  child reaches the host, as a featureless element: a compound matches it
+  only when every simple selector in it is `:host` or `:host(<compound>)`
+  (the compound tested against the host as an ordinary element), and the
+  climb stops there. `:host` matches nothing else. So `:host(.open)
+  .panel` works, `.page .panel` in a component never reaches the page,
+  and `querySelector` inside a shadow root answers the same way.
+- *Two more targets.* A rule whose subject compound holds `:host` is filed
+  in `TARGET_HOST`, consulted when cascading a host, under its shadow
+  root's scope. A rule ending in `::slotted(<compound>)` is filed in
+  `TARGET_SLOTTED` (keyed on the compound to the left: the slot's),
+  consulted for an assigned element once per slot on its forwarding
+  chain, each under that slot's scope, the selector matched from the slot
+  and the argument tested against the element. Specificity: `:host` and
+  `:host()` weigh as a pseudo-class plus their argument, `::slotted()` as
+  a pseudo-element plus its argument (CSS Scoping 1). `:host::before` and
+  the like are not filed: a DEBTS row.
+- *The context step.* Every declaration carries its context: where its
+  tree's root falls, in shadow-including order, among the trees that
+  style the element. Those trees always fall in one order — the
+  element's own (its rules, `style` attribute and SVG presentation
+  attributes) first; then each slot's tree along its forwarding chain,
+  outward to inward, since each slot's host lies inside the tree before;
+  and a host's own shadow tree last, its root following the host — so
+  the context is a count along that list, not a nesting depth (two trees
+  can stand at one depth: a slotted host's slot tree and its own).
+  `before()` compares it after importance and before the `style`
+  attribute: for normal declarations the earlier wins, for important ones
+  the later. A rule from a sheet that applies in two of the trees counts
+  in each.
+- *Inheritance.* `custom_value`'s chain and `animation_names`' climb take
+  the flat parent, falling back to the parent for an element in no flat
+  tree (a host's unassigned child, a slot's fallback while it has
+  nodes). yonder's `resource_transform` takes the flat parent too.
+- *Updates.* `connected` asks for the shadow-including root. Marking a
+  subtree marks its shadow trees too, and marking a slot marks the nodes
+  assigned to it; a host's attachment (a CHILDREN change with nothing
+  added or removed) marks the host's whole subtree, and a slot's `name`
+  changing or a slot arriving marks its host's children. A slot leaving
+  asks for a fresh cascade: the same batch may have removed or moved the
+  tree it left before the log is read. A cascade over a tree with shadow
+  roots recomputes its dirty elements in one shadow-including walk rather
+  than from its minimal dirty roots, because a dirty slotted element's
+  flat parent can lie outside its own dirty root.
+- *libpage and yonder.* The model's sheet list and `os64_page_sheets_in`
+  take a shadow tree's sheets too, in shadow-including order, and say
+  which tree each one is in (`scope`). `document.styleSheets` is libdom's
+  own walk and keeps to the document. yonder groups its cascade input by
+  that scope. Every shadow `<style>` is still a sheet of its own in
+  yonder's table, so a page with many component instances that each
+  carry one fills `SHEETS_MAX`: a DEBTS row, which D4b's shared adopted
+  sheets answer for Lit, the case § 1 measured.
 
 ## 7. The script surface
 
@@ -337,14 +416,16 @@ CSSStyleSheet's constructor and the members above; Document's
 load: `window.ShadowRoot && ('adoptedStyleSheets' in Document.prototype)
 && ('replace' in CSSStyleSheet.prototype)`, and the 96 `MISSING global
 ShadowRoot` records are guards that flip the day the global exists. So
-the names come and go together, behind one libdom switch, off until D4
-turns it on: `attachShadow`, `shadowRoot`, `slot`, `assignedSlot` (on
-Element and Text), `getRootNode`'s `composed` member, `ShadowRoot`,
-`HTMLSlotElement`, `CSSStyleSheet`'s constructor, both
-`adoptedStyleSheets`, and `Event.composed`. A `yonder.conf` developer key
-sets it before D4 does, so D3 can load real pages in QEMU, and the host
-suites set it for their own cases. All of it is also behind the Modern
-Web switch, as every surface since Slice 1 is.
+the names come and go together, behind one libdom switch: `attachShadow`,
+`shadowRoot`, `slot`, `assignedSlot` (on Element and Text),
+`getRootNode`'s `composed` member, `ShadowRoot`, `HTMLSlotElement`,
+`CSSStyleSheet`'s constructor with `replace` and `replaceSync`, both
+`adoptedStyleSheets`, and `Event.composed`. libdom's default leaves it
+off, so a host opts in; yonder turns it on (D4b), and its `yonder.conf`
+developer key `shadow_dom = off` turns it off again, to compare a page
+without shadow trees. The host suites set it for their own cases. All of
+it is also behind the Modern Web switch, as every surface since Slice 1
+is.
 
 ## 8. Events
 
@@ -492,10 +573,52 @@ Four PRs, stacked, merged in order, the switch (§ 7) off until the last:
   on § 1's community page, which decides whether the cache keeps its
   version test beside the marks (Fable, round 3: any change anywhere
   drops every root's assignment, the marks already being exact).
-- **D4 Scoped style, and the switch on**: libgarb's scopes and their
-  filter, `:host`, `:host()`, `::slotted()`, the context step, yonder's
-  sheet list in shadow-including order, constructed sheets and both
-  `adoptedStyleSheets`; then the switch goes on. M.
+- **D4a Scoped style**: libgarb's scopes and their filter, the
+  shadow-including walk, `:host`, `:host()`, `::slotted()`, the context
+  step, flat inheritance of cascaded values, and libpage's and yonder's
+  sheet lists carrying each sheet's tree (§ 6, "How the cascade does
+  it"). The switch stays off. M.
+- **D4b Constructed sheets, and the switch on**: `new CSSStyleSheet()`,
+  `replace` and `replaceSync`, both `adoptedStyleSheets`; then the switch
+  goes on and the census runs again. M. The plan:
+  - *libdom keeps the text.* A constructed sheet is a CSSStyleSheet with
+    no owner node and a record of its own: the text `replace`/`replaceSync`
+    last gave it and a generation that moves with each. Both refuse a
+    sheet a node owns (NotAllowedError); `replace` answers a Promise of the
+    sheet, rejected rather than thrown when it refuses (WebIDL). CSSOM
+    drops `@import` from a constructed sheet, so yonder never
+    fetches one's imports. The constructor's options (`media`, `disabled`,
+    `baseURL`) are a DEBTS row until something reads them.
+  - *`adoptedStyleSheets` is an observable array* on `Document.prototype`
+    and `ShadowRoot.prototype`: one array object per root (the same one
+    each read), a Proxy over a plain array made by a small embedded
+    factory (event.c's precedent), run at install so it holds the engine's
+    own Proxy, Reflect and Array.from whatever a page replaces later. Its
+    traps keep WebIDL observable array's shape — no holes, no accessor at
+    an index, never non-extensible — and hand every value going in and
+    every change to native hooks, which refuse anything but a constructed
+    sheet of the root's document (TypeError / NotAllowedError, as CSSOM
+    says) and keep the root's list. Assigning an array replaces the
+    contents.
+  - *The change signal is the document's version.* yonder restyles when the
+    version moves, and an adoption or a `replaceSync` moves no node. A new
+    libhtml verb, `os64_html_touch`, moves the version and logs a STATE
+    change on the root with no listener told — `set_ce`'s shape, for the
+    same reason (the cascade reads it). libdom touches a root when its
+    list changes, and every root adopting a sheet whose text changes.
+  - *yonder reads the adoptions* when it builds its sheet table: after the
+    model's sheets, for the document and each connected shadow root in
+    shadow-including order, libdom's list for that root (a key, the text,
+    its generation). One table entry per distinct TEXT, parsed once and
+    reused across rebuilds — so a component that makes its own sheet in
+    every instance costs one entry, not one an instance; the entries go
+    after every sheet the model lists, each in the order first met, and
+    each scope lists its adopted ones after its own — CSSOM's final style
+    sheets. Two roots adopting shared sheets in opposite orders get the
+    first one's: a DEBTS row. The cascade finds each root's scope by
+    hashing it, since such a page has thousands of roots.
+  - *The switch goes on*: `shadow_trees` in yonder's libdom options
+    defaults on, and the yonder.conf key stays to turn it off.
 
 Holding the switch off until D4 is the answer to § 2 applied to the
 stack: until style is scoped, a page that feature-tests is better served
@@ -546,7 +669,7 @@ Each entry is ruled one of three ways:
 | libhtml dom.c `root_of` in `split_records`, `d_parted`, `take_out`, `assert_records`, `d_root`; tree.c `tree_root` in `associate_form` | does a form owner share the node's tree | STOPS, because HTML resets a form owner that is not in the element's tree |
 | libhtml fragment.c `h_parse_fragment`'s context climb | the fragment parser's context element | STOPS, because a ShadowRoot's `innerHTML` passes its host as the context explicitly |
 | libdom window.c `tree_root` under `d_connected` and `d_in_window_tree`, and their callers: custom.c `children_changed` and `upgrade`, window.c `submit`, canvas.c `os64_dom_canvas_visit_damage`, view.c `d_computed_property` and `computed_empty`, pointer.c `connected` (its sixteen uses); yonder geometry.c `connected` and the snapshot's root check, yonder.c `node_in_document` and `asks_perform_with_fallback`'s root check | is the node in the document | CROSSES. DOM's "connected" is the shadow-including root being a document; these become one libhtml call |
-| libgarb cascade.c `connected` (and `mark_subtree`, `mark_changed`, `mark_children`, `garb_cascade_update` through it) | is a changed node in what the cascade matched | CROSSES, but in D4 with the scoped match walk: the build visits the document's tree alone until then, so crossed early every change inside a shadow tree would find no slot and force a fresh cascade (Fable, round 3) |
+| libgarb cascade.c `connected` (and `mark_subtree`, `mark_changed`, `mark_children`, `garb_cascade_update` through it) | is a changed node in what the cascade matched | CROSSES, but in D4a with the scoped match walk: the build visits the document's tree alone until then, so crossed early every change inside a shadow tree would find no slot and force a fresh cascade (Fable, round 3) |
 | libdom implementation.c `d_node_document` | `ownerDocument`, by climbing to a document | CROSSES. Today a node in a shadow tree would climb to the shadow root, find no document, and answer the window's document by fallback, right by accident for the window's own tree and wrong for any other document's |
 | libdom sheets.c `associated` | does a `style` or `link` have a sheet | CROSSES. A sheet's node in a connected shadow tree has a sheet; where it applies is § 6's scope |
 | libdom compare.c `root_of`, `depth_of`, `is_ancestor`, `precedes`, `position`; collection.c `d_selector_test`; walker.c `inclusive_ancestor`, `retarget`, `following`, `walker_next` | `contains`, `compareDocumentPosition`, `closest`, TreeWalker and NodeIterator | STOPS, because each is defined over one tree; two nodes in different trees compare as disconnected |
@@ -567,16 +690,16 @@ Each entry is ruled one of three ways:
 | libhtml dom.c `next_in_tree` in `split_records`, `d_parted` | form owner records under a moved node | STOPS, because form owners are per tree (A.1) |
 | libhtml serialize.c `children`, `os64_html_serialize`; fragment.c `copy_result` | serializing and the fragment parser's result | STOPS, because a host's `innerHTML` and `outerHTML` exclude its shadow tree (`getHTML` booked, § 10) |
 | libhtml core.c `os64_html_document_element`, dom.c `landmarks`, `child_of_kind`; libdom node.c `d_document_element`, `d_document_part`, view.c `root_element`, `body_element`, `view_member`, event.c `body_element`, document.c `title_element`, `title_text`, `title_set`; yonder.c `title_of`; libpage resolve.c `find_base` | the document's own landmarks: root, head, body, title, base | STOPS, because each is a child or descendant of the document in its own tree |
-| libdom custom.c `children_changed` (the insertion walk that tries upgrades and queues `connectedCallback`; the removal walk that queues `disconnectedCallback`), `define`'s walk of the document, `registry_member`'s `upgrade(root)`, `d_custom_cloned`, `d_custom_adopted` | custom element reactions under a node | CROSSES, because the standard walks each one's shadow-including descendants (a lazily defined element whose instances already sit in other components' roots upgrades) |
+| libdom custom.c `children_changed` (the insertion walk that tries upgrades and queues `connectedCallback`; the removal walk that queues `disconnectedCallback`), `define`'s walk of the document, `registry_member`'s `upgrade(root)`, `d_custom_upgrade_new`, `d_custom_adopted` | custom element reactions under a node | CROSSES, because the standard walks each one's shadow-including descendants (a lazily defined element whose instances already sit in other components' roots upgrades) |
 | libdom window.c `subtree_next` in `d_script_mark_tree`, `d_script_copy_marks`, `d_script_collect`, `d_script_connected` | the scripts an insertion makes connected | CROSSES, because a script that becomes connected inside a shadow tree runs |
 | libdom event.c `os64_dom_handler_attributes` | which event-handler attributes the page has | CROSSES: a handler on an element in a shadow tree is a listener the page has |
 | libdom node.c `getElementById` (`method`), collection.c `query_next`, `query_step`, `refresh`, `d_select`; classic.c `next_node`, `d_form_control`, `named_property`, `d_classic_collection`; content.c `text_next`, `d_content_get`, `d_replace_content`; controls.c `d_child_text`, `d_label_control`; mixin.c `change`, `adjacent`, `normalize`, `reflect`; tables.c; options.c `text_step`, `option_text`; walker.c `walker_children`, `walker_siblings`, `iterator_traverse`; validity.c `d_form_validate` | `querySelector*`, `getElementsBy*` and live collections, `getElementById`, the document's collections and named access, `form.elements`, `textContent`, labels, `normalize`, table parts, option text, traversal, form validation | STOPS, because each is scoped to the receiver's own descendants or the document's own tree; a ShadowRoot is a receiver of its own for the queries (§ 7) |
 | libpage core.c `collect_node`, `collect_model`, `collect_forms` | the page model: controls, links, frames, Tab order | CROSSES for gathering, in shadow-including order: a frame in a connected tree loads, and a control or link inside a component is one a person types into or follows. But what a person can REACH follows the flat tree: a node with no place in it (a light child assigned to no slot, or a slot's fallback while the slot has nodes) renders nowhere, so the model is to count it hidden, as it counts a node under `display: none`: D3's, with `os64_html_flat_parent` answering NULL for both. Tab order by the flat tree (a component's own controls around the content it wraps, not before it) is its own DEBTS row with this slice, apart from `delegatesFocus`'s |
 | libpage core.c `collect_ids` | the document's ids, for `#fragment` navigation and `form=` | STOPS for the document's map, because ids are per tree; a control in a shadow tree resolves `form=` in its own tree (libpage gains per-root lookup in D2a) |
-| libpage core.c `walk_sheets`; yonder.c's sheet list | the page's sheets | CROSSES, each sheet carrying its scope (§ 6; D4) |
+| libpage core.c `walk_sheets`; yonder.c's sheet list | the page's sheets | CROSSES, each sheet carrying its scope (§ 6; D4a) |
 | libpage state.c `tree_next`, `os64_page_node_checked`, `os64_page_node_set_checked`, `p_radio_group_missing`, `select_assign`, `option_index`, `os64_page_node_selected_index`, `os64_page_node_value`, `p_state_set_value`, `attr_owner`, `attr_select_baseline`, `attr_selection`, `os64_page_node_set_attr`, `tree_plan_*`, `tree_radio_same`, `textarea_value_equal`, `tree_change`, `os64_page_node_clone` | control state: radio peers, selection, normalization after a tree change | STOPS, because each is per tree; a host inserted with a shadow tree brings controls whose groups are already their root's |
 | libpage submit.c `text_blank`, `option_value_empty`, `contained_direction`; value.c `p_child_text_into`; core.c `gather` (under `p_subtree_text_into`), `p_subtree_text_into`, `first_legend`, `read_options` | an element's own text and children | STOPS: its own descendants |
-| libgarb cascade.c `garb_cascade_limited`'s match walk, `subtree_next` in `mark_subtree` and `mark_children`, `garb_cascade_dump` | which elements the cascade matches and re-matches | CROSSES: every connected shadow tree is matched, by its scopes (§ 6; D4) |
+| libgarb cascade.c's match walk (`build`), `mark_subtree`, `garb_cascade_dump` | which elements the cascade matches and re-matches | CROSSES: every connected shadow tree is matched, by its scopes (§ 6; D4a, through `si_next`: A.7) |
 | libgarb select.c `next_el`, `position`, `pseudo_matches`, `subtree_has`, `has_matches` | `:nth-*`, `:empty`, `:has()` | STOPS, because structural selectors are per tree |
 | libgarb cascade.c `garb_parse_style_element` | a `style` element's text | STOPS: its own children |
 | libflow boxes.c `after_of`, `kids`, `sib`, `count_items`, `element_box`, `table_part`; style.c `blank`, `next_element`, `f_style_build_reusing`; flow.c `motion_seen`, `motion_drawn`, `draws_none`; reuse_snapshot.inc `reuse_next`, `reuse_snapshot_new`; dump.c `f_style_dump` | box building, style order, list counting, table parts, the reuse snapshot; pictures are fetched for the boxes this builds | FLAT (D3) |
@@ -686,4 +809,18 @@ reads one row more finely than A.3 wrote it.
 | libdom resize.c `node_depth` | ResizeObserver's depth | FLAT (A.1) |
 | yonder geometry.c's `offsetParent` climb, and `closed_shadow_hidden` | `offsetParent` | FLAT, passing over an ancestor closed-shadow-hidden from the element (a fixed one ends the walk with none), as CSSOM View's steps do; the offsets are taken from what it answers. `closed_shadow_hidden` STOPS at a node's own root and CROSSES for the ancestor test. Not retargeting: an ancestor in an open tree is an answer (Quinn's review of #486) |
 | yonder yonder.c `element_of`, `parts_what`, `webfonts_chars` | a hit text's element, the record's name for it, the text a web font must cover | FLAT (A.3) |
-| libgarb cascade.c `custom_value`, `animation_names`; yonder svg.c `resource_transform` | inheritance of a cascaded value | FLAT, and moved with D4: until D4 the cascade styles no shadow tree, so there is nothing for them to inherit across |
+| libgarb cascade.c `custom_value`, `animation_names`; yonder svg.c `resource_transform` | inheritance of a cascaded value | FLAT, and moved with D4a: until D4a the cascade styles no shadow tree, so there is nothing for them to inherit across |
+
+### A.7 Walks D4a adds
+
+| Sites | Question | Ruling |
+|---|---|---|
+| libgarb cascade.c `si_next` (the build's match walk and slot sizing, `garb_cascade_dump`, the shadowed update's recompute, the removed- and added-subtree loops, `mark_subtree`) | which elements the cascade matches, and re-matches | CROSSES, in shadow-including order, so an element follows the element it inherits from |
+| libgarb cascade.c `inherit_from` (the customs chain through `cascade_whole`, `animation_names`) | inheritance of a cascaded value | FLAT, the parent where the element is in no flat tree |
+| libgarb cascade.c `tree_place` | which tree an element is in (its scope) | STOPS at the element's own root |
+| libgarb cascade.c `cascade_element`'s slot chain (`os64_html_assigned_slot` repeated) | the trees whose `::slotted()` rules style an element, and their order (the context step) | FLAT: each slot it is assigned to, outward to inward along the forwarding chain |
+| libgarb cascade.c `connected` | is a changed node in what the cascade matched | CROSSES (`os64_html_shadow_including_root`) |
+| libgarb cascade.c `holds_slot`, `mark_host_children` | did a change move assignments in this tree; the host whose children it may have moved | STOPS: a slot assigns its own host's children, so a nested tree's slots are not this tree's |
+| libgarb select.c `match_from` | what a combinator climbs to | STOPS, but for the shadow root's host, featureless, past which nothing climbs |
+| libpage core.c `walk_sheets`, `collect_node`'s sheets | the page's sheets | CROSSES, each saying its tree (`os64_page_sheet_t.scope`) |
+| libdom collection.c's `document.styleSheets` walk | the document's sheets | STOPS: a shadow tree's sheets are its root's (`associated` asks only whether a sheet's node is connected, shadow trees included) |

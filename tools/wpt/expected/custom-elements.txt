@@ -61,6 +61,8 @@ CustomElementRegistry-getName.html	customElements.getName must return null when 
 CustomElementRegistry-getName.html	customElements.getName must throw when the element interface is not a constructor
 CustomElementRegistry-getName.html	customElements.getName returns the name of the entry with the given constructor when there is a matching entry.
 Document-createElement-customized-builtins.html	document.createElement must create an instance of autonomous custom elements when it has is attribute
+Document-createElementNS.html	autonomous: document.createElementNS should check namespaces.
+Document-createElementNS.html	autonomous: document.createElementNS should not create HTMLUnknownElement for a valid custom element name
 Document-createElementNS.html	autonomous: document.createElementNS with undefined options value should be upgraded.
 HTMLElement-constructor.html	Custom element constructor must throw TypeError when it does not extend HTMLElement
 HTMLElement-constructor.html	HTMLElement constructor must allow subclassing a custom element
@@ -71,6 +73,7 @@ HTMLElement-constructor.html	HTMLElement constructor must only get .prototype on
 HTMLElement-constructor.html	HTMLElement constructor must only get .prototype once, calling proxy constructor via Reflect
 HTMLElement-constructor.html	HTMLElement constructor must only get .prototype once, calling proxy constructor via Reflect with no inheritance
 HTMLElement-constructor.html	HTMLElement constructor must throw TypeError when it has not been defined by customElements.define
+connected-callbacks-template.html	Nested custom element connectedCallback insertion involving a template DocumentFragment
 createElement-reentrant-construction.window.html	Re-entrant createElement() of the same element after super()
 createElement-reentrant-construction.window.html	Re-entrant createElement() of the same element before super()
 element-internals-behaviors.tentative.html	attachInternals throws TypeError for DOM element in behaviors array
@@ -81,6 +84,10 @@ element-internals-behaviors.tentative.html	attachInternals throws TypeError for 
 element-internals-behaviors.tentative.html	attachInternals throws TypeError for undefined in behaviors array
 form-associated/form-disabled-callback.html	A disabled form-associated custom element should not provide an entry for it
 historical.html	document.registerElement should not exist
+microtasks-and-constructors.html	Microtasks evaluate afterward when the stack is not empty due to upgrades
+microtasks-and-constructors.html	Microtasks evaluate afterward when the stack is not empty using createElement()
+microtasks-and-constructors.html	Microtasks evaluate afterward when the stack is not empty using the constructor
+microtasks-and-constructors.html	Microtasks evaluate immediately when the stack is empty inside the parser
 overwritten-customElements-global.html	Custom elements can still be constructed after `window.customElements` is deleted.
 overwritten-customElements-global.html	Custom elements can still be constructed after `window.customElements` is overwritten.
 overwritten-customElements-global.html	Custom elements can still be created after `window.customElements` is deleted.
@@ -91,7 +98,10 @@ parser/parser-constructs-custom-elements-with-is.html	HTML parser must create a 
 parser/parser-constructs-custom-elements.html	HTML parser must NOT create a custom element before customElements.define is called
 parser/parser-constructs-custom-elements.html	HTML parser must create a defined custom element before executing inline scripts
 parser/parser-custom-element-in-foreign-content.html	HTML parser should not create custom elements in non-HTML namespaces
+parser/parser-sets-attributes-after-autonomous-constructor.html	No attributes: parser attribute mutation records on an autonomous custom element without observedAttributes
 parser/parser-uses-registry-of-owner-document.html	HTML parser must not instantiate custom elements inside template elements
+range-and-constructors.html	Range.cloneContents should invoke constructor in tree order
+range-and-constructors.html	Range.extractContents should invoke constructor in tree order
 reaction-timing.html	Calling Node.prototype.cloneNode(false) must push a new element queue to the processing stack
 reaction-timing.html	setAttribute and removeAttribute must enqueue and invoke attributeChangedCallback
 reaction-timing.html	toggleAttribute must enqueue and invoke attributeChangedCallback
@@ -154,8 +164,15 @@ reactions/ParentNode.html	append on ParentNode must enqueue a connected reaction
 reactions/ParentNode.html	append on ParentNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
 reactions/ParentNode.html	prepend on ParentNode must enqueue a connected reaction
 reactions/ParentNode.html	prepend on ParentNode must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Range.html	cloneContents on Range must not enqueue an attributeChanged reaction when cloning an element with an unobserved attribute
+reactions/Range.html	deleteContents on Range must enqueue a disconnected reaction
+reactions/Range.html	extractContents on Range must enqueue a disconnected reaction
+reactions/Range.html	insertNode on Range must enqueue a connected reaction
+reactions/Range.html	insertNode on Range must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Range.html	surroundContents on Range must enqueue a connected reaction
+reactions/Range.html	surroundContents on Range must enqueue a disconnected reaction, an adopted reaction, and a connected reaction when the custom element was in another document
+reactions/Selection.html	deleteFromDocument on Selection must enqueue a disconnected reaction
 reactions/customized-builtins/HTMLInputElement.html	No tests if HTMLInputEement has no "capture" IDL attribute
-registries/global.window.html	createElementNS() should throw with global registry from another document
 registries/upgrade.html	Two elements as children of the upgraded node
 registries/upgrade.html	Two elements as descendants of the upgraded node
 registries/upgrade.html	Upgrading an element directly (example from the spec)
@@ -164,3 +181,4 @@ state/state-pseudo-class.html	deprecated :--state parsing failures
 upgrading/upgrading-parser-created-element.html	Element.prototype.createElement must add an unresolved custom element to the upgrade candidates map
 upgrading/upgrading-parser-created-element.html	Upgrading a custom element must throw an TypeError when the returned element is not SameValue as the upgraded element
 upgrading/upgrading-parser-created-element.html	Upgrading a custom element whose constructor returns a Text node must throw
+upgrading/upgrading-parser-created-element.html	Upgrading a custom element whose constructor returns an Element must throw

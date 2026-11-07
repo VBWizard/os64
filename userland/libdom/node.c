@@ -125,7 +125,7 @@ JSValue d_node_clone(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
         d_made_in(dom, copy, document);
         /* [CEReactions]: the copy's elements with a definition come back
          * upgraded (custom.c), which asks the document just recorded. */
-        if (d_custom_cloned(dom, ctx, copy) < 0) {
+        if (d_custom_upgrade_new(dom, ctx, copy) < 0) {
             JS_FreeValue(ctx, made);
             return JS_EXCEPTION;
         }
@@ -175,36 +175,41 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 
 /* The binding's tree changes. A node one of them takes out of its tree
  * records first the document it leaves (d_leaving), whether or not the
- * change then happens: the record is read only while the node is a root. */
+ * change then happens: the record is read only while the node is a root.
+ * Each first frees the dead Range records (d_ranges_sweep), so a dropped
+ * range neither pins its nodes nor rides every mutation's range walk. */
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before)
 {
+    d_ranges_sweep(dom);
     return os64_page_node_insert(dom->state, parent, node, before);
 }
 int64_t d_remove(os64_dom_t *dom, os64_html_node_t *node)
 {
+    d_ranges_sweep(dom);
     d_leaving(dom, node);
     return os64_page_node_remove(dom->state, node);
 }
 int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                    os64_html_node_t *old)
 {
+    d_ranges_sweep(dom);
     d_leaving(dom, old);
     return os64_page_node_replace(dom->state, parent, node, old);
 }
 
 /* A tree change a script asked for: D_APPEND/D_INSERT put `child` under
  * `parent` before `other` (NULL: last), D_REPLACE puts it where `other` is,
- * D_REPLACE_CHILDREN puts it in place of all `parent`'s children, D_REMOVE
- * takes it out. Scripts the move may connect are found before it,
- * while a fragment still holds its children, and handed to the host after
- * it. 0, or -1 with the exception thrown. */
+ * D_REPLACE_CHILDREN puts it (or nothing, when NULL) in place of all
+ * `parent`'s children, D_REMOVE takes it out. Scripts the move may connect
+ * are found before it, while a fragment still holds its children, and
+ * handed to the host after it. 0, or -1 with the exception thrown. */
 int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_t *parent,
             const os64_html_node_t *child, const os64_html_node_t *other)
 {
     const os64_html_node_t *few[8], **scripts = few;
     size_t found = 0;
-    if (op != D_REMOVE && dom->options.script_connected != NULL) {
+    if (op != D_REMOVE && child != NULL && dom->options.script_connected != NULL) {
         found = d_script_collect(child, few, 8);
         if (found > 8) {
             scripts = d_alloc(dom, found * sizeof(*scripts));
@@ -228,25 +233,44 @@ int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_
     return 0;
 }
 
+/* A node's nodeType (DOM § 4.4) by libhtml's kind, a CDATA section's being
+ * its own. */
+int d_node_type(const os64_html_node_t *node)
+{
+    static const uint8_t types[] = {9, 11, 10, 1, 3, 8, 7};
+    _Static_assert(sizeof(types) == OS64_HTML_PI + 1, "a nodeType for each node kind");
+    return node->kind == OS64_HTML_TEXT && node->cdata ? 4 : types[node->kind];
+}
+
+/* nodeName, and an element's tagName: its qualified name (prefix and local
+ * name), uppercased for an HTML element of an HTML document (DOM § 4.9's
+ * "HTML-uppercased qualified name"). */
 static JSValue node_name(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     const char *name;
     switch (node->kind) {
     case OS64_HTML_DOCUMENT: name = "#document"; break;
     case OS64_HTML_FRAGMENT: name = "#document-fragment"; break;
-    case OS64_HTML_TEXT: name = "#text"; break;
+    case OS64_HTML_TEXT: name = node->cdata ? "#cdata-section" : "#text"; break;
     case OS64_HTML_COMMENT: name = "#comment"; break;
     default: name = node->name != NULL ? node->name : ""; break;
     }
-    if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML)
-        return JS_NewString(ctx, name);
-    size_t length = os64_strlen(name);
-    char *upper = d_alloc(dom, length + 1);
-    if (upper == NULL) return d_error(ctx, "QuotaExceededError", "DOM name quota exceeded");
-    for (size_t i = 0; i <= length; i++)
-        upper[i] = name[i] >= 'a' && name[i] <= 'z' ? name[i] - ('a' - 'A') : name[i];
-    JSValue value = JS_NewStringLen(ctx, upper, length);
-    d_free(dom, upper);
+    if (node->kind != OS64_HTML_ELEMENT) return JS_NewString(ctx, name);
+    bool upper = node->ns == OS64_HTML_NS_HTML &&
+                 d_document_type(dom, d_node_document(dom, node)) == D_DOCUMENT_HTML;
+    size_t prefix = node->prefix != NULL ? os64_strlen(node->prefix) + 1 : 0, length = os64_strlen(name);
+    if (!upper && prefix == 0) return JS_NewString(ctx, name);
+    char *qualified = d_alloc(dom, prefix + length + 1);
+    if (qualified == NULL) return d_error(ctx, "QuotaExceededError", "DOM name quota exceeded");
+    if (prefix != 0) {
+        os64_memcpy(qualified, node->prefix, prefix - 1);
+        qualified[prefix - 1] = ':';
+    }
+    os64_memcpy(qualified + prefix, name, length + 1);
+    for (size_t i = 0; upper && i < prefix + length; i++)
+        if (qualified[i] >= 'a' && qualified[i] <= 'z') qualified[i] -= 'a' - 'A';
+    JSValue value = JS_NewStringLen(ctx, qualified, prefix + length);
+    d_free(dom, qualified);
     return value;
 }
 
@@ -431,10 +455,7 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
             if (at->kind == OS64_HTML_ELEMENT) count++;
         return JS_NewUint32(ctx, count);
     }
-    case D_TYPE: {
-        static const int types[] = {9, 11, 10, 1, 3, 8};
-        return JS_NewInt32(ctx, types[node->kind]);
-    }
+    case D_TYPE: return JS_NewInt32(ctx, d_node_type(node));
     case D_NAME: return node_name(dom, ctx, node);
     case D_TAG:
         if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "tagName requires an element");
@@ -579,21 +600,18 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     if (magic != D_CREATE_FRAGMENT && !d_string(dom, ctx, argv[0], &string)) return JS_EXCEPTION;
     /* An HTML document folds an element's name; an XML document keeps it,
      * and makes HTML elements only when it was made for that namespace
-     * (DOM § 4.5's createElement). One that was not would make an element
-     * in no namespace, which this tree cannot hold. */
+     * (DOM § 4.5's createElement: an XHTML document); any other makes an
+     * element in no namespace, which no custom element definition names. */
     int type = d_document_type(dom, node);
+    bool no_namespace = magic == D_CREATE_ELEMENT && (type == D_DOCUMENT_XML || type == D_DOCUMENT_SVG);
     if (magic == D_CREATE_ELEMENT) {
         if (!d_element_name_valid(string.data)) {
             d_string_free(dom, &string);
             return d_error(ctx, "InvalidCharacterError", "Invalid element name");
         }
-        if (type == D_DOCUMENT_XML || type == D_DOCUMENT_SVG) {
-            d_string_free(dom, &string);
-            return d_error(ctx, "NotSupportedError",
-                           "This XML document's createElement would make an element in no namespace, "
-                           "which this browser's documents cannot hold");
-        }
         if (type == D_DOCUMENT_HTML) d_fold(string.data);
+    }
+    if (magic == D_CREATE_ELEMENT && !no_namespace) {
         /* An element with a definition is constructed (custom.c), inside
          * [CEReactions]: what its constructor queued runs before this
          * returns. */
@@ -617,7 +635,9 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         }
     }
     int64_t status;
-    os64_html_node_t *created = magic == D_CREATE_ELEMENT ?
+    os64_html_node_t *created = no_namespace ?
+        os64_html_create_element_ns(dom->document, NULL, NULL, string.data, &status) :
+        magic == D_CREATE_ELEMENT ?
         os64_html_create_element(dom->document, OS64_HTML_NS_HTML, string.data, &status) :
         magic == D_CREATE_TEXT ? os64_html_create_text(dom->document, string.data, string.length, &status) :
         magic == D_CREATE_COMMENT ? os64_html_create_comment(dom->document, string.data, string.length, &status) :
@@ -735,6 +755,6 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
                 d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
     }
     if(d_svg_geometry_prototypes(dom,ctx)<0)return -1;
-    if (d_shadow_prototypes(dom, ctx) < 0) return -1;
+    if (d_shadow_prototypes(dom, ctx) < 0 || d_data_prototypes(dom, ctx) < 0) return -1;
     return d_geometry_install(dom, ctx);
 }

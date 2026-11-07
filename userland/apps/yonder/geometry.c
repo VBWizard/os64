@@ -93,6 +93,75 @@ static const flow_box_t *own_box(const flow_box_t *box, const os64_html_node_t *
     return box;
 }
 
+size_t yonder_text_rects(const os64_html_document_t *document, const flow_tree_t *tree,
+    const os64_html_node_t *node, size_t from, size_t to, uint32_t zoom, flow_point_t scroll,
+    double *out, size_t cap)
+{
+    if (document == NULL || tree == NULL || node == NULL || node->kind != OS64_HTML_TEXT ||
+        flow_incomplete(tree) || !os64_html_owns_node(document, node) ||
+        os64_html_shadow_including_root(node) != document->document)
+        return 0;
+    double scale = 1000.0 / (zoom != 0 ? zoom : 1000);
+    bool point = from == to;
+    size_t count = 0;
+    const flow_box_t *prev = NULL;
+    for (const flow_box_t *box = flow_root(tree); box != NULL; box = next_box(box)) {
+        if (box->kind != FLOW_BOX_TEXT || box->node != node || box->pseudo != 0 || box->run == NULL) continue;
+        uint32_t pf, pt;
+        if (!flow_text_processed(box, from, &pf) || !flow_text_processed(box, to, &pt)) continue;
+        uint32_t begin = box->begin, end = box->begin + box->length;
+        // A justified line lays each word out as a box of its own and the
+        // space between two in no box: bytes the selection reaches in that
+        // gap take its room, from the word before's right edge to this
+        // one's left. The two share a line and so a frame, so the gap is
+        // made in their own coordinates and taken out through the matrices
+        // as the slice below is: under a rotation the words' painted edges
+        // no longer bound it.
+        const flow_box_t *before = prev;
+        prev = box;
+        uint32_t gap = before != NULL ? before->begin + before->length : begin;
+        if (!point && before != NULL && before->parent == box->parent && gap < begin &&
+            (pf > gap ? pf : gap) < (pt < begin ? pt : begin)) {
+            int32_t left = before->rect.x + before->rect.w;
+            os64_gui_rect_t local = {left, before->rect.y, box->rect.x > left ? box->rect.x - left : 0,
+                                     before->rect.h};
+            os64_gui_rect_t rect = flow_box_doc_rect_of(box, local, scroll);
+            if (count < cap) {
+                out[4 * count] = (rect.x - scroll.x) * scale;
+                out[4 * count + 1] = (rect.y - scroll.y) * scale;
+                out[4 * count + 2] = rect.w * scale;
+                out[4 * count + 3] = rect.h * scale;
+            }
+            count++;
+        }
+        uint32_t s = pf > begin ? pf : begin, e = pt < end ? pt : end;
+        if (point ? pf < begin || pf > end : s >= e) continue;
+        if (point) e = s;
+        // A selected end inside a cluster takes the whole cluster: the start
+        // rounds back to the cluster's start, the end on to its end.
+        os64_text_caret_t c0, c1;
+        if (os64_text_caret(box->run, s - begin, OS64_TEXT_BEFORE, &c0) != OS64_FONT_OK ||
+            os64_text_caret(box->run, e - begin, point ? OS64_TEXT_BEFORE : OS64_TEXT_AFTER, &c1) != OS64_FONT_OK)
+            continue;
+        // The selected slice in the box's own coordinates (device pixels,
+        // the carets rounded to them), taken out through the box's offset
+        // and every matrix it is drawn through, as the snapshot takes an
+        // element's box: a scaled or rotated text's slice is the painted one.
+        int32_t x0 = box->rect.x + (int32_t)((c0.x + 32) / 64), x1 = box->rect.x + (int32_t)((c1.x + 32) / 64);
+        os64_gui_rect_t local = {x0, box->rect.y, x1 > x0 ? x1 - x0 : 0, box->rect.h};
+        os64_gui_rect_t rect = flow_box_doc_rect_of(box, local, scroll);
+        if (count < cap) {
+            out[4 * count] = (rect.x - scroll.x) * scale;
+            out[4 * count + 1] = (rect.y - scroll.y) * scale;
+            out[4 * count + 2] = rect.w * scale;
+            out[4 * count + 3] = rect.h * scale;
+        }
+        count++;
+        if (point) break;
+    }
+    return count;
+}
+
 bool yonder_geometry_snapshot(const os64_html_document_t *document,
     const flow_tree_t *tree, const os64_html_node_t *node, int32_t width,
     int32_t height, uint32_t zoom, flow_point_t scroll, os64_dom_geometry_t *out)

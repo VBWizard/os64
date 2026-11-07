@@ -461,8 +461,10 @@ int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t
 
 // ── The page's style sheets ─────────────────────────────────────────────
 //
-// Every sheet the page names, in DOCUMENT ORDER, which is the order the
-// cascade ranks them in (GARB.md): a `style` element, whose text is its
+// Every sheet the page names, in its shadow trees too, in SHADOW-INCLUDING
+// ORDER — the document's order, a host's shadow tree before its children —
+// which within any one tree is the order the cascade ranks them in (GARB.md;
+// SHADOW_DOM.md § 6): a `style` element, whose text is its
 // children as libhtml keeps them, and a `link` whose `rel` holds the token
 // `stylesheet` and not `alternate` (an alternate sheet is off until a
 // person picks it), with an `href` that is not empty or white space,
@@ -476,6 +478,9 @@ typedef struct {
     bool linked;                    // a `link`: its sheet is at `href`
     os64_page_ref_t href;           // a `link`'s, resolved; refused says why
     const char *media;
+    // The root of the tree the element is in — the document node, or a
+    // shadow root — whose elements the sheet styles (garb_scope_in_t).
+    const os64_html_node_t *scope;
 } os64_page_sheet_t;
 
 // Whether `node` names a sheet by the rule above, as its tree stands now,
@@ -596,6 +601,18 @@ os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
 // Failure preserves text, control state, published values and both revisions.
 int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node,
                                 const char *utf8, size_t len);
+// libhtml's replace data, split and normalize (os64_html_replace_data,
+// os64_html_split_text, os64_html_normalize: UTF-16 offsets, the live range
+// steps). replace_data keeps set_text's state contract for the text a
+// parent holds. Splitting a Text node and normalizing keep every parent's
+// text as it was, so they change no control's value or default and plan
+// nothing: a failed split changes nothing, and a normalize that fails has
+// merged the runs before the one it failed on and left that one whole.
+int64_t os64_page_node_replace_data(os64_page_state_t *state, os64_html_node_t *node, uint32_t offset,
+                                    uint32_t count, const char *utf8, size_t len);
+int64_t os64_page_node_split_text(os64_page_state_t *state, os64_html_node_t *node, uint32_t offset,
+                                  os64_html_node_t **out);
+int64_t os64_page_node_normalize(os64_page_state_t *state, os64_html_node_t *node);
 // A script assigns by node, including detached and never-inserted controls.
 // Disabled, readonly and hidden controls accept these assignments. Value
 // mode decides storage: text/textarea use dirty state; hidden/button/tick

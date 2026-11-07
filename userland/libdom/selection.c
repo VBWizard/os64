@@ -13,11 +13,13 @@
  * without them fell through to window.getSelection().
  *
  * The page's (the Selection API): window.getSelection() and
- * document.getSelection() answer the window's one Selection. yonder keeps
- * no selection of the page's text a script could see, so it holds none:
- * rangeCount 0, type "None", every node null. It answers the reads a page
- * makes before it acts on a selection; what would change one (addRange,
- * collapse, extend) is not here, so a page that calls it finds it missing.
+ * document.getSelection() answer the window's one Selection. Without DOM
+ * Range (options.ranges off) it holds nothing: rangeCount 0, type "None",
+ * every node null, the reads a page makes before it acts on a selection,
+ * and none of the members that would change one. With it these are left
+ * off and range.c defines the Selection API's members on the same
+ * prototype, a model holding a Range (RANGE.md § 9; getComposedRanges and
+ * modify are DEBTS rows); yonder draws no page-text selection either way.
  *
  * One row of the Modern Web table, naming getSelection and Selection. */
 
@@ -169,10 +171,7 @@ static size_t byte_of_unit(const char *text, size_t len, uint32_t units)
 /* `len` bytes of UTF-8 in UTF-16 code units. */
 uint32_t d_utf16_length(const char *text, size_t len)
 {
-    uint32_t units = 0;
-    for (size_t i = 0; i < len; i++)
-        if (((unsigned char)text[i] & 0xC0) != 0x80) units += (unsigned char)text[i] >= 0xF0 ? 2 : 1;
-    return units;
+    return os64_html_utf16_length(text, len);
 }
 
 enum { M_SELECT, M_START, M_END, M_PRESERVE };
@@ -340,12 +339,16 @@ int d_selection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"focusOffset", Y_FOCUS_OFFSET}, {"isCollapsed", Y_COLLAPSED}, {"rangeCount", Y_RANGE_COUNT},
         {"type", Y_TYPE}, {"direction", Y_DIRECTION},
     };
-    for (size_t i = 0; i < sizeof(kReads) / sizeof(kReads[0]); i++)
+    /* With DOM Range the members are the Selection API's, which range.c
+     * defines on this prototype; these "None" answers are the surface
+     * without it. */
+    bool ranges = dom->options.ranges && dom->options.modern;
+    for (size_t i = 0; !ranges && i < sizeof(kReads) / sizeof(kReads[0]); i++)
         if (d_accessor(dom, ctx, prototype, kReads[i].name, selection_member, kReads[i].magic, false) < 0) return -1;
-    if (d_method(dom, ctx, prototype, "getRangeAt", selection_member, 1, Y_GET_RANGE) < 0 ||
-        d_method(dom, ctx, prototype, "removeAllRanges", selection_member, 0, Y_REMOVE_ALL) < 0 ||
-        d_method(dom, ctx, prototype, "empty", selection_member, 0, Y_REMOVE_ALL) < 0 ||
-        d_method(dom, ctx, prototype, "toString", selection_member, 0, Y_TO_STRING) < 0)
+    if (!ranges && (d_method(dom, ctx, prototype, "getRangeAt", selection_member, 1, Y_GET_RANGE) < 0 ||
+                    d_method(dom, ctx, prototype, "removeAllRanges", selection_member, 0, Y_REMOVE_ALL) < 0 ||
+                    d_method(dom, ctx, prototype, "empty", selection_member, 0, Y_REMOVE_ALL) < 0 ||
+                    d_method(dom, ctx, prototype, "toString", selection_member, 0, Y_TO_STRING) < 0))
         return -1;
     JSValue selection = JS_NewObjectClass(ctx, (int)id);
     if (JS_IsException(selection)) return -1;

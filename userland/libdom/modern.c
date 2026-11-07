@@ -47,6 +47,10 @@ static const DModernRow kModern[] = {
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
+    /* CDATASection and ProcessingInstruction, over the row above's Text
+     * and CharacterData, with Document's createCDATASection and
+     * createProcessingInstruction (data_nodes.c). */
+    {(const char *const[]){"CDATASection", "ProcessingInstruction", NULL}, d_data_install},
     {(const char *const[]){"scrollX", "pageXOffset", "scrollY", "pageYOffset", "innerWidth",
                            "innerHeight", "outerWidth", "outerHeight", "scroll", "scrollTo",
                            "scrollBy", "onscroll", "onresize", "focus", "blur", NULL},
@@ -124,7 +128,8 @@ static const DModernRow kModern[] = {
                            "TransformStream", "TransformStreamDefaultController", "ByteLengthQueuingStrategy",
                            "CountQueuingStrategy", "TextDecoderStream", "TextEncoderStream", NULL},
      d_streams_install},
-    {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
+    {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", "MessagePort", "MessageChannel",
+                           NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
     /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its
@@ -154,6 +159,9 @@ static const DModernRow kModern[] = {
     /* Node's comparisons, members of Node's and Attr's prototypes and none
      * of window's. */
     {(const char *const[]){NULL}, d_compare_install},
+    /* elementFromPoint and elementsFromPoint (hit.c): members of Document's
+     * prototype, and ShadowRoot's with shadow trees, none of window's. */
+    {(const char *const[]){NULL}, d_hit_install},
     /* 0f's P3b: a form's controls collection and RadioNodeList, over the
      * interfaces row's HTMLCollection and NodeList; and the form's,
      * label's, fieldset's, legend's and output's own members. */
@@ -206,6 +214,10 @@ int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
          * among them. */
         if (kModern[i].install == d_custom_install && dom->options.shadow_trees &&
             (d_shadow_install(dom, ctx, global) < 0 || JS_HasException(ctx)))
+            return -1;
+        /* DOM Range has its switch too (options.ranges, range.c). */
+        if (kModern[i].install == d_custom_install && dom->options.ranges &&
+            (d_ranges_install(dom, ctx, global) < 0 || JS_HasException(ctx)))
             return -1;
         if (kModern[i].install(dom, ctx, global) < 0 || JS_HasException(ctx)) return -1;
     }

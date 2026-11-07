@@ -251,8 +251,8 @@ mutants = [
      '            os64_html_set_ce(dom->document, element, OS64_HTML_CE_CUSTOM);\n'
      '            result = d_wrap_constructed(dom, ctx, element, prototype);',
      '            result = d_wrap_constructed(dom, ctx, element, prototype);', [DOMC]),
-    ('ce-clone-upgrades', NODE_C, '            if (d_custom_cloned(dom, ctx, copy) < 0) {',
-     '            if (false && d_custom_cloned(dom, ctx, copy) < 0) {', [DOMC]),
+    ('ce-clone-upgrades', NODE_C, '            if (d_custom_upgrade_new(dom, ctx, copy) < 0) {',
+     '            if (false && d_custom_upgrade_new(dom, ctx, copy) < 0) {', [DOMC]),
     ('ce-create-element-constructs', NODE_C,
      '        int constructed = d_custom_create(dom, ctx, node, string.data, &made);',
      '        int constructed = 0;', [DOMC]),

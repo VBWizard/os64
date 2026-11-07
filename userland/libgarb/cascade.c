@@ -56,12 +56,13 @@ typedef struct {
     int32_t ndecls;
     uint32_t order;
     int32_t sheet;              // which input sheet it came from
-    // The element and target this rule last matched for, and where in the
-    // match list — so one rule matched through two selectors is counted
-    // once, for an element and for its pseudo-element apart.
+    // The element and consultation (Consult: its target and context) this
+    // rule last matched for, and where in the match list — so one rule
+    // matched through two selectors is counted once, for an element and
+    // for its pseudo-element apart, and once in each tree that styles it.
     const os64_html_node_t *seen;
     uint64_t seen_update;
-    int32_t seen_target;
+    int32_t seen_pass;
     int32_t slot;
 } Rule;
 
@@ -93,11 +94,15 @@ typedef struct {
     int32_t universal;
 } Index;
 
-// The targets a cascade files for: an element's own rules, and ::before's
-// and ::after's. A rule for another pseudo-element is read and not filed.
-enum { TARGET_ELEMENT, TARGET_BEFORE, TARGET_AFTER, TARGETS };
+// The targets a cascade files for: an element's own rules, ::before's and
+// ::after's, a shadow host's from its own shadow tree (`:host`), and a
+// slotted element's from a slot's tree (`::slotted()`), the last two part
+// of the element's own winners (SHADOW_DOM.md § 6). A rule for another
+// pseudo-element is read and not filed.
+enum { TARGET_ELEMENT, TARGET_BEFORE, TARGET_AFTER, TARGET_HOST, TARGET_SLOTTED, TARGETS };
 
-// The custom properties an element sees: its own, then its parent's.
+// The custom properties an element sees: its own, then those of the element
+// it inherits from (inherit_from).
 typedef struct CustomMap CustomMap;
 
 typedef struct {
@@ -152,11 +157,14 @@ typedef struct {
     garb_style_t style;
     // Its ::before's and ::after's winners (TARGET_BEFORE - 1, TARGET_AFTER
     // - 1), none when no rule for it matched.
-    garb_style_t pseudo[TARGETS - 1];
+    garb_style_t pseudo[TARGET_AFTER];
     const CustomMap *customs;
     OwnFrames *frames;
     int32_t nframes;
-    bool needs_substitution, dirty, dirty_suffix;
+    // The tree it is in, as the cascade sees it (tree_place): the scope
+    // whose sheets apply there, -1 for none. `placed` once it is set.
+    int32_t scope;
+    bool placed, needs_substitution, dirty, dirty_suffix;
     uint64_t changed, removed_children;
 } Slot;
 
@@ -221,7 +229,36 @@ struct garb_cascade {
     // How many allocations have failed, so a reader can tell whether its
     // own did (add_face).
     uint32_t allocs_failed;
+    // The scopes as the caller gave them, for garb_cascade_matches_scoped
+    // (`given`, `ngiven`, the lists copied); and as the cascade uses them:
+    // each distinct root once (`roots`), and which sheets apply in each
+    // (`applies`, a bit per (scope, input), imports included). Without
+    // scopes the document's root is the one scope, every sheet applying.
+    garb_scope_in_t *given;
+    int32_t ngiven;
+    const os64_html_node_t **roots;
+    int32_t nroots;
+    uint8_t *applies;
+    // Each root's scope found by hashing it (scope_of_root): open
+    // addressing over `root_slotcap` slots, a power of two at least twice
+    // the roots, each the index in `roots` or -1. A page can have
+    // thousands of component roots, and every host and every shadow
+    // root's child asks.
+    int32_t *root_slots;
+    uint32_t root_slotcap;
+    // Whether the document has had a shadow root: the walks cross into
+    // shadow trees and an update recomputes in one ordered walk.
+    bool shadowed;
 };
+
+// Whether input `sheet` applies in scope `scope` (-1: none does).
+static bool applies_in(const garb_cascade_t *c, int32_t scope, int32_t sheet)
+{
+    if (scope < 0 || sheet < 0)
+        return false;
+    size_t bit = (size_t)scope * (size_t)c->ninputs + (size_t)sheet;
+    return (c->applies[bit / 8] >> (bit % 8)) & 1;
+}
 
 // How this cascade reads a declaration: in its document's mode, knowing the
 // properties its environment knows (garb_env_t.modern_off).
@@ -966,7 +1003,14 @@ static void add_style_rule(garb_cascade_t *c, garb_parsed_t *owner, const garb_r
     int32_t index = c->nrules++;
     for (int32_t s = 0; s < garb_selectors_count(sel); s++) {
         garb_pseudo_t pseudo = garb_selector_pseudo(sel, s);
-        if (pseudo == GARB_PSEUDO_NONE)
+        // A host's pseudo-elements from its shadow tree (`:host::before`)
+        // are booked in DEBTS: only `:host` itself is filed for it.
+        if (garb_selector_names_host(sel, s)) {
+            if (pseudo == GARB_PSEUDO_NONE)
+                file_selector(c, index, s, TARGET_HOST);
+        } else if (pseudo == GARB_PSEUDO_SLOTTED)
+            file_selector(c, index, s, TARGET_SLOTTED);
+        else if (pseudo == GARB_PSEUDO_NONE)
             file_selector(c, index, s, TARGET_ELEMENT);
         else if (pseudo == GARB_PSEUDO_BEFORE)
             file_selector(c, index, s, TARGET_BEFORE);
@@ -2027,8 +2071,21 @@ static void own_frames(garb_cascade_t *c, Slot *slot, const garb_val_t *names,
 
 static bool is_el(const os64_html_node_t *n);
 
+// The element `x` inherits from: its flat parent (a slot, for an element
+// assigned to one; a host, for a shadow root's child), or, for an element
+// in no flat tree (a host's unassigned child, a slot's own child while the
+// slot has nodes), its parent. NULL at the top.
+static const os64_html_node_t *inherit_from(const garb_cascade_t *c, const os64_html_node_t *x)
+{
+    const os64_html_node_t *up = c->shadowed ? os64_html_flat_parent(c->doc, x) : NULL;
+    if (up == NULL)
+        up = x->parent;
+    return is_el(up) ? up : NULL;
+}
+
 // The animation names element `el` computes from its winner `v`: the
-// winner's own, or for `inherit` its parent's, as far up as `inherit`
+// winner's own, or for `inherit` the one of the element it inherits from
+// (inherit_from), as far up as `inherit`
 // goes — whose rules with var() are then built against `el`'s custom
 // properties, since `el` animates with them. NULL for none: no winner, or
 // another wide keyword (animation-name does not inherit).
@@ -2036,8 +2093,8 @@ static const garb_val_t *animation_names(const garb_cascade_t *c, const os64_htm
                                          const garb_val_t *v)
 {
     while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit")) {
-        el = el->parent;
-        const Slot *up = is_el(el) ? slot_for(c, el, false) : NULL;
+        el = inherit_from(c, el);
+        const Slot *up = el != NULL ? slot_for(c, el, false) : NULL;
         v = NULL;
         for (int32_t i = 0; up != NULL && i < up->style.n; i++)
             if (up->style.sets[i].prop == GARB_ANIMATION_NAME)
@@ -2048,18 +2105,24 @@ static const garb_val_t *animation_names(const garb_cascade_t *c, const os64_htm
 
 // ── Per element ─────────────────────────────────────────────────────────
 
+// A rule that matched, at its heaviest selector, and the context it came
+// through (Consult.context).
 typedef struct {
     Rule *rule;
     uint32_t spec;
+    int32_t context;
 } Match;
 
-// One declaration's place in the cascade: importance, then (inline above
-// every rule) specificity, then order.
+// One declaration's place in the cascade: importance, then context (CSS
+// Cascade 5 § 6.1: between trees, the normal declaration from the tree
+// earlier in shadow-including order wins, and the important one from the
+// later), then (inline above every rule) specificity, then order.
 typedef struct {
     const Decl *d;
     bool important, inline_;
     uint32_t spec, order;
     int32_t sheet;              // -1 for the style attribute
+    int32_t context;
 } Applied;
 
 // Declaration ordering is temporary. Reuse its storage within one build
@@ -2077,6 +2140,8 @@ static bool before(const Applied *a, const Applied *b)
 {
     if (a->important != b->important)
         return !a->important;
+    if (a->context != b->context)
+        return a->important ? a->context < b->context : a->context > b->context;
     if (a->inline_ != b->inline_)
         return !a->inline_;
     if (a->spec != b->spec)
@@ -2084,38 +2149,57 @@ static bool before(const Applied *a, const Applied *b)
     return a->order < b->order;
 }
 
+// One consultation of an index for the element being styled: which target,
+// under which scope's sheets, in which context, and the element the rules'
+// subject compound is matched against — the styled element, or for
+// `::slotted()` the slot it is assigned to. The context is the tree's place
+// in shadow-including order among the trees that style the element
+// (cascade_element): its own tree 0, each slot's tree on its forwarding
+// chain 1, 2, …, outward to inward, and a host's own shadow tree last.
+typedef struct {
+    int32_t target, scope, context;
+    const os64_html_node_t *styled, *keyed;
+} Consult;
+
 static void consider(garb_cascade_t *c, Match **m, int32_t *n, int32_t *cap, Rule *r,
-                     uint32_t spec, const os64_html_node_t *el, int32_t target)
+                     uint32_t spec, const Consult *q)
 {
     uint64_t update = c->updates + (c->updating ? 1 : 0);
-    if (r->seen == el && r->seen_update == update && r->seen_target == target) {
+    int32_t pass = q->target + TARGETS * q->context;
+    if (r->seen == q->styled && r->seen_update == update && r->seen_pass == pass) {
         if (spec > (*m)[r->slot].spec)
             (*m)[r->slot].spec = spec;
         return;
     }
     if (!grow(c, (void **)m, *n, cap, sizeof(Match)))
         return;
-    r->seen = el; r->seen_update = update;
-    r->seen_target = target;
+    r->seen = q->styled; r->seen_update = update;
+    r->seen_pass = pass;
     r->slot = *n;
-    (*m)[(*n)++] = (Match){r, spec};
+    (*m)[(*n)++] = (Match){r, spec, q->context};
 }
 
-static void try_bucket(garb_cascade_t *c, int32_t head, const os64_html_node_t *el, Match **m,
-                       int32_t *n, int32_t *cap, int32_t target)
+static void try_bucket(garb_cascade_t *c, int32_t head, const Consult *q, Match **m,
+                       int32_t *n, int32_t *cap)
 {
     for (int32_t e = head; e >= 0; e = c->entries[e].next) {
         Entry *en = &c->entries[e];
         Rule *r = &c->rules[en->rule];
-        if (garb_selector_matches(r->sel, en->sel, el))
-            consider(c, m, n, cap, r, garb_selector_specificity(r->sel, en->sel), el, target);
+        if (!applies_in(c, q->scope, r->sheet))
+            continue;
+        bool hit = q->target == TARGET_HOST ? garb_selector_matches_host(r->sel, en->sel, q->keyed)
+                 : q->target == TARGET_SLOTTED
+                     ? garb_selector_matches_slotted(r->sel, en->sel, q->keyed, q->styled)
+                     : garb_selector_matches(r->sel, en->sel, q->keyed);
+        if (hit)
+            consider(c, m, n, cap, r, garb_selector_specificity(r->sel, en->sel), q);
     }
 }
 
-static void try_classes(garb_cascade_t *c, Index *ix, const os64_html_node_t *el, Match **m, int32_t *n,
-                        int32_t *cap, int32_t target)
+static void try_classes(garb_cascade_t *c, Index *ix, const Consult *q, Match **m, int32_t *n,
+                        int32_t *cap)
 {
-    const os64_html_attr_t *a = os64_html_attr(el, "class");
+    const os64_html_attr_t *a = os64_html_attr(q->keyed, "class");
     if (a == NULL || a->value == NULL || ix->classes.n == 0)
         return;
     const char *v = a->value;
@@ -2130,31 +2214,33 @@ static void try_classes(garb_cascade_t *c, Index *ix, const os64_html_node_t *el
             continue;
         Bucket *b = bucket(c, &ix->classes, v + start, i - start, quirky, false);
         if (b != NULL)
-            try_bucket(c, b->head, el, m, n, cap, target);
+            try_bucket(c, b->head, q, m, n, cap);
     }
 }
 
-// Every rule that matches `el` for `target` (the element, or one of its
-// pseudo-elements), each once, at its heaviest selector.
-static int32_t matching(garb_cascade_t *c, const os64_html_node_t *el, int32_t target, Match **m,
-                        int32_t *cap)
+// Every rule `q` finds, each once, at its heaviest selector, added after
+// the `n` matches already in `m`; answers the new count. A scope with no
+// sheets finds nothing.
+static int32_t matching(garb_cascade_t *c, const Consult *q, Match **m, int32_t n, int32_t *cap)
 {
-    int32_t n = 0;
-    Index *ix = &c->index[target];
+    if (q->scope < 0)
+        return n;
+    Index *ix = &c->index[q->target];
+    const os64_html_node_t *el = q->keyed;
     const os64_html_attr_t *id = os64_html_attr(el, "id");
     if (id != NULL && id->value != NULL && ix->ids.n > 0) {
         Bucket *b = bucket(c, &ix->ids, id->value, os64_strlen(id->value),
                            c->quirks == OS64_HTML_QUIRKS, false);
         if (b != NULL)
-            try_bucket(c, b->head, el, m, &n, cap, target);
+            try_bucket(c, b->head, q, m, &n, cap);
     }
-    try_classes(c, ix, el, m, &n, cap, target);
+    try_classes(c, ix, q, m, &n, cap);
     if (el->name != NULL && ix->types.n > 0) {
         Bucket *b = bucket(c, &ix->types, el->name, os64_strlen(el->name), true, false);
         if (b != NULL)
-            try_bucket(c, b->head, el, m, &n, cap, target);
+            try_bucket(c, b->head, q, m, &n, cap);
     }
-    try_bucket(c, ix->universal, el, m, &n, cap, target);
+    try_bucket(c, ix->universal, q, m, &n, cap);
     return n;
 }
 
@@ -2163,6 +2249,41 @@ static bool targeted(const garb_cascade_t *c, int32_t target)
 {
     const Index *ix = &c->index[target];
     return ix->ids.n > 0 || ix->classes.n > 0 || ix->types.n > 0 || ix->universal >= 0;
+}
+
+// The scope whose root is `root`, -1 when no scope names it.
+static int32_t scope_of_root(const garb_cascade_t *c, const os64_html_node_t *root)
+{
+    if (c->root_slotcap == 0)
+        return -1;
+    for (uint32_t h = hash_ptr(root) & (c->root_slotcap - 1); c->root_slots[h] >= 0;
+         h = (h + 1) & (c->root_slotcap - 1))
+        if (c->roots[c->root_slots[h]] == root)
+            return c->root_slots[h];
+    return -1;
+}
+
+// Adds `root` as scope `index` (scopes_take, which sized the slots).
+static void scope_add_root(garb_cascade_t *c, const os64_html_node_t *root, int32_t index)
+{
+    uint32_t h = hash_ptr(root) & (c->root_slotcap - 1);
+    while (c->root_slots[h] >= 0)
+        h = (h + 1) & (c->root_slotcap - 1);
+    c->root_slots[h] = index;
+    c->roots[index] = root;
+}
+
+// The scope of the tree element `x` is in (Slot.scope): its parent's, when
+// that is an element already placed, or else found by climbing to its root.
+static int32_t tree_place(const garb_cascade_t *c, const os64_html_node_t *x)
+{
+    const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
+    if (up != NULL && up->placed)
+        return up->scope;
+    const os64_html_node_t *root = x;
+    while (root->parent != NULL)
+        root = root->parent;
+    return scope_of_root(c, root);
 }
 
 // The `style` attribute's declarations, read into a Decl list.
@@ -2311,9 +2432,18 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
 }
 
 // `el`'s winners for `target`: its own, from its rules, its `style`
-// attribute and its SVG presentation attributes; or one of its
-// pseudo-element's, from that pseudo-element's rules alone, its custom
-// properties inherited from `el` and its own kept for its own reading.
+// attribute and its SVG presentation attributes — and, for a shadow host,
+// its shadow tree's `:host` rules, and for a slotted element each slot's
+// tree's `::slotted()` rules; or one of its pseudo-element's, from that
+// pseudo-element's rules alone, its custom properties inherited from `el`
+// and its own kept for its own reading. Its own comes first: it places
+// the element (Slot.scope), which its pseudo-elements read.
+//
+// The contexts (Consult.context) follow the trees' roots in shadow-including
+// order: the element's own tree; then the tree of each slot it is assigned
+// to, outward to inward along the forwarding chain, each slot's host lying
+// inside the tree before it; and last a host's own shadow tree, whose root
+// follows the host and so everything above it.
 static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32_t target,
                             const CustomMap *inherited, Match **m, int32_t *mcap, AppliedScratch *scratch)
 {
@@ -2321,9 +2451,29 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
     if (slot == NULL)
         return;
     bool own = target == TARGET_ELEMENT;
-    if (own)
+    if (own) {
         slot->customs = inherited;
-    int32_t nm = matching(c, el, target, m, mcap);
+        slot->scope = tree_place(c, el);
+        slot->placed = true;
+    }
+    Consult q = {target, slot->scope, 0, el, el};
+    int32_t nm = matching(c, &q, m, 0, mcap);
+    if (own && c->shadowed) {
+        int32_t context = 0;
+        if (targeted(c, TARGET_SLOTTED))
+            for (const os64_html_node_t *s = os64_html_assigned_slot(c->doc, el); s != NULL;
+                 s = os64_html_assigned_slot(c->doc, s)) {
+                const Slot *placed = slot_for(c, s, false);
+                Consult slotted = {TARGET_SLOTTED,
+                                   placed != NULL && placed->placed ? placed->scope : tree_place(c, s),
+                                   ++context, el, s};
+                nm = matching(c, &slotted, m, nm, mcap);
+            }
+        if (el->shadow_root != NULL && targeted(c, TARGET_HOST)) {
+            Consult host = {TARGET_HOST, scope_of_root(c, el->shadow_root), context + 1, el, el};
+            nm = matching(c, &host, m, nm, mcap);
+        }
+    }
     Decl *inl = NULL;
     int32_t ninl = own ? inline_decls(c, el, &inl) : 0;
     Decl *attrs = NULL;
@@ -2346,15 +2496,15 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el, int32
     Applied *ap = scratch->items ? scratch->items : scratch->local;
     int32_t na = 0;
     for (int32_t j = 0; j < nattrs; ++j)
-        ap[na++] = (Applied){&attrs[j], false, false, 0, 0, -1};
+        ap[na++] = (Applied){&attrs[j], false, false, 0, 0, -1, 0};
     for (int32_t k = 0; k < nm; k++)
         for (int32_t j = 0; j < (*m)[k].rule->ndecls; j++) {
             const Decl *d = &(*m)[k].rule->decls[j];
             ap[na++] = (Applied){d, d->important, false, (*m)[k].spec, (*m)[k].rule->order,
-                                 (*m)[k].rule->sheet};
+                                 (*m)[k].rule->sheet, (*m)[k].context};
         }
     for (int32_t j = 0; j < ninl; j++)
-        ap[na++] = (Applied){&inl[j], inl[j].important, true, 0, (uint32_t)j, -1};
+        ap[na++] = (Applied){&inl[j], inl[j].important, true, 0, (uint32_t)j, -1, 0};
     // Insertion sort into ascending precedence; the last write wins.
     for (int32_t i = 1; i < na; i++) {
         Applied x = ap[i];
@@ -2503,16 +2653,152 @@ static bool is_el(const os64_html_node_t *n)
     return n != NULL && n->kind == OS64_HTML_ELEMENT;
 }
 
+// The node after `x` in preorder over `root`'s shadow-including descendants
+// — a host's shadow root and its tree before the host's children, which
+// puts every element after the element it inherits from (inherit_from) —
+// skipping `x`'s own when `children` is false. NULL after the last.
+static const os64_html_node_t *si_next(const os64_html_node_t *x, const os64_html_node_t *root,
+                                       bool children)
+{
+    if (children && x->shadow_root != NULL)
+        return x->shadow_root;
+    if (children && x->first_child != NULL)
+        return x->first_child;
+    while (x != NULL && x != root) {
+        const os64_html_node_t *host = os64_html_shadow_host(x);
+        if (host != NULL) {
+            // A shadow tree done: its host's children are next.
+            if (host->first_child != NULL)
+                return host->first_child;
+            x = host;
+            continue;
+        }
+        if (x->next != NULL)
+            return x->next;
+        x = x->parent;
+    }
+    return NULL;
+}
+
+// Element `x`'s winners and its pseudo-elements', its custom properties
+// taken from the element it inherits from, which the walks calling this
+// (si_next's order) have already styled; its pseudo-elements take its own.
+static void cascade_whole(garb_cascade_t *c, const os64_html_node_t *x, Match **m, int32_t *mcap,
+                          AppliedScratch *scratch)
+{
+    const os64_html_node_t *from = inherit_from(c, x);
+    const Slot *up = from != NULL ? slot_for(c, from, false) : NULL;
+    cascade_element(c, x, TARGET_ELEMENT, up != NULL ? up->customs : NULL, m, mcap, scratch);
+    const Slot *self = slot_for(c, x, false);
+    for (int32_t t = TARGET_BEFORE; t <= TARGET_AFTER; t++)
+        if (targeted(c, t))
+            cascade_element(c, x, t, self != NULL ? self->customs : NULL, m, mcap, scratch);
+}
+
+static void set_applies(garb_cascade_t *c, int32_t scope, int32_t sheet)
+{
+    size_t bit = (size_t)scope * (size_t)c->ninputs + (size_t)sheet;
+    c->applies[bit / 8] |= (uint8_t)(1u << (bit % 8));
+}
+
+// The scopes, as given (for garb_cascade_matches_scoped) and as used: each
+// distinct root once, and a bit for each sheet applying there, an imported
+// sheet's bit following its importer's.
+static bool scopes_take(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_t n,
+                        const garb_scope_in_t *scopes, int32_t nscopes)
+{
+    if (scopes == NULL || nscopes < 0)
+        nscopes = 0;
+    if (nscopes > 0) {
+        c->given = alloc(c, (size_t)nscopes * sizeof(*c->given));
+        if (c->given == NULL)
+            return false;
+        for (int32_t i = 0; i < nscopes; i++) {
+            c->given[i] = (garb_scope_in_t){scopes[i].root, NULL, 0};
+            if (scopes[i].sheets == NULL || scopes[i].n <= 0)
+                continue;
+            int32_t *list = alloc(c, (size_t)scopes[i].n * sizeof(*list));
+            if (list == NULL)
+                return false;
+            os64_memcpy(list, scopes[i].sheets, (size_t)scopes[i].n * sizeof(*list));
+            c->given[i].sheets = list;
+            c->given[i].n = scopes[i].n;
+        }
+        c->ngiven = nscopes;
+    }
+    int32_t most = nscopes > 0 ? nscopes : 1;
+    c->root_slotcap = 4;
+    while (c->root_slotcap < (uint32_t)most * 2)
+        c->root_slotcap *= 2;
+    c->roots = alloc(c, (size_t)most * sizeof(*c->roots));
+    c->root_slots = alloc(c, (size_t)c->root_slotcap * sizeof(*c->root_slots));
+    c->applies = alloc(c, ((size_t)most * (size_t)(n > 0 ? n : 1) + 7) / 8);
+    if (c->roots == NULL || c->root_slots == NULL || c->applies == NULL) {
+        c->root_slotcap = 0;
+        return false;
+    }
+    for (uint32_t h = 0; h < c->root_slotcap; h++)
+        c->root_slots[h] = -1;
+    if (nscopes == 0) {
+        scope_add_root(c, c->doc->document, c->nroots++);
+        for (int32_t s = 0; s < n; s++)
+            set_applies(c, 0, s);
+        return true;
+    }
+    for (int32_t i = 0; i < nscopes; i++) {
+        if (c->given[i].root == NULL)
+            continue;
+        int32_t r = scope_of_root(c, c->given[i].root);
+        if (r < 0) {
+            r = c->nroots++;
+            scope_add_root(c, c->given[i].root, r);
+        }
+        for (int32_t k = 0; k < c->given[i].n; k++)
+            if (c->given[i].sheets[k] >= 0 && c->given[i].sheets[k] < n)
+                set_applies(c, r, c->given[i].sheets[k]);
+    }
+    // An importer follows the sheets it imports, so its bit is set first.
+    for (int32_t s = n - 1; s >= 0; s--)
+        if (sheets[s].via != NULL && sheets[s].parent > s && sheets[s].parent < n)
+            for (int32_t r = 0; r < c->nroots; r++)
+                if (applies_in(c, r, sheets[s].parent))
+                    set_applies(c, r, s);
+    return true;
+}
+
+static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
+                             const garb_scope_in_t *scopes, int32_t nscopes,
+                             const os64_html_document_t *doc, garb_env_t env,
+                             garb_cascade_limits_t limits);
+
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env)
 {
-    return garb_cascade_limited(sheets, n, doc, env,
-        (garb_cascade_limits_t){GARB_ARENA_MAX, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX});
+    return garb_cascade_scoped(sheets, n, NULL, 0, doc, env, NULL);
 }
 
 garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
                                      const os64_html_document_t *doc, garb_env_t env,
                                      garb_cascade_limits_t limits)
+{
+    return build(sheets, n, NULL, 0, doc, env, limits);
+}
+
+garb_cascade_t *garb_cascade_scoped(const garb_sheet_in_t *sheets, int32_t n,
+                                    const garb_scope_in_t *scopes, int32_t nscopes,
+                                    const os64_html_document_t *doc, garb_env_t env,
+                                    const garb_cascade_limits_t *limits)
+{
+    return build(sheets, n, scopes, nscopes, doc, env,
+                 limits != NULL ? *limits
+                                : (garb_cascade_limits_t){GARB_ARENA_MAX, GARB_CASCADE_READ_MAX,
+                                                          GARB_ARENA_MAX, SIZE_MAX});
+}
+
+static garb_cascade_t *build(const garb_sheet_in_t *sheets, int32_t n,
+                             const garb_scope_in_t *scopes, int32_t nscopes,
+                             const os64_html_document_t *doc, garb_env_t env,
+                             garb_cascade_limits_t limits)
 {
     if (!limits.state_bytes || !limits.read_bytes || !limits.attribute_bytes)
         return NULL;
@@ -2567,6 +2853,11 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
             c->inputs[i].media = copy;
         }
     }
+    if (!scopes_take(c, sheets, n, scopes, nscopes)) {
+        garb_cascade_free(c);
+        return NULL;
+    }
+    c->shadowed = os64_html_has_shadow_roots(doc);
     uint32_t order = 0;
     for (int32_t s = 0; s < n; s++) {
         const garb_parsed_t *sheet = sheets[s].sheet;
@@ -2593,18 +2884,10 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     for (int32_t k = 0; k < c->nkeyframes; k++)
         c->keyframes[k].nframes = build_frames(c, &c->keyframes[k], NULL, false,
                                                &c->keyframes[k].frames);
-    // Every element's slot: the table is sized for the tree.
+    // Every element's slot, in every tree: the table is sized for them.
     size_t elements = 0;
-    for (const os64_html_node_t *x = doc->document; x != NULL;) {
+    for (const os64_html_node_t *x = doc->document; x != NULL; x = si_next(x, doc->document, true))
         elements += is_el(x);
-        if (x->first_child != NULL) {
-            x = x->first_child;
-            continue;
-        }
-        while (x != NULL && x->next == NULL)
-            x = x->parent;
-        x = x != NULL ? x->next : NULL;
-    }
     c->slotcap = 64;
     while (c->slotcap < elements * 2 + 2)
         c->slotcap *= 2;
@@ -2617,24 +2900,9 @@ garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
     Match *m = NULL;
     int32_t mcap = 0;
     AppliedScratch scratch = {0};
-    for (const os64_html_node_t *x = doc->document; x != NULL;) {
-        if (is_el(x)) {
-            const Slot *up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
-            cascade_element(c, x, TARGET_ELEMENT, up != NULL ? up->customs : NULL, &m, &mcap, &scratch);
-            // Its pseudo-elements inherit its custom properties.
-            const Slot *self = slot_for(c, x, false);
-            for (int32_t t = TARGET_BEFORE; t < TARGETS; t++)
-                if (targeted(c, t))
-                    cascade_element(c, x, t, self != NULL ? self->customs : NULL, &m, &mcap, &scratch);
-        }
-        if (x->first_child != NULL) {
-            x = x->first_child;
-            continue;
-        }
-        while (x != NULL && x->next == NULL)
-            x = x->parent;
-        x = x != NULL ? x->next : NULL;
-    }
+    for (const os64_html_node_t *x = doc->document; x != NULL; x = si_next(x, doc->document, true))
+        if (is_el(x))
+            cascade_whole(c, x, &m, &mcap, &scratch);
     os64_free(scratch.items);
     // What the cascade read ran short wherever it was read: a sheet's own
     // parse (taken in above, for the sheets the cascade applied), the rule
@@ -2663,25 +2931,27 @@ static const os64_html_node_t *subtree_next(const os64_html_node_t *x,
     while (x != root && !x->next) x = x->parent;
     return x == root ? NULL : x->next;
 }
-// In the tree the cascade matches: the document's own, which is all its
-// match walk visits, so a change inside a shadow tree is outside it. This
-// question crosses together with the scoped match walk (SHADOW_DOM.md § 6,
-// § 12): crossed alone, every such change would find no slot and refuse
-// the update.
+// In what the cascade matches: the document's tree and every shadow tree
+// connected to it (SHADOW_DOM.md § 6).
 static bool connected(const garb_cascade_t *c, const os64_html_node_t *x)
 {
-    if (!x) return false;
-    while (x->parent) x = x->parent;
-    return x == c->doc->document;
+    return x != NULL && os64_html_shadow_including_root(x) == c->doc->document;
 }
+static bool is_slot(const os64_html_node_t *x)
+{
+    return is_el(x) && x->ns == OS64_HTML_NS_HTML && x->tag == OS64_HTML_TAG_SLOT;
+}
+// Marks the elements under `root` whose winners may have changed: its
+// shadow-including descendants, and what a slot among them passes its
+// style on to — the nodes assigned to it (`::slotted()`, inheritance).
 static bool mark_subtree(garb_cascade_t *c, const os64_html_node_t *root)
 {
     if (!connected(c, root)) return true;
     for (const os64_html_node_t *x = root; x;) {
-        if (!is_el(x)) { x = subtree_next(x, root, true); continue; }
+        if (!is_el(x)) { x = si_next(x, root, true); continue; }
         Slot *s = slot_for(c, x, false);
         if (!s) return false;
-        if (s->dirty) { x = subtree_next(x, root, false); continue; }
+        if (s->dirty) { x = si_next(x, root, false); continue; }
         if (c->ndirty == c->dirtycap) {
             size_t cap = c->dirtycap ? c->dirtycap * 2 : 32;
             if (cap > SIZE_MAX / sizeof(*c->dirty_nodes)) return false;
@@ -2693,9 +2963,32 @@ static bool mark_subtree(garb_cascade_t *c, const os64_html_node_t *root)
         // A broad update would recompute most winners and retain the old
         // versions too. Ask for the fresh build before producing winners.
         if (c->ndirty > c->slotcount / 2) return false;
-        x = subtree_next(x, root, true);
+        if (c->shadowed && is_slot(x))
+            for (size_t i = 0, n = os64_html_slot_assigned_count(c->doc, x); i < n; i++) {
+                const os64_html_node_t *a = os64_html_slot_assigned(c->doc, x, i);
+                if (is_el(a) && !mark_subtree(c, a)) return false;
+            }
+        x = si_next(x, root, true);
     }
     return true;
+}
+// Marks every child of the host whose shadow tree holds `node`: a change
+// there may have moved which slot each is assigned to.
+static bool mark_host_children(garb_cascade_t *c, const os64_html_node_t *node)
+{
+    const os64_html_node_t *root = node;
+    while (root->parent) root = root->parent;
+    const os64_html_node_t *host = os64_html_shadow_host(root);
+    for (const os64_html_node_t *k = host ? host->first_child : NULL; k; k = k->next)
+        if (is_el(k) && !mark_subtree(c, k)) return false;
+    return true;
+}
+// Whether the subtree under `root` holds a slot.
+static bool holds_slot(const os64_html_node_t *root)
+{
+    for (const os64_html_node_t *x = root; x; x = subtree_next(x, root, true))
+        if (is_slot(x)) return true;
+    return false;
 }
 static bool mark_siblings(garb_cascade_t *c, const os64_html_node_t *first)
 {
@@ -2732,6 +3025,12 @@ static bool body_hint(const os64_html_change_entry_t *e, const os64_html_documen
 static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
 {
     const os64_html_node_t *parent = e->target;
+    // A slot leaving a tree moves its host's children, and by the time the
+    // log is read the tree it left may be past finding — its parent removed
+    // or moved since, in the same batch: a fresh cascade instead.
+    if (c->shadowed)
+        for (size_t i = 0; i < e->nremoved; ++i)
+            if (holds_slot(e->removed[i])) return false;
     if (!connected(c, parent)) return true;
     // :empty can change inherited winners and a following sibling's match.
     // The UA first-summary/first-legend rules also depend on child order.
@@ -2740,6 +3039,17 @@ static bool mark_children(garb_cascade_t *c, const os64_html_change_entry_t *e)
         if (!mark_changed(c, parent)) return false;
     for (size_t i = 0; i < e->nadded; ++i)
         if (!mark_subtree(c, e->added[i])) return false;
+    if (c->shadowed) {
+        // A shadow root attached: libhtml logs it as a change of the host's
+        // children with none added or removed, and every child of the host
+        // now inherits from a slot, or from nothing.
+        if (parent->shadow_root && !e->nadded && !e->nremoved && !mark_subtree(c, parent))
+            return false;
+        // A slot arriving in a shadow tree moves assignments.
+        bool slots = false;
+        for (size_t i = 0; i < e->nadded && !slots; ++i) slots = holds_slot(e->added[i]);
+        if (slots && !mark_host_children(c, parent)) return false;
+    }
     if (c->dependencies.position_back || c->dependencies.filtered)
         return mark_siblings(c, parent->first_child);
     if (c->dependencies.position_front || c->dependencies.following) {
@@ -2773,6 +3083,9 @@ bool garb_cascade_update(garb_cascade_t *c)
     if (!c || c->incomplete || c->update_failed) return false;
     uint64_t version = os64_html_version(c->doc);
     if (version == c->version) return true;
+    // A document's first shadow root changes how every walk goes (shadowed).
+    if (!c->shadowed && os64_html_has_shadow_roots(c->doc))
+        return false;
     // Old derived values stay alive for displayed trees. Renew once added
     // storage reaches one initial state's worth (at least 4 KiB). Keeping
     // many whole restyles bloats the allocator's region ledger and slows
@@ -2791,13 +3104,13 @@ bool garb_cascade_update(garb_cascade_t *c)
     for (const os64_html_change_entry_t *e = changes; e; e = e->next)
         for (size_t i = 0; i < e->nremoved; ++i)
             for (const os64_html_node_t *x = e->removed[i]; x;
-                 x = subtree_next(x, e->removed[i], true))
+                 x = si_next(x, e->removed[i], true))
                 if (is_el(x)) slot_remove(c, x);
     for (const os64_html_change_entry_t *e = changes; e; e = e->next)
         for (size_t i = 0; i < e->nadded; ++i) {
             const os64_html_node_t *root = e->added[i];
             if (!connected(c, root)) continue;
-            for (const os64_html_node_t *x = root; x; x = subtree_next(x, root, true))
+            for (const os64_html_node_t *x = root; x; x = si_next(x, root, true))
                 if (is_el(x) && !slot_for(c, x, true)) return false;
         }
     for (const os64_html_change_entry_t *e = changes; e; e = e->next)
@@ -2814,36 +3127,52 @@ bool garb_cascade_update(garb_cascade_t *c)
             const os64_html_node_t *root = e->target;
             if (root && !is_el(root)) root = root->parent;
             if (!mark_changed(c, root)) return false;
+            // A slot renamed moves which of its host's children it takes.
+            if (c->shadowed && e->kind == OS64_HTML_CHANGE_ATTR && e->attr_name &&
+                os64_streq(e->attr_name, "name") && is_slot(e->target) &&
+                !mark_host_children(c, e->target))
+                return false;
         }
     }
     c->updating = true;
     int32_t old_nattrs = c->nattrs;
     Match *m = NULL; int32_t mcap = 0;
     AppliedScratch scratch = {0};
-    for (size_t i = 0; i < c->ndirty; ++i) {
+    bool failed = false;
+    if (c->shadowed) {
+        // A dirty slotted element inherits from its slot, which may lie
+        // outside its own dirty root, so the dirty elements are recomputed
+        // in one walk in si_next's order, which puts each after the element
+        // it inherits from.
+        for (const os64_html_node_t *x = c->doc->document; x && !failed;
+             x = si_next(x, c->doc->document, true)) {
+            Slot *s = is_el(x) ? slot_for(c, x, false) : NULL;
+            if (!s || !s->dirty) continue;
+            *s = (Slot){.node = x, .changed = c->updates + 1};
+            cascade_whole(c, x, &m, &mcap, &scratch);
+            failed = c->incomplete || c->self.incomplete;
+        }
+    }
+    for (size_t i = 0; i < c->ndirty && !c->shadowed && !failed; ++i) {
         const os64_html_node_t *root = c->dirty_nodes[i];
         Slot *s = slot_for(c, root, false);
         const Slot *up = is_el(root->parent) ? slot_for(c, root->parent, false) : NULL;
         if (!s || !s->dirty || (up && up->dirty)) continue;
         // Minimal dirty roots traverse their dirty descendants in tree order,
         // so inherited custom properties have their new parent values.
-        for (const os64_html_node_t *x = root; x; x = subtree_next(x, root, true)) {
+        for (const os64_html_node_t *x = root; x && !failed; x = subtree_next(x, root, true)) {
             if (!is_el(x)) continue;
             s = slot_for(c, x, false);
             if (!s || !s->dirty) continue;
-            up = is_el(x->parent) ? slot_for(c, x->parent, false) : NULL;
             *s = (Slot){.node = x, .changed = c->updates + 1};
-            cascade_element(c, x, TARGET_ELEMENT, up ? up->customs : NULL, &m, &mcap, &scratch);
-            const Slot *self = slot_for(c, x, false);
-            for (int32_t t = TARGET_BEFORE; t < TARGETS; t++)
-                if (targeted(c, t))
-                    cascade_element(c, x, t, self ? self->customs : NULL, &m, &mcap, &scratch);
-            if (c->incomplete || c->self.incomplete) {
-                os64_free(scratch.items);
-                c->updating = false;
-                return false;
-            }
+            cascade_whole(c, x, &m, &mcap, &scratch);
+            failed = c->incomplete || c->self.incomplete;
         }
+    }
+    if (failed) {
+        os64_free(scratch.items);
+        c->updating = false;
+        return false;
     }
     os64_free(scratch.items);
     c->updating = false;
@@ -2974,7 +3303,24 @@ bool garb_cascade_retain(garb_cascade_t *c)
 bool garb_cascade_matches(const garb_cascade_t *c, const garb_sheet_in_t *in,
                           int32_t n, garb_env_t env)
 {
-    if (!c || c->ninputs != n || c->env.width != env.width || c->env.height != env.height ||
+    return garb_cascade_matches_scoped(c, in, n, NULL, 0, env);
+}
+
+bool garb_cascade_matches_scoped(const garb_cascade_t *c, const garb_sheet_in_t *in, int32_t n,
+                                 const garb_scope_in_t *scopes, int32_t nscopes, garb_env_t env)
+{
+    if (scopes == NULL || nscopes < 0)
+        nscopes = 0;
+    if (!c || c->ngiven != nscopes)
+        return false;
+    for (int32_t i = 0; i < nscopes; ++i) {
+        const garb_scope_in_t *a = &c->given[i], *b = &scopes[i];
+        int32_t bn = b->sheets != NULL && b->n > 0 ? b->n : 0;
+        if (a->root != b->root || a->n != bn ||
+            (bn > 0 && os64_memcmp(a->sheets, b->sheets, (size_t)bn * sizeof(*a->sheets)) != 0))
+            return false;
+    }
+    if (c->ninputs != n || c->env.width != env.width || c->env.height != env.height ||
         c->env.dark != env.dark || c->env.reduced_motion != env.reduced_motion ||
         c->env.scripting != env.scripting || c->env.modern_off != env.modern_off ||
         c->env.device_width != env.device_width || c->env.device_height != env.device_height ||
@@ -3062,19 +3408,11 @@ size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *do
     Out o = {out, cap, 0};
     if (cap > 0)
         out[0] = '\0';
-    for (const os64_html_node_t *x = doc->document; x != NULL;) {
+    for (const os64_html_node_t *x = doc->document; x != NULL; x = si_next(x, doc->document, true))
         if (is_el(x)) {
             dump_winners(&o, x, "", garb_style_for(c, x));
             dump_winners(&o, x, "::before", garb_style_for_pseudo(c, x, GARB_PSEUDO_BEFORE));
             dump_winners(&o, x, "::after", garb_style_for_pseudo(c, x, GARB_PSEUDO_AFTER));
         }
-        if (x->first_child != NULL) {
-            x = x->first_child;
-            continue;
-        }
-        while (x != NULL && x->next == NULL)
-            x = x->parent;
-        x = x != NULL ? x->next : NULL;
-    }
     return o.len;
 }

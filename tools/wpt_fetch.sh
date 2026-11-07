@@ -34,6 +34,7 @@ WPT_DIRS=(
     tools
     dom/nodes
     dom/traversal
+    dom/ranges
     webstorage
     url
     encoding
@@ -73,6 +74,8 @@ WPT_DIRS=(
     html/webappapis/structured-clone
     requestidlecallback
     webmessaging/without-ports
+    webmessaging/message-channels
+    selection
     html/semantics/document-metadata/the-link-element
     html/semantics/document-metadata/the-style-element
     preload

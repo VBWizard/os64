@@ -1,5 +1,6 @@
 // select.c — Selectors Level 3, with Level 4's :is(), :where(), :not() with a
-// list, and :has() (garb/select.h).
+// list, and :has(), and CSS Scoping's :host, :host() and ::slotted()
+// (garb/select.h).
 //
 // A selector is parsed from a rule's prelude into COMPLEX selectors — a
 // run of COMPOUNDS joined by combinators — each compound a run of SIMPLE
@@ -21,6 +22,7 @@ typedef enum {
     P_ONLY_OF_TYPE, P_NTH_CHILD, P_NTH_LAST_CHILD, P_NTH_OF_TYPE, P_NTH_LAST_OF_TYPE, P_EMPTY,
     P_LINK, P_ANY_LINK, P_NEVER, P_USER_ACTION, P_ENABLED, P_DISABLED, P_CHECKED, P_LANG, P_DIR, P_NOT, P_IS,
     P_WHERE, P_HAS, P_REQUIRED, P_OPTIONAL, P_READ_ONLY, P_READ_WRITE, P_DEFINED, P_SCOPE,
+    P_HOST, P_SLOTTED,
 } PKind;
 typedef enum { C_NONE, C_DESCENDANT, C_CHILD, C_NEXT, C_SUBSEQUENT } Comb;
 
@@ -37,7 +39,9 @@ typedef struct {
     int8_t ci;                  // ATTR: -1 as HTML says, 0 `s`, 1 `i`
     PKind pseudo;
     int32_t a, b;               // the nth- pseudo-classes
-    List *list;                 // :not, :is, :where, :has, nth-child(… of S)
+    // :not, :is, :where, :has, nth-child(… of S); :host()'s and
+    // ::slotted()'s compound, as a list of one
+    List *list;
     const garb_value_t *args;   // :lang, :dir: their arguments
     int32_t nargs;
 } Simple;
@@ -301,6 +305,14 @@ static List *sub_list(Cur *outer, const garb_value_t *v, int32_t n, bool forgivi
     return parse_list(&c, forgiving, relative);
 }
 
+// :host()'s and ::slotted()'s argument (CSS Scoping 1 § 3.2.1, § 3.2.3): one
+// compound selector, so no combinator and no comma; NULL when it is not.
+static List *one_compound(Cur *outer, const garb_value_t *v, int32_t n)
+{
+    List *l = sub_list(outer, v, n, false, false);
+    return l != NULL && l->n == 1 && l->v[0].n == 1 ? l : NULL;
+}
+
 static bool pseudo_element_named(const char *s, size_t n, garb_pseudo_t *out)
 {
     static const struct { const char *name; garb_pseudo_t which; } kNames[] = {
@@ -330,7 +342,7 @@ static bool pseudo_class_named(const char *s, size_t n, PKind *out)
         {"enabled", P_ENABLED},
         {"disabled", P_DISABLED}, {"checked", P_CHECKED}, {"required", P_REQUIRED},
         {"optional", P_OPTIONAL}, {"read-only", P_READ_ONLY}, {"read-write", P_READ_WRITE},
-        {"defined", P_DEFINED}, {"scope", P_SCOPE},
+        {"defined", P_DEFINED}, {"scope", P_SCOPE}, {"host", P_HOST},
     };
     for (size_t k = 0; k < sizeof(kNames) / sizeof(kNames[0]); k++)
         if (ascii_ieq(s, n, kNames[k].name)) {
@@ -425,6 +437,11 @@ static bool parse_pseudo_function(Cur *c, const garb_value_t *f, Simple *s)
         s->pseudo = is_not ? P_NOT : ascii_ieq(name, len, "where") ? P_WHERE : P_IS;
         s->list = sub_list(c, f->children, f->nchildren, !is_not, false);
         return s->list != NULL && (s->list->n > 0 || !is_not);
+    }
+    if (ascii_ieq(name, len, "host")) {
+        s->pseudo = P_HOST;
+        s->list = one_compound(c, f->children, f->nchildren);
+        return s->list != NULL;
     }
     if (ascii_ieq(name, len, "has")) {
         if (c->in_has)
@@ -527,6 +544,23 @@ static bool parse_compound(Cur *c, Compound *cp, garb_pseudo_t *pseudo)
             const garb_value_t *u = peek(c, 1);
             if (u != NULL && u->kind == GARB_COLON) {
                 const garb_value_t *w = peek(c, 2);
+                // ::slotted(<compound>) keeps its argument where the
+                // compound it follows keeps its simple selectors, as a
+                // P_SLOTTED that the slot always matches: the argument is
+                // the slotted element's to match (garb_selector_matches_slotted).
+                if (w != NULL && w->kind == GARB_FUNCTION && ascii_ieq(w->text, w->len, "slotted")) {
+                    if (*pseudo != GARB_PSEUDO_NONE)
+                        return false;
+                    Simple sl = {.kind = S_PSEUDO, .pseudo = P_SLOTTED};
+                    sl.list = one_compound(c, w->children, w->nchildren);
+                    if (sl.list == NULL)
+                        return false;
+                    *pseudo = GARB_PSEUDO_SLOTTED;
+                    c->i += 3;
+                    push_simple(c, cp, &sl);
+                    any = true;
+                    continue;
+                }
                 if (w == NULL || w->kind != GARB_IDENT || *pseudo != GARB_PSEUDO_NONE ||
                     !pseudo_element_named(w->text, w->len, pseudo))
                     return false;
@@ -588,7 +622,8 @@ static bool combinator(const garb_value_t *t, Comb *out)
 
 // Specificity: ids, then classes/attributes/pseudo-classes, then types and
 // pseudo-elements. :is(), :not() and :has() weigh as their heaviest
-// argument, :where() as nothing, nth-child(… of S) as a class and S.
+// argument, :where() as nothing, nth-child(… of S) as a class and S,
+// :host(S) as a class and S, ::slotted(S) as a pseudo-element and S.
 static void weigh_list(const List *l, uint32_t *a, uint32_t *b, uint32_t *c)
 {
     *a = *b = *c = 0;
@@ -618,7 +653,9 @@ static void weigh(Complex *x)
             case S_PSEUDO:
                 if (s->pseudo == P_WHERE)
                     break;
-                if (s->pseudo == P_IS || s->pseudo == P_NOT || s->pseudo == P_HAS) {
+                // ::slotted()'s own weight is the pseudo-element's, below.
+                if (s->pseudo == P_IS || s->pseudo == P_NOT || s->pseudo == P_HAS ||
+                    s->pseudo == P_SLOTTED) {
                     weigh_list(s->list, &a, &b, &c);
                     x->a += a;
                     x->b += b;
@@ -1159,8 +1196,33 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
     case P_IS:
     case P_WHERE: return match_list(sel, s->list, el, scope);
     case P_HAS: return has_matches(sel, s->list, el);
+    // Only a featureless host matches :host (featureless_matches), and
+    // every element reaching here has features.
+    case P_HOST: return false;
+    // The slot ::slotted() follows; its argument is matched against the
+    // slotted element, by garb_selector_matches_slotted alone.
+    case P_SLOTTED: return true;
     }
     return false;
+}
+
+// A shadow host as the selectors of its own shadow tree see it (CSS
+// Scoping 1 § 3.1): FEATURELESS, so a compound matches it only when every
+// simple selector in it is :host or :host(S), S matched against the host
+// as an ordinary element of its own tree.
+static bool featureless_matches(const garb_selectors_t *sel, const Compound *cp,
+                                const os64_html_node_t *host, const os64_html_node_t *scope)
+{
+    if (cp->n == 0)
+        return false;
+    for (int32_t j = 0; j < cp->n; j++) {
+        const Simple *s = &cp->s[j];
+        if (s->kind != S_PSEUDO || s->pseudo != P_HOST)
+            return false;
+        if (s->list != NULL && !match_list(sel, s->list, host, scope))
+            return false;
+    }
+    return true;
 }
 
 static bool compound_matches(const garb_selectors_t *sel, const Compound *cp,
@@ -1216,25 +1278,41 @@ static bool compound_matches(const garb_selectors_t *sel, const Compound *cp,
 // algorithm browsers use, whose answers say how far a failure reaches — no
 // later sibling can succeed, or no ancestor can — so a search does not try
 // again what has already failed.
+//
+// `featureless` says `el` is a shadow host seen from inside its shadow tree.
+// A shadow root's child climbs to it, and nothing climbs past it or reaches
+// its siblings: in the tree whose selectors are matching, the host stands
+// where the root's parent would, with nothing around it.
 static Result match_from(const garb_selectors_t *sel, const Complex *x, int32_t k,
-                         const os64_html_node_t *el, const os64_html_node_t *scope)
+                         const os64_html_node_t *el, const os64_html_node_t *scope,
+                         bool featureless)
 {
-    if (!compound_matches(sel, &x->c[k], el, scope))
+    if (featureless ? !featureless_matches(sel, &x->c[k], el, scope)
+                    : !compound_matches(sel, &x->c[k], el, scope))
         return NOT_SIBLING;
     Comb comb = k > 0 ? x->c[k].left : x->relative;
     if (k == 0 && comb == C_NONE)
         return MATCHED;
     Result none = comb == C_NEXT || comb == C_SUBSEQUENT ? NOT_DESCENDANT : NOT_GLOBALLY;
     const os64_html_node_t *at = el;
+    bool at_host = featureless;
     for (;;) {
-        at = comb == C_CHILD || comb == C_DESCENDANT ? parent_el(at) : prev_el(at);
+        if (at_host) {
+            at = NULL;
+        } else if (comb == C_CHILD || comb == C_DESCENDANT) {
+            const os64_html_node_t *host = at->parent ? os64_html_shadow_host(at->parent) : NULL;
+            at = host != NULL ? host : parent_el(at);
+            at_host = host != NULL;
+        } else {
+            at = prev_el(at);
+        }
         if (at == NULL)
             return none;
         Result r;
         if (k == 0)
             r = at == scope ? MATCHED : NOT_SIBLING;    // :has()'s anchor
         else
-            r = match_from(sel, x, k - 1, at, scope);
+            r = match_from(sel, x, k - 1, at, scope, at_host);
         if (r == MATCHED || r == NOT_GLOBALLY || comb == C_NEXT)
             return r;
         if (comb == C_CHILD)
@@ -1247,7 +1325,7 @@ static Result match_from(const garb_selectors_t *sel, const Complex *x, int32_t 
 static bool match_complex(const garb_selectors_t *sel, const Complex *x,
                           const os64_html_node_t *el, const os64_html_node_t *scope)
 {
-    return match_from(sel, x, x->n - 1, el, scope) == MATCHED;
+    return match_from(sel, x, x->n - 1, el, scope, false) == MATCHED;
 }
 
 // :has(): some element the relative selector reaches from `el` — its
@@ -1302,6 +1380,50 @@ bool garb_selector_matches_in(const garb_selectors_t *list, int32_t i,
     if (list == NULL || i < 0 || i >= list->list.n || !is_el(element))
         return false;
     return match_complex(list, &list->list.v[i], element, scope);
+}
+
+bool garb_selector_matches_host(const garb_selectors_t *list, int32_t i,
+                                const os64_html_node_t *host)
+{
+    if (list == NULL || i < 0 || i >= list->list.n || !is_el(host))
+        return false;
+    const Complex *x = &list->list.v[i];
+    return match_from(list, x, x->n - 1, host, NULL, true) == MATCHED;
+}
+
+// The ::slotted() argument of the i-th selector, NULL when it has none.
+static const List *slotted_argument(const garb_selectors_t *list, int32_t i)
+{
+    const Complex *x = &list->list.v[i];
+    if (x->pseudo != GARB_PSEUDO_SLOTTED)
+        return NULL;
+    const Compound *last = &x->c[x->n - 1];
+    for (int32_t j = 0; j < last->n; j++)
+        if (last->s[j].kind == S_PSEUDO && last->s[j].pseudo == P_SLOTTED)
+            return last->s[j].list;
+    return NULL;
+}
+
+bool garb_selector_matches_slotted(const garb_selectors_t *list, int32_t i,
+                                   const os64_html_node_t *slot, const os64_html_node_t *element)
+{
+    if (list == NULL || i < 0 || i >= list->list.n || !is_el(slot) || !is_el(element))
+        return false;
+    const List *argument = slotted_argument(list, i);
+    return argument != NULL && match_list(list, argument, element, NULL) &&
+           match_complex(list, &list->list.v[i], slot, NULL);
+}
+
+bool garb_selector_names_host(const garb_selectors_t *list, int32_t i)
+{
+    if (list == NULL || i < 0 || i >= list->list.n)
+        return false;
+    const Complex *x = &list->list.v[i];
+    const Compound *last = &x->c[x->n - 1];
+    for (int32_t j = 0; j < last->n; j++)
+        if (last->s[j].kind == S_PSEUDO && last->s[j].pseudo == P_HOST)
+            return true;
+    return false;
 }
 
 // Walk the parsed form, including :is/:not/:where and nth-child's filter.

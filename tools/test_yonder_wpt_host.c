@@ -11,7 +11,8 @@
  * clocks, the disk), so a page here takes the path a page from the network
  * takes in yonder: a navigation, a head, the body in the stream's chunks,
  * the verdict, then turns of the loop. Its modern switch is on, as yonder's
- * is unless yonder.conf says otherwise; --modern-off turns it off, which is
+ * is unless yonder.conf says otherwise, and so is DOM Range's under it
+ * (settings.h); --modern-off turns both off, which is
  * how a slice shows its required tests are its own surface's: then every
  * [required] test that passes is listed as LEAKED and fails the run, the
  * baseline is not compared (it is the switch on's), and --update is
@@ -988,6 +989,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     pool_submit_hook=wpt_submit;pool_cancel_hook=wpt_cancel_image;
     g.scripts_on=true; g.script_ms=5000; now_ms=100; clock_step=1000;
     g.modern=!wpt_modern_off;
+    s_ranges=true;
     wpt_navigated=false;
     start_trip(url,NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
     if(pool_work.job==NULL || !g.stream.active) {

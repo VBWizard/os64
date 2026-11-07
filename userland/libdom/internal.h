@@ -97,6 +97,8 @@ _Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
 #define D_KIND(kind) ((uint64_t)1 << (kind))
 /* The wrapper's base family; SVG graphics refine its prototype separately. */
 int d_node_kind(const os64_html_node_t *node);
+/* Its nodeType (node.c): libhtml's kind, a CDATA section's 4. */
+int d_node_type(const os64_html_node_t *node);
 /* A content attribute reflected as an IDL attribute (HTML § 2.6.1), by
  * one of HTML's rules: a string (null as "null", or as "" for WebIDL's
  * LegacyNullToEmptyString); a URL, read resolved, and base's href, read
@@ -205,6 +207,10 @@ struct DValue {
      * `link`'s CSSStyleSheet, made once (sheets.c). */
     DQuery *style_sheets;
     DValue *sheet;
+    /* A constructed CSSStyleSheet's own entry: its text (adopted.c). */
+    struct DSheetText *constructed;
+    /* A document node's or shadow root's adoptedStyleSheets (adopted.c). */
+    struct DAdopted *adopted;
     /* A control's, fieldset's or output's ValidityState, made once
      * ([SameObject], validity.c). */
     DValue *validity;
@@ -239,7 +245,8 @@ struct DValue {
     void (*listeners_changed)(JSRuntime *rt, DValue *entry);
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
- * HTML documents; createDocument makes an XML document, whose createElement
+ * HTML documents; createDocument and `new Document()` make XML documents
+ * (the latter as if made for no namespace), whose createElement
  * makes HTML elements when it was made for the HTML namespace
  * (application/xhtml+xml) and elements in no namespace otherwise. An SVG
  * one is an XML document made for the SVG namespace, which differs from
@@ -251,6 +258,9 @@ struct DQuery {
     DQuery *next;
     DValue *entry;
     char *name, *folded, *named;
+    /* The root's node document was an HTML document when the query was
+     * made: an HTML element's name is then matched against `folded`. */
+    bool html_document;
     unsigned kind;
     const os64_html_node_t **nodes;
     size_t count;
@@ -347,11 +357,20 @@ struct os64_dom {
     void *geometry_opaque;
     os64_dom_svg_hit_provider_t svg_hit;
     void *svg_hit_opaque;
+    /* elementFromPoint's hit provider (hit.c). */
+    os64_dom_hit_provider_t hit;
+    void *hit_opaque;
+    /* A range's text rects (range.c). */
+    os64_dom_text_rects_provider_t text_rects;
+    void *text_rects_opaque;
     DValue *svg_graphics_proto, *svg_geometry_proto;
     /* ShadowRoot's and HTMLSlotElement's prototypes, refining a shadow
      * root's DocumentFragment kind and a slot's HTMLElement kind (shadow.c);
      * NULL with the surface off. */
     DValue *shadow_root_proto, *slot_proto;
+    /* CDATASection's and ProcessingInstruction's prototypes, refining a
+     * CDATA section's Text kind and a PI's (data_nodes.c). */
+    DValue *cdata_proto, *pi_proto;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
     /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
@@ -377,6 +396,12 @@ struct os64_dom {
     /* StyleSheetList's prototype (collection.c) and CSSStyleSheet's
      * (sheets.c); NULL with the modern switch off. */
     DValue *sheet_list_prototype, *sheet_prototype;
+    /* Adoption (adopted.c): every root that has an adoptedStyleSheets
+     * array, the factory that makes one, and the next constructed sheet's
+     * key. */
+    struct DAdopted *adoptions;
+    DValue *adopt_factory;
+    uint64_t sheet_keys;
     /* Constraint validation (validity.c): ValidityState's prototype; the
      * RegExp constructor and RegExp.prototype.exec, taken before any page
      * ran, which judge a control's pattern; the native function a person's
@@ -439,6 +464,8 @@ struct os64_dom {
     DValue *event_target_prototype, *window_prototype;
     bool sweep_pending;
     DListener *invoking;
+    /* Listeners a host's dispatch has called, ever (os64_dom_listener_calls). */
+    uint64_t listener_calls;
     /* The import map os64_dom_import_map is parsing, while it does
      * (importmap.c). */
     struct DImportParse *import_parse;
@@ -644,6 +671,10 @@ struct os64_dom {
     void *intersections_opaque;
     /* The traversal row's walkers and iterators (walker.c). */
     struct DWalks *walks;
+    /* DOM Range's records (range.c). */
+    struct DRanges *ranges;
+    /* d_body_context's element, made on first use; held. */
+    const os64_html_node_t *body_context;
     /* ResizeObserver (resize.c), the same three. */
     struct DResizes *resizes;
     size_t resizes_held;
@@ -721,13 +752,21 @@ bool d_svg_geometry_node(const os64_html_node_t *);
 JSValueConst d_svg_prototype(os64_dom_t *, const os64_html_node_t *);
 /* Shadow trees' surface (shadow.c, SHADOW_DOM.md § 7): the two prototypes,
  * made at creation when the surface is on (NULL otherwise); the prototype
- * a node's wrapper takes, refined for a shadow root and a slot before
- * SVG's; the members and interfaces, which
+ * a node's wrapper takes, refined for a CDATA section and a processing
+ * instruction (data_nodes.c), then a shadow root and a slot, before SVG's;
+ * the members and interfaces, which
  * d_modern_install puts on with options.shadow_trees; the names it puts on
  * window, by index, NULL past the last. */
 int d_shadow_prototypes(os64_dom_t *dom, JSContext *ctx);
 JSValueConst d_node_prototype(os64_dom_t *dom, const os64_html_node_t *n);
 int d_shadow_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* CDATASection and ProcessingInstruction (data_nodes.c): their prototypes,
+ * made with the binding's own; and the Modern Web row that names them and
+ * puts createCDATASection and createProcessingInstruction on Document. */
+int d_data_prototypes(os64_dom_t *dom, JSContext *ctx);
+int d_data_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* new Document() (implementation.c): Document's constructor. */
+JSValue d_document_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);
 const char *d_shadow_name(size_t index);
 /* Whether a custom element definition lists "shadow" in disabledFeatures
  * (custom.c). */
@@ -1507,6 +1546,32 @@ int d_tables_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* Node's comparisons, isSameNode, isEqualNode and compareDocumentPosition,
  * on Node's prototype and Attr's (compare.c). */
 int d_compare_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* elementFromPoint and elementsFromPoint (hit.c), on Document's prototype
+ * and, with shadow trees, ShadowRoot's. */
+int d_hit_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The plain tree (compare.c): a node's root by ->parent; whether `ancestor`
+ * is a proper ancestor of `node`; whether `a` comes before `b`, two
+ * different nodes of one tree, in tree order. */
+const os64_html_node_t *d_tree_root(const os64_html_node_t *node);
+bool d_tree_ancestor(const os64_html_node_t *ancestor, const os64_html_node_t *node);
+bool d_tree_precedes(const os64_html_node_t *a, const os64_html_node_t *b);
+/* DOM Range (RANGE.md § 5-§ 6, range.c): AbstractRange, Range, StaticRange
+ * and Document's createRange, which d_modern_install puts on with
+ * options.ranges; the names it puts on window, by index, NULL past the
+ * last. Dead records are swept at the top of the binding's tree changes
+ * (d_insert, d_remove, d_replace) and at the next creation; d_ranges_free
+ * releases the rest, before the document goes. */
+int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+const char *d_ranges_name(size_t index);
+/* The context a fragment parse takes when it has no element of its own to
+ * take (insertAdjacentHTML, createContextualFragment; mixin.c). NULL with
+ * `*status` saying why. */
+const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status);
+/* The context a fragment parse takes for `element` (mixin.c): the element,
+ * or d_body_context's body for one in no namespace or another one. */
+const os64_html_node_t *d_fragment_context(os64_dom_t *dom, const os64_html_node_t *element, int64_t *status);
+void d_ranges_sweep(os64_dom_t *dom);
+void d_ranges_free(os64_dom_t *dom);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its
  * `for` names, when the first element of its tree with that ID is one;
  * without `for`, its first labelable descendant. NULL for none, or for a
@@ -1533,6 +1598,19 @@ JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* document.styleSheets, StyleSheet, CSSStyleSheet and LinkStyle's `sheet`
  * (sheets.c): one row of the Modern Web table. */
 int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* Constructed sheets and adoption (adopted.c, SHADOW_DOM.md § 12 D4b):
+ * CSSStyleSheet's constructor, replace and replaceSync, and both
+ * adoptedStyleSheets, installed with the shadow surface. `d_sheet_constructed`
+ * answers a constructed sheet's members sheets.c asks about, true when
+ * `entry` is one. `d_adopted_free` lets go of an entry's records at
+ * teardown. */
+int d_adopted_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSValueConst sheet_prototype,
+                      JSValueConst root_prototype);
+JSValue d_sheet_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);
+/* CSSStyleSheet's class (sheets.c), whose opaque is the sheet's entry. */
+JSClassID d_sheet_class(void);
+bool d_sheet_constructed(const DValue *entry);
+void d_adopted_free(os64_dom_t *dom, DValue *entry);
 /* The CSS namespace (css.c): CSS.escape and CSS.supports; one row of the
  * Modern Web table. */
 int d_css_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -1734,9 +1812,11 @@ int d_reactions_pop(os64_dom_t *dom, JSContext *ctx);
  * which is reported) or JS_EXCEPTION. */
 int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, const char *name,
                     JSValue *out);
-/* A clone's elements with a definition, upgraded before the clone is
- * handed back. 0, or -1 with an exception pending. */
-int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *copy);
+/* A new detached subtree's elements with a definition, upgraded before it
+ * is handed back: a clone's (cloneNode, a range's contents) and a parsed
+ * fragment's (createContextualFragment). 0, or -1 with an exception
+ * pending. */
+int d_custom_upgrade_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root);
 /* adoptNode moved `root`'s tree from document `from` to `to`: each custom
  * element in it is owed an adoptedCallback. */
 void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *from,
@@ -1798,6 +1878,9 @@ void d_walkers_free(os64_dom_t *dom);
 int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 JSValue d_rect_new(os64_dom_t *dom, JSContext *ctx, bool readonly, double x, double y, double width,
                    double height);
+/* A DOMRectList of `count` DOMRects, x, y, width, height four by four in
+ * `rects` (a range's getClientRects, range.c). */
+JSValue d_rect_list_new(os64_dom_t *dom, JSContext *ctx, const double *rects, size_t count);
 /* WebIDL's iteration of an iterable (§ 3.2.20, "create a sequence from an
  * iterable"): `each` handed every value in turn, borrowed for the call, 0
  * to go on and -1, with an exception pending, to stop. `method` is the

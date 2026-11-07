@@ -597,6 +597,20 @@ void h_detach(HDoc *d, HNode *n)
 {
     if (!n->parent)
         return;
+    /* The ranges first: a boundary leaving the subtree moves its hold while
+     * the subtree is still counted in its unit, so h_unlink's accounting
+     * moves the holds that remain, not one already gone. */
+    if (d->ranges)
+        d_ranges_unlinking(d, n);
+    h_unlink(d, n);
+}
+/* `n` unlinked with no range step: for a node no live range can name —
+ * collection frees only a unit with no holds, and a range holds both its
+ * boundary nodes, so no boundary is in it or at its parent. */
+void h_unlink(HDoc *d, HNode *n)
+{
+    if (!n->parent)
+        return;
     d_unlinking(d, n);
     if (n->prev)
         n->prev->next = n->next;
@@ -608,9 +622,21 @@ void h_detach(HDoc *d, HNode *n)
         n->parent->last_child = n->prev;
     n->parent = n->prev = n->next = NULL;
 }
+/* DOM's insert (§ 4.2.3): the live ranges move by `before`'s index in the
+ * tree as it stands, the node still where it was (step 5), and only then is
+ * the node taken out of its old parent (adopt, step 7.1). A node moved
+ * earlier among its own siblings is where the order shows. */
 void h_attach(HDoc *d, HNode *parent, HNode *before, HNode *n)
 {
+    if (d->ranges)
+        d_ranges_linking(d, parent, before);
     h_detach(d, n);
+    h_link(d, parent, before, n);
+}
+/* `n`, which has no parent, linked under `parent` before `before`, with no
+ * range step: the caller ran it. */
+void h_link(HDoc *d, HNode *parent, HNode *before, HNode *n)
+{
     d_linking(d, parent, n);
     n->parent = parent;
     n->next = before;
@@ -673,6 +699,10 @@ const char *os64_html_status_name(int64_t s)
         return "OS64_HTML_BAD_ARGUMENT";
     case OS64_HTML_NOT_SUPPORTED:
         return "OS64_HTML_NOT_SUPPORTED";
+    case OS64_HTML_INVALID_NODE_TYPE:
+        return "OS64_HTML_INVALID_NODE_TYPE";
+    case OS64_HTML_INDEX_SIZE:
+        return "OS64_HTML_INDEX_SIZE";
     default:
         return "OS64_HTML_UNKNOWN_STATUS";
     }

@@ -115,11 +115,23 @@ typedef struct {
     /* Shadow trees (docs/design/pending/SHADOW_DOM.md § 7), with `modern`:
      * set, Element's attachShadow, shadowRoot, slot and assignedSlot,
      * Text's assignedSlot, ShadowRoot and HTMLSlotElement on window,
-     * getRootNode's `composed` and Event's `composed` exist; clear, none of
-     * them does, so a page that tests for one takes its fallback. One
+     * getRootNode's `composed`, Event's `composed`, CSSStyleSheet's
+     * constructor with replace and replaceSync, and adoptedStyleSheets on
+     * the document and a shadow root exist (SHADOW_DOM.md § 12, D4b);
+     * clear, none of them does, so a page that tests for one takes its
+     * fallback. One
      * switch, because a page decides once from several names together.
      * Clear in the defaults. */
     bool shadow_trees;
+    /* DOM Range (docs/design/pending/RANGE.md § 2), with `modern`: set,
+     * AbstractRange, Range and StaticRange on window and the document's
+     * createRange exist, and the page Selection is a model with the
+     * Selection API's members (RANGE.md § 9); clear, none of them does and the
+     * Selection is the fixed empty one (selection.c), so a page that tests
+     * `typeof document.createRange` takes its fallback rather than meeting
+     * a Range with members missing. One switch for the same reason as
+     * shadow trees'. Clear in the defaults. */
+    bool ranges;
     /* The UTF-8 message is borrowed during this owner-thread call. The host
      * copies it if needed and must not enter JS or a nested event loop here. */
     void (*alert)(void *opaque, const char *utf8, size_t length);
@@ -601,6 +613,32 @@ typedef os64_geometry_status_t (*os64_dom_svg_hit_provider_t)(void *,
     const os64_html_node_t *, double x, double y, const os64_geometry_memory_t *,
     bool (*cancelled)(void *), void *, bool *inside, os64_dom_geometry_stats_t *cost);
 void os64_dom_set_svg_hit(os64_dom_t *, os64_dom_svg_hit_provider_t, void *);
+/* elementFromPoint's and elementsFromPoint's (CSSOM View § 5.1; RANGE.md
+ * § 8): the elements under (x, y), CSS pixels in the viewport of the page's
+ * document, topmost first: the one the pointer's hit test finds there (a
+ * hit on text answers the element holding it in the flat tree, one over an
+ * image map's region its area), then that element's flat-tree ancestors; a
+ * point inside the viewport on bare canvas answers the root element. Up to
+ * `cap` into `out`; the count there is, which past `cap` means the rest
+ * were cut. 0 for a point outside the viewport or a document not laid out.
+ * The provider makes the layout current, records attempted layouts and
+ * elapsed work in `cost` even on refusal, and must not enter JS. Borrowed
+ * nodes expire on return. */
+typedef size_t (*os64_dom_hit_provider_t)(void *opaque, double x, double y, const os64_html_node_t **out,
+                                          size_t cap, os64_dom_geometry_stats_t *cost);
+void os64_dom_set_hit(os64_dom_t *dom, os64_dom_hit_provider_t provider, void *opaque);
+/* A range's text rects (CSSOM View § 6.1's Range.getClientRects; RANGE.md
+ * § 7): for bytes [from, to) of Text node `node`'s data, one rect per
+ * laid-out piece of the node's text that the bytes reach, measured over
+ * the white-space-processed text, in CSS pixels of the viewport of the
+ * page's document: x, y, width, height into `out[4*i]`, up to `cap` rects;
+ * the count there is. `from == to` asks for the zero-width rect at that
+ * point. 0 for a node with no laid-out text. The same contract as the
+ * geometry provider: a current layout, no JS, cost recorded. */
+typedef size_t (*os64_dom_text_rects_provider_t)(void *opaque, const os64_html_node_t *node, size_t from,
+                                                 size_t to, double *out, size_t cap,
+                                                 os64_dom_geometry_stats_t *cost);
+void os64_dom_set_text_rects(os64_dom_t *dom, os64_dom_text_rects_provider_t provider, void *opaque);
 
 /* What making the style current cost, added to os64_dom_geometry_stats. */
 void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t elapsed_us);
@@ -732,6 +770,16 @@ void os64_dom_body_stats(const os64_dom_t *dom, size_t *held, uint64_t *refused)
 os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node,
                                    const os64_dom_event_t *event, bool *prevented,
                                    os64_js_outcome_t *outcome);
+/* The rule a dispatch folds two outcomes into one by, for a host that runs
+ * a dispatch inside a task of its own (a script element's load, after the
+ * script ran): `from` replaces `into` when `into` is OK, or when `from` is
+ * sticky and `into` is not; an OK or MORE_JOBS `from` changes nothing. */
+void os64_dom_outcome_fold(os64_js_outcome_t *into, const os64_js_outcome_t *from);
+/* How many listeners and event handlers the host's dispatches have called
+ * since the binding was made: read before and after a dispatch, it says
+ * whether anything heard it, where os64_dom_listens says only that
+ * something on the page listens for the type. 0 for NULL. */
+uint64_t os64_dom_listener_calls(const os64_dom_t *dom);
 /* A person's submission of `form`, by `submitter` (a submit button, or NULL
  * for none), as one task: HTML's interactive constraint validation (§
  * 4.10.21.3, the form submission algorithm), which the host asks BEFORE it
@@ -817,6 +865,22 @@ bool os64_dom_reactions_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * that name has no definition or its constructor has not failed. For the
  * host's census of FAILED elements. */
 bool os64_dom_custom_failure(const os64_dom_t *dom, const char *name, char *out, size_t cap);
+
+/* A constructed sheet a tree has adopted (SHADOW_DOM.md § 12, D4b): its key,
+ * the same for the sheet's life and never another sheet's; its generation,
+ * which moves each time replace or replaceSync gives it new text; and that
+ * text, valid until the sheet's next replace or the binding's free. */
+typedef struct {
+    uint64_t key, generation;
+    const char *text;
+    size_t length;
+} os64_dom_adopted_sheet_t;
+/* The sheets `root` — the document node or a shadow root — has adopted, in
+ * the order its adoptedStyleSheets holds them: writes at most `cap` and
+ * answers how many there are. A change to any of them moves the document's
+ * version (os64_html_touch at the root), which is when to ask again. */
+size_t os64_dom_adopted(const os64_dom_t *dom, const os64_html_node_t *root, os64_dom_adopted_sheet_t *out,
+                        size_t cap);
 /* How many nodes define's searches for elements to upgrade have visited,
  * so the page's record says what defining cost. */
 uint64_t os64_dom_custom_visits(const os64_dom_t *dom);
