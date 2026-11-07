@@ -403,6 +403,206 @@ static void scribe_navigation(void)
     sh_rm(OS64_CLIPBOARD_PATH); sh_rm("/doc"); current = "";
 }
 
+static void sh_find_query(const char *query)
+{
+    find_open();
+    os64_ui_textfield_set(&g.ui, &g.field, query);
+}
+
+static bool sh_match(size_t line, size_t start, size_t end)
+{
+    return g.view.sel && g.view.sel_line == line && g.view.sel_col == start &&
+           g.view.cur_line == line && g.view.cur_col == end;
+}
+
+static void sh_find_button(os64_ui_widget_t *w)
+{
+    os64_gui_event_t ev = {.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x = w->bounds.x + w->bounds.w / 2;
+    ev.mouse.y = w->bounds.y + w->bounds.h / 2;
+    ev.mouse.button = OS64_GUI_MOUSE_LEFT;
+    commands(NULL, &ev);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    commands(NULL, &ev);
+}
+
+static size_t sh_search_line_reads;
+static const char *sh_search_line(void *user, size_t idx, size_t *len)
+{
+    ++sh_search_line_reads;
+    return sbuf_textbuf_template.line(user, idx, len);
+}
+
+static void scribe_find_boundaries(void)
+{
+    current = "scribe find boundaries";
+    const char doc[] = "aa\nx aa aa\nAA x";
+    const size_t base[] = {0, 3, 11}, length[] = {2, 7, 4};
+    const size_t match_line[] = {0, 1, 1, 2}, match_col[] = {0, 2, 5, 0};
+    sh_scribe(16, doc, sizeof(doc)-1); g.running = true;
+    sh_find_query("aa");
+    for (unsigned exact = 0; exact < 2; ++exact)
+    for (unsigned wrap = 0; wrap < 2; ++wrap)
+    for (unsigned previous = 0; previous < 2; ++previous)
+    for (size_t line = 0; line < 3; ++line)
+    for (size_t col = 0; col <= length[line]; ++col) {
+        g.find_case.checked = exact; g.find_wrap.checked = wrap;
+        sh_caret(line, col);
+        int expected = -1, count = exact ? 3 : 4;
+        size_t origin = base[line] + col;
+        for (int n = 0; n < count; ++n) {
+            int m = previous ? count - n - 1 : n;
+            size_t offset = base[match_line[m]] + match_col[m];
+            if (previous ? offset <= origin : offset >= origin) { expected = m; break; }
+        }
+        if (expected < 0 && wrap) expected = previous ? count - 1 : 0;
+        do_find(previous);
+        if (expected < 0) CHECK(!g.view.sel && g.view.cur_line == line && g.view.cur_col == col);
+        else CHECK(sh_match(match_line[expected], match_col[expected], match_col[expected]+2));
+    }
+    CHECK(!g.buf.dirty);
+    sh_close();
+
+    char *log = malloc(100000); size_t used = 0;
+    CHECK(log != NULL);
+    if (log) {
+        for (unsigned n = 0; n < 5000; ++n)
+            used += (size_t)snprintf(log+used, 100000-used, n == 4998 ? "BOOT marker\n" : "log %u\n", n);
+        sh_scribe(16, log, used); g.running = true;
+        sh_find_query("boot");
+        os64_ui_textview_goto(&g.ui, &g.view, 4999, 8, false);
+        g.textbuf.line = sh_search_line;
+        sh_search_line_reads = 0;
+        do_find(true);
+        CHECK(sh_match(4998, 0, 4));
+        CHECK(sh_search_line_reads < 256); /* local backward scan plus visible-row layout */
+        CHECK(g.view.top <= 4998 && g.view.top + (size_t)os64_ui_textview_rows(&g.view, &g.ui.theme) > 4998);
+        CHECK(!g.buf.dirty);
+        sh_close(); free(log);
+    }
+    sh_rm("/doc"); current = "";
+}
+
+static void scribe_find(void)
+{
+    current = "scribe find";
+    const char doc[] = "boot zero\nBoot one\nboot two\nlast";
+    sh_scribe(16, doc, sizeof(doc) - 1); g.running = true;
+    g.ui.theme.checkbox_size = 18;
+    CHECK(!g.find_case.checked && !g.find_wrap.checked);
+    sh_find_query("boot");
+    CHECK(!g.find_previous.hidden && !g.find_wrap.w.hidden);
+    /* The caret is exactly at the first match. */
+    sh_command_key('\r', 0, 0x1c);
+    CHECK(sh_match(0, 0, 4));
+    sh_command_key(0, 0, 0x3d); /* PS/2 F3 */
+    CHECK(sh_match(1, 0, 4));
+    sh_command_key(0, OS64_GUI_MOD_HID, 0x3c); /* USB F3 */
+    CHECK(sh_match(2, 0, 4));
+    size_t top = g.view.top; int64_t left = g.view.left_px;
+    sh_command_key(0, 0, 0x3d);
+    CHECK(sh_match(2, 0, 4) && g.view.top == top && g.view.left_px == left);
+    CHECK(!strcmp(g.status_text, "No later match"));
+    sh_command_key(0, OS64_GUI_MOD_SHIFT, 0x3d);
+    CHECK(sh_match(1, 0, 4));
+    sh_command_key('\r', OS64_GUI_MOD_HID | OS64_GUI_MOD_SHIFT, 0x28);
+    CHECK(sh_match(0, 0, 4));
+    sh_command_key('\r', OS64_GUI_MOD_SHIFT, 0x1c);
+    CHECK(sh_match(0, 0, 4) && !strcmp(g.status_text, "No earlier match"));
+    sh_find_button(&g.find_wrap.w);
+    CHECK(g.find_wrap.checked);
+    sh_find_button(&g.find_previous);
+    CHECK(sh_match(2, 0, 4) && strstr(g.status_text, "Wrapped to end"));
+    CHECK(g.ui.focus == &g.field.w);
+    sh_find_button(&g.find_next);
+    CHECK(sh_match(0, 0, 4) && strstr(g.status_text, "Wrapped to start"));
+    sh_find_button(&g.find_close);
+    CHECK(g.mode == MODE_NONE && g.ui.focus == &g.view.w && g.find_previous.hidden);
+    CHECK(!strcmp(g.find_text, "boot") && g.find_wrap.checked);
+    sh_command_key(0, 0, 0x3d);
+    CHECK(g.mode == MODE_NONE && sh_match(1, 0, 4));
+    sh_command_key(0, OS64_GUI_MOD_HID | OS64_GUI_MOD_SHIFT, 0x3c);
+    CHECK(g.mode == MODE_NONE && sh_match(0, 0, 4));
+    sh_find_query("BOOT");
+    sh_find_button(&g.find_case.w);
+    CHECK(g.find_case.checked);
+    sh_command_key(0, 0, 0x3d);
+    CHECK(sh_match(0, 0, 4) && !strcmp(g.status_text, "Text not found"));
+    os64_ui_set_focus(&g.ui, &g.find_case.w);
+    sh_command_key(' ', 0, 0x39);
+    CHECK(!g.find_case.checked);
+    sh_command_key(27, 0, 0x01); /* Escape also closes from an option. */
+    CHECK(g.mode == MODE_NONE && !strcmp(g.find_text, "BOOT"));
+    sh_command_key(0, 0, 0x3d);
+    CHECK(sh_match(1, 0, 4));
+    sh_find_query("unfinished query");
+    enter_mode(MODE_QUITSAVE, "save before quit:", "");
+    CHECK(!strcmp(g.find_text, "unfinished query"));
+    sh_command_key(0, 0, 0x3d);
+    CHECK(g.mode == MODE_QUITSAVE && sh_match(1, 0, 4));
+    leave_mode();
+    sh_find_query("");
+    sh_command_key(27, OS64_GUI_MOD_HID, 0x29);
+    sh_command_key(0, 0, 0x3d);
+    CHECK(g.mode == MODE_FIND && g.ui.focus == &g.field.w);
+    CHECK(!strcmp(g.status_text, "Enter text to find"));
+    CHECK(SH_DOC_IS("boot zero\nBoot one\nboot two\nlast") && !g.buf.dirty);
+
+    /* Find controls stay inside a narrow window and participate in font adoption. */
+    g.root.bounds.w = 320; layout(&g.ui);
+    for (unsigned i = 0; i < 5; ++i) {
+        os64_gui_rect_t r = find_control(i)->bounds;
+        CHECK(r.x >= 0 && r.x + r.w <= 320 && r.y + r.h <= g.view.w.bounds.y);
+    }
+    g.root.bounds.w = SH_W; layout(&g.ui);
+    CHECK(ui_test_adopt(&g.ui, sh_dir, 20) == OS64_FONT_OK);
+    for (unsigned i = 0; i < 5; ++i) {
+        os64_gui_rect_t r = find_control(i)->bounds;
+        CHECK(r.x >= 0 && r.x + r.w <= SH_W && r.y + r.h <= g.view.w.bounds.y);
+    }
+    os64_ui_render(&g.ui, NULL);
+    sh_close();
+
+    /* Splitting the origin row must neither miss column zero nor revisit
+     * the same selected match without an explicit wrap. */
+    sh_scribe(16, "aa xx aa aa", 11); g.running = true;
+    sh_find_query("aa"); sh_caret(0, 6);
+    sh_command_key('\r', OS64_GUI_MOD_SHIFT, 0x1c);
+    CHECK(sh_match(0, 6, 8));
+    sh_command_key('\r', OS64_GUI_MOD_SHIFT, 0x1c);
+    CHECK(sh_match(0, 0, 2));
+    sh_command_key('\r', 0, 0x1c); CHECK(sh_match(0, 6, 8));
+    sh_command_key('\r', 0, 0x1c); CHECK(sh_match(0, 9, 11));
+    sh_command_key('\r', 0, 0x1c); CHECK(sh_match(0, 9, 11));
+    sh_find_button(&g.find_wrap.w);
+    sh_command_key('\r', 0, 0x1c); CHECK(sh_match(0, 0, 2));
+    sh_command_key('\r', OS64_GUI_MOD_SHIFT, 0x1c); CHECK(sh_match(0, 9, 11));
+    sh_find_query("not here");
+    sh_command_key('\r', 0, 0x1c);
+    CHECK(sh_match(0, 9, 11) && !strcmp(g.status_text, "Text not found"));
+    sh_close();
+
+    const char utf[] = "cafe\xcc\x81 caf\xc3\xa9";
+    sh_scribe(16, utf, sizeof(utf)-1); g.running = true;
+    sh_find_query("cafe"); sh_command_key('\r', 0, 0x1c);
+    CHECK(!g.view.sel && !strcmp(g.status_text, "No later match"));
+    sh_find_query("cafe\xcc\x81"); sh_command_key('\r', 0, 0x1c);
+    CHECK(sh_match(0, 0, 6));
+    sh_find_query("caf\xc3\xa9"); sh_command_key('\r', 0, 0x1c);
+    CHECK(sh_match(0, 7, 12));
+    sh_close();
+
+    sh_scribe(16, "", 0); g.running = true;
+    sh_find_query("boot");
+    sh_command_key('\r', OS64_GUI_MOD_SHIFT, 0x1c);
+    CHECK(!g.view.sel && !strcmp(g.status_text, "No earlier match"));
+    sh_find_button(&g.find_wrap.w);
+    sh_command_key('\r', 0, 0x1c);
+    CHECK(!g.view.sel && !strcmp(g.status_text, "Text not found"));
+    sh_close();
+    sh_rm("/doc"); current = "";
+}
+
 /* ── C2-R1: deletion is by cluster, through the real handler ──────────── */
 
 static void scribe_deletes_whole_letters(void)
@@ -1550,6 +1750,8 @@ int scribe_host_tests(int argc, char **argv)
     sh_dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
     (void)ui_test_suite_main;
 
+    scribe_find_boundaries();
+    scribe_find();
     scribe_navigation();
     scribe_deletes_whole_letters();
     scribe_keys_under_refusal();
