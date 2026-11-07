@@ -1106,6 +1106,48 @@ static void intl_cases(void)
         "    [1e6, 2].toLocaleString() !== '1,000,000,2' || Intl.getCanonicalLocales('EN-us')[0] !== 'en-US')\n"
         "    throw new Error('the redefined built-ins');\n"),
         "Intl formats in the host's zone, published as a global property");
+    // SEGMENTER.md § 1: the corpus's calls, each shape against fixed text.
+    check(intl_eval(runtime,
+        "const eq = (a, b, what) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(what + ': ' + JSON.stringify(a)); };\n"
+        "if (typeof Intl.Segmenter !== 'function' || !('Segmenter' in Intl)) throw new Error('feature test');\n"
+        // A social network's: graphemes, white space trimmed by walking containing() backwards.
+        "const g = new Intl.Segmenter(void 0, {granularity: 'grapheme'});\n"
+        "const ws = /^[\\p{White_Space}\\p{Default_Ignorable_Code_Point}]+$/u;\n"
+        "const trimEnd = s => { const t = g.segment(s); let n = s.length;\n"
+        "    for (; n > 0;) { const e = t.containing(n - 1); if (e === undefined || !ws.test(e.segment)) break; n = e.index; }\n"
+        "    return s.slice(0, n); };\n"
+        "eq(trimEnd('Hi \\u{1F44D}\\u{1F3FD} \\u200B  '), 'Hi \\u{1F44D}\\u{1F3FD}', 'grapheme trim');\n"
+        // A design tool's: the default granularity, a combining mark and an emoji modifier kept whole.
+        "eq(Array.from(new Intl.Segmenter().segment('e\\u0301\\u{1F44D}\\u{1F3FD}\\u{1F1FA}\\u{1F1F8}'), d => d.segment),\n"
+        "   ['e\\u0301', '\\u{1F44D}\\u{1F3FD}', '\\u{1F1FA}\\u{1F1F8}'], 'graphemes');\n"
+        // A search engine's: the word-like words.
+        "const words = [...new Intl.Segmenter(void 0, {granularity: 'word'}).segment(\"Don't stop, 3.14 rocks!\")];\n"
+        "eq(words.filter(d => d.isWordLike).map(d => d.segment), [\"Don't\", 'stop', '3.14', 'rocks'], 'word-like words');\n"
+        "eq(words.map(d => d.index), [0, 5, 6, 10, 11, 12, 16, 17, 22], 'word indices');\n"
+        "if (words[1].isWordLike !== false || words[0].input !== \"Don't stop, 3.14 rocks!\") throw new Error('word data');\n"
+        // A news site's: sentences.
+        "eq([...new Intl.Segmenter('en', {granularity: 'sentence'}).segment('Hi there. How are you? Fine.')].map(d => d.segment),\n"
+        "   ['Hi there. ', 'How are you? ', 'Fine.'], 'sentences');\n"
+        "const s = new Intl.Segmenter('en').segment('abc');\n"
+        "if (s.containing(1).segment !== 'b' || s.containing(3) !== undefined || s.containing(-1) !== undefined ||\n"
+        "    s.containing(1.9).index !== 1 || 'isWordLike' in s.containing(0)) throw new Error('containing');\n"
+        "eq(new Intl.Segmenter('en-US', {granularity: 'word'}).resolvedOptions(), {locale: 'en-US', granularity: 'word'}, 'options');\n"
+        "try { new Intl.Segmenter('en', {granularity: 'line'}); throw new Error('no RangeError'); }\n"
+        "catch (e) { if (!(e instanceof RangeError)) throw e; }\n"
+        "if (Object.prototype.toString.call(new Intl.Segmenter()) !== '[object Intl.Segmenter]' ||\n"
+        "    Object.prototype.toString.call(s[Symbol.iterator]()) !== '[object Segmenter String Iterator]' ||\n"
+        "    [...new Intl.Segmenter().segment('')].length !== 0) throw new Error('tags');\n"
+        // The door's UTF-8 to UTF-16: a string held in Latin-1 (two-byte UTF-8) and lone surrogates (three).
+        "const wordsOf = t => [...new Intl.Segmenter(void 0, {granularity: 'word'}).segment(t)].map(d => [d.segment, d.index]);\n"
+        "eq(wordsOf('caf\\u00E9 x'), [['caf\\u00E9', 0], [' ', 4], ['x', 5]], 'a Latin-1 string');\n"
+        "eq(new Intl.Segmenter().segment('caf\\u00E9 x').containing(4).index, 4, 'containing in a Latin-1 string');\n"
+        "eq(Array.from(new Intl.Segmenter().segment('\\uD800x\\uDC00'), d => d.index), [0, 1, 2], 'lone surrogates');\n"
+        // A page that replaces the typed arrays' length getter does not move containing().
+        "const TA = Object.getPrototypeOf(Uint32Array.prototype), length = Object.getOwnPropertyDescriptor(TA, 'length');\n"
+        "Object.defineProperty(TA, 'length', {get() { return 0; }, configurable: true});\n"
+        "try { eq(new Intl.Segmenter().segment('ab cd').containing(3).index, 3, 'a replaced length getter'); }\n"
+        "finally { Object.defineProperty(TA, 'length', length); }\n"),
+        "Intl.Segmenter answers the corpus's calls: graphemes, word-like words, sentences, containing");
     check(os64_js_install_intl(runtime, "en-US", &outcome) == OS64_JS_BAD_ARGUMENT,
           "Intl installs once and only before evaluation");
     os64_js_destroy(runtime);
