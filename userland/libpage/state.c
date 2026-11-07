@@ -1644,8 +1644,13 @@ static int64_t node_set_attr(os64_page_state_t *state, const os64_html_node_t *n
     // An attribute in a namespace is none of a control's: libpage's readers
     // (p_attr) read the ones in no namespace, so it has no state to stage,
     // and staging by its name would reset a select for a namespaced
-    // `multiple`, as other browsers do not.
-    if (by_ns && ns != NULL)
+    // `multiple`, as other browsers do not. Which namespace the change
+    // touches is the record's it finds: a qualified name may find a
+    // namespaced attribute (removeAttribute('multiple') after
+    // setAttributeNS('urn:x', 'multiple', '')); a new record by qualified
+    // name is in none.
+    const char *touched = by_ns ? ns : existing != NULL ? existing->ns : NULL;
+    if (touched != NULL)
         return os64_html_set_attrs(state->doc, (os64_html_node_t *)node, changes, 1);
     if ((remove && existing == NULL) || (!remove && existing != NULL &&
         same_bytes(existing->value, os64_strlen(existing->value), value, len)))
@@ -1716,7 +1721,9 @@ static int64_t node_set_attr(os64_page_state_t *state, const os64_html_node_t *n
             if (old == NULL)
                 goto no_memory;
             if (old_len != 0) {
-                changes[count++] = (os64_html_attr_change_t){"value", old, old_len, false, false, NULL};
+                // HTML's `value` attribute, the one in no namespace, never
+                // a namespaced attribute of that qualified name.
+                changes[count++] = (os64_html_attr_change_t){"value", old, old_len, false, true, NULL};
                 raw = old;
                 raw_len = old_len;
             } else {
