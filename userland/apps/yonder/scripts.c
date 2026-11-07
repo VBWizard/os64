@@ -214,9 +214,10 @@ static bool sticky(os64_js_status_t status)
 // script, at the checkpoint that follows it, so they run here. Until they
 // do, the runtime refuses every next task as busy: the page's `load`
 // went undelivered on google.com. The script's own failure stays the
-// task's; a job that throws is passed over as the next job runs, and a
-// sticky outcome (the time limit, memory) replaces it, so the runtime is
-// retired.
+// task's; a job that throws, or a module's late failure a job surfaces, is
+// passed over as the next job runs (the task keeps one failure, and the
+// window's error event has heard it), and a sticky outcome (the time
+// limit, memory) replaces it, so the runtime is retired.
 static void drain_after_exception(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
     os64_js_outcome_t jobs = *out;
