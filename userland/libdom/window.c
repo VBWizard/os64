@@ -546,7 +546,7 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
 bool d_activation_has(const os64_html_node_t *node)
 {
     if (html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA))
-        return os64_html_attr(node, "href") != NULL;
+        return os64_html_attr_ns(node, NULL, "href") != NULL;
     if (html_element(node, OS64_HTML_TAG_BUTTON)) return true;
     return html_element(node, OS64_HTML_TAG_INPUT) &&
         (type_is(node, "checkbox", false) || type_is(node, "radio", false) || type_is(node, "submit", false) ||
@@ -590,7 +590,7 @@ int d_activation_after(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
     }
     if (canceled || disabled(node)) return 0;
     if ((html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA)) &&
-        os64_html_attr(node, "href") != NULL) {
+        os64_html_attr_ns(node, NULL, "href") != NULL) {
         /* A link in a document with no window cannot navigate. */
         if (d_window_document(dom, node)) {
             d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW, node, NULL, NULL, 0);

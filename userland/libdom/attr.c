@@ -11,15 +11,18 @@
  * as nodes, so an Attr is what `style`, `classList` and `dataset` are: a
  * registry entry with no `node`, whose `target` is the element it stands
  * for, given a name (DAttr). The binding keeps an element's Attrs in a
- * table by element and qualified name, one per name, each made the first
- * time it is asked for, so the same object comes back for as long as the
- * attribute exists. The name is the identity because libhtml's is: its
- * verbs find an attribute by qualified name, first match, and no verb
- * makes two of one name.
+ * table by element, namespace and local name, one per attribute, each made
+ * the first time it is asked for, so the same object comes back for as long
+ * as the attribute exists. That pair is the identity because it is DOM's:
+ * an element holds one attribute of a namespace and local name, while two
+ * may share a qualified name in two namespaces (setAttribute('foo') beside
+ * setAttributeNS('urn:x', 'foo')). A verb that takes a qualified name finds
+ * its attribute by that name, first match, and its Attr by the pair.
  *
  * NOTHING IS HELD ACROSS PAGE CODE. An attached Attr's value is read from
- * libhtml by name at every read, never through a pointer kept from an
- * earlier one: libhtml retires an attribute's bytes when its value changes.
+ * libhtml by namespace and local name at every read, never through a
+ * pointer kept from an earlier one: libhtml retires an attribute's bytes
+ * when its value changes.
  * The map trusts no snapshot: `length`, `item(i)` and every indexed or
  * named property answer the element's list as it is at the call, so a
  * getter that removes an attribute in the middle of a walk is seen by the
@@ -31,8 +34,10 @@
  *
  * DETACHMENT HAPPENS AT THE ONE DOOR. An attribute leaves its element by a
  * removal, and every attribute the binding sets or removes goes through
- * d_set_attr: removeAttribute, toggleAttribute, a dataset delete,
- * removeAttributeNode and removeNamedItem among them. The parser removes
+ * the door, by qualified name (d_set_attr: removeAttribute,
+ * toggleAttribute and a dataset delete among them) or by namespace and
+ * local name (d_set_attr_ns: removeAttributeNS and removeAttributeNode
+ * among them). The parser removes
  * none (it sets an element's attributes as it makes the element, and a
  * second html or body tag only adds the ones the element lacks), and
  * libpage keeps a control's state beside the attribute list, never by
@@ -45,7 +50,8 @@
  * QuotaExceededError, not a leak.
  *
  * THE LAZY BACKSTOP names the invariant if it ever stops being true: an
- * attached Attr whose name libhtml no longer finds on its element reads as
+ * attached Attr whose namespace and local name libhtml no longer finds on
+ * its element reads as
  * detached with an empty value, and the host is told (options.broken, which
  * yonder writes as `FAILED page: an attribute left its element outside
  * libdom`). What it cannot see is an attribute removed and set again
@@ -57,14 +63,14 @@
  * another element is InUseAttributeError, and one of this element is
  * answered as it is.
  *
- * A NAMESPACE GOES WITH THE NAME AND NO FURTHER. libhtml's verbs set an
- * attribute by qualified name, keeping the namespace of one that is there
- * and giving a new one none. So an Attr in a namespace (createAttributeNS,
- * or one an SVG element's `xlink:href` stood for) is set onto an element
- * only where the element holds that name in that namespace already, and
- * one in none only where the element does not hold its name in some
- * namespace; anything else is a NotSupportedError, since the tree would
- * hold the attribute under another namespace than the Attr says it has. */
+ * A NAMESPACE GOES WITH THE ATTRIBUTE. The door sets and removes by
+ * namespace and local name as well as by qualified name (d_set_attr_ns), so
+ * an Attr in a namespace (createAttributeNS, or one an SVG element's
+ * `xlink:href` stood for) is set onto an element where it says it belongs.
+ * One refusal stands: a set keeps the qualified name of an attribute of
+ * that namespace and local name already there, so an Attr whose prefix
+ * differs from that attribute's is a NotSupportedError rather than an
+ * attribute held under a name the Attr does not have. */
 
 static JSClassID attr_slot, map_slot;
 
@@ -141,26 +147,44 @@ static const os64_html_attr_t *attr_ns(const os64_html_node_t *element, const ch
     return NULL;
 }
 
-/* THE TABLE OF ATTACHED ATTRS, by element and qualified name: what makes
- * finding an attribute's Attr a step or two however many Attrs an element
- * has, so a walk over all of an element's attributes stays linear. Made at
- * install; it doubles when it holds twice its slots, and keeps its size
- * when there is no room to double, its chains growing longer. */
-static size_t record_slot(const os64_dom_t *dom, const os64_html_node_t *element, const char *name)
+/* THE TABLE OF ATTACHED ATTRS, by element, namespace and local name (an
+ * attribute's identity on its element: two may share a qualified name in
+ * two namespaces): what makes finding an attribute's Attr a step or two
+ * however many Attrs an element has, so a walk over all of an element's
+ * attributes stays linear. Made at install; it doubles when it holds twice
+ * its slots, and keeps its size when there is no room to double, its
+ * chains growing longer. */
+static size_t record_slot(const os64_dom_t *dom, const os64_html_node_t *element, const char *ns,
+                          const char *local)
 {
     uint64_t key = (uint64_t)(uintptr_t)element * 0x9E3779B97F4A7C15ull;
-    for (const unsigned char *at = (const unsigned char *)name; *at != 0; at++)
+    for (const unsigned char *at = (const unsigned char *)local; *at != 0; at++)
+        key = (key ^ *at) * 0x100000001B3ull;
+    for (const unsigned char *at = (const unsigned char *)ns; at != NULL && *at != 0; at++)
         key = (key ^ *at) * 0x100000001B3ull;
     return (size_t)(key ^ (key >> 29)) & (dom->attr_capacity - 1);
 }
 
-static DAttr *record_of(os64_dom_t *dom, const os64_html_node_t *element, const char *name)
+static size_t rec_slot(const os64_dom_t *dom, const DAttr *rec)
 {
-    for (DAttr *rec = dom->attr_table[record_slot(dom, element, name)]; rec != NULL; rec = rec->hash_next) {
+    return record_slot(dom, rec->entry->target, rec->ns, d_attr_local(rec->name, rec->ns));
+}
+
+static DAttr *record_of(os64_dom_t *dom, const os64_html_node_t *element, const char *ns, const char *local)
+{
+    for (DAttr *rec = dom->attr_table[record_slot(dom, element, ns, local)]; rec != NULL; rec = rec->hash_next) {
         s_steps++;
-        if (rec->entry->target == element && os64_strcmp(rec->name, name) == 0) return rec;
+        if (rec->entry->target == element && ns_equal(rec->ns, ns) &&
+            os64_strcmp(d_attr_local(rec->name, rec->ns), local) == 0)
+            return rec;
     }
     return NULL;
+}
+
+/* The Attr made for an attribute the element holds, if any. */
+static DAttr *record_for(os64_dom_t *dom, const os64_html_node_t *element, const os64_html_attr_t *a)
+{
+    return record_of(dom, element, a->ns, d_attr_local(a->name, a->ns));
 }
 
 static void record_add(os64_dom_t *dom, DAttr *rec)
@@ -176,14 +200,14 @@ static void record_add(os64_dom_t *dom, DAttr *rec)
             for (size_t i = 0; i < old_capacity; i++)
                 for (DAttr *at = old[i], *next; at != NULL; at = next) {
                     next = at->hash_next;
-                    size_t slot = record_slot(dom, at->entry->target, at->name);
+                    size_t slot = rec_slot(dom, at);
                     at->hash_next = table[slot];
                     table[slot] = at;
                 }
             d_free(dom, old);
         }
     }
-    size_t slot = record_slot(dom, rec->entry->target, rec->name);
+    size_t slot = rec_slot(dom, rec);
     rec->hash_next = dom->attr_table[slot];
     dom->attr_table[slot] = rec;
     dom->attr_attached++;
@@ -191,7 +215,7 @@ static void record_add(os64_dom_t *dom, DAttr *rec)
 
 static void record_remove(os64_dom_t *dom, DAttr *rec)
 {
-    for (DAttr **at = &dom->attr_table[record_slot(dom, rec->entry->target, rec->name)]; *at != NULL;
+    for (DAttr **at = &dom->attr_table[rec_slot(dom, rec)]; *at != NULL;
          at = &(*at)->hash_next)
         if (*at == rec) {
             *at = rec->hash_next;
@@ -259,23 +283,31 @@ static void detach(os64_dom_t *dom, DAttr *rec, char *value, size_t length)
     rec->length = length;
 }
 
-/* THE BACKSTOP: an attached Attr whose name its element no longer has was
- * removed by something other than the door. It reads as detached with an
- * empty value from here on, and the host hears of the broken rule. */
+/* The attribute an attached Attr stands for, by its namespace and local
+ * name (never its qualified name, which another namespace's attribute may
+ * share); NULL when its element no longer holds it. */
+static const os64_html_attr_t *rec_attr(const DAttr *rec)
+{
+    return os64_html_attr_ns(rec->entry->target, rec->ns, d_attr_local(rec->name, rec->ns));
+}
+
+/* THE BACKSTOP: an attached Attr whose attribute its element no longer has
+ * was removed by something other than the door. It reads as detached with
+ * an empty value from here on, and the host hears of the broken rule. */
 static void attr_live(os64_dom_t *dom, DAttr *rec)
 {
     const os64_html_node_t *element = rec->entry->target;
-    if (element == NULL || os64_html_attr(element, rec->name) != NULL) return;
+    if (element == NULL || rec_attr(rec) != NULL) return;
     detach(dom, rec, NULL, 0);
     if (dom->options.broken != NULL) dom->options.broken(dom->options.host_opaque, kBroken);
 }
 
 /* The Attr standing for an attribute `element` has: the one made for its
- * name, else a new one. */
+ * namespace and local name, else a new one. */
 static JSValue attr_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
                         const os64_html_attr_t *a)
 {
-    DAttr *rec = record_of(dom, element, a->name);
+    DAttr *rec = record_for(dom, element, a);
     if (rec == NULL) {
         rec = attr_make(dom, ctx, a->name, a->ns);
         if (rec == NULL) return JS_EXCEPTION;
@@ -284,28 +316,39 @@ static JSValue attr_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
     return JS_DupValue(ctx, rec->entry->value);
 }
 
-int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *name,
-                   const char *value, size_t length, bool remove)
+/* THE DOOR, under its two names: `a` is the attribute the change finds (by
+ * qualified name, or by namespace and local name), NULL for none. A removal
+ * detaches the Attr made for it, if any, keeping the value it leaves with:
+ * copied before it goes (the removal retires libhtml's bytes), and the
+ * removal refused when there is no room to copy it. */
+static int64_t door(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_attr_t *a, bool by_ns,
+                    const char *ns, const char *name, const char *value, size_t length, bool remove)
 {
-    DAttr *rec = remove ? record_of(dom, node, name) : NULL;
-    const os64_html_attr_t *a = rec != NULL ? os64_html_attr(node, name) : NULL;
-    if (rec != NULL && a == NULL) {
-        attr_live(dom, rec);
-        rec = NULL;
-    }
-    /* The value it leaves with is copied before it goes (the removal
-     * retires libhtml's bytes), and the removal refused when there is no
-     * room to copy it. */
-    size_t kept_length = a != NULL ? os64_strlen(a->value) : 0;
-    char *kept = a != NULL ? copy_bytes(dom, a->value, kept_length) : NULL;
-    if (a != NULL && kept == NULL) return OS64_HTML_NO_MEMORY;
-    int64_t status = os64_page_node_set_attr(dom->state, node, name, value, length, remove);
+    DAttr *rec = remove && a != NULL ? record_for(dom, node, a) : NULL;
+    size_t kept_length = rec != NULL ? os64_strlen(a->value) : 0;
+    char *kept = rec != NULL ? copy_bytes(dom, a->value, kept_length) : NULL;
+    if (rec != NULL && kept == NULL) return OS64_HTML_NO_MEMORY;
+    int64_t status = by_ns ? os64_page_node_set_attr_ns(dom->state, node, ns, name, value, length, remove)
+                           : os64_page_node_set_attr(dom->state, node, name, value, length, remove);
     if (status < 0) {
         d_free(dom, kept);
         return status;
     }
     if (rec != NULL) detach(dom, rec, kept, kept_length);
     return status;
+}
+
+int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *name,
+                   const char *value, size_t length, bool remove)
+{
+    return door(dom, node, os64_html_attr(node, name), false, NULL, name, value, length, remove);
+}
+
+int64_t d_set_attr_ns(os64_dom_t *dom, const os64_html_node_t *node, const char *ns, const char *name,
+                      const char *value, size_t length, bool remove)
+{
+    return door(dom, node, os64_html_attr_ns(node, ns, d_attr_local(name, ns)), true, ns, name, value, length,
+                remove);
 }
 
 bool d_is_attr(os64_dom_t *dom, JSValueConst value)
@@ -338,17 +381,17 @@ int d_attr_view(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DAttrView *
     view->name = rec->name;
     view->ns = rec->ns;
     view->local = d_attr_local(rec->name, rec->ns);
-    view->value = element != NULL ? os64_html_attr(element, rec->name)->value :
+    view->value = element != NULL ? rec_attr(rec)->value :
                   rec->value != NULL ? rec->value : "";
     view->length = element != NULL ? os64_strlen(view->value) : rec->length;
     return 1;
 }
 
-/* Its value: the element's, read by name, while attached. */
+/* Its value: the element's, read by namespace and local name, while attached. */
 static JSValue attr_value(JSContext *ctx, const DAttr *rec)
 {
     const os64_html_node_t *element = rec->entry->target;
-    if (element != NULL) return JS_NewString(ctx, os64_html_attr(element, rec->name)->value);
+    if (element != NULL) return JS_NewString(ctx, rec_attr(rec)->value);
     return JS_NewStringLen(ctx, rec->value != NULL ? rec->value : "", rec->length);
 }
 
@@ -361,7 +404,7 @@ static JSValue attr_value_set(os64_dom_t *dom, JSContext *ctx, DAttr *rec, DStri
     attr_live(dom, rec);
     const os64_html_node_t *element = rec->entry->target;
     if (element != NULL) {
-        int64_t status = d_set_attr(dom, element, rec->name, text->data, text->length, false);
+        int64_t status = d_set_attr_ns(dom, element, rec->ns, rec->name, text->data, text->length, false);
         return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
     }
     d_free(dom, rec->value);
@@ -418,7 +461,7 @@ static const os64_html_node_t *attr_document(os64_dom_t *dom, const DAttr *rec)
 static JSValue attr_clone(os64_dom_t *dom, JSContext *ctx, DAttr *rec, const os64_html_node_t *document)
 {
     const os64_html_node_t *element = rec->entry->target;
-    const char *value = element != NULL ? os64_html_attr(element, rec->name)->value :
+    const char *value = element != NULL ? rec_attr(rec)->value :
                         rec->value != NULL ? rec->value : "";
     size_t length = element != NULL ? os64_strlen(value) : rec->length;
     char *copy = copy_bytes(dom, value, length);
@@ -447,7 +490,7 @@ int d_attr_adopt(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const os64
     if (rec == NULL) return -1;
     const os64_html_node_t *element = rec->entry->target;
     if (element != NULL) {
-        int64_t status = d_set_attr(dom, element, rec->name, NULL, 0, true);
+        int64_t status = d_set_attr_ns(dom, element, rec->ns, rec->name, NULL, 0, true);
         if (status < 0) { d_html_error(ctx, status); return -1; }
     }
     rec->document = document != window_document(dom) ? document : NULL;
@@ -536,7 +579,8 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
 
 enum {
     M_CREATE, M_CREATE_NS, M_GET, M_GET_NS, M_SET, M_SET_NS, M_REMOVE_NODE,
-    M_ITEM, M_REMOVE_NAMED, M_REMOVE_NAMED_NS, M_LENGTH, M_ATTRIBUTES
+    M_ITEM, M_REMOVE_NAMED, M_REMOVE_NAMED_NS, M_LENGTH, M_ATTRIBUTES,
+    M_GET_VALUE_NS, M_HAS_NS, M_SET_VALUE_NS, M_REMOVE_NS
 };
 
 #define NS_XML "http://www.w3.org/XML/1998/namespace"
@@ -546,6 +590,30 @@ static bool same(const char *text, size_t length, const char *word)
 {
     size_t n = os64_strlen(word);
     return length == n && os64_memcmp(text, word, n) == 0;
+}
+
+/* DOM's "validate and extract" for an attribute named `name` in namespace
+ * `ns` (`has_ns` false: none), for createAttributeNS and setAttributeNS:
+ * split at the first colon as createDocument splits an element's name
+ * (implementation.c), the part before a valid prefix and the rest a valid
+ * attribute local name, else InvalidCharacterError; then the namespace
+ * rules in the standard's order (a prefix with no namespace, `xml` outside
+ * the XML namespace, `xmlns` outside the XMLNS one and the XMLNS one
+ * without it), each a NamespaceError. JS_UNDEFINED, or the refusal thrown. */
+static JSValue attribute_extract(JSContext *ctx, bool has_ns, const DString *ns, const DString *name)
+{
+    const char *colon = os64_strchr(name->data, ':');
+    size_t prefix = colon != NULL ? (size_t)(colon - name->data) : 0;
+    const char *local = colon != NULL ? colon + 1 : name->data;
+    bool xmlns = same(name->data, name->length, "xmlns") || (colon != NULL && same(name->data, prefix, "xmlns"));
+    bool is_xmlns_ns = has_ns && same(ns->data, ns->length, NS_XMLNS);
+    if ((colon != NULL && !d_prefix_valid(name->data, prefix)) || !d_attribute_name_valid(local))
+        return d_error(ctx, "InvalidCharacterError", "That is not an attribute's qualified name");
+    if ((colon != NULL && !has_ns) ||
+        (colon != NULL && same(name->data, prefix, "xml") && !(has_ns && same(ns->data, ns->length, NS_XML))) ||
+        xmlns != is_xmlns_ns)
+        return d_error(ctx, "NamespaceError", "That name and namespace do not go together");
+    return JS_UNDEFINED;
 }
 
 /* createAttribute(localName): a name setAttribute would take, folded in an
@@ -572,17 +640,7 @@ static JSValue create_attribute(os64_dom_t *dom, JSContext *ctx, const os64_html
             result = d_error(ctx, "InvalidCharacterError", "Invalid attribute name");
         else if (d_document_type(dom, document) == D_DOCUMENT_HTML) d_fold(name.data);
     } else {
-        const char *colon = os64_strchr(name.data, ':');
-        size_t prefix = colon != NULL ? (size_t)(colon - name.data) : 0;
-        const char *local = colon != NULL ? colon + 1 : name.data;
-        bool xmlns = same(name.data, name.length, "xmlns") || (colon != NULL && same(name.data, prefix, "xmlns"));
-        bool is_xmlns_ns = has_ns && same(ns.data, ns.length, NS_XMLNS);
-        if ((colon != NULL && !d_prefix_valid(name.data, prefix)) || !d_attribute_name_valid(local))
-            result = d_error(ctx, "InvalidCharacterError", "That is not an attribute's qualified name");
-        else if ((colon != NULL && !has_ns) ||
-                 (colon != NULL && same(name.data, prefix, "xml") && !(has_ns && same(ns.data, ns.length, NS_XML))) ||
-                 xmlns != is_xmlns_ns)
-            result = d_error(ctx, "NamespaceError", "That name and namespace do not go together");
+        result = attribute_extract(ctx, has_ns, &ns, &name);
     }
     DAttr *rec = JS_IsUndefined(result) ? attr_make(dom, ctx, name.data, has_ns ? ns.data : NULL) : NULL;
     d_string_free(dom, &name);
@@ -606,32 +664,34 @@ static JSValue set_attribute_node(os64_dom_t *dom, JSContext *ctx, const os64_ht
     if (at != NULL && at != element)
         return d_error(ctx, "InUseAttributeError", "That Attr belongs to another element");
     if (at == element) return JS_DupValue(ctx, value);
-    /* The attribute it replaces is the one of its namespace and local name;
-     * libhtml's verb sets the one of its qualified name, keeping that one's
-     * namespace or giving a new one none. Unless those agree, the tree would
-     * hold the attribute under another name or namespace than the Attr's. */
+    /* The attribute it replaces is the one of its namespace and local name,
+     * and the door sets it by those. A set keeps the qualified name of the
+     * attribute already there, so one under another prefix would be held
+     * under a name the Attr does not have: that one is refused. */
     const os64_html_attr_t *old = attr_ns(element, rec->ns, d_attr_local(rec->name, rec->ns));
-    if (old != os64_html_attr(element, rec->name) || (old == NULL && rec->ns != NULL))
+    if (old != NULL && os64_strcmp(old->name, rec->name) != 0)
         return d_error(ctx, "NotSupportedError",
-                       "This element cannot hold that Attr under both its name and its namespace");
+                       "This element holds that attribute under another prefix than the Attr's");
     /* Everything that can be refused is asked for before the tree changes:
      * the Attr the old attribute goes as, its last value, and the handler
      * slot an on<type> name takes. */
     JSValue previous = old != NULL ? attr_get(dom, ctx, element, old) : JS_NULL;
     if (JS_IsException(previous)) return previous;
-    DAttr *gone = old != NULL ? record_of(dom, element, old->name) : NULL;
+    DAttr *gone = old != NULL ? record_for(dom, element, old) : NULL;
     size_t kept_length = gone != NULL ? os64_strlen(old->value) : 0;
     char *kept = gone != NULL ? copy_bytes(dom, old->value, kept_length) : NULL;
     if (gone != NULL && kept == NULL) {
         JS_FreeValue(ctx, previous);
         return d_error(ctx, "QuotaExceededError", "DOM attribute quota exceeded");
     }
-    if (d_handler_attribute_set(dom, ctx, element, rec->name) < 0) {
+    /* An event handler content attribute is one in no namespace. */
+    if (rec->ns == NULL && d_handler_attribute_set(dom, ctx, element, rec->name) < 0) {
         d_free(dom, kept);
         JS_FreeValue(ctx, previous);
         return JS_EXCEPTION;
     }
-    int64_t status = d_set_attr(dom, element, rec->name, rec->value != NULL ? rec->value : "", rec->length, false);
+    int64_t status = d_set_attr_ns(dom, element, rec->ns, rec->name, rec->value != NULL ? rec->value : "",
+                                   rec->length, false);
     if (status < 0) {
         d_free(dom, kept);
         JS_FreeValue(ctx, previous);
@@ -653,7 +713,7 @@ static JSValue remove_attribute_node(os64_dom_t *dom, JSContext *ctx, const os64
         return JS_EXCEPTION;
     }
     if (rec->entry->target != element) return d_error(ctx, "NotFoundError", "That Attr is not this element's");
-    int64_t status = d_set_attr(dom, element, rec->name, NULL, 0, true);
+    int64_t status = d_set_attr_ns(dom, element, rec->ns, rec->name, NULL, 0, true);
     return status < 0 ? d_html_error(ctx, status) : JS_DupValue(ctx, value);
 }
 
@@ -677,6 +737,35 @@ static int ns_arguments(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst 
     return 0;
 }
 
+/* setAttributeNS(namespace, qualifiedName, value) (DOM § 4.9): validate and
+ * extract, then set the attribute of that namespace and local name, an
+ * existing one keeping its own prefix. Not folded, as an HTML element's
+ * setAttribute is. An on<type> name in no namespace takes its handler
+ * slot first, as setAttribute's does. */
+static JSValue set_attribute_ns(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, int argc,
+                                JSValueConst *argv)
+{
+    if (argc < 3) return JS_ThrowTypeError(ctx, "setAttributeNS needs a namespace, a name and a value");
+    DString ns = {0}, name = {0}, value = {0};
+    bool has_ns = !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0]);
+    if (has_ns && !d_string(dom, ctx, argv[0], &ns)) return JS_EXCEPTION;
+    JSValue result = JS_UNDEFINED;
+    if (!d_string(dom, ctx, argv[1], &name) || !d_string(dom, ctx, argv[2], &value)) result = JS_EXCEPTION;
+    if (has_ns && ns.length == 0) has_ns = false;
+    if (JS_IsUndefined(result)) result = attribute_extract(ctx, has_ns, &ns, &name);
+    if (JS_IsUndefined(result) && !has_ns && d_handler_attribute_set(dom, ctx, element, name.data) < 0)
+        result = JS_EXCEPTION;
+    if (JS_IsUndefined(result)) {
+        int64_t status = d_set_attr_ns(dom, element, has_ns ? ns.data : NULL, name.data, value.data, value.length,
+                                       false);
+        if (status < 0) result = d_html_error(ctx, status);
+    }
+    d_string_free(dom, &value);
+    d_string_free(dom, &name);
+    d_string_free(dom, &ns);
+    return result;
+}
+
 /* The verbs, on an element (Element's methods, and the map's, whose
  * element is its own). */
 static JSValue element_verb(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element, int magic,
@@ -690,6 +779,29 @@ static JSValue element_verb(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
         if (argc < 1) return JS_ThrowTypeError(ctx, "Missing Attr argument");
         return remove_attribute_node(dom, ctx, element, argv[0]);
     }
+    if (magic == M_SET_VALUE_NS) return set_attribute_ns(dom, ctx, element, argc, argv);
+    if (magic == M_GET_VALUE_NS || magic == M_HAS_NS || magic == M_REMOVE_NS) {
+        /* getAttributeNS, hasAttributeNS, removeAttributeNS (DOM § 4.9):
+         * the attribute of that namespace and local name. */
+        DString ns = {0}, local = {0};
+        if (ns_arguments(dom, ctx, argc, argv, &ns, &local) < 0) return JS_EXCEPTION;
+        const os64_html_attr_t *a = attr_ns(element, ns.data, local.data);
+        JSValue result = magic == M_HAS_NS ? JS_NewBool(ctx, a != NULL)
+                       : magic == M_GET_VALUE_NS ? (a != NULL ? JS_NewString(ctx, a->value) : JS_NULL)
+                                                 : JS_UNDEFINED;
+        if (magic == M_REMOVE_NS && a != NULL) {
+            /* Addressed by the attribute's own qualified name, copied: the
+             * removal retires libhtml's bytes. */
+            char *name = copy_bytes(dom, a->name, os64_strlen(a->name));
+            int64_t status = name == NULL ? OS64_HTML_NO_MEMORY
+                                          : d_set_attr_ns(dom, element, ns.data, name, NULL, 0, true);
+            d_free(dom, name);
+            if (status < 0) result = d_html_error(ctx, status);
+        }
+        d_string_free(dom, &ns);
+        d_string_free(dom, &local);
+        return result;
+    }
     if (magic == M_GET_NS || magic == M_REMOVE_NAMED_NS) {
         DString ns = {0}, local = {0};
         if (ns_arguments(dom, ctx, argc, argv, &ns, &local) < 0) return JS_EXCEPTION;
@@ -699,15 +811,12 @@ static JSValue element_verb(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
         if (a == NULL)
             return magic == M_GET_NS ? JS_NULL : d_error(ctx, "NotFoundError", "No such attribute");
         if (magic == M_GET_NS) return attr_get(dom, ctx, element, a);
-        /* The name is the binding's own copy before the removal retires
-         * libhtml's bytes. */
-        DString name = {0};
-        name.length = os64_strlen(a->name);
-        name.data = copy_bytes(dom, a->name, name.length);
-        if (name.data == NULL) return d_error(ctx, "QuotaExceededError", "DOM attribute quota exceeded");
+        /* The Attr's own copies of its namespace and name address the
+         * removal: the removal retires libhtml's bytes. */
         JSValue gone = attr_get(dom, ctx, element, a);
-        int64_t status = JS_IsException(gone) ? OS64_HTML_OK : d_set_attr(dom, element, name.data, NULL, 0, true);
-        d_string_free(dom, &name);
+        if (JS_IsException(gone)) return gone;
+        DAttr *rec = record_for(dom, element, a);
+        int64_t status = d_set_attr_ns(dom, element, rec->ns, rec->name, NULL, 0, true);
         if (status < 0) { JS_FreeValue(ctx, gone); return d_html_error(ctx, status); }
         return gone;
     }
@@ -816,7 +925,11 @@ static bool cursor_for(os64_dom_t *dom, const os64_html_node_t *element)
         c->capacity = capacity;
     }
     size_t i = 0;
-    for (const os64_html_attr_t *a = element->attrs; i < count; a = a->next) c->list[i++] = a;
+    c->namespaced = false;
+    for (const os64_html_attr_t *a = element->attrs; i < count; a = a->next) {
+        c->namespaced |= a->ns != NULL;
+        c->list[i++] = a;
+    }
     c->count = (uint32_t)count;
     c->found = 0;
     c->element = element;
@@ -845,8 +958,9 @@ static uint32_t attr_count(os64_dom_t *dom, const os64_html_node_t *element)
 
 /* Whether the map lists a name (DOM § 4.9.1's supported property names):
  * an HTML element's names with an ASCII uppercase letter are not listed,
- * since its named getter folds and could never answer them. libhtml holds
- * no two attributes of one name, so no name is listed twice. */
+ * since its named getter folds and could never answer them. Two
+ * attributes may share a qualified name in two namespaces; the name is
+ * listed once (map_own_names). */
 static bool name_listed(const os64_html_node_t *element, const char *name, size_t length)
 {
     for (size_t i = 0; folds(element) && i < length; i++)
@@ -854,10 +968,24 @@ static bool name_listed(const os64_html_node_t *element, const char *name, size_
     return true;
 }
 
+/* The first of the cursor's attributes before index `i` with the qualified
+ * name of the one at `i`, else that one: DOM's named getter answers the
+ * first of a name. Only an element holding a namespaced attribute can hold
+ * two of one name, so only it pays the walk back. */
+static uint32_t first_of_name(os64_dom_t *dom, uint32_t i)
+{
+    struct DAttrCursor *c = &dom->attr_cursor;
+    if (!c->namespaced) return i;
+    for (uint32_t j = 0; j < i; j++, s_steps++)
+        if (os64_strcmp(c->list[j]->name, c->list[i]->name) == 0) return j;
+    return i;
+}
+
 /* The attribute a listed property name names, NULL for none: looked for
  * in the cursor outward from the last one found, a step after it and a
  * step before it in turn, so names asked for in the list's order, either
- * way round, cost a step or two each. */
+ * way round, cost a step or two each; then the first of that name
+ * (first_of_name). */
 static const os64_html_attr_t *listed(os64_dom_t *dom, const os64_html_node_t *element, const char *name,
                                       size_t length)
 {
@@ -877,8 +1005,8 @@ static const os64_html_attr_t *listed(os64_dom_t *dom, const os64_html_node_t *e
             const os64_html_attr_t *a = c->list[i];
             s_steps++;
             if (os64_strlen(a->name) == length && os64_memcmp(a->name, name, length) == 0) {
-                c->found = i;
-                return a;
+                c->found = first_of_name(dom, i);
+                return c->list[c->found];
             }
         }
     return NULL;
@@ -986,9 +1114,19 @@ static int map_own_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *lengt
         used++;
     }
     uint32_t indices = used;
+    bool namespaced = false;
+    for (const os64_html_attr_t *a = element->attrs; a != NULL; a = a->next) namespaced |= a->ns != NULL;
     i = 0;
     for (const os64_html_attr_t *a = element->attrs; a != NULL && i < count; a = a->next, i++) {
         if (!name_listed(element, a->name, os64_strlen(a->name))) continue;
+        /* A name shared with an earlier attribute (two namespaces, so only
+         * on an element holding a namespaced one) is listed once, at its
+         * first. */
+        bool earlier = false;
+        if (namespaced)
+            for (const os64_html_attr_t *b = element->attrs; b != a && !earlier; b = b->next)
+                earlier = os64_strcmp(b->name, a->name) == 0;
+        if (earlier) continue;
         JSAtom atom = JS_NewAtom(ctx, a->name);
         if (atom == JS_ATOM_NULL) goto fail;
         uint32_t ignored;
@@ -1157,6 +1295,8 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
         {"getAttributeNode", M_GET, 1, false}, {"getAttributeNodeNS", M_GET_NS, 2, false},
         {"setAttributeNode", M_SET, 1, false}, {"setAttributeNodeNS", M_SET_NS, 1, false},
         {"removeAttributeNode", M_REMOVE_NODE, 1, false},
+        {"getAttributeNS", M_GET_VALUE_NS, 2, false}, {"hasAttributeNS", M_HAS_NS, 2, false},
+        {"setAttributeNS", M_SET_VALUE_NS, 3, false}, {"removeAttributeNS", M_REMOVE_NS, 2, false},
     };
     for (size_t i = 0; i < sizeof(kVerbs) / sizeof(kVerbs[0]); i++)
         if (d_method(dom, ctx, kVerbs[i].on_document ? document : element, kVerbs[i].name, node_verb,

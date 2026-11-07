@@ -429,6 +429,9 @@ struct os64_dom {
         size_t capacity;
         uint64_t version;
         uint32_t count, found;
+        /* Whether any listed attribute is in a namespace: only then can
+         * two share a qualified name (attr.c's first-of-a-name rule). */
+        bool namespaced;
     } attr_cursor;
     /* Set while the map's own ordinary property is asked of the engine,
      * which the map's named properties then do not answer (attr.c). */
@@ -1747,13 +1750,17 @@ const os64_html_node_t *d_document_element(const os64_html_node_t *document);
 const os64_html_node_t *d_document_part(const os64_html_node_t *document, bool body);
 /* An object's own [Symbol.toStringTag] (classic.c), as an interface's. */
 int d_string_tag(JSContext *ctx, JSValueConst object, const char *name);
-/* ATTRIBUTES (attr.c). THE ONE DOOR: every attribute the binding sets or
- * removes goes through d_set_attr to libpage's verb, so that a removal
- * detaches the Attr that stood for the attribute, with its last value.
- * libhtml's status; on a refusal the attribute and its Attr are as they
- * were. */
+/* ATTRIBUTES (attr.c). THE ONE DOOR, under two names: every attribute the
+ * binding sets or removes goes through d_set_attr (by qualified name, the
+ * first of that name, a new one in no namespace) or d_set_attr_ns (by
+ * namespace, NULL for none, and the local part of `name`; a new one takes
+ * `name` and `ns`) to libpage's verbs, so that a removal detaches the Attr
+ * that stood for the attribute, with its last value. libhtml's status; on a
+ * refusal the attribute and its Attr are as they were. */
 int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *name,
                    const char *value, size_t length, bool remove);
+int64_t d_set_attr_ns(os64_dom_t *dom, const os64_html_node_t *node, const char *ns, const char *name,
+                      const char *value, size_t length, bool remove);
 /* Whether a value is an Attr of this binding. */
 bool d_is_attr(os64_dom_t *dom, JSValueConst value);
 /* importNode's and adoptNode's Attr halves (DOM § 4.5): a detached copy

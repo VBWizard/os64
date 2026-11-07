@@ -1609,15 +1609,44 @@ static bool attr_selection(PReserve *reserve, PAttrStage **stages,
     return true;
 }
 
-int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t *node,
-                                const char *name, const char *value, size_t len, bool remove)
+// Two namespaces, NULL being none.
+static bool same_ns(const char *a, const char *b)
+{
+    return a == NULL || b == NULL ? a == b : os64_streq(a, b);
+}
+
+// The local part of an attribute name: after its colon in a namespace, the
+// whole name in none.
+static const char *attr_local_name(const char *name, const char *ns)
+{
+    const char *colon = ns != NULL ? os64_strchr(name, ':') : NULL;
+    return colon != NULL ? colon + 1 : name;
+}
+
+// The attribute verb under both doors. With `by_ns` the attribute is the
+// one of namespace `ns` (NULL for none) and the local part of `name`
+// (setAttributeNS's: a record of another namespace and the same qualified
+// name must not stand in for it); otherwise the first of that qualified
+// name, in any namespace (setAttribute's). An attribute in no namespace is
+// staged from the prospective list as the tree will hold it, so control
+// state agrees with what libpage's readers will find; one in a namespace
+// is none of theirs and goes straight to the tree.
+static int64_t node_set_attr(os64_page_state_t *state, const os64_html_node_t *node, const char *name,
+                             const char *value, size_t len, bool remove, bool by_ns, const char *ns)
 {
     if (state == NULL || !os64_html_owns_node(state->doc, node) ||
         node->kind != OS64_HTML_ELEMENT || name == NULL || *name == '\0' ||
         (!remove && value == NULL && len != 0) || (!remove && len == SIZE_MAX))
         return OS64_HTML_BAD_ARGUMENT;
-    const os64_html_attr_t *existing = os64_html_attr(node, name);
-    os64_html_attr_change_t changes[2] = {{name, value, len, remove}};
+    const char *local = attr_local_name(name, by_ns ? ns : NULL);
+    const os64_html_attr_t *existing = by_ns ? os64_html_attr_ns(node, ns, local) : os64_html_attr(node, name);
+    os64_html_attr_change_t changes[2] = {{name, value, len, remove, by_ns, by_ns ? ns : NULL}};
+    // An attribute in a namespace is none of a control's: libpage's readers
+    // (p_attr) read the ones in no namespace, so it has no state to stage,
+    // and staging by its name would reset a select for a namespaced
+    // `multiple`, as other browsers do not.
+    if (by_ns && ns != NULL)
+        return os64_html_set_attrs(state->doc, (os64_html_node_t *)node, changes, 1);
     if ((remove && existing == NULL) || (!remove && existing != NULL &&
         same_bytes(existing->value, os64_strlen(existing->value), value, len)))
         return os64_html_set_attrs(state->doc, (os64_html_node_t *)node, changes, 1);
@@ -1634,7 +1663,8 @@ int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t
     view.attrs = NULL;
     bool found = false;
     for (const os64_html_attr_t *a = node->attrs; a != NULL; a = a->next) {
-        bool match = os64_streq(a->name, name);
+        bool match = by_ns ? same_ns(a->ns, ns) && os64_streq(attr_local_name(a->name, a->ns), local)
+                           : !found && os64_streq(a->name, name);
         found |= match;
         if (match && remove)
             continue;
@@ -1652,10 +1682,10 @@ int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t
         os64_html_attr_t *copy = p_arena_alloc(&temporary, sizeof(*copy));
         if (copy == NULL)
             goto no_memory;
-        *copy = (os64_html_attr_t){.name = name, .value = terminated};
+        *copy = (os64_html_attr_t){.name = name, .value = terminated, .ns = by_ns ? ns : NULL};
         *tail = copy;
     }
-    if (os64_streq(name, "form") && !remove)
+    if (os64_streq(name, "form") && !remove && !(by_ns && ns != NULL))
         view.form_owner = NULL;
     size_t count = 1;
     PNodeState *edit = p_state_find(state, node);
@@ -1686,7 +1716,7 @@ int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t
             if (old == NULL)
                 goto no_memory;
             if (old_len != 0) {
-                changes[count++] = (os64_html_attr_change_t){"value", old, old_len, false};
+                changes[count++] = (os64_html_attr_change_t){"value", old, old_len, false, false, NULL};
                 raw = old;
                 raw_len = old_len;
             } else {
@@ -1815,6 +1845,18 @@ no_memory:
     p_reserve_abort(&reserve);
     p_arena_free(&temporary);
     return OS64_HTML_NO_MEMORY;
+}
+
+int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t *node,
+                                const char *name, const char *value, size_t len, bool remove)
+{
+    return node_set_attr(state, node, name, value, len, remove, false, NULL);
+}
+
+int64_t os64_page_node_set_attr_ns(os64_page_state_t *state, const os64_html_node_t *node, const char *ns,
+                                   const char *name, const char *value, size_t len, bool remove)
+{
+    return node_set_attr(state, node, name, value, len, remove, true, ns);
 }
 
 // Walk moving subtrees, not the document. Template contents are independent

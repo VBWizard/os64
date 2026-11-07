@@ -670,6 +670,22 @@ const HAttr *os64_html_attr(const HNode *e, const char *name)
                 return a;
     return NULL;
 }
+const char *h_local_name(const char *name, const char *ns)
+{
+    if (ns && name)
+        for (const char *c = name; *c; c++)
+            if (*c == ':')
+                return c + 1;
+    return name;
+}
+const HAttr *os64_html_attr_ns(const HNode *e, const char *ns, const char *local)
+{
+    if (e && e->kind == OS64_HTML_ELEMENT && local)
+        for (const HAttr *a = e->attrs; a; a = a->next)
+            if (h_eq(a->ns, ns) && h_eq(h_local_name(a->name, a->ns), local))
+                return a;
+    return NULL;
+}
 const char *os64_html_status_name(int64_t s)
 {
     switch (s) {

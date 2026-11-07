@@ -562,6 +562,14 @@ int64_t os64_page_reset(os64_page_t *page, int32_t form);
 // Ordinary owned elements accept attributes too; remove ignores value/len.
 int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t *node,
                                 const char *name, const char *value, size_t len, bool remove);
+// The same by namespace (NULL for none) and the local part of `name`, as
+// setAttributeNS and removeAttributeNS address an attribute: a new one
+// takes `name` and `ns`, an existing one keeps its own qualified name. One
+// in no namespace is staged as os64_page_node_set_attr stages a change; one
+// in a namespace changes no control's state (libpage's controls read the
+// attributes in no namespace) and goes straight to the tree.
+int64_t os64_page_node_set_attr_ns(os64_page_state_t *state, const os64_html_node_t *node, const char *ns,
+                                   const char *name, const char *value, size_t len, bool remove);
 
 /* State-aware tree verbs retain libhtml's placement rules/status codes and
  * normalize the radio/select effects of each move without changing dirty

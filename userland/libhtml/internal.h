@@ -439,6 +439,9 @@ bool h_work(os64_html_parser_t *p, uint64_t n);
 void h_error(os64_html_parser_t *p, const char *name);
 void h_refuse(os64_html_parser_t *p, int64_t status);
 bool h_eq(const char *a, const char *b);
+/* An attribute name's local part: after its colon when it is in a
+ * namespace, the whole name in none. */
+const char *h_local_name(const char *name, const char *ns);
 bool h_in(const char *name, const char *set);
 size_t h_len(const char *s);
 bool h_space(uint32_t cp);

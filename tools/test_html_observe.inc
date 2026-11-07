@@ -373,20 +373,20 @@ static void t_observe_attributes(void)
 
     // A batch is one record per change as applied in order.
     const os64_html_attr_change_t batch[] = {
-        {"class", "z", 1, false}, {"class", NULL, 0, true}, {"class", "w", 1, false}, {"nope", NULL, 0, true}};
+        {"class", "z", 1, false, false, NULL}, {"class", NULL, 0, true, false, NULL}, {"class", "w", 1, false, false, NULL}, {"nope", NULL, 0, true, false, NULL}};
     ntold = 0;
     check(os64_html_set_attrs(doc, p, batch, 4) == OS64_HTML_OK && ntold == 3 && told_old(&told[0], "y") &&
               told_old(&told[1], "z") && told_old(&told[2], NULL),
           "a batch: each change's old value as the changes before it left it");
-    const os64_html_attr_change_t same[] = {{"class", "w", 1, false}},
-                                  there_and_back[] = {{"class", "q", 1, false}, {"class", "w", 1, false}};
+    const os64_html_attr_change_t same[] = {{"class", "w", 1, false, false, NULL}},
+                                  there_and_back[] = {{"class", "q", 1, false, false, NULL}, {"class", "w", 1, false, false, NULL}};
     ntold = 0;
     version = os64_html_version(doc);
     check(os64_html_set_attrs(doc, p, same, 1) == OS64_HTML_OK && ntold == 1 && told_old(&told[0], "w") &&
               os64_html_set_attrs(doc, p, there_and_back, 2) == OS64_HTML_OK && ntold == 3 &&
               told_old(&told[1], "w") && told_old(&told[2], "q") && os64_html_version(doc) == version,
           "a batch that changes nothing in the end is told change by change, and the version stays");
-    const os64_html_attr_change_t renew[] = {{"xlink:href", NULL, 0, true}, {"xlink:href", "m", 1, false}};
+    const os64_html_attr_change_t renew[] = {{"xlink:href", NULL, 0, true, false, NULL}, {"xlink:href", "m", 1, false, false, NULL}};
     ntold = 0;
     href = NULL;
     check(os64_html_set_attrs(doc, s, renew, 2) == OS64_HTML_OK && ntold == 2 && told_old(&told[0], "k") &&

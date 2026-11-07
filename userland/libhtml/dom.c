@@ -1456,6 +1456,35 @@ static HAttr **attr_slot(HNode *e, const char *name)
         slot = &(*slot)->next;
     return slot;
 }
+/* Whether `a` is the record a change addresses: by qualified name, or with
+ * by_ns by namespace and local name. */
+static bool change_finds(const HAttr *a, const os64_html_attr_change_t *c)
+{
+    if (!c->by_ns)
+        return h_eq(a->name, c->name);
+    return h_eq(a->ns, c->ns) && h_eq(h_local_name(a->name, a->ns), h_local_name(c->name, c->ns));
+}
+static HAttr **change_slot(HNode *e, const os64_html_attr_change_t *c)
+{
+    HAttr **slot = &e->attrs;
+    while (*slot && !change_finds(*slot, c))
+        slot = &(*slot)->next;
+    return slot;
+}
+/* Whether two changes of a batch address the same record, as tell_attrs
+ * replays the batch for its listener report: two by namespace that agree
+ * on namespace and local name, or otherwise the same qualified name. That
+ * is by name, not by record: on an element holding two attributes of one
+ * qualified name, a batch that removes one by name and sets the name again
+ * (or mixes a change by name with one by namespace on that name) is
+ * reported against the wrong record. No caller builds such a batch;
+ * DEBTS.md books it. */
+static bool same_target(const os64_html_attr_change_t *a, const os64_html_attr_change_t *b)
+{
+    if (a->by_ns != b->by_ns || !a->by_ns)
+        return h_eq(a->name, b->name);
+    return h_eq(a->ns, b->ns) && h_eq(h_local_name(a->name, a->ns), h_local_name(b->name, b->ns));
+}
 /* Private records are replaced and retired independently; inline records
  * expire with their node. Clones copy either kind instead of sharing it. */
 bool d_attrs_inherit(HDoc *d, const HNode *from, HNode *to, int64_t *why)
@@ -1512,8 +1541,9 @@ static bool attrs_equal(const HAttr *a, const HAttr *b)
 /* One record for each change as it was applied, in order, to `had`, the
  * list the element had before: a set is told whether or not it changed the
  * value, a remove only when there was something to remove. A set keeps the
- * namespace of a record it replaces, and a name removed and set again comes
- * back in none, as set_attrs builds it. */
+ * qualified name and namespace of a record it replaces; a new one, and a
+ * record removed and set again, comes back as os64_html_set_attrs builds it: the
+ * change's name, in its namespace when by namespace and in none when not. */
 static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
                        const os64_html_attr_change_t *changes, size_t count, bool log)
 {
@@ -1522,15 +1552,18 @@ static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
     for (size_t i = 0; i < count; i++) {
         const os64_html_attr_change_t *c = &changes[i];
         const HAttr *a = had;
-        while (a && !h_eq(a->name, c->name))
+        while (a && !change_finds(a, c))
             a = a->next;
-        const char *ns = a ? a->ns : NULL, *value = a ? a->value : NULL;
+        const char *name = a ? a->name : c->name, *ns = a ? a->ns : c->by_ns ? c->ns : NULL;
+        const char *value = a ? a->value : NULL;
         size_t len = a ? h_len(a->value) : 0;
         for (size_t j = 0; j < i; j++) {
-            if (!h_eq(changes[j].name, c->name))
+            if (!same_target(&changes[j], c))
                 continue;
             if (changes[j].remove) {
-                ns = value = NULL;
+                name = c->name;
+                ns = c->by_ns ? c->ns : NULL;
+                value = NULL;
                 len = 0;
             } else {
                 value = changes[j].value ? changes[j].value : "";
@@ -1538,7 +1571,7 @@ static void tell_attrs(HDoc *d, HNode *e, const HAttr *had,
             }
         }
         if (!c->remove || value)
-            tell_attr(d, e, c->name, ns, value, len, log);
+            tell_attr(d, e, name, ns, value, len, log);
     }
 }
 
@@ -1554,9 +1587,10 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
         if (!c->name || !*c->name || (!c->remove && !c->value && c->value_len))
             return OS64_HTML_BAD_ARGUMENT;
         if (!d_text_ok(c->name, h_len(c->name)) ||
-            (!c->remove && !d_text_ok(c->value, c->value_len)))
+            (!c->remove && !d_text_ok(c->value, c->value_len)) ||
+            (c->by_ns && c->ns && !d_text_ok(c->ns, h_len(c->ns))))
             return OS64_HTML_BAD_TEXT;
-        const HAttr *a = *attr_slot(e, c->name);
+        const HAttr *a = *change_slot(e, c);
         effective |= c->remove ? a != NULL : !a || !same_bytes(a->value, c->value, c->value_len);
     }
     if (!effective) {
@@ -1572,14 +1606,15 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     }
     for (size_t i = 0; i < count; i++) {
         const os64_html_attr_change_t *c = &changes[i];
-        HAttr **slot = attr_slot(&prospective, c->name), *old = *slot;
+        HAttr **slot = change_slot(&prospective, c), *old = *slot;
         if (c->remove) {
             if (old) {
                 *slot = old->next;
                 h_free(d, old);
             }
         } else if (!old || !same_bytes(old->value, c->value, c->value_len)) {
-            HAttr *fresh = attr_new(d, c->name, c->value, c->value_len, old ? old->ns : NULL, &why);
+            HAttr *fresh = attr_new(d, old ? old->name : c->name, c->value, c->value_len,
+                                    old ? old->ns : c->by_ns ? c->ns : NULL, &why);
             if (!fresh) {
                 attrs_discard(d, prospective.attrs);
                 d->pub.peak_arena_bytes = peak;
@@ -1603,8 +1638,9 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     *h_word(e) |= H_ATTRS_PRIVATE;
     d->version++;
+    /* HTML's `form` attribute is the one in no namespace. */
     for (size_t i = 0; i < count; i++)
-        if (!changes[i].remove)
+        if (!changes[i].remove && (!changes[i].by_ns || !changes[i].ns))
             form_attr_set(d, e, changes[i].name);
     tell_attrs(d, e, old, changes, count, true);
     if (private)
