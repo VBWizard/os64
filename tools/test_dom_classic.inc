@@ -96,7 +96,7 @@ static void dom_classic_cases(void)
         "assert(HTMLElement.ELEMENT_NODE===1);"
         "d=Object.getOwnPropertyDescriptor(HTMLElement,'length');"
         "assert(d.value===0&&!d.writable&&!d.enumerable&&d.configurable);"
-        "bad=false;try{new Document()}catch(e){bad=e instanceof TypeError&&e.message==='Illegal constructor'}assert(bad);"
+        "bad=false;try{new DocumentType()}catch(e){bad=e instanceof TypeError&&e.message==='Illegal constructor'}assert(bad);"
         "Element.prototype.patched=function(){return 'yes'};assert(b.patched()==='yes'&&i.patched()==='yes');"
         "delete Element.prototype.patched;",
         "classic-interface-objects");

@@ -77,6 +77,11 @@ typedef struct os64_html_node {
     const char *name; /* Local element name; PI target; doctype name. */
     const char *prefix, *namespace_uri; /* Owned XML spellings; NULL when absent. */
     bool xml_document; /* Owning arena is an XML document, including detached nodes. */
+    /* A TEXT node that is a CDATA section (DOM's CDATASection, nodeType 4):
+     * text in every other respect, except that normalize leaves it out of a
+     * run of text (DOM's "exclusive Text node"). Set only by os64_html_create_cdata,
+     * and carried by clone and split_text. */
+    bool cdata;
     /* An element's custom state, an os64_html_ce_t (below). Only
      * os64_html_set_ce changes it. */
     uint8_t ce;
@@ -352,6 +357,23 @@ os64_html_node_t *os64_html_create_text(os64_html_document_t *doc, const char *u
 os64_html_node_t *os64_html_create_comment(os64_html_document_t *doc, const char *utf8, size_t len,
                                            int64_t *status);
 os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *status);
+/* A CDATA section: a TEXT node with `cdata` set. Its data is the caller's to
+ * check (DOM refuses "]]>" in it); libhtml checks only that it is text. */
+os64_html_node_t *os64_html_create_cdata(os64_html_document_t *doc, const char *utf8, size_t len,
+                                         int64_t *status);
+/* A processing instruction: `target` its name, `utf8` its data. The target's
+ * Name production and "?>" in the data are the caller's to check. */
+os64_html_node_t *os64_html_create_pi(os64_html_document_t *doc, const char *target, const char *utf8,
+                                      size_t len, int64_t *status);
+/* An element in any namespace, as DOM's createElementNS makes one:
+ * `namespace_uri` NULL for none, `prefix` NULL for none, `local` its local
+ * name, each copied. The HTML, SVG and MathML namespaces get their kinds
+ * (an HTML element its tag, a template its contents); any other is
+ * OS64_HTML_NS_OTHER, keeping the URI, and none is OS64_HTML_NS_NONE, as the
+ * XML builder makes them. The name rules are the caller's (DOM's validate
+ * and extract). */
+os64_html_node_t *os64_html_create_element_ns(os64_html_document_t *doc, const char *namespace_uri,
+                                              const char *prefix, const char *local, int64_t *status);
 /* A SECOND DOCUMENT, as DOMImplementation makes one (DOM § 4.5.1): a
  * DOCUMENT node, empty, that lives in `doc`'s arena and carries its mark,
  * so a node moves between it and `doc`'s own tree as any of `doc`'s nodes

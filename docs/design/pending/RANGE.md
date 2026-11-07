@@ -349,13 +349,15 @@ their own edits (the framework that keeps `focusedElem` and
   mutation pages — Range-set, compare, cloneContents, extractContents,
   deleteContents, insertNode, surroundContents and the mutations, the
   live-range steps' real examination — build their trees with
-  dom/common.js, which needs `new Document()` and `createCDATASection`;
-  libdom has neither, so those pages fail whole at setup. R2 requires what
-  can run (the constructor, attributes, the stringifier, the -2 pages,
-  normalize's mutations, adoption, the Attr answers); the slice right
-  after R2 adds `new Document()`, CDATASection and an HTML document's
-  `createProcessingInstruction`, and the algorithm pages join the
-  required list then (Chris, 2026-11-06).
+  dom/common.js, which needs `new Document()`, `createCDATASection`,
+  `createProcessingInstruction` and an XML document's elements in no
+  namespace. The slice after R2 added those (Chris's ruling, 2026-11-06),
+  and the directory went from 38 passes to 35,113; `[required]` holds a
+  test of each page that runs, `[passing]` every pass. What stays out:
+  Selection's `addRange` (R4), shadow trees (off in the runner), a range
+  in an Attr (DEBTS), five pages that run their tests from an iframe the
+  runner does not load, and three mutation pages (dataChange, deleteData,
+  replaceData) that never report within the runner's budget.
 - **libhtml, a reference model**: a host test that applies random
   mutations (the existing random walk) to a tree holding random ranges and
   checks every boundary after every step against a model that recomputes

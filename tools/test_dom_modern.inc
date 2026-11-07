@@ -97,7 +97,8 @@ static char *modern_chain_shape(DomFixture *f)
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
-        "clear|getSelection|createElementNS|importNode|adoptNode|links|scripts|createTreeWalker|createNodeIterator)$/;"
+        "clear|getSelection|createElementNS|importNode|adoptNode|links|scripts|createTreeWalker|createNodeIterator|"
+        "createCDATASection|createProcessingInstruction)$/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){"
@@ -1228,7 +1229,8 @@ static void dom_modern_cases(void)
         "assert(name(()=>document.createElementNS(SVG,'a:'))==='InvalidCharacterError','a bad name');"
         "assert(name(()=>document.createElementNS(null,'p:a'))==='NamespaceError','a prefix with no namespace');"
         "assert(name(()=>document.createElementNS('','p:a'))==='NamespaceError','the empty string is no namespace');"
-        "assert(name(()=>document.createElementNS(null,'a'))==='NotSupportedError','no namespace the tree holds');"
+        "assert(document.createElementNS(null,'a').namespaceURI===null&&document.createElementNS('urn:x','a').namespaceURI==='urn:x',"
+        "'no namespace, or any');"
         "assert(name(()=>document.createElementNS(SVG))==='TypeError','two arguments');",
         "modern-on-create-element-ns");
     /* 0f's P1a select row: React's option updater first, as it runs. */

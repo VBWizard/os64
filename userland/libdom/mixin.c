@@ -218,6 +218,17 @@ const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status)
     return dom->body_context;
 }
 
+/* The context a fragment parse takes for `element`: itself, or the held
+ * body when libhtml's fragment parser takes no context in its namespace
+ * (none, or one other than HTML's, SVG's and MathML's). The standard parses
+ * such a context's markup as foreign content in that namespace; here it is
+ * parsed as a body's (DEBTS.md § Classic browser scripting). */
+const os64_html_node_t *d_fragment_context(os64_dom_t *dom, const os64_html_node_t *element, int64_t *status)
+{
+    if (element->ns == OS64_HTML_NS_NONE || element->ns == OS64_HTML_NS_OTHER) return d_body_context(dom, status);
+    return element;
+}
+
 /* After the arguments are converted (the position, then the HTML or the
  * text, both strings; or the element). */
 static JSValue adjacent_steps(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self, int magic,
@@ -229,13 +240,16 @@ static JSValue adjacent_steps(os64_dom_t *dom, JSContext *ctx, const os64_html_n
     if (magic == D_ADJACENT_HTML) {
         /* The fragment is parsed as if it were the context element's
          * contents: the parent's for a place beside this node. A context
-         * that is no element, or is <html>, parses as <body> would. */
+         * that is no element, is <html>, or is in no namespace or another
+         * one (d_fragment_context), parses as <body> would. */
         if (place == 0 || parent->kind == OS64_HTML_DOCUMENT)
             return d_error(ctx, "NoModificationAllowedError", "The element has no parent element to insert beside");
         int64_t status = OS64_HTML_OK;
         const os64_html_node_t *context = parent;
         if (!is_element(context) || is_html(context, OS64_HTML_TAG_HTML))
             context = d_body_context(dom, &status);
+        else
+            context = d_fragment_context(dom, context, &status);
         os64_html_node_t *fragment = context == NULL ? NULL :
             os64_html_parse_fragment(dom->document, context, text->data, text->length, d_scripting(dom, parent), &status);
         if (fragment == NULL) return d_html_error(ctx, status);
@@ -1221,7 +1235,9 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
     if (self == NULL) return JS_EXCEPTION;
     if (self->kind != OS64_HTML_TEXT) return JS_ThrowTypeError(ctx, "Text member requires a text node");
     if (magic == T_WHOLE_TEXT) {
-        /* The data of the run of text siblings it is in, in order. */
+        /* The data of the contiguous Text nodes it is among (DOM § 4.11),
+         * in order: CDATA sections are Text nodes too, so they count; only
+         * normalize leaves them out of a run. */
         const os64_html_node_t *first = self;
         while (first->prev != NULL && first->prev->kind == OS64_HTML_TEXT) first = first->prev;
         size_t total = 0;
