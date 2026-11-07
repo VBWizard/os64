@@ -1,13 +1,24 @@
 /* Drive Pulse's real widgets, layout and font planner on a host surface.
  * The shared font harness supplies the allocator and real face loader. */
 #include "os64/ui.h"
-static uint64_t pulse_test_parent_flags, pulse_test_create_flags;
+static uint64_t pulse_test_parent_flags, pulse_test_create_flags, pulse_test_dialog_flags;
+static bool pulse_test_pin_failure;
+static unsigned pulse_test_focuses;
 static bool pulse_test_state_failure;
 static int64_t pulse_test_state(int64_t window,os64_gui_window_state_t *state)
 {
-    (void)window;*state=(os64_gui_window_state_t){.flags=pulse_test_parent_flags,.x=10,.y=20};
+    *state=(os64_gui_window_state_t){.flags=window==2?pulse_test_dialog_flags:pulse_test_parent_flags,.x=10,.y=20};
     return pulse_test_state_failure?-1:0;
 }
+static int64_t pulse_test_pin(int64_t window,bool pinned)
+{
+    if(pulse_test_pin_failure)return -1;
+    uint64_t *flags=window==2?&pulse_test_dialog_flags:&pulse_test_parent_flags;
+    if(pinned)*flags|=OS64_GUI_WINDOW_PINNED;else *flags&=~OS64_GUI_WINDOW_PINNED;
+    return 0;
+}
+static int64_t pulse_test_focus(int64_t window)
+{ (void)window;++pulse_test_focuses;return 0; }
 static int64_t pulse_test_create(const char *title,int32_t x,int32_t y,uint32_t w,uint32_t h,uint64_t flags)
 {
     (void)title;(void)x;(void)y;(void)w;(void)h;pulse_test_create_flags=flags;
@@ -39,9 +50,15 @@ static int64_t pulse_test_refresh(os64_draw_ctx_t *ctx)
 #define os64_gui_window_set_min_size pulse_test_min_size
 #define os64_draw_ctx_refresh pulse_test_refresh
 #define pulse_sample pulse_test_sample
+#define os64_gui_window_get_state pulse_test_state
+#define os64_gui_window_set_pinned pulse_test_pin
+#define os64_gui_window_focus pulse_test_focus
 #define main pulse_test_guest_main
 #include "../userland/apps/pulse/pulse.c"
 #undef main
+#undef os64_gui_window_get_state
+#undef os64_gui_window_set_pinned
+#undef os64_gui_window_focus
 #undef pulse_sample
 #undef os64_draw_ctx_refresh
 #undef os64_gui_window_set_min_size
@@ -74,9 +91,11 @@ static unsigned pulse_test_saves;
 static bool pulse_test_save_failure;
 int64_t os64_conf_write(const char *name,const os64_conf_pair_t *pairs,size_t count)
 {
-    CHECK(!strcmp(name,"pulse.conf"));CHECK(count==9);CHECK(!strcmp(pairs[8].key,"font_size"));CHECK(!strcmp(pairs[7].key,"refresh_ms"));
+    CHECK(!strcmp(name,"pulse.conf"));CHECK(count==10);CHECK(!strcmp(pairs[9].key,"stay_on_top"));CHECK(!strcmp(pairs[8].key,"font_size"));CHECK(!strcmp(pairs[7].key,"refresh_ms"));
     ++pulse_test_saves;return pulse_test_save_failure?-1:0;
 }
+static unsigned visible_count(const pulse_config_t *c)
+{ unsigned n=0;for(unsigned i=0;i<PULSE_METERS;++i)if(c->show[i])++n;return n; }
 static void pulse_test_settings(void)
 {
     current="settings Apply and Save";
@@ -116,6 +135,21 @@ static void pulse_test_settings(void)
     CHECK(strstr(g.settings.message,"could not be saved")!=NULL);
     pulse_test_save_failure=false;settings_apply(&g.settings,true);
     CHECK(pulse_test_saves==2 && !strcmp(g.settings.message,"Applied and saved."));
+    current="frame pin and Settings share native state";
+    g.settings.window=2;pulse_test_parent_flags=pulse_test_dialog_flags=OS64_GUI_WINDOW_PINNED;
+    sync_pin_state();CHECK(g.stay_on_top.checked);
+    g.stay_on_top.checked=false;pin_changed(&g.stay_on_top,NULL);
+    CHECK(!g.config.stay_on_top && !g.stay_on_top.checked);
+    CHECK(!pulse_test_parent_flags && !pulse_test_dialog_flags && pulse_test_focuses==1);
+    pulse_test_parent_flags=OS64_GUI_WINDOW_PINNED;
+    os64_gui_event_t pin={.type=OS64_GUI_EVENT_WINDOW_PIN_CHANGED};window_event(NULL,&pin);
+    CHECK(g.config.stay_on_top && g.stay_on_top.checked && pulse_test_dialog_flags==OS64_GUI_WINDOW_PINNED);
+    pulse_test_pin_failure=true;g.stay_on_top.checked=false;pin_changed(&g.stay_on_top,NULL);
+    CHECK(g.stay_on_top.checked && g.config.stay_on_top && strstr(g.settings.message,"Could not change")!=NULL);
+    pulse_test_pin_failure=false;
+    pulse_test_parent_flags=0;pin.type=OS64_GUI_EVENT_INPUT_LOST;window_event(NULL,&pin);
+    CHECK(!g.stay_on_top.checked && !g.config.stay_on_top && !pulse_test_dialog_flags);
+    g.settings.window=0;
     CHECK(os64_ui_font_release(&g.settings.ui)==OS64_FONT_OK);
 }
 
@@ -147,6 +181,7 @@ int main(int argc,char **argv)
     CHECK(!os64_ui_settings_open(&d,1,"test",1,NULL,NULL,NULL));
     CHECK(pulse_test_create_flags==OS64_GUI_CREATE_FIT_SCREEN);
 
+    pulse_test_state_failure=false;pulse_test_parent_flags=OS64_GUI_WINDOW_PINNED;
     current="meter selection and layout";
     pulse_config_defaults(&g.config);g.ui.ctx=&g.ctx;ui_test_view_theme(&g.ui.theme);
     g.ui.theme.panel_bg=0xff202833;g.ui.theme.label_fg=0xffedf3fa;
@@ -171,10 +206,17 @@ int main(int argc,char **argv)
     g.sample=(pulse_sample_t){.cpu_valid=true,.ram_valid=true,.disk_valid=true,.net_valid=true,
         .cpu_percent=37,.ram_used=3ULL<<30,.ram_available=5ULL<<30,.ram_total=8ULL<<30,
         .disk_used=120ULL<<30,.disk_available=380ULL<<30,.disk_total=500ULL<<30,
-        .download=1572864,.upload=262144};
+        .download=1572864,.upload=262144,.network_scale=2097152};
     render_sample();CHECK(!strcmp(g.title[0],"CPU: 37%"));CHECK(strstr(g.title[3],"1.5 MiB/s")!=NULL);
     os64_gui_rect_t damage;CHECK(os64_ui_render(&g.ui,&damage));
     CHECK(g.titles[0].run!=NULL);
+    int32_t net_row=os64_ui_font_row_height(&g.ui,OS64_FONT_ROLE_UI),pad=g.ui.theme.pad;
+    int32_t y=g.meters[PULSE_NET].bounds.y+net_row+pad/2;
+    uint32_t *pixels=g.ctx.surf.pixels;
+    int32_t x=g.meters[PULSE_NET].bounds.x;
+    CHECK(pixels[y*g.ctx.surf.pitch_px+x]==0xff409bff);
+    CHECK(pixels[(y+net_row+pad+8)*g.ctx.surf.pitch_px+x]==0xffed6868);
+    CHECK(strstr(g.scale_text,"2.0 MiB/s")!=NULL);
     g.sample.cpu_percent=75;render_sample();CHECK(g.titles[0].run==NULL);
     CHECK(os64_ui_render(&g.ui,&damage));CHECK(!strcmp(g.title[0],"CPU: 75%"));
 #ifdef UI_TEXT_REAL
@@ -201,6 +243,9 @@ int main(int argc,char **argv)
     // A normal user resize after reducing text size can restore compactness.
     g.ctx.surf.height=ui_test_min_h;g.ctx.surf.width=pulse_test_min_w;layout(&g.ui);
 #endif
+    g.sample.network_scale=1024;render_sample();CHECK(!strcmp(g.scale_text,"Scale: 1.0 KiB/s"));
+    g.config.units=PULSE_MBIT;render_sample();CHECK(!strcmp(g.scale_text,"Scale: 8.1 kbit/s"));
+    g.config.units=PULSE_MIB;g.sample.network_scale=2097152;render_sample();
     if(argc>2)pulse_test_preview(argv[2]);
     g.sample=(pulse_sample_t){0};render_sample();
     CHECK(strstr(g.title[0],"waiting")!=NULL && strstr(g.title[1],"unavailable")!=NULL);

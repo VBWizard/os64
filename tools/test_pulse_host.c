@@ -66,9 +66,27 @@ static void formatting(void)
     pulse_format_rate(text,sizeof(text),UINT64_MAX,PULSE_BITS);assert(!strcmp(text,"rate too large"));
     pulse_format_rate(text,sizeof(text),0,PULSE_BYTES);assert(!strcmp(text,"0.0 B/s"));
 }
+static void scales(void)
+{
+    pulse_rate_scale_t s={0};
+    assert(pulse_rate_scale(&s,0,0,0,true)==1024);
+    assert(pulse_rate_scale(&s,0,1500,500,true)==2048);
+    assert(pulse_rate_scale(&s,0,1,1,true)==2048);
+    assert(pulse_rate_scale(&s,59,0,0,true)==2048);
+    assert(pulse_rate_scale(&s,60,0,0,true)==1024);
+    assert(pulse_rate_scale(&s,61,0,5000,true)==8192);
+    assert(pulse_rate_scale(&s,62,UINT64_MAX,0,false)==8192);
+    assert(pulse_rate_scale(&s,63,UINT64_MAX,0,true)==UINT64_MAX);
+    assert(pulse_rate_scale(&s,123,0,0,false)==1024);
+    assert(pulse_rate_scale(&s,2,9000,0,true)==16384);
+    assert(pulse_rate_scale(&s,1,0,0,true)==1024);
+}
 static void sampling(void)
 {
     pulse_config_t c;pulse_config_defaults(&c);
+    assert(c.stay_on_top);
+    pulse_config_line("stay_on_top","off",&c);assert(!c.stay_on_top);
+    pulse_config_line("stay_on_top","bad",&c);assert(!c.stay_on_top);
     assert(c.font_size==24);
     pulse_config_line("font_size","32",&c);assert(c.font_size==32);
     pulse_config_line("font_size","0",&c);assert(c.font_size==32);
@@ -93,6 +111,6 @@ static void sampling(void)
 }
 int main(void)
 {
-    disk();network();formatting();sampling();
+    disk();network();formatting();scales();sampling();
     puts("pulse: disk parsing, network validity, unit conversion, percentages and sampling PASS");
 }

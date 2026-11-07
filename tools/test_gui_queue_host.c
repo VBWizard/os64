@@ -6,6 +6,21 @@ int main(void)
 {
     for(unsigned offset=0;offset<GUI_WINDOW_EVENTS_MAX;++offset){
         gui_event_queue_t q={.head=offset,.tail=offset};input_event_t out;
+        input_event_t pin={.type=INPUT_EVENT_WINDOW_PIN_CHANGED};
+        // Dropped pin hints report input loss; retained hints survive gesture
+        // purging so clients can reconcile the authoritative native state.
+        for(unsigned i=0;i<GUI_WINDOW_EVENTS_MAX-1;++i){
+            input_event_t motion={.type=INPUT_EVENT_MOUSE_MOVE};
+            assert(gui_event_queue_push(&q,&motion)==1);
+        }
+        assert(gui_event_queue_push(&q,&pin)==0);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_INPUT_LOST);
+        assert(!gui_event_queue_pending(&q));
+        assert(gui_event_queue_push(&q,&pin)==1);
+        q.lost_pending=true;
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_INPUT_LOST);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_WINDOW_PIN_CHANGED);
+        q=(gui_event_queue_t){.head=offset,.tail=offset};
         input_event_t down={.type=INPUT_EVENT_MOUSE_BUTTON_DOWN};
         input_event_t up={.type=INPUT_EVENT_MOUSE_BUTTON_UP};
         input_event_t move={.type=INPUT_EVENT_MOUSE_MOVE};
@@ -42,21 +57,19 @@ int main(void)
             assert(gui_event_queue_push(&q,&close)==1);
         assert(gui_event_queue_push(&q,&move)==0);
         assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_INPUT_LOST);
-        assert(gui_event_queue_push(&q,&move)==0);
-        assert(gui_event_queue_push(&q,&bell)==1);
-        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_DOORBELL);
-        assert(gui_event_queue_push(&q,&move)==0);
-        assert(gui_event_queue_push(&q,&bell)==1);
-        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_WINDOW_CLOSE);
-        unsigned controls=1, polls=0;
+        // Service rotates between doorbells and ring/loss; either can lead.
+        // Keep both busy and require bounded progress for retained controls.
+        unsigned controls=0, bells=0, polls=0;
         while(controls<GUI_WINDOW_EVENTS_MAX-1 && polls++<4*GUI_WINDOW_EVENTS_MAX){
             (void)gui_event_queue_push(&q,&move);
             (void)gui_event_queue_push(&q,&move);
+            assert(gui_event_queue_push(&q,&bell)==1);
             assert(gui_event_queue_pop(&q,&out));
             if(out.type==INPUT_EVENT_WINDOW_CLOSE)++controls;
-            else assert(out.type==INPUT_EVENT_INPUT_LOST || out.type==INPUT_EVENT_DOORBELL);
+            else if(out.type==INPUT_EVENT_DOORBELL)++bells;
+            else assert(out.type==INPUT_EVENT_INPUT_LOST);
         }
-        assert(controls==GUI_WINDOW_EVENTS_MAX-1);
+        assert(controls==GUI_WINDOW_EVENTS_MAX-1 && bells>0);
     }
     puts("gui queue: 64 wrap positions; drop/eviction reset, control order and overflow fairness passed");
     return 0;

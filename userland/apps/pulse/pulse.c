@@ -16,6 +16,8 @@ static struct {
     os64_ui_widget_t root, settings_button, meters[PULSE_METERS];
     os64_ui_widget_t titles[PULSE_METERS], details[PULSE_METERS];
     os64_ui_class_t meter_class;
+    os64_ui_widget_t scale_label;
+    char scale_text[64];
     char title[PULSE_METERS][96], detail[PULSE_METERS][96];
     pulse_config_t config;
     const pulse_config_t *font_candidate;
@@ -26,7 +28,7 @@ static struct {
     unsigned stop_timer, refresh_ms;
     os64_ui_settings_t settings;
     os64_ui_menu_session_t *settings_menu;
-    os64_ui_checkbox_t show[PULSE_METERS];
+    os64_ui_checkbox_t show[PULSE_METERS], stay_on_top;
     os64_ui_dropdown_t units;
     os64_ui_widget_t labels[8];
     os64_ui_textfield_t mount, interface, refresh, font_size;
@@ -36,13 +38,17 @@ static const char *const names[PULSE_METERS]={"CPU","RAM","Disk","Network"};
 
 static void place(os64_ui_widget_t *w,os64_gui_rect_t box,bool stage)
 { if(stage) os64_ui_widget_stage_bounds(w,box);else w->bounds=box; }
-static unsigned visible_count(const pulse_config_t *c)
-{ unsigned n=0;for(unsigned i=0;i<PULSE_METERS;++i) if(c->show[i]) ++n;return n; }
 
-static int32_t needed_height(os64_ui_t *ui,const pulse_config_t *c)
+static int32_t meter_height(os64_ui_t *ui,unsigned meter)
 {
     int32_t row=os64_ui_font_row_height(ui,OS64_FONT_ROLE_UI),pad=ui->theme.pad;
-    return 2*pad+os64_ui_control_min_height(ui)+(int32_t)visible_count(c)*(2*row+3*pad+8);
+    return meter==PULSE_NET?3*row+3*pad+16:2*row+2*pad+8;
+}
+static int32_t needed_height(os64_ui_t *ui,const pulse_config_t *c)
+{
+    int32_t height=2*ui->theme.pad+os64_ui_control_min_height(ui);
+    for(unsigned i=0;i<PULSE_METERS;++i)if(c->show[i])height+=meter_height(ui,i)+ui->theme.pad;
+    return height;
 }
 static bool arrange(os64_ui_t *ui,bool stage)
 {
@@ -54,11 +60,14 @@ static bool arrange(os64_ui_t *ui,bool stage)
     int32_t caption;
     if(os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,"Settings",8,&caption) || caption+2*pad>width) return false;
     place(&g.settings_button,(os64_gui_rect_t){pad,pad,width,bh},stage);
-    int32_t y=2*pad+bh,h=2*row+2*pad+8;
+    int32_t y=2*pad+bh;
     for(unsigned i=0;i<PULSE_METERS;++i) if(c->show[i]) {
+        int32_t h=meter_height(ui,i);
         place(&g.meters[i],(os64_gui_rect_t){pad,y,width,h},stage);
         place(&g.titles[i],(os64_gui_rect_t){pad,y,width,row},stage);
-        place(&g.details[i],(os64_gui_rect_t){pad,y+row,width,row},stage);
+        int32_t detail_y=y+row+(i==PULSE_NET?pad+8:0);
+        place(&g.details[i],(os64_gui_rect_t){pad,detail_y,width,row},stage);
+        if(i==PULSE_NET)place(&g.scale_label,(os64_gui_rect_t){pad,y+2*row+2*pad+16,width,row},stage);
         y+=h+pad;
     }
     return true;
@@ -135,7 +144,22 @@ static void meter_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_t
     if(i==PULSE_CPU){valid=g.sample.cpu_valid;pct=g.sample.cpu_percent;}
     else if(i==PULSE_RAM){valid=g.sample.ram_valid;pct=pulse_percent(g.sample.ram_used,g.sample.ram_total);}
     else if(i==PULSE_DISK){valid=g.sample.disk_valid;pct=pulse_percent(g.sample.disk_used,g.sample.disk_total);}
-    else return; // Network has rates, not a percentage of an invented capacity.
+    else {
+        // Both directions use the same recent-peak ceiling, not link capacity.
+        int32_t row=os64_ui_font_row_height(&g.ui,OS64_FONT_ROLE_UI);
+        uint64_t rates[]={g.sample.download,g.sample.upload};
+        uint32_t colors[]={0xff409bff,0xffed6868};
+        for(unsigned n=0;n<2;++n){
+            os64_gui_rect_t bar={w->bounds.x,w->bounds.y+(int32_t)n*(row+t->pad+8)+row+t->pad/2,w->bounds.w,8};
+            os64_draw_fill_rect(&ctx->surf,bar,t->scroll_track);
+            if(g.sample.net_valid && rates[n] && g.sample.network_scale){
+                bar.w=(int32_t)((int64_t)bar.w*pulse_percent(rates[n],g.sample.network_scale)/100);
+                if(bar.w<1)bar.w=1;
+                os64_draw_fill_rect(&ctx->surf,bar,colors[n]);
+            }
+        }
+        return;
+    }
     os64_gui_rect_t bar={w->bounds.x,w->bounds.y+w->bounds.h-8,w->bounds.w,8};
     os64_draw_fill_rect(&ctx->surf,bar,t->scroll_track);
     if(valid){bar.w=(int32_t)((int64_t)bar.w*pct/100);os64_draw_fill_rect(&ctx->surf,bar,t->text_sel_bg);}
@@ -173,6 +197,12 @@ static void render_sample(void)
         os64_strcopy(g.title[3],sizeof(g.title[3]),"Network: waiting for a sample");
         os64_strcopy(g.detail[3],sizeof(g.detail[3]),g.config.interface);
     }
+    pulse_format_rate(a,sizeof(a),g.sample.network_scale,g.config.units);
+    // A small ceiling must not round to a displayed zero in large units.
+    if(g.sample.network_scale && a[0]=='0' && a[1]=='.' && a[2]=='0' && a[3]==' ')
+        pulse_format_rate(a,sizeof(a),g.sample.network_scale,g.config.units>=PULSE_BITS?PULSE_KBIT:PULSE_KIB);
+    os64_snprintf(g.scale_text,sizeof(g.scale_text),"Scale: %s",a);
+    os64_ui_run_release(g.scale_label.run);g.scale_label.run=NULL;
     for(unsigned i=0;i<PULSE_METERS;++i) text_changed(i);
 }
 static void sample_now(void)
@@ -184,9 +214,38 @@ static void ask_settings(os64_ui_widget_t *w,void *user)
 { (void)w;(void)user;g.want_settings=true; }
 static void close_window(os64_ui_t *ui)
 { (void)ui;g.running=false; }
+// Native state is authoritative, including changes from frame compositions
+// and the keyboard. Input-loss and periodic reconciliation cover dropped hints.
+static void sync_pin_state(void)
+{
+    os64_gui_window_state_t state;
+    if(os64_gui_window_get_state(g.window,&state)<0)return;
+    g.config.stay_on_top=(state.flags & OS64_GUI_WINDOW_PINNED)!=0;
+    if(g.settings.window>0){
+        os64_ui_checkbox_set(&g.settings.ui,&g.stay_on_top,g.config.stay_on_top);
+        os64_gui_window_state_t dialog;
+        if(!os64_gui_window_get_state(g.settings.window,&dialog) &&
+           ((dialog.flags & OS64_GUI_WINDOW_PINNED)!=0)!=g.config.stay_on_top)
+            (void)os64_gui_window_set_pinned(g.settings.window,g.config.stay_on_top);
+    }
+}
+static void pin_changed(os64_ui_checkbox_t *box,void *user)
+{
+    (void)user;
+    if(os64_gui_window_set_pinned(g.window,box->checked)<0){
+        os64_ui_settings_report(&g.settings,"Could not change Stay on top; check that the kernel is updated.");
+        os64_ui_checkbox_set(&g.settings.ui,box,g.config.stay_on_top);
+        sync_pin_state();return;
+    }
+    sync_pin_state();
+    // Re-raising the parent into its band must not cover the dialog used here.
+    if(g.settings.window>0)(void)os64_gui_window_focus(g.settings.window);
+    os64_ui_settings_report(&g.settings,"Stay on top changed. Save as default to remember it.");
+}
 static void window_event(void *user,const os64_gui_event_t *ev)
 {
     (void)user;
+    sync_pin_state();
     if(ev->type==OS64_GUI_EVENT_SETTINGS) g.want_settings=true;
     else if(ev->type==OS64_GUI_EVENT_DOORBELL) sample_now();
     else os64_ui_dispatch(&g.ui,ev);
@@ -218,13 +277,14 @@ static bool settings_arrange(os64_ui_settings_t *d,os64_gui_rect_t b,int32_t row
     if(half<100)return false;
     for(unsigned i=0;i<PULSE_METERS;++i)
         place(&g.show[i].w,(os64_gui_rect_t){b.x+(int32_t)(i%2)*(half+gap),b.y+(int32_t)(i/2)*row,half,row},stage);
+    place(&g.stay_on_top.w,(os64_gui_rect_t){b.x,b.y+2*row,b.w,row},stage);
     os64_ui_widget_t *fields[]={&g.units.w,&g.mount.w,&g.interface.w,&g.refresh.w,&g.font_size.w};
     for(unsigned i=0;i<5;++i){
-        place(&g.labels[i],(os64_gui_rect_t){b.x,b.y+(int32_t)(i+2)*row,half,row},stage);
-        place(fields[i],(os64_gui_rect_t){b.x+half+gap,b.y+(int32_t)(i+2)*row,half,row},stage);
+        place(&g.labels[i],(os64_gui_rect_t){b.x,b.y+(int32_t)(i+3)*row,half,row},stage);
+        place(fields[i],(os64_gui_rect_t){b.x+half+gap,b.y+(int32_t)(i+3)*row,half,row},stage);
     }
     for(unsigned i=5;i<8;++i)
-        place(&g.labels[i],(os64_gui_rect_t){b.x,b.y+(int32_t)(i+2)*row,b.w,row},stage);
+        place(&g.labels[i],(os64_gui_rect_t){b.x,b.y+(int32_t)(i+3)*row,b.w,row},stage);
     return true;
 }
 static void settings_apply(os64_ui_settings_t *d,bool save)
@@ -259,7 +319,7 @@ static void settings_apply(os64_ui_settings_t *d,bool save)
             {"cpu",c.show[0]?"on":"off"},{"ram",c.show[1]?"on":"off"},
             {"disk",c.show[2]?"on":"off"},{"net",c.show[3]?"on":"off"},
             {"network_units",pulse_unit_names[c.units]},{"mount",c.mount},
-            {"interface",c.interface},{"refresh_ms",refresh},{"font_size",font_size}};
+            {"interface",c.interface},{"refresh_ms",refresh},{"font_size",font_size},{"stay_on_top",c.stay_on_top?"on":"off"}};
         if(os64_conf_write("pulse.conf",pairs,sizeof(pairs)/sizeof(*pairs))){
             os64_ui_settings_report(d,"Applied here, but settings could not be saved.");return;
         }
@@ -267,7 +327,7 @@ static void settings_apply(os64_ui_settings_t *d,bool save)
     os64_ui_settings_report(d,save?"Applied and saved.":"Applied to this window.");
 }
 static void settings_event(void *user,const os64_gui_event_t *ev)
-{ (void)user;os64_ui_settings_event(&g.settings,ev); }
+{ (void)user;sync_pin_state();os64_ui_settings_event(&g.settings,ev); }
 static void settings_paint(void *user)
 { (void)user;os64_ui_paint(&g.settings.ui); }
 static bool close_settings(void)
@@ -283,6 +343,8 @@ static void build_settings_widgets(void)
         os64_ui_checkbox(&g.show[i],names[i],g.config.show[i],NULL,NULL);
         os64_ui_add_child(&g.settings.body,&g.show[i].w);
     }
+    os64_ui_checkbox(&g.stay_on_top,"Stay on top",g.config.stay_on_top,pin_changed,NULL);
+    os64_ui_add_child(&g.settings.body,&g.stay_on_top.w);
     const char *labels[]={"Network units","Disk mount","Network interface","Refresh (milliseconds)","Text size (pixels)",
         "Use all to combine network interfaces.","A mount such as / selects its filesystem space.",
         "Hide meters here; resize the panel to your liking."};
@@ -307,7 +369,8 @@ static void build_settings_widgets(void)
 static void open_settings(void)
 {
     g.want_settings=false;
-    if(!os64_ui_settings_open(&g.settings,g.window,"Pulse Settings",10,settings_arrange,settings_apply,NULL))return;
+    sync_pin_state();
+    if(!os64_ui_settings_open(&g.settings,g.window,"Pulse Settings",11,settings_arrange,settings_apply,NULL))return;
     build_settings_widgets();
     os64_ui_settings_ready(&g.settings);
     if(os64_ui_dispatcher_add(&g.dispatcher,g.settings.window,&g.settings.ui,settings_event,settings_paint,NULL)!=OS64_UI_OK){
@@ -330,6 +393,7 @@ static void build_widgets(void)
         os64_ui_label(&g.titles[i],g.title[i]);os64_ui_add_child(&g.meters[i],&g.titles[i]);
         os64_ui_label(&g.details[i],g.detail[i]);os64_ui_add_child(&g.meters[i],&g.details[i]);
     }
+    os64_ui_label(&g.scale_label,g.scale_text);os64_ui_add_child(&g.meters[PULSE_NET],&g.scale_label);
 }
 
 int main(void)
@@ -339,7 +403,7 @@ int main(void)
     if(rc<0 && rc!=OS64_CONF_NO_FILE)os64_complain("pulse: configuration could not be fully read; using available settings");
     if(!pulse_sampler_init(&g.sampler)){os64_complain("pulse: cannot allocate samplers");return 1;}
     os64_ui_window_options_t options={.title="Pulse",.x=30,.y=40,.content_width=320,.content_height=420,
-        .flags=OS64_GUI_WINDOW_PINNED|OS64_GUI_WINDOW_START_UNFOCUSED|OS64_GUI_WINDOW_HAS_SETTINGS,
+        .flags=(g.config.stay_on_top?OS64_GUI_WINDOW_PINNED:0)|OS64_GUI_WINDOW_START_UNFOCUSED|OS64_GUI_WINDOW_HAS_SETTINGS,
         .remember={"pulse.conf",OS64_WINDOW_REMEMBER_POSITION_AND_SIZE}};
     if(os64_ui_window_open(&g.ui,&g.ctx,&g.window,&options)!=OS64_UI_OK){
         if(g.window>0)(void)os64_gui_window_destroy(g.window);
@@ -366,6 +430,7 @@ int main(void)
     if(g.timer<0){os64_complain("pulse: cannot start refresh timer");g.running=false;}
     while(g.running && !g.ui.quit){
         if(os64_ui_dispatcher_turn(&g.dispatcher,true)<0)break;
+        sync_pin_state();
         if(g.settings.window && g.settings.ui.quit)(void)close_settings();
         if(g.want_settings && os64_ui_dispatcher_can_create(&g.dispatcher))open_settings();
     }

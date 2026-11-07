@@ -718,6 +718,8 @@ typedef enum os64_shutdown_mode
 // Rename an owned window: arg0 = handle, arg1 = title string, arg2 = flags
 // (OS64_GUI_WINDOW_TITLE_UTF8 or 0). See os64/gui.h.
 #define SYSCALL_GUI_WINDOW_SET_TITLE 65
+// Change an owned ordinary window's stacking band: arg0 handle, arg1 0/1.
+#define SYSCALL_GUI_WINDOW_SET_PINNED 66
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

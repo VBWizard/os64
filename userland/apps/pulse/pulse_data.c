@@ -6,7 +6,7 @@
 const char *const pulse_unit_names[PULSE_UNITS] = {"B/s", "KiB/s", "MiB/s", "bit/s", "kbit/s", "Mbit/s"};
 void pulse_config_defaults(pulse_config_t *c)
 {
-    *c = (pulse_config_t){.show={true,true,true,true},.units=PULSE_MIB,.refresh_ms=1000,.font_size=24};
+    *c = (pulse_config_t){.show={true,true,true,true},.units=PULSE_MIB,.refresh_ms=1000,.font_size=24,.stay_on_top=true};
     os64_strcopy(c->mount,sizeof(c->mount),"/");
     os64_strcopy(c->interface,sizeof(c->interface),"all");
 }
@@ -18,6 +18,7 @@ bool pulse_config_line(const char *key,const char *value,void *user)
     const char *names[]={"cpu","ram","disk","net"};
     for(unsigned i=0;i<PULSE_METERS;++i)
         if(os64_streq_nocase(key,names[i])) { (void)os64_conf_get_bool(value,&c->show[i]); return true; }
+    if(os64_streq_nocase(key,"stay_on_top")){(void)os64_conf_get_bool(value,&c->stay_on_top);return true;}
     uint64_t n;
     if(os64_streq_nocase(key,"refresh_ms")) {
         if(os64_parse_u64(value,&n) && n>=250 && n<=10000) c->refresh_ms=(unsigned)n;
@@ -107,6 +108,25 @@ bool pulse_network_rate(const os64_monitor_io_snapshot_t *s,const char *name,uin
     return found;
 }
 
+uint64_t pulse_rate_scale(pulse_rate_scale_t *s,uint64_t second,uint64_t down,uint64_t up,bool valid)
+{
+    if(!s->initialized || second<s->last_second)*s=(pulse_rate_scale_t){.initialized=true};
+    s->last_second=second;
+    unsigned slot=(unsigned)(second%60);
+    if(s->seconds[slot]!=second){s->seconds[slot]=second;s->peaks[slot]=0;}
+    uint64_t rate=down>up?down:up;
+    if(valid && rate>s->peaks[slot])s->peaks[slot]=rate;
+    uint64_t peak=0;
+    for(unsigned i=0;i<60;++i)
+        if(s->seconds[i]<=second && second-s->seconds[i]<60 && s->peaks[i]>peak)peak=s->peaks[i];
+    uint64_t ceiling=1024;
+    while(ceiling<peak){
+        if(ceiling>UINT64_MAX/2)return UINT64_MAX;
+        ceiling*=2;
+    }
+    return ceiling;
+}
+
 bool pulse_sampler_init(pulse_sampler_t *s)
 {
     *s=(pulse_sampler_t){0};
@@ -132,9 +152,15 @@ void pulse_sample(pulse_sampler_t *sampler,const pulse_config_t *c,pulse_sample_
         out->ram_valid=sys->memory_valid;
         out->ram_used=sys->memory.used;out->ram_available=sys->memory.available;out->ram_total=sys->memory.usable;
     }
+    if(!os64_streq(sampler->scale_interface,c->interface)){
+        sampler->scale=(pulse_rate_scale_t){0};
+        os64_strcopy(sampler->scale_interface,sizeof(sampler->scale_interface),c->interface);
+    }
     const os64_monitor_io_snapshot_t *net=NULL;
     if(os64_monitor_io_sample(sampler->network,&net)==0)
         out->net_valid=pulse_network_rate(net,c->interface,&out->download,&out->upload);
+    uint64_t second=sys && sys->ticks.per_second?sys->ticks.ticks/sys->ticks.per_second:sampler->scale.last_second;
+    out->network_scale=pulse_rate_scale(&sampler->scale,second,out->download,out->upload,out->net_valid);
     if(c->show[PULSE_DISK]) {
         uint8_t *text=NULL;size_t len=0;
         if(os64_slurp("/sys/mounts",8192,&text,&len)==OS64_SLURP_OK) {
