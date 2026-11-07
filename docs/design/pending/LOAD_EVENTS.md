@@ -336,10 +336,19 @@ a left-out sheet fires `error`.
   grown and compacted after a drain that stopped part way, keeping its
   order. A sheet that lands while the page streams, before it has
   scripts, is told when they are made, at both places that make them.
-- **WPT:** `the-script-element/module`'s exclusion "element's load and
-  error events" lifted and its pages run; the classic
-  `the-script-element/` pages that test `load`/`error` added; whatever
-  `document-metadata/the-link-element` and `the-style-element` have for
-  `load`. Any line that passed before for the wrong reason is re-read.
-- **QEMU** navigate (a wire-facing yonder change), then **the P5**: the
-  social network's logged-out page before and after, counts only.
+- **WPT**, as run at the pin: `the-script-element/module` 14 new passes
+  (fetch-error-1 and -2, the error-type, choice-of-error and
+  instantiation-error pages that wait on a script's `error`, integrity),
+  `document-metadata/the-link-element` 6 (stylesheet-appropriate-time-to-
+  obtain's three, which wait on a link's `load`), `the-style-element` 8
+  (style_load_async, style-load-after-mutate, the media and type pages);
+  none lost. They are `[passing]`, not `[required]`: these events are not
+  behind the Modern Web switch, and `[required]` is what a `--modern-off`
+  run holds to fail. The module `load-error-events` pages run part way:
+  their scripts come from a `.py` handler, which the runner has not, so
+  each "200" script is a 404 and fires `error`, correctly. The classic
+  `the-script-element/` pages are not added: the directory holds `module/`,
+  whose expectation file it would overlap, and no expectation file nests
+  over another.
+- **The P5**: the social network's logged-out page before and after,
+  counts only (Chris's test of the branch).

@@ -5,5 +5,11 @@
 [required]
 [excluded]
 [passing]
+link-rel-attribute-tokenization.html	The rel attribute needs to handle ASCII whitespace correctly
+link-rel-attribute.html	Removing stylesheet from link rel attribute should remove the stylesheet for light DOM
 link-rellist.html	link.relList: non-string contains
 no-browsing-context.html	no load or error events
+stylesheet-appropriate-time-to-obtain.html	adding a href attribute after inserting the link into the document causes the stylesheet to load and apply
+stylesheet-appropriate-time-to-obtain.html	adding a href attribute before inserting the link into the document causes the stylesheet to load and apply
+stylesheet-appropriate-time-to-obtain.html	changing the href attribute after inserting the link into the document causes the stylesheet to load again
+stylesheet-media-change-no-fetch.html	stylesheet should not re-fetch when media changes. The media change should apply immediately
