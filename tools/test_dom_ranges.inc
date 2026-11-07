@@ -126,6 +126,13 @@ static void dom_range_content_cases(void)
         "assert(throwsName(()=>r.surroundContents(document.createElement('u')),'InvalidStateError'),"
         "'a partly held element refuses');"
         "r.selectNode(document.doctype);assert(throwsName(()=>r.cloneContents(),'HierarchyRequestError'),'a doctype');"
+        "var dt=document.implementation.createDocument(null,null,document.implementation.createDocumentType('x','',''));"
+        "var kept=document.body.appendChild(document.createElement('p'));var at=new Range();at.setStart(dt,0);"
+        "assert(throwsName(()=>at.insertNode(kept),'HierarchyRequestError')&&kept.parentNode===document.body,"
+        "'a refused node stays where it was');"
+        "var m=made('<a></a><b></b><i></i>'),first=m.firstChild;var end=document.createRange();end.setStart(m,3);"
+        "end.insertNode(first);assert(m.lastChild===first&&end.startContainer===m&&end.startOffset===2&&"
+        "end.endOffset===3,'a node moved within its parent: the offset counts it gone from its old place');"
         "var cm=document.createComment('c');document.body.appendChild(cm);r.setStart(cm,0);"
         "assert(throwsName(()=>r.insertNode(document.createElement('a')),'HierarchyRequestError'),'into a comment');",
         "range-content");

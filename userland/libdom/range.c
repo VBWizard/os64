@@ -515,15 +515,18 @@ static int insert_node(os64_dom_t *dom, JSContext *ctx, DRange *r, const os64_ht
         for (uint32_t i = 0; reference != NULL && i < b.start_offset; i++) reference = reference->next;
     }
     const os64_html_node_t *parent = reference == NULL ? start : reference->parent;
-    /* Pre-insert validity before anything moves: libhtml's verdict for
-     * `node` going under `parent` at the end. Only a document's rules hang
-     * on where among its children a node goes, so only there can the end's
-     * verdict differ from the reference child's: a doctype inserted before
-     * a document's element is refused here, where the standard lets it in.
-     * A Text start, the one case that splits first, has an element or
-     * fragment parent. */
-    int64_t status = os64_html_may_insert(dom->document, parent, node);
-    if (status < 0) return throw_status(ctx, status);
+    /* Pre-insert validity comes before anything moves. The insertion
+     * itself (d_tree_change, libhtml's insert) checks it against the
+     * reference child before it moves anything, and takes the node out of
+     * its old place as part of moving it — the standard's step 9 and its
+     * pre-insert at once, so a refused node stays where it was. A Text
+     * start splits first, so it is asked before the split: libhtml's verdict
+     * for the end of `parent`, which is the reference child's for the
+     * element or fragment a Text has for a parent (only a document's rules
+     * hang on where among its children a node goes). */
+    int64_t status = OS64_HTML_OK;
+    if (start->kind == OS64_HTML_TEXT && (status = os64_html_may_insert(dom->document, parent, node)) < 0)
+        return throw_status(ctx, status);
     os64_html_hold(dom->document, node);
     os64_html_hold(dom->document, parent);
     int failed = 0;
@@ -539,10 +542,15 @@ static int insert_node(os64_dom_t *dom, JSContext *ctx, DRange *r, const os64_ht
     }
     if (!failed && node == reference) reference = reference->next;
     if (reference != NULL) os64_html_hold(dom->document, reference);
-    if (!failed && node->parent != NULL) failed = d_tree_change(dom, ctx, D_REMOVE, node->parent, node, NULL) < 0;
     uint32_t new_offset = 0;
     if (!failed) {
+        /* The offset after the node, counted as if it had already left its
+         * old place (step 10 follows step 9's removal): one less when it
+         * stood before the reference among `parent`'s own children. */
         new_offset = reference == NULL ? os64_html_node_length(parent) : index_of(reference);
+        if (node->parent == parent && new_offset > 0 &&
+            (reference == NULL || d_tree_precedes(node, reference)))
+            new_offset--;
         if (node->kind == OS64_HTML_FRAGMENT) new_offset += os64_html_node_length(node);
         else new_offset++;
         failed = d_tree_change(dom, ctx, D_INSERT, parent, node, reference) < 0;
@@ -998,9 +1006,15 @@ static int define_interface(JSContext *ctx, JSValueConst global, const char *nam
 {
     JSValue interface = d_interface_new(ctx, name, length, constructor, prototype, parent);
     if (JS_IsException(interface)) return -1;
-    if (out != NULL) *out = JS_DupValue(ctx, interface);
-    return JS_DefinePropertyValueStr(ctx, global, name, interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0
-        ? -1 : 0;
+    /* The define takes `interface`; the caller's copy is handed over only
+     * once it is on the global, so a failed define leaves nothing to free. */
+    JSValue copy = out != NULL ? JS_DupValue(ctx, interface) : JS_UNDEFINED;
+    if (JS_DefinePropertyValueStr(ctx, global, name, interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(ctx, copy);
+        return -1;
+    }
+    if (out != NULL) *out = copy;
+    return 0;
 }
 
 int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
