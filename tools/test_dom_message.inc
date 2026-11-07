@@ -845,6 +845,10 @@ static void dom_channel_cases(void)
         "let e1=null,e2=null;try{d.port1.postMessage(1,[d.port1])}catch(e){e1=e.name}"
         "try{d.port1.postMessage(1,{transfer:[d.port2]})}catch(e){e2=e.name}"
         "assert(e1==='DataCloneError'&&e2==='DataCloneError','a port in a transfer list');"
+        "const g=new MessageChannel();g.port1.postMessage({get x(){g.port1.close();return 1}});"
+        "const h=(new MessageChannel()).port1;h.postMessage({get x(){h.close();return 1}});"
+        "const b=new ArrayBuffer(4);const s=new MessageChannel();s.port2.postMessage(b,new Set([b]));"
+        "assert(b.byteLength===0,'a Set is a transfer sequence');"
         "d.port1.close();d.port2.postMessage(3);d.port1.postMessage(4);",
         "channel: close");
     /* The window's own 'w' is still queued; nothing more after it. */

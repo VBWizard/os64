@@ -405,11 +405,32 @@ static JSValue port_new(os64_dom_t *dom, JSContext *ctx)
 
 enum { P_POST, P_START, P_CLOSE };
 
+static bool same_object(JSValueConst a, JSValueConst b)
+{
+    return JS_IsObject(a) && JS_IsObject(b) && JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b);
+}
+
+/* WebIDL's overload resolution between a sequence and a dictionary: an
+ * object with an @@iterator is the sequence (an array, a Set, any
+ * iterable). 1, 0, or -1 with the exception pending. */
+static int is_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    if (!JS_IsObject(value) || dom->iterator_symbol == NULL) return 0;
+    JSAtom key = JS_ValueToAtom(ctx, dom->iterator_symbol->value);
+    if (key == JS_ATOM_NULL) return -1;
+    JSValue method = JS_GetProperty(ctx, value, key);
+    JS_FreeAtom(ctx, key);
+    if (JS_IsException(method)) return -1;
+    int sequence = !JS_IsUndefined(method) && !JS_IsNull(method);
+    JS_FreeValue(ctx, method);
+    return sequence;
+}
+
 /* postMessage(message, transfer) and postMessage(message, {transfer})
- * (HTML's message port post message steps): the overloads told apart by an
- * array (a sequence; another iterable is read as the dictionary), the
- * message serialized whatever becomes of it, then sent to the entangled
- * port, or nowhere when there is none. */
+ * (HTML's message port post message steps): the overloads told apart as
+ * WebIDL tells them (is_sequence), the message serialized whatever becomes
+ * of it, then sent to the port still entangled once it is written, or
+ * nowhere when there is none. */
 static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                            JSValue *data)
 {
@@ -428,11 +449,12 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     if (argc < 1) return JS_ThrowTypeError(ctx, "postMessage needs a message");
     JSValue *transfer = NULL;
     size_t count = 0;
-    int converted;
-    if (argc > 1 && JS_IsArray(ctx, argv[1]) == 1) {
+    int sequence = argc > 1 ? is_sequence(dom, ctx, argv[1]) : 0;
+    int converted = sequence < 0 ? -1 : 0;
+    if (sequence > 0) {
         converted = d_sequence(dom, ctx, argv[1], D_SEQUENCE_MAX, &transfer, &count);
         if (converted == 0) converted = d_clone_objects(ctx, transfer, count);
-    } else {
+    } else if (converted == 0) {
         converted = d_clone_transfer(dom, ctx, argc, argv, 1, &transfer, &count);
     }
     for (size_t i = 0; converted == 0 && i < count; i++)
@@ -441,10 +463,14 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
                                                                      : "A MessagePort is not transferred here");
             converted = -1;
         }
-    /* The node first, so a quota refusal detaches nothing; then the message
-     * written and the transfer list detached, which happens even with no
-     * port to receive it, as the standard serializes it all the same. */
-    DPort *target = port_of(p->partner);
+    /* The receiver held while the message is written: serializing runs the
+     * page's getters, which may close either port, and closing drops the
+     * last other hold on it. The node first, so a quota refusal detaches
+     * nothing; then the message written and the transfer list detached,
+     * which happens even with no port to receive it, as the standard
+     * serializes it all the same; then the pair asked again. */
+    JSValue receiver = JS_DupValue(ctx, p->partner);
+    DPort *target = port_of(receiver);
     bool live = target != NULL && !target->closed;
     DMessage *message = converted == 0 && live ? d_alloc(dom, sizeof(*message)) : NULL;
     if (converted == 0 && live && message == NULL) {
@@ -454,20 +480,20 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     DClone *clone = converted == 0 ? d_clone_write(dom, ctx, argv[0], transfer, count) : NULL;
     if (clone != NULL) d_clone_detach(ctx, transfer, count);
     d_sequence_free(ctx, transfer, count);
-    if (clone == NULL) {
+    live = live && !p->closed && !target->closed && same_object(p->partner, receiver);
+    if (clone == NULL || !live) {
         d_free(dom, message);
-        return JS_EXCEPTION;
-    }
-    if (!live) {
-        d_clone_free(dom->engine, clone);
-        return JS_UNDEFINED;
+        if (clone != NULL) d_clone_free(dom->engine, clone);
+        JS_FreeValue(ctx, receiver);
+        return clone == NULL ? JS_EXCEPTION : JS_UNDEFINED;
     }
     *message = (DMessage){.clone = clone, .source = JS_UNDEFINED, .port = JS_UNDEFINED, .target_kind = T_ANY,
                           .posted = now_ms(dom)};
     if (target->started) {
-        message->port = JS_DupValue(ctx, p->partner);
+        message->port = receiver;
         message_enqueue(dom, message);
     } else {
+        JS_FreeValue(ctx, receiver);
         if (target->pending_last != NULL) target->pending_last->next = message;
         else target->pending = message;
         target->pending_last = message;
