@@ -2,8 +2,9 @@
 
 Pulse is a small, pinned GUI system monitor. Launch `pulse` from a shell.
 It opens without taking keyboard focus, remembers position and size, and
-follows the Interface font and toolkit theme. The first layout is a vertical
-panel with text and usage bars.
+uses its own 24-pixel DejaVu Sans meter text. The first layout is a vertical
+panel with text and usage bars. The panel follows toolkit colours, independently
+of the desktop Interface font; the Settings dialog uses the normal Interface font.
 
 ## Controls
 
@@ -11,7 +12,11 @@ Open Settings with the panel button or the titlebar Settings action. Each
 meter can be shown independently; hiding all four leaves Settings accessible.
 Apply affects this window. Save as default also updates `pulse.conf` through
 the shared configuration writer, preserving unrelated keys and saved geometry.
-Resize the panel after hiding meters if a smaller window is preferred.
+Resize the panel after hiding meters or reducing text size if a smaller window
+is preferred. Text size accepts 16–48 pixels; larger text grows the minimum
+window envelope to fit. A font-load or native-size failure refuses Apply and
+keeps the previous settings and font. The installed face is
+`/etc/fonts/DejaVuSans.ttf`.
 
 | Meter | Display | Default |
 | --- | --- | --- |
@@ -33,7 +38,7 @@ not measured. Settings inherits the parent's pinned band so Pulse cannot
 cover it merely by occupying a higher window band.
 
 Configuration keys: `cpu`, `ram`, `disk`, `net` (on/off), `network_units`,
-`mount`, `interface`, `refresh_ms`. Invalid startup values preserve defaults.
+`mount`, `interface`, `refresh_ms`, `font_size`. Invalid startup values preserve defaults.
 
 ## Structure
 
@@ -63,14 +68,15 @@ meters are hidden. The selected disk is sampled only while its meter is shown.
   `/proc` independence and switching back to full sampling.
 - `python3 tools/test_pulse_ui_host.py`: production widgets with real fonts,
   all visibility combinations, Apply/Save validation and save failure,
-  dynamic captions, font adoption/rollback and Settings creation flags.
+  dynamic captions, independent 24–48 pixel text, geometry growth, font-load
+  and resize refusal, appearance-event independence and Settings creation flags.
   Native window I/O is stubbed. `--build-only` supports running the resulting
   binary outside a sandbox while retaining leak detection. The runner writes
   a host-rendered `pulse.ppm` preview.
 - Native `pulse` target built with the project's warning-as-error toolchain.
 
-P5 acceptance remains open: compare CPU/RAM with `htop` and Disk with `df`;
-check network rates during a transfer and at idle; exercise the unit dropdown,
-Apply/Save/restart, show/hide/resize, topmost behavior and closing while the
-Settings popup is open. Host tests do not establish native window stacking or
-timer behavior on hardware.
+The first version passed a hardware tryout: CPU utilization, network rates and
+root-partition space were confirmed. The independent text-size revision still
+needs hardware acceptance. Remaining checks include RAM, Apply/Save/restart,
+show/hide/resize, topmost behavior and closing with the Settings popup open.
+Host tests do not establish native window stacking or timer behavior.

@@ -7,7 +7,7 @@ enum { PULSE_CPU, PULSE_RAM, PULSE_DISK, PULSE_NET, PULSE_METERS };
 enum { PULSE_BYTES, PULSE_KIB, PULSE_MIB, PULSE_BITS, PULSE_KBIT, PULSE_MBIT, PULSE_UNITS };
 typedef struct {
     bool show[PULSE_METERS];
-    unsigned units, refresh_ms;
+    unsigned units, refresh_ms, font_size;
     char mount[256], interface[64];
 } pulse_config_t;
 // Measurements carry no widget geometry, colour or display strings. A bar,

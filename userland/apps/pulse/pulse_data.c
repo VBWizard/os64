@@ -6,7 +6,7 @@
 const char *const pulse_unit_names[PULSE_UNITS] = {"B/s", "KiB/s", "MiB/s", "bit/s", "kbit/s", "Mbit/s"};
 void pulse_config_defaults(pulse_config_t *c)
 {
-    *c = (pulse_config_t){.show={true,true,true,true},.units=PULSE_MIB,.refresh_ms=1000};
+    *c = (pulse_config_t){.show={true,true,true,true},.units=PULSE_MIB,.refresh_ms=1000,.font_size=24};
     os64_strcopy(c->mount,sizeof(c->mount),"/");
     os64_strcopy(c->interface,sizeof(c->interface),"all");
 }
@@ -21,6 +21,8 @@ bool pulse_config_line(const char *key,const char *value,void *user)
     uint64_t n;
     if(os64_streq_nocase(key,"refresh_ms")) {
         if(os64_parse_u64(value,&n) && n>=250 && n<=10000) c->refresh_ms=(unsigned)n;
+    } else if(os64_streq_nocase(key,"font_size")) {
+        if(os64_parse_u64(value,&n) && n>=16 && n<=48) c->font_size=(unsigned)n;
     } else if(os64_streq_nocase(key,"network_units")) {
         for(unsigned i=0;i<PULSE_UNITS;++i) if(os64_streq(value,pulse_unit_names[i])) c->units=i;
     } else if(os64_streq_nocase(key,"mount")) {

@@ -6,6 +6,7 @@
 #include "os64/ui_menu.h"
 #include "os64/conf.h"
 #include "os64/thread.h"
+#include "os64/slurp.h"
 
 static struct {
     os64_ui_t ui;
@@ -17,6 +18,8 @@ static struct {
     os64_ui_class_t meter_class;
     char title[PULSE_METERS][96], detail[PULSE_METERS][96];
     pulse_config_t config;
+    const pulse_config_t *font_candidate;
+    uint32_t font_min_w, font_min_h;
     pulse_sample_t sample;
     pulse_sampler_t sampler;
     bool running, want_settings;
@@ -25,9 +28,9 @@ static struct {
     os64_ui_menu_session_t *settings_menu;
     os64_ui_checkbox_t show[PULSE_METERS];
     os64_ui_dropdown_t units;
-    os64_ui_widget_t labels[7];
-    os64_ui_textfield_t mount, interface, refresh;
-    char mount_text[256], interface_text[64], refresh_text[16];
+    os64_ui_widget_t labels[8];
+    os64_ui_textfield_t mount, interface, refresh, font_size;
+    char mount_text[256], interface_text[64], refresh_text[16], font_size_text[16];
 } g;
 static const char *const names[PULSE_METERS]={"CPU","RAM","Disk","Network"};
 
@@ -43,15 +46,16 @@ static int32_t needed_height(os64_ui_t *ui,const pulse_config_t *c)
 }
 static bool arrange(os64_ui_t *ui,bool stage)
 {
+    const pulse_config_t *c=g.font_candidate?g.font_candidate:&g.config;
     os64_gui_rect_t b=os64_ui_widget_planned_bounds(&g.root);
     int32_t pad=ui->theme.pad,row=os64_ui_font_row_height(ui,OS64_FONT_ROLE_UI);
     int32_t bh=os64_ui_control_min_height(ui),width=b.w-2*pad;
-    if(width<1 || b.h<needed_height(ui,&g.config)) return false;
+    if(width<1 || b.h<needed_height(ui,c)) return false;
     int32_t caption;
     if(os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,"Settings",8,&caption) || caption+2*pad>width) return false;
     place(&g.settings_button,(os64_gui_rect_t){pad,pad,width,bh},stage);
     int32_t y=2*pad+bh,h=2*row+2*pad+8;
-    for(unsigned i=0;i<PULSE_METERS;++i) if(g.config.show[i]) {
+    for(unsigned i=0;i<PULSE_METERS;++i) if(c->show[i]) {
         place(&g.meters[i],(os64_gui_rect_t){pad,y,width,h},stage);
         place(&g.titles[i],(os64_gui_rect_t){pad,y,width,row},stage);
         place(&g.details[i],(os64_gui_rect_t){pad,y+row,width,row},stage);
@@ -64,15 +68,63 @@ static void layout(os64_ui_t *ui)
     g.root.bounds=(os64_gui_rect_t){0,0,(int32_t)g.ctx.surf.width,(int32_t)g.ctx.surf.height};
     (void)arrange(ui,false);
 }
+// The font transaction stages geometry before any native resize. Its final
+// barrier can refuse a screen-sized envelope without changing the active font.
 static os64_font_status_t plan_font(os64_ui_t *ui,void *user,void **out)
-{ (void)user;*out=NULL;return arrange(ui,true)?OS64_FONT_OK:OS64_FONT_LIMIT; }
+{
+    (void)user;*out=NULL;
+    const pulse_config_t *c=g.font_candidate?g.font_candidate:&g.config;
+    const char *captions[]={"CPU: waiting for a sample","RAM: 999.9G used",
+        "Disk: 999.9G used","Network: waiting for a sample"};
+    int32_t width=0,measured;
+    if(os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,"Settings",8,&width))return OS64_FONT_LIMIT;
+    for(unsigned i=0;i<PULSE_METERS;++i)if(c->show[i]){
+        const char *rows[]={captions[i],g.title[i],g.detail[i]};
+        for(unsigned j=0;j<3;++j){
+            if(os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,rows[j],os64_strlen(rows[j]),&measured))
+                return OS64_FONT_LIMIT;
+            if(measured>width)width=measured;
+        }
+    }
+    width+=4*ui->theme.pad;
+    g.font_min_w=(uint32_t)(width<280?280:width);
+    g.font_min_h=(uint32_t)needed_height(ui,c);
+    os64_ui_widget_stage_bounds(&g.root,(os64_gui_rect_t){0,0,
+        (int32_t)(g.ctx.surf.width>g.font_min_w?g.ctx.surf.width:g.font_min_w),
+        (int32_t)(g.ctx.surf.height>g.font_min_h?g.ctx.surf.height:g.font_min_h)});
+    return arrange(ui,true)?OS64_FONT_OK:OS64_FONT_LIMIT;
+}
 static void discard_font(os64_ui_t *ui,void *user,void *plan)
 { (void)ui;(void)user;(void)plan; }
+static os64_font_status_t resize_for_font(void *user,void *plan)
+{
+    (void)user;(void)plan;
+    return os64_gui_window_set_min_size(g.window,g.font_min_w,g.font_min_h)<0?OS64_FONT_LIMIT:OS64_FONT_OK;
+}
 static void commit_font(os64_ui_t *ui,void *user,void *plan)
 {
     (void)user;(void)plan;
-    // Keep later manual resizes within the newly adopted font's envelope.
-    (void)os64_gui_window_set_min_size(g.window,280,(uint32_t)needed_height(ui,&g.config));
+    // The barrier already established the envelope; acquire its current view.
+    if(os64_draw_ctx_refresh(&g.ctx)<0)ui->quit=true;
+}
+static bool apply_font(const pulse_config_t *config)
+{
+    uint8_t *bytes=NULL;size_t length=0;
+    if(os64_slurp("/etc/fonts/DejaVuSans.ttf",4*1024*1024,&bytes,&length)!=OS64_SLURP_OK)return false;
+    os64_font_role_spec_t specs[OS64_FONT_ROLE_COUNT]={0};
+    specs[OS64_FONT_ROLE_UI].pixel_height=config->font_size;
+    specs[OS64_FONT_ROLE_UI].primary=(os64_font_source_t){OS64_FONT_SOURCE_OUTLINE,bytes,length};
+    os64_font_set_t *set=NULL;
+    os64_font_status_t status=os64_font_set_prepare(os64_ui_font_context(&g.ui),specs,&set);
+    os64_free(bytes);
+    if(status)return false;
+    os64_font_consumer_t consumer;os64_ui_font_consumer(&g.ui,&consumer);
+    consumer.barrier=resize_for_font;
+    g.font_candidate=config;
+    status=os64_font_adopt(set,&consumer,1,NULL);
+    g.font_candidate=NULL;
+    os64_font_set_release(set);
+    return status==OS64_FONT_OK;
 }
 
 static void meter_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_theme_t *t)
@@ -166,22 +218,26 @@ static bool settings_arrange(os64_ui_settings_t *d,os64_gui_rect_t b,int32_t row
     if(half<100)return false;
     for(unsigned i=0;i<PULSE_METERS;++i)
         place(&g.show[i].w,(os64_gui_rect_t){b.x+(int32_t)(i%2)*(half+gap),b.y+(int32_t)(i/2)*row,half,row},stage);
-    os64_ui_widget_t *fields[]={&g.units.w,&g.mount.w,&g.interface.w,&g.refresh.w};
-    for(unsigned i=0;i<4;++i){
+    os64_ui_widget_t *fields[]={&g.units.w,&g.mount.w,&g.interface.w,&g.refresh.w,&g.font_size.w};
+    for(unsigned i=0;i<5;++i){
         place(&g.labels[i],(os64_gui_rect_t){b.x,b.y+(int32_t)(i+2)*row,half,row},stage);
         place(fields[i],(os64_gui_rect_t){b.x+half+gap,b.y+(int32_t)(i+2)*row,half,row},stage);
     }
-    for(unsigned i=4;i<7;++i)
+    for(unsigned i=5;i<8;++i)
         place(&g.labels[i],(os64_gui_rect_t){b.x,b.y+(int32_t)(i+2)*row,b.w,row},stage);
     return true;
 }
 static void settings_apply(os64_ui_settings_t *d,bool save)
 {
     pulse_config_t c=g.config;
-    uint64_t interval;
+    uint64_t interval,size;
     if(!os64_parse_u64(g.refresh.buf,&interval) || interval<250 || interval>10000){
         os64_ui_settings_report(d,"Refresh must be 250 to 10000 milliseconds.");return;
     }
+    if(!os64_parse_u64(g.font_size.buf,&size) || size<16 || size>48){
+        os64_ui_settings_report(d,"Text size must be 16 to 48 pixels.");return;
+    }
+    c.font_size=(unsigned)size;
     if(g.mount.buf[0]!='/' || !g.interface.buf[0] || g.units.selected<0 || g.units.selected>=PULSE_UNITS){
         os64_ui_settings_report(d,"Choose units, an absolute mount path, and an interface or all.");return;
     }
@@ -189,19 +245,21 @@ static void settings_apply(os64_ui_settings_t *d,bool save)
     os64_strcopy(c.mount,sizeof(c.mount),g.mount.buf);
     os64_strcopy(c.interface,sizeof(c.interface),g.interface.buf);
     for(unsigned i=0;i<PULSE_METERS;++i)c.show[i]=g.show[i].checked;
-    if(os64_gui_window_set_min_size(g.window,280,(uint32_t)needed_height(&g.ui,&c))<0 ||
-       os64_draw_ctx_refresh(&g.ctx)<0){os64_ui_settings_report(d,"The window could not fit those meters.");return;}
+    if(!apply_font(&c)){
+        os64_ui_settings_report(d,"Could not load the font or fit that text size; settings unchanged.");return;
+    }
     g.config=c;
     __atomic_store_n(&g.refresh_ms,c.refresh_ms,__ATOMIC_RELAXED);
     for(unsigned i=0;i<PULSE_METERS;++i) os64_ui_set_hidden(&g.ui,&g.meters[i],!c.show[i]);
     layout(&g.ui);sample_now();os64_ui_mark_dirty(&g.ui,&g.root);
     if(save){
-        char refresh[16];os64_snprintf(refresh,sizeof(refresh),"%u",c.refresh_ms);
+        char refresh[16],font_size[16];os64_snprintf(refresh,sizeof(refresh),"%u",c.refresh_ms);
+        os64_snprintf(font_size,sizeof(font_size),"%u",c.font_size);
         os64_conf_pair_t pairs[]={
             {"cpu",c.show[0]?"on":"off"},{"ram",c.show[1]?"on":"off"},
             {"disk",c.show[2]?"on":"off"},{"net",c.show[3]?"on":"off"},
             {"network_units",pulse_unit_names[c.units]},{"mount",c.mount},
-            {"interface",c.interface},{"refresh_ms",refresh}};
+            {"interface",c.interface},{"refresh_ms",refresh},{"font_size",font_size}};
         if(os64_conf_write("pulse.conf",pairs,sizeof(pairs)/sizeof(*pairs))){
             os64_ui_settings_report(d,"Applied here, but settings could not be saved.");return;
         }
@@ -225,27 +283,31 @@ static void build_settings_widgets(void)
         os64_ui_checkbox(&g.show[i],names[i],g.config.show[i],NULL,NULL);
         os64_ui_add_child(&g.settings.body,&g.show[i].w);
     }
-    const char *labels[]={"Network units","Disk mount","Network interface","Refresh (milliseconds)",
+    const char *labels[]={"Network units","Disk mount","Network interface","Refresh (milliseconds)","Text size (pixels)",
         "Use all to combine network interfaces.","A mount such as / selects its filesystem space.",
         "Hide meters here; resize the panel to your liking."};
-    for(unsigned i=0;i<7;++i){os64_ui_label(&g.labels[i],labels[i]);os64_ui_add_child(&g.settings.body,&g.labels[i]);}
+    for(unsigned i=0;i<8;++i){os64_ui_label(&g.labels[i],labels[i]);os64_ui_add_child(&g.settings.body,&g.labels[i]);}
     os64_ui_dropdown(&g.units,PULSE_UNITS,unit_label,NULL,NULL);
     os64_ui_add_child(&g.settings.body,&g.units.w);
     os64_ui_dropdown_set(&g.settings.ui,&g.units,PULSE_UNITS,(int)g.config.units);
     os64_ui_textfield(&g.mount,g.mount_text,sizeof(g.mount_text),NULL,NULL,NULL);
     os64_ui_textfield(&g.interface,g.interface_text,sizeof(g.interface_text),NULL,NULL,NULL);
     os64_ui_textfield(&g.refresh,g.refresh_text,sizeof(g.refresh_text),NULL,NULL,NULL);
+    os64_ui_textfield(&g.font_size,g.font_size_text,sizeof(g.font_size_text),NULL,NULL,NULL);
+    os64_ui_add_child(&g.settings.body,&g.font_size.w);
     os64_ui_add_child(&g.settings.body,&g.mount.w);os64_ui_add_child(&g.settings.body,&g.interface.w);
     os64_ui_add_child(&g.settings.body,&g.refresh.w);
     os64_ui_textfield_set(&g.settings.ui,&g.mount,g.config.mount);
     os64_ui_textfield_set(&g.settings.ui,&g.interface,g.config.interface);
     char value[16];os64_snprintf(value,sizeof(value),"%u",g.config.refresh_ms);
     os64_ui_textfield_set(&g.settings.ui,&g.refresh,value);
+    os64_snprintf(value,sizeof(value),"%u",g.config.font_size);
+    os64_ui_textfield_set(&g.settings.ui,&g.font_size,value);
 }
 static void open_settings(void)
 {
     g.want_settings=false;
-    if(!os64_ui_settings_open(&g.settings,g.window,"Pulse Settings",9,settings_arrange,settings_apply,NULL))return;
+    if(!os64_ui_settings_open(&g.settings,g.window,"Pulse Settings",10,settings_arrange,settings_apply,NULL))return;
     build_settings_widgets();
     os64_ui_settings_ready(&g.settings);
     if(os64_ui_dispatcher_add(&g.dispatcher,g.settings.window,&g.settings.ui,settings_event,settings_paint,NULL)!=OS64_UI_OK){
@@ -288,7 +350,12 @@ int main(void)
     (void)os64_ui_font_planner(&g.ui,plan_font,commit_font,discard_font,NULL);
     (void)os64_gui_window_set_min_size(g.window,280,(uint32_t)needed_height(&g.ui,&g.config));
     (void)os64_draw_ctx_refresh(&g.ctx);layout(&g.ui);
-    (void)os64_ui_font_follow(&g.ui);
+    // The gadget has its own face/size; session colours can still follow.
+    if(!apply_font(&g.config)){
+        os64_complain("pulse: cannot load or fit the gadget font");
+        os64_ui_font_release(&g.ui);os64_gui_window_destroy(g.window);pulse_sampler_destroy(&g.sampler);return 1;
+    }
+    layout(&g.ui);
     os64_ui_dispatcher_init(&g.dispatcher,NULL);
     if(os64_ui_dispatcher_add(&g.dispatcher,g.window,&g.ui,window_event,window_paint,NULL)!=OS64_UI_OK){
         os64_ui_font_release(&g.ui);os64_gui_window_destroy(g.window);pulse_sampler_destroy(&g.sampler);return 1;

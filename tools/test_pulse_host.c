@@ -69,6 +69,12 @@ static void formatting(void)
 static void sampling(void)
 {
     pulse_config_t c;pulse_config_defaults(&c);
+    assert(c.font_size==24);
+    pulse_config_line("font_size","32",&c);assert(c.font_size==32);
+    pulse_config_line("font_size","0",&c);assert(c.font_size==32);
+    pulse_config_line("font_size","49",&c);assert(c.font_size==32);
+    pulse_config_line("font_size","16",&c);assert(c.font_size==16);
+    pulse_config_line("font_size","48",&c);assert(c.font_size==48);
     assert(c.refresh_ms==1000 && c.units==PULSE_MIB && c.show[PULSE_NET]);
     pulse_config_line("refresh_ms","0",&c);assert(c.refresh_ms==1000);
     pulse_config_line("refresh_ms","250",&c);assert(c.refresh_ms==250);
