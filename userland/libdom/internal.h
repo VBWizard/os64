@@ -97,6 +97,8 @@ _Static_assert(D_PROTO_COUNT <= 64, "a set of prototype kinds is one uint64_t");
 #define D_KIND(kind) ((uint64_t)1 << (kind))
 /* The wrapper's base family; SVG graphics refine its prototype separately. */
 int d_node_kind(const os64_html_node_t *node);
+/* Its nodeType (node.c): libhtml's kind, a CDATA section's 4. */
+int d_node_type(const os64_html_node_t *node);
 /* A content attribute reflected as an IDL attribute (HTML § 2.6.1), by
  * one of HTML's rules: a string (null as "null", or as "" for WebIDL's
  * LegacyNullToEmptyString); a URL, read resolved, and base's href, read
@@ -243,7 +245,8 @@ struct DValue {
     void (*listeners_changed)(JSRuntime *rt, DValue *entry);
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
- * HTML documents; createDocument makes an XML document, whose createElement
+ * HTML documents; createDocument and `new Document()` make XML documents
+ * (the latter as if made for no namespace), whose createElement
  * makes HTML elements when it was made for the HTML namespace
  * (application/xhtml+xml) and elements in no namespace otherwise. An SVG
  * one is an XML document made for the SVG namespace, which differs from
@@ -255,6 +258,9 @@ struct DQuery {
     DQuery *next;
     DValue *entry;
     char *name, *folded, *named;
+    /* The root's node document was an HTML document when the query was
+     * made: an HTML element's name is then matched against `folded`. */
+    bool html_document;
     unsigned kind;
     const os64_html_node_t **nodes;
     size_t count;
@@ -356,6 +362,9 @@ struct os64_dom {
      * root's DocumentFragment kind and a slot's HTMLElement kind (shadow.c);
      * NULL with the surface off. */
     DValue *shadow_root_proto, *slot_proto;
+    /* CDATASection's and ProcessingInstruction's prototypes, refining a
+     * CDATA section's Text kind and a PI's (data_nodes.c). */
+    DValue *cdata_proto, *pi_proto;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
     /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
@@ -737,13 +746,21 @@ bool d_svg_geometry_node(const os64_html_node_t *);
 JSValueConst d_svg_prototype(os64_dom_t *, const os64_html_node_t *);
 /* Shadow trees' surface (shadow.c, SHADOW_DOM.md § 7): the two prototypes,
  * made at creation when the surface is on (NULL otherwise); the prototype
- * a node's wrapper takes, refined for a shadow root and a slot before
- * SVG's; the members and interfaces, which
+ * a node's wrapper takes, refined for a CDATA section and a processing
+ * instruction (data_nodes.c), then a shadow root and a slot, before SVG's;
+ * the members and interfaces, which
  * d_modern_install puts on with options.shadow_trees; the names it puts on
  * window, by index, NULL past the last. */
 int d_shadow_prototypes(os64_dom_t *dom, JSContext *ctx);
 JSValueConst d_node_prototype(os64_dom_t *dom, const os64_html_node_t *n);
 int d_shadow_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* CDATASection and ProcessingInstruction (data_nodes.c): their prototypes,
+ * made with the binding's own; and the Modern Web row that names them and
+ * puts createCDATASection and createProcessingInstruction on Document. */
+int d_data_prototypes(os64_dom_t *dom, JSContext *ctx);
+int d_data_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* new Document() (implementation.c): Document's constructor. */
+JSValue d_document_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv);
 const char *d_shadow_name(size_t index);
 /* Whether a custom element definition lists "shadow" in disabledFeatures
  * (custom.c). */
@@ -1541,6 +1558,9 @@ const char *d_ranges_name(size_t index);
  * take (insertAdjacentHTML, createContextualFragment; mixin.c). NULL with
  * `*status` saying why. */
 const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status);
+/* The context a fragment parse takes for `element` (mixin.c): the element,
+ * or d_body_context's body for one in no namespace or another one. */
+const os64_html_node_t *d_fragment_context(os64_dom_t *dom, const os64_html_node_t *element, int64_t *status);
 void d_ranges_sweep(os64_dom_t *dom);
 void d_ranges_free(os64_dom_t *dom);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its

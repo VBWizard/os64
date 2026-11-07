@@ -633,11 +633,10 @@ static int string_tag(JSContext *ctx, JSValueConst prototype, JSAtom key, const 
  * (`Object.getPrototypeOf(HTMLElement) === Element`), as its prototype
  * inherits its parent prototype (d_proto_parent); Node's is
  * Function.prototype. An interface whose standard gives it a constructor
- * the binding can honour constructs (DocumentFragment, Text, Comment, and
+ * the binding can honour constructs (DocumentFragment, Text, Comment,
+ * Document, which makes an XML-kind document, implementation.c, and
  * HTMLElement for a custom element's definition, custom.c); the rest are
- * Illegal constructors, as WebIDL makes
- * an interface without one (`new Document()`, which makes an XML document,
- * is one of these here). Node's constants come with Node, and each
+ * Illegal constructors, as WebIDL makes an interface without one. Node's constants come with Node, and each
  * prototype's Symbol.toStringTag with its interface. NamedNodeMap, whose
  * objects are no nodes, comes after them, over attr.c's prototype. The
  * Modern Web table's row (modern.c), so all of it exists only while
@@ -698,6 +697,8 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
             ? JS_NewCFunction2(ctx, fragment_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor, 0)
             : proto == D_PROTO_HTML_ELEMENT
             ? JS_NewCFunction2(ctx, d_html_element_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor, 0)
+            : proto == D_PROTO_DOCUMENT
+            ? JS_NewCFunction2(ctx, d_document_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor, 0)
             : proto == D_PROTO_TEXT || proto == D_PROTO_COMMENT
             ? JS_NewCFunctionMagic(ctx, character_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor_magic,
                                    (int)proto)

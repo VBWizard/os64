@@ -46,6 +46,10 @@ int d_shadow_prototypes(os64_dom_t *dom, JSContext *ctx)
 
 JSValueConst d_node_prototype(os64_dom_t *dom, const os64_html_node_t *n)
 {
+    /* CDATASection's and ProcessingInstruction's refine the same way
+     * (data_nodes.c). */
+    if (dom->cdata_proto != NULL && n->kind == OS64_HTML_TEXT && n->cdata) return dom->cdata_proto->value;
+    if (dom->pi_proto != NULL && n->kind == OS64_HTML_PI) return dom->pi_proto->value;
     if (dom->shadow_root_proto != NULL && os64_html_shadow_host(n) != NULL) return dom->shadow_root_proto->value;
     if (dom->slot_proto != NULL && is_slot(n)) return dom->slot_proto->value;
     return d_svg_prototype(dom, n);

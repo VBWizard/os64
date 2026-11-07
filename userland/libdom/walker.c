@@ -60,9 +60,6 @@ struct DWalks {
 
 static JSClassID walker_slot, iterator_slot;
 
-/* Each node kind's nodeType, whose bit (nodeType - 1) whatToShow tests. */
-static const uint8_t kNodeTypes[] = {9, 11, 10, 1, 3, 8, 7};
-_Static_assert(sizeof(kNodeTypes) == OS64_HTML_PI + 1, "a nodeType for each node kind");
 
 /* `*held` let go of and `next` held instead: the node a traversal stands
  * on, which stays valid however the filter changes the tree. */
@@ -110,7 +107,8 @@ static int filter_node(os64_dom_t *dom, JSContext *ctx, DWalk *w, const os64_htm
         d_error(ctx, "InvalidStateError", "The traversal's filter is already running");
         return -1;
     }
-    if ((w->what & (1u << (kNodeTypes[node->kind] - 1))) == 0) return FILTER_SKIP;
+    /* whatToShow's bit for a node is its nodeType's, less one. */
+    if ((w->what & (1u << (d_node_type(node) - 1))) == 0) return FILTER_SKIP;
     if (JS_IsNull(w->filter)) return FILTER_ACCEPT;
     JSValue argument = d_wrap(dom, ctx, node);
     if (JS_IsException(argument)) return -1;

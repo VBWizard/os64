@@ -674,8 +674,9 @@ constants on itself and its prototype, and each prototype's
 `Object.prototype.toString` reports. Each interface object inherits its
 parent interface's, as its prototype inherits the parent prototype.
 `new DocumentFragment()` constructs, and any call without `new` is refused
-by the engine (a constructor-only function); `new Document()` is an Illegal
-constructor. Setting an interface object's own [[Prototype]] met an engine
+by the engine (a constructor-only function); `new DocumentType()` is an
+Illegal constructor, and `new Document()` makes an XML-kind document
+(implementation.c). Setting an interface object's own [[Prototype]] met an engine
 leak: QuickJS's `JS_SetPrototype` keeps its reference to the new prototype
 when the shape copy it then needs runs out of memory, so the installer
 gives each interface object a shape of its own first (`interface_parent`,

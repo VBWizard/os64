@@ -210,7 +210,7 @@ static void dom_document_member_cases(void)
         "assert(x.contentType==='application/xhtml+xml'&&x.readyState==='complete');"
         "const s=document.implementation.createDocument('http://www.w3.org/2000/svg','svg',null);"
         "assert(s.contentType==='image/svg+xml'&&s.rootElement===s.documentElement);"
-        "throws('NotSupportedError',()=>s.createElement('g'));"
+        "assert(s.createElement('g').namespaceURI===null,'an SVG document\\'s createElement makes no namespace');"
         "const m=document.implementation.createDocument(null,'',null);"
         "assert(m.contentType==='application/xml'&&m.activeElement===null&&m.rootElement===null&&m.title==='');"
         "m.title='nothing';assert(m.title===''&&m.firstChild===null,'no element: nothing is made');",

@@ -233,25 +233,44 @@ int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_
     return 0;
 }
 
+/* A node's nodeType (DOM § 4.4) by libhtml's kind, a CDATA section's being
+ * its own. */
+int d_node_type(const os64_html_node_t *node)
+{
+    static const uint8_t types[] = {9, 11, 10, 1, 3, 8, 7};
+    _Static_assert(sizeof(types) == OS64_HTML_PI + 1, "a nodeType for each node kind");
+    return node->kind == OS64_HTML_TEXT && node->cdata ? 4 : types[node->kind];
+}
+
+/* nodeName, and an element's tagName: its qualified name (prefix and local
+ * name), uppercased for an HTML element of an HTML document (DOM § 4.9's
+ * "HTML-uppercased qualified name"). */
 static JSValue node_name(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     const char *name;
     switch (node->kind) {
     case OS64_HTML_DOCUMENT: name = "#document"; break;
     case OS64_HTML_FRAGMENT: name = "#document-fragment"; break;
-    case OS64_HTML_TEXT: name = "#text"; break;
+    case OS64_HTML_TEXT: name = node->cdata ? "#cdata-section" : "#text"; break;
     case OS64_HTML_COMMENT: name = "#comment"; break;
     default: name = node->name != NULL ? node->name : ""; break;
     }
-    if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML)
-        return JS_NewString(ctx, name);
-    size_t length = os64_strlen(name);
-    char *upper = d_alloc(dom, length + 1);
-    if (upper == NULL) return d_error(ctx, "QuotaExceededError", "DOM name quota exceeded");
-    for (size_t i = 0; i <= length; i++)
-        upper[i] = name[i] >= 'a' && name[i] <= 'z' ? name[i] - ('a' - 'A') : name[i];
-    JSValue value = JS_NewStringLen(ctx, upper, length);
-    d_free(dom, upper);
+    if (node->kind != OS64_HTML_ELEMENT) return JS_NewString(ctx, name);
+    bool upper = node->ns == OS64_HTML_NS_HTML &&
+                 d_document_type(dom, d_node_document(dom, node)) == D_DOCUMENT_HTML;
+    size_t prefix = node->prefix != NULL ? os64_strlen(node->prefix) + 1 : 0, length = os64_strlen(name);
+    if (!upper && prefix == 0) return JS_NewString(ctx, name);
+    char *qualified = d_alloc(dom, prefix + length + 1);
+    if (qualified == NULL) return d_error(ctx, "QuotaExceededError", "DOM name quota exceeded");
+    if (prefix != 0) {
+        os64_memcpy(qualified, node->prefix, prefix - 1);
+        qualified[prefix - 1] = ':';
+    }
+    os64_memcpy(qualified + prefix, name, length + 1);
+    for (size_t i = 0; upper && i < prefix + length; i++)
+        if (qualified[i] >= 'a' && qualified[i] <= 'z') qualified[i] -= 'a' - 'A';
+    JSValue value = JS_NewStringLen(ctx, qualified, prefix + length);
+    d_free(dom, qualified);
     return value;
 }
 
@@ -436,10 +455,7 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
             if (at->kind == OS64_HTML_ELEMENT) count++;
         return JS_NewUint32(ctx, count);
     }
-    case D_TYPE: {
-        static const int types[] = {9, 11, 10, 1, 3, 8};
-        return JS_NewInt32(ctx, types[node->kind]);
-    }
+    case D_TYPE: return JS_NewInt32(ctx, d_node_type(node));
     case D_NAME: return node_name(dom, ctx, node);
     case D_TAG:
         if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "tagName requires an element");
@@ -584,21 +600,18 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     if (magic != D_CREATE_FRAGMENT && !d_string(dom, ctx, argv[0], &string)) return JS_EXCEPTION;
     /* An HTML document folds an element's name; an XML document keeps it,
      * and makes HTML elements only when it was made for that namespace
-     * (DOM § 4.5's createElement). One that was not would make an element
-     * in no namespace, which this tree cannot hold. */
+     * (DOM § 4.5's createElement: an XHTML document); any other makes an
+     * element in no namespace, which no custom element definition names. */
     int type = d_document_type(dom, node);
+    bool no_namespace = magic == D_CREATE_ELEMENT && (type == D_DOCUMENT_XML || type == D_DOCUMENT_SVG);
     if (magic == D_CREATE_ELEMENT) {
         if (!d_element_name_valid(string.data)) {
             d_string_free(dom, &string);
             return d_error(ctx, "InvalidCharacterError", "Invalid element name");
         }
-        if (type == D_DOCUMENT_XML || type == D_DOCUMENT_SVG) {
-            d_string_free(dom, &string);
-            return d_error(ctx, "NotSupportedError",
-                           "This XML document's createElement would make an element in no namespace, "
-                           "which this browser's documents cannot hold");
-        }
         if (type == D_DOCUMENT_HTML) d_fold(string.data);
+    }
+    if (magic == D_CREATE_ELEMENT && !no_namespace) {
         /* An element with a definition is constructed (custom.c), inside
          * [CEReactions]: what its constructor queued runs before this
          * returns. */
@@ -622,7 +635,9 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         }
     }
     int64_t status;
-    os64_html_node_t *created = magic == D_CREATE_ELEMENT ?
+    os64_html_node_t *created = no_namespace ?
+        os64_html_create_element_ns(dom->document, NULL, NULL, string.data, &status) :
+        magic == D_CREATE_ELEMENT ?
         os64_html_create_element(dom->document, OS64_HTML_NS_HTML, string.data, &status) :
         magic == D_CREATE_TEXT ? os64_html_create_text(dom->document, string.data, string.length, &status) :
         magic == D_CREATE_COMMENT ? os64_html_create_comment(dom->document, string.data, string.length, &status) :
@@ -740,6 +755,6 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
                 d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
     }
     if(d_svg_geometry_prototypes(dom,ctx)<0)return -1;
-    if (d_shadow_prototypes(dom, ctx) < 0) return -1;
+    if (d_shadow_prototypes(dom, ctx) < 0 || d_data_prototypes(dom, ctx) < 0) return -1;
     return d_geometry_install(dom, ctx);
 }

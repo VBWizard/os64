@@ -200,6 +200,34 @@ static bool name_char(uint32_t c)
     return name_start(c) || c == '-' || c == '.' || (c >= '0' && c <= '9') || c == 0xb7 ||
            (c >= 0x300 && c <= 0x36f) || (c >= 0x203f && c <= 0x2040);
 }
+/* A caller's bytes are not the decoder's, so each sequence is decoded here
+ * with its length checked and an overlong or truncated one refused; a code
+ * point the Name ranges leave out (a surrogate among them) fails them. */
+bool xml_name_valid(const char *utf8, size_t size)
+{
+    if (!utf8 || !size)
+        return false;
+    for (size_t at = 0; at < size;) {
+        bool first = at == 0;
+        unsigned c = (unsigned char)utf8[at];
+        size_t n = c < 0x80 ? 0 : c >= 0xc2 && c < 0xe0 ? 1 : c >= 0xe0 && c < 0xf0 ? 2 : c >= 0xf0 && c < 0xf5 ? 3 : 4;
+        if (n == 4 || n >= size - at)
+            return false;
+        uint32_t cp = n ? c & ((1u << (6 - n)) - 1) : c;
+        for (size_t i = 1; i <= n; i++) {
+            unsigned k = (unsigned char)utf8[at + i];
+            if ((k & 0xc0) != 0x80)
+                return false;
+            cp = (cp << 6) | (k & 63);
+        }
+        if ((n == 2 && cp < 0x800) || (n == 3 && (cp < 0x10000 || cp > 0x10ffff)))
+            return false;
+        at += n + 1;
+        if (!(first ? name_start(cp) : name_char(cp)))
+            return false;
+    }
+    return true;
+}
 static bool space(char c)
 {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
