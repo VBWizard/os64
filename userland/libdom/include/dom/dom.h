@@ -735,6 +735,16 @@ void os64_dom_body_stats(const os64_dom_t *dom, size_t *held, uint64_t *refused)
 os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node,
                                    const os64_dom_event_t *event, bool *prevented,
                                    os64_js_outcome_t *outcome);
+/* The rule a dispatch folds two outcomes into one by, for a host that runs
+ * a dispatch inside a task of its own (a script element's load, after the
+ * script ran): `from` replaces `into` when `into` is OK, or when `from` is
+ * sticky and `into` is not; an OK or MORE_JOBS `from` changes nothing. */
+void os64_dom_outcome_fold(os64_js_outcome_t *into, const os64_js_outcome_t *from);
+/* How many listeners and event handlers the host's dispatches have called
+ * since the binding was made: read before and after a dispatch, it says
+ * whether anything heard it, where os64_dom_listens says only that
+ * something on the page listens for the type. 0 for NULL. */
+uint64_t os64_dom_listener_calls(const os64_dom_t *dom);
 /* A person's submission of `form`, by `submitter` (a submit button, or NULL
  * for none), as one task: HTML's interactive constraint validation (§
  * 4.10.21.3, the form submission algorithm), which the host asks BEFORE it

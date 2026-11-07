@@ -651,6 +651,12 @@ typedef struct Sheet {
     const char *media;              // a sheet the page names: its element's; NULL otherwise
     int32_t importer, import_index; // -1 for a sheet the page names; else its @import
     char *url;                      // where it came from, its @imports' base; NULL for a `style`
+    // Its element has been owed its `load` or `error` for the address it
+    // asked for (`asked`, before redirects; NULL for a `style`). A table
+    // that replaces another copies it by element and address, so a reparse
+    // or a refetch tells the element nothing twice (LOAD_EVENTS.md § 3.3).
+    bool told;
+    char *asked;
     garb_import_t *imports;         // once ready: its @imports, and each one's entry or -1
     int32_t *child;
     int32_t nimports;
@@ -879,6 +885,7 @@ static void sheet_table_free(const os64_html_document_t *doc, Sheet *sheets, int
             os64_free(source);
         }
         os64_free(sheets[i].url);
+        os64_free(sheets[i].asked);
         os64_free(sheets[i].imports);
         os64_free(sheets[i].child);
     }
@@ -4971,10 +4978,28 @@ static void coming_rejudge(void)
         coming_show();
 }
 
-// Sends a sheet's address to a worker. One that cannot be fetched stays
-// out of the cascade, and the page is drawn without it.
 static void sheet_ready(Page *p, int32_t e);
 
+// A sheet's verdict owed to its element as `load`, or `error` when it will
+// not be in the cascade, once for the address it asked for, by the scripts
+// serving its page (LOAD_EVENTS.md § 3.2). An `@import`'s or a constructed
+// sheet names no element. A page laid out for a measurement, inside a
+// running script, owes nothing: its own page reads the same sheet and owes
+// it then, never inside the script that inserted it.
+static void sheet_owe(Page *p, Sheet *sh, bool failed)
+{
+    if (sh->node == NULL || sh->told || p->measuring)
+        return;
+    sh->told = true;
+    yonder_scripts_t *host = page_scripts(p);
+    (void)yonder_scripts_owe(host != NULL ? host : scripts_for(p->serial), sh->node, failed);
+}
+
+// A linked sheet's address sent to a worker, or its parse taken from the
+// table this one replaces. One yonder will not fetch (a scheme it does not
+// fetch sheets from, no memory, a pool that will not take it) stays out of
+// the cascade, the page is drawn without it, and its element is told
+// `error`, since no verdict would ever come for it.
 static void sheet_fetch(Page *p, Sheet *sh, const char *url)
 {
     sh->url = copy_text(url);
@@ -4996,8 +5021,10 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
                       (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0));
     yonder_sheet_job_t *job = fetchable && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
-    if (job == NULL)
+    if (job == NULL) {
+        sheet_owe(p, sh, true);
         return;
+    }
     const os64_html_document_t *doc = page_doc(p);
     job->kind = YONDER_JOB_SHEET;
     job->page = p->serial;
@@ -5017,7 +5044,8 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
     sh->id = os64_work_submit(g.pool, &work);
     if (sh->id == 0) {
-        os64_free(job);         // the table is full: the page goes without it
+        os64_free(job);         // the pool will not take it: the page goes without it
+        sheet_owe(p, sh, true);
         return;
     }
     sh->waiting = true;
@@ -5025,16 +5053,18 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
         p->sheets_waiting++;
 }
 
-// A sheet is ready: it joins the cascade, and its @imports are sent for,
-// each resolved against the sheet's own address — a `style` element's
-// against the page's base — and none that is already on the chain of
-// sheets importing it, which would import itself for ever.
+// A sheet is ready: it joins the cascade, its element is owed its `load`
+// (whatever its @imports do), and its @imports are sent for, each resolved
+// against the sheet's own address — a `style` element's against the page's
+// base — and none that is already on the chain of sheets importing it,
+// which would import itself for ever.
 static void sheet_ready(Page *p, int32_t e)
 {
     Sheet *sh = &p->sheets[e];
     sh->ready = true;
     p->sheets_ready++;
     p->sheets_changed = true;
+    sheet_owe(p, sh, false);
     int32_t n = garb_sheet_imports(&sh->source->parsed, NULL, 0);
     if (n > SHEET_IMPORTS_MAX)
         n = SHEET_IMPORTS_MAX;
@@ -5104,15 +5134,23 @@ static void sheet_inline(Page *p, Sheet *sh)
             return;
         }
     }
+    // A sheet left out (no memory, or text that will not parse) is a
+    // failure its element is told of.
     SheetParse *source = os64_calloc(1, sizeof(*source));
-    if (!source) return;
+    if (!source) {
+        sheet_owe(p, sh, true);
+        return;
+    }
     source->refs = 1;
     sh->source = source;
     size_t len = 0;
     for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
         if (x->kind == OS64_HTML_TEXT) len += x->text_len;
     source->inline_text = os64_malloc(len + 1);
-    if (!source->inline_text) return;
+    if (!source->inline_text) {
+        sheet_owe(p, sh, true);
+        return;
+    }
     for (const os64_html_node_t *x = sh->node->first_child; x; x = x->next)
         if (x->kind == OS64_HTML_TEXT) {
             os64_memcpy(source->inline_text + source->inline_len, x->text, x->text_len);
@@ -5121,14 +5159,20 @@ static void sheet_inline(Page *p, Sheet *sh)
     source->inline_text[len] = '\0';
     if (garb_parse_sheet_text(source->inline_text, len, &source->parsed) == GARB_OK)
         sheet_ready(p, (int32_t)(sh - p->sheets));
+    else
+        sheet_owe(p, sh, true);
 }
 
 // A sheet the page names, if the table does not have it yet: a `style`
 // element's parsed here, a linked one sent for. A page whose table the
 // stream began has most of them already (stream_sheets); a sheet is
 // fetched once in a page's life. A sheet that will not parse — too big, or
-// no memory — is left out, and the page is drawn without it. False once
-// the table is full.
+// no memory — is left out, the page is drawn without it, and its element
+// is told `error`. Whether its element has been told is carried from the
+// table this one replaces, ready or failed (LOAD_EVENTS.md § 3.3): a link's
+// by element and the address it asked for, a `style`'s by element and its
+// text, since HTML makes a `style` a new sheet, and fires again, when its
+// text changes. False once the table is full.
 static bool sheet_add(void *page, const os64_page_sheet_t *one)
 {
     Page *p = page;
@@ -5137,6 +5181,15 @@ static bool sheet_add(void *page, const os64_page_sheet_t *one)
     Sheet *sh = sheet_new(p, one->node, one->media, -1, -1);
     if (sh == NULL)
         return false;               // the table is full
+    sh->asked = one->linked ? copy_text(one->href.url) : NULL;
+    int32_t was = p->reuse_sheets != NULL ? sheet_of(p->reuse_sheets, one->node) : -1;
+    if (was >= 0) {
+        const Sheet *old = &p->reuse_sheets->sheets[was];
+        sh->told = old->told && (one->linked ? old->asked != NULL && sh->asked != NULL &&
+                                                   os64_streq(old->asked, sh->asked)
+                                             : old->asked == NULL && (old->source == NULL ||
+                                                   sheet_inline_matches(old->source, one->node)));
+    }
     if (one->linked) {
         sheet_fetch(p, sh, one->href.url);
     } else {
@@ -5296,9 +5349,14 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     sh->id = 0;
     if (sh->holds)
         p->sheets_waiting--;
-    if (got != NULL && got->ok) {
+    if (got == NULL || !got->ok) {
+        sheet_owe(p, sh, true);
+    } else {
         sh->source = os64_calloc(1, sizeof(*sh->source));
-        if (!sh->source) return;
+        if (!sh->source) {
+            sheet_owe(p, sh, true);
+            return;
+        }
         sh->source->refs = 1;
         sh->source->parsed = got->parsed;
         os64_memset(&got->parsed, 0, sizeof(got->parsed));
@@ -10745,6 +10803,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     const char *what = "script";
     bool ran = yonder_scripts_step(host, &out);
     if (!ran) { what="image"; ran=yonder_scripts_image_fire(host,&out); }
+    if (!ran) { what="sheet"; ran=yonder_scripts_owed_fire(host,&out); }
     if (!ran)
         ran = queued_task(host, &what, &out);
     if (!ran)
@@ -10755,7 +10814,8 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 }
 
 // Whether a host has a task to run now: a history event owed its page, a
-// script ready, image event ready, a message posted, or a timer due. An idle callback is no
+// script ready, an image's or a sheet's event owed, a message posted, or a
+// timer due. An idle callback is no
 // task owed: the shown page's turn runs one only when nothing else is
 // (script_turn).
 static bool scripts_owed(const yonder_scripts_t *host)
@@ -10763,7 +10823,8 @@ static bool scripts_owed(const yonder_scripts_t *host)
     const Page *p = page_of_host(host);
     uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
-           yonder_scripts_images_pending(host) || yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now ||
+           yonder_scripts_images_pending(host) || yonder_scripts_owed_pending(host) ||
+           yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now ||
            yonder_scripts_intersections_due(host);
 }
 
@@ -11849,6 +11910,10 @@ static bool script_turn(void)
     if (!ran) {
         what = "image";
         ran = yonder_scripts_image_fire(g.page.scripts, &out);
+    }
+    if (!ran) {
+        what = "sheet";
+        ran = yonder_scripts_owed_fire(g.page.scripts, &out);
     }
     // The intersection observers' delivery task, which the last rendering
     // step queued (intersections_turn).

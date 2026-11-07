@@ -39,6 +39,7 @@ static const DReflection kRows[] = {
     STRING(D_PROTO_META, "content", "content"), STRING(D_PROTO_META, "media", "media"),
     STRING(D_PROTO_META, "scheme", "scheme"),
     STRING(D_PROTO_STYLE, "media", "media"), STRING(D_PROTO_STYLE, "type", "type"),
+    STRING(D_PROTO_LINK, "media", "media"), STRING(D_PROTO_LINK, "type", "type"),
     NUMBER(D_PROTO_CANVAS, "width", "width", K_UNSIGNED, 300),
     NUMBER(D_PROTO_CANVAS, "height", "height", K_UNSIGNED, 150),
     STRING(D_PROTO_TIME, "dateTime", "datetime"), STRING(D_PROTO_DATA, "value", "value"),

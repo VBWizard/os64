@@ -684,6 +684,16 @@ void d_outcome_fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
         *into = *from;
 }
 
+void os64_dom_outcome_fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
+{
+    d_outcome_fold(into, from);
+}
+
+uint64_t os64_dom_listener_calls(const os64_dom_t *dom)
+{
+    return dom != NULL ? dom->listener_calls : 0;
+}
+
 typedef struct {
     os64_dom_t *dom;
     JSContext *ctx;
@@ -746,6 +756,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
             if (d->host != NULL) {
                 JSValue args[2] = {d->object, callback};
                 os64_js_outcome_t call, point;
+                dom->listener_calls++;
                 dom->invoking = listener;
                 dom->invoking_entry = entry;
                 os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->invoke->value, entry->value, 2, args,
