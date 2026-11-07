@@ -331,13 +331,13 @@ static bool x_bound(const XWriter *w, const char *prefix, size_t len)
     return false;
 }
 
-/* Whether the map binds `prefix` to `ns`. */
+/* Whether `prefix` is bound to `ns` where the writer is: its latest
+ * declaration, not any earlier one a nearer element shadows, so a
+ * declaration that restores a shadowed binding is recorded and written. */
 static bool x_holds(const XWriter *w, const char *ns, const char *prefix, size_t len)
 {
-    for (size_t i = 0; i < w->count; i++)
-        if (h_eq(w->map[i].ns, ns) && same_prefix(&w->map[i], prefix, len))
-            return true;
-    return false;
+    ptrdiff_t bound = x_binding(w, prefix, len);
+    return bound >= 0 && h_eq(w->map[bound].ns, ns);
 }
 
 /* Whether the element's own xmlns:* declarations (the map from `from` on,
