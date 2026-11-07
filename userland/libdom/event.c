@@ -3041,7 +3041,7 @@ static int ui_field(os64_dom_t *dom, JSContext *ctx, DEvent *event, int field, i
         if (d_sequence(dom, ctx, value, D_SEQUENCE_MAX, &items, &count) < 0) return -1;
         d_sequence_free(ctx, items, count);
         if (count == 0) return 0;
-        JS_ThrowTypeError(ctx, "An InputEvent's targetRanges are StaticRanges, which this browser does not have");
+        JS_ThrowTypeError(ctx, "An InputEvent's targetRanges are not kept by this browser");
         return -1;
     }
     case F_VIEW: string = ui_view(dom, ctx, value); slot = U_VIEW; break;

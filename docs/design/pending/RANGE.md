@@ -212,8 +212,8 @@ document. The members, each the standard's algorithm:
 - **Comparing**: `compareBoundaryPoints` (and its four constants),
   `comparePoint`, `isPointInRange`, `intersectsNode`,
   `commonAncestorContainer`. Boundary-point comparison needs tree order
-  and child indexes; compare.c's `precedes`, `root_of` and `is_ancestor`
-  become shared libdom helpers. A child index is a sibling walk (libhtml
+  and child indexes; compare.c's tree helpers are shared for it
+  (`d_tree_precedes`, `d_tree_root`, `d_tree_ancestor`). A child index is a sibling walk (libhtml
   keeps none) — the cost of one comparison, not of the tree.
 - **The content algorithms**: `cloneContents`, `extractContents`,
   `deleteContents`, `insertNode`, `surroundContents`, each built from the
@@ -236,8 +236,8 @@ document. The members, each the standard's algorithm:
 **Lifetime.** The record follows walker.c's `DWalk`: the finalizer marks it
 dead (a finalizer must not reach into libhtml while the runtime is being
 torn down), dead records are freed at the next creation **and at the top
-of libdom's own mutation wrappers** (`d_tree_change`, `d_insert`,
-`d_remove`, which run on the owner thread outside any finalizer) — so a
+of libdom's own mutation wrappers** (`d_insert`, `d_remove`, `d_replace`,
+which `d_tree_change` runs, on the owner thread outside any finalizer) — so a
 dropped range on a large detached subtree does not pin it until the next
 Range is made, and the mutation walk does not keep visiting it — and the
 binding drains the rest when the document goes. A range in a document that is
@@ -343,12 +343,19 @@ their own edits (the framework that keeps `focusedElem` and
 
 ## 10. Proof
 
-- **WPT dom/ranges**: `tools/wpt_fetch.sh` gains `dom/ranges` and an
-  expectation file with a `[required]` list — the Range-set, compare,
-  cloneContents, extractContents, deleteContents, insertNode,
-  surroundContents, mutations and stringifier tests — run through
-  `tools/test_yonder_wpt_host.sh`. Their mutation tests are the live-range
-  steps' real examination.
+- **WPT dom/ranges**: `tools/wpt_fetch.sh` gains `dom/ranges`, run
+  through `tools/test_yonder_wpt_host.sh dom/ranges --ranges` (the runner
+  turns on the switch yonder's settings leave off). Its algorithm and
+  mutation pages — Range-set, compare, cloneContents, extractContents,
+  deleteContents, insertNode, surroundContents and the mutations, the
+  live-range steps' real examination — build their trees with
+  dom/common.js, which needs `new Document()` and `createCDATASection`;
+  libdom has neither, so those pages fail whole at setup. R2 requires what
+  can run (the constructor, attributes, the stringifier, the -2 pages,
+  normalize's mutations, adoption, the Attr answers); the slice right
+  after R2 adds `new Document()`, CDATASection and an HTML document's
+  `createProcessingInstruction`, and the algorithm pages join the
+  required list then (Chris, 2026-11-06).
 - **libhtml, a reference model**: a host test that applies random
   mutations (the existing random walk) to a tree holding random ranges and
   checks every boundary after every step against a model that recomputes
@@ -407,3 +414,5 @@ Codex on each PR.
 - Ranges in XML documents' processing instructions behave as text
   (CharacterData), which they are; nothing else differs, so no row unless
   a test finds one.
+- A range rooted at an Attr (`setStart(attr, 0)`, `selectNodeContents`):
+  libhtml holds no Attr node for a live range to point at; booked with R2.

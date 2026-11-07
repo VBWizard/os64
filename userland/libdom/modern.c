@@ -207,6 +207,10 @@ int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (kModern[i].install == d_custom_install && dom->options.shadow_trees &&
             (d_shadow_install(dom, ctx, global) < 0 || JS_HasException(ctx)))
             return -1;
+        /* DOM Range has its switch too (options.ranges, range.c). */
+        if (kModern[i].install == d_custom_install && dom->options.ranges &&
+            (d_ranges_install(dom, ctx, global) < 0 || JS_HasException(ctx)))
+            return -1;
         if (kModern[i].install(dom, ctx, global) < 0 || JS_HasException(ctx)) return -1;
     }
     return 0;

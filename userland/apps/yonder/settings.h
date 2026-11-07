@@ -90,6 +90,11 @@ bool yonder_settings_saved_modern(const char **refused);
 // modern switch unless `shadow_dom = off` says otherwise; anything else, or
 // no key, leaves it on. Read at start.
 bool yonder_settings_saved_shadow_dom(void);
+// A developer's key with no row in the dialog: DOM Range's surface
+// (os64_dom_options_t.ranges, RANGE.md § 2) is off until its arc's last
+// slice; `ranges = on` turns it on under the modern switch, to try a page
+// with it. Read at start.
+bool yonder_settings_saved_ranges(void);
 // THE COOKIES' SWITCH (cookies.h): `cookies = on | session | off`, without
 // case. Absent it is on; a value that is none of the three is read as on,
 // and `*refused` (may be NULL) says so for the status line; otherwise it

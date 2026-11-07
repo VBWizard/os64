@@ -34,6 +34,7 @@ WPT_DIRS=(
     tools
     dom/nodes
     dom/traversal
+    dom/ranges
     webstorage
     url
     encoding

@@ -250,6 +250,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_pointer.inc"
 #include "test_dom_importmap.inc"
 #include "test_dom_shadow.inc"
+#include "test_dom_ranges.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -589,6 +590,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--window")){dom_window_cases();printf("DOM window probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--ranges")){dom_range_cases();printf("DOM ranges probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--shadow")){dom_shadow_cases();printf("DOM shadow probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--animation")){dom_animation_cases();printf("DOM animation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--scroll")){dom_geometry_cases();dom_element_scroll_cases();dom_view_cases();printf("DOM scroll probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -654,6 +656,7 @@ int main(int argc, char **argv)
     dom_implementation_cases();
     dom_attributes_cases();
     dom_shadow_cases();
+    dom_range_cases();
     if(!mutation_mode){dom_report_sweep_cases();dom_p2b_sweep_cases();dom_import_map_sweep_cases();dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();implementation_allocation_cases();attributes_allocation_cases();}
     printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
     return failures ? 1 : 0;

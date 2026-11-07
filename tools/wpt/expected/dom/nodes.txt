@@ -501,10 +501,134 @@ CharacterData-appendChild.html	Comment.appendChild(Comment)
 CharacterData-appendChild.html	Comment.appendChild(Text)
 CharacterData-appendChild.html	Text.appendChild(Comment)
 CharacterData-appendChild.html	Text.appendChild(Text)
+CharacterData-appendData.html	Comment.appendData('')
+CharacterData-appendData.html	Comment.appendData('', 'bar')
+CharacterData-appendData.html	Comment.appendData('bar')
 CharacterData-appendData.html	Comment.appendData()
+CharacterData-appendData.html	Comment.appendData(non-ASCII)
+CharacterData-appendData.html	Comment.appendData(null)
+CharacterData-appendData.html	Comment.appendData(undefined)
+CharacterData-appendData.html	Text.appendData('')
+CharacterData-appendData.html	Text.appendData('', 'bar')
+CharacterData-appendData.html	Text.appendData('bar')
 CharacterData-appendData.html	Text.appendData()
+CharacterData-appendData.html	Text.appendData(non-ASCII)
+CharacterData-appendData.html	Text.appendData(null)
+CharacterData-appendData.html	Text.appendData(undefined)
+CharacterData-data.html	Comment.data = ''
+CharacterData-data.html	Comment.data = '--'
+CharacterData-data.html	Comment.data = '資料'
+CharacterData-data.html	Comment.data = '🌠 test 🌠 TEST'
+CharacterData-data.html	Comment.data = 0
+CharacterData-data.html	Comment.data = null
+CharacterData-data.html	Comment.data = undefined
+CharacterData-data.html	Comment.data initial value
+CharacterData-data.html	Text.data = ''
+CharacterData-data.html	Text.data = '--'
+CharacterData-data.html	Text.data = '資料'
+CharacterData-data.html	Text.data = '🌠 test 🌠 TEST'
+CharacterData-data.html	Text.data = 0
+CharacterData-data.html	Text.data = null
+CharacterData-data.html	Text.data = undefined
+CharacterData-data.html	Text.data initial value
+CharacterData-deleteData.html	Comment.deleteData() at the end
+CharacterData-deleteData.html	Comment.deleteData() at the start
+CharacterData-deleteData.html	Comment.deleteData() in the middle
+CharacterData-deleteData.html	Comment.deleteData() out of bounds
+CharacterData-deleteData.html	Comment.deleteData() with large negative count
+CharacterData-deleteData.html	Comment.deleteData() with non-BMP data
+CharacterData-deleteData.html	Comment.deleteData() with non-ascii data
+CharacterData-deleteData.html	Comment.deleteData() with small negative count
+CharacterData-deleteData.html	Comment.deleteData() with zero count
+CharacterData-deleteData.html	Text.deleteData() at the end
+CharacterData-deleteData.html	Text.deleteData() at the start
+CharacterData-deleteData.html	Text.deleteData() in the middle
+CharacterData-deleteData.html	Text.deleteData() out of bounds
+CharacterData-deleteData.html	Text.deleteData() with large negative count
+CharacterData-deleteData.html	Text.deleteData() with non-BMP data
+CharacterData-deleteData.html	Text.deleteData() with non-ascii data
+CharacterData-deleteData.html	Text.deleteData() with small negative count
+CharacterData-deleteData.html	Text.deleteData() with zero count
+CharacterData-insertData.html	Comment.insertData('')
+CharacterData-insertData.html	Comment.insertData() at the end
+CharacterData-insertData.html	Comment.insertData() at the start
+CharacterData-insertData.html	Comment.insertData() in the middle
+CharacterData-insertData.html	Comment.insertData() negative in bounds
+CharacterData-insertData.html	Comment.insertData() negative out of bounds
+CharacterData-insertData.html	Comment.insertData() out of bounds
+CharacterData-insertData.html	Comment.insertData() with non-BMP data
+CharacterData-insertData.html	Comment.insertData() with non-ascii data
+CharacterData-insertData.html	Text.insertData('')
+CharacterData-insertData.html	Text.insertData() at the end
+CharacterData-insertData.html	Text.insertData() at the start
+CharacterData-insertData.html	Text.insertData() in the middle
+CharacterData-insertData.html	Text.insertData() negative in bounds
+CharacterData-insertData.html	Text.insertData() negative out of bounds
+CharacterData-insertData.html	Text.insertData() out of bounds
+CharacterData-insertData.html	Text.insertData() with non-BMP data
+CharacterData-insertData.html	Text.insertData() with non-ascii data
+CharacterData-replaceData.html	Comment.replaceData() at the end (longer)
+CharacterData-replaceData.html	Comment.replaceData() at the end (same length)
+CharacterData-replaceData.html	Comment.replaceData() at the end (shorter)
+CharacterData-replaceData.html	Comment.replaceData() at the start (equal length)
+CharacterData-replaceData.html	Comment.replaceData() at the start (longer)
+CharacterData-replaceData.html	Comment.replaceData() at the start (shorter)
+CharacterData-replaceData.html	Comment.replaceData() before the start
+CharacterData-replaceData.html	Comment.replaceData() in the middle (equal length)
+CharacterData-replaceData.html	Comment.replaceData() in the middle (longer)
+CharacterData-replaceData.html	Comment.replaceData() in the middle (shorter)
+CharacterData-replaceData.html	Comment.replaceData() the whole string
+CharacterData-replaceData.html	Comment.replaceData() with clamped count
+CharacterData-replaceData.html	Comment.replaceData() with invalid offset
+CharacterData-replaceData.html	Comment.replaceData() with negative clamped count
+CharacterData-replaceData.html	Comment.replaceData() with non-ASCII data
+CharacterData-replaceData.html	Comment.replaceData() with non-BMP data
+CharacterData-replaceData.html	Comment.replaceData() with the empty string
+CharacterData-replaceData.html	Text.replaceData() at the end (longer)
+CharacterData-replaceData.html	Text.replaceData() at the end (same length)
+CharacterData-replaceData.html	Text.replaceData() at the end (shorter)
+CharacterData-replaceData.html	Text.replaceData() at the start (equal length)
+CharacterData-replaceData.html	Text.replaceData() at the start (longer)
+CharacterData-replaceData.html	Text.replaceData() at the start (shorter)
+CharacterData-replaceData.html	Text.replaceData() before the start
+CharacterData-replaceData.html	Text.replaceData() in the middle (equal length)
+CharacterData-replaceData.html	Text.replaceData() in the middle (longer)
+CharacterData-replaceData.html	Text.replaceData() in the middle (shorter)
+CharacterData-replaceData.html	Text.replaceData() the whole string
+CharacterData-replaceData.html	Text.replaceData() with clamped count
+CharacterData-replaceData.html	Text.replaceData() with invalid offset
+CharacterData-replaceData.html	Text.replaceData() with negative clamped count
+CharacterData-replaceData.html	Text.replaceData() with non-ASCII data
+CharacterData-replaceData.html	Text.replaceData() with non-BMP data
+CharacterData-replaceData.html	Text.replaceData() with the empty string
+CharacterData-substringData.html	Comment.substringData() with in-bounds count
+CharacterData-substringData.html	Comment.substringData() with in-bounds offset
+CharacterData-substringData.html	Comment.substringData() with invalid offset
+CharacterData-substringData.html	Comment.substringData() with large count
+CharacterData-substringData.html	Comment.substringData() with negative count
+CharacterData-substringData.html	Comment.substringData() with negative offset
+CharacterData-substringData.html	Comment.substringData() with non-ASCII data
+CharacterData-substringData.html	Comment.substringData() with non-BMP data
+CharacterData-substringData.html	Comment.substringData() with string offset
 CharacterData-substringData.html	Comment.substringData() with too few arguments
+CharacterData-substringData.html	Comment.substringData() with too many arguments
+CharacterData-substringData.html	Comment.substringData() with very large count
+CharacterData-substringData.html	Comment.substringData() with very large offset
+CharacterData-substringData.html	Comment.substringData() with zero count
+CharacterData-substringData.html	Text.substringData() with in-bounds count
+CharacterData-substringData.html	Text.substringData() with in-bounds offset
+CharacterData-substringData.html	Text.substringData() with invalid offset
+CharacterData-substringData.html	Text.substringData() with large count
+CharacterData-substringData.html	Text.substringData() with negative count
+CharacterData-substringData.html	Text.substringData() with negative offset
+CharacterData-substringData.html	Text.substringData() with non-ASCII data
+CharacterData-substringData.html	Text.substringData() with non-BMP data
+CharacterData-substringData.html	Text.substringData() with string offset
 CharacterData-substringData.html	Text.substringData() with too few arguments
+CharacterData-substringData.html	Text.substringData() with too many arguments
+CharacterData-substringData.html	Text.substringData() with very large count
+CharacterData-substringData.html	Text.substringData() with very large offset
+CharacterData-substringData.html	Text.substringData() with zero count
 ChildNode-after.html	Comment.after() on a child without any parent.
 ChildNode-after.html	Comment.after() when pre-insert behaves like append.
 ChildNode-after.html	Comment.after() with all siblings of child as arguments.
@@ -1041,6 +1165,12 @@ Document-createAttribute.html	XML document.createAttribute("x:y:x")
 Document-createAttribute.html	XML document.createAttribute("~")
 Document-createAttribute.html	XML document.createAttribute(null)
 Document-createAttribute.html	XML document.createAttribute(undefined)
+Document-createComment.html	createComment("-b")
+Document-createComment.html	createComment("\\v")
+Document-createComment.html	createComment("a -- b")
+Document-createComment.html	createComment("a-")
+Document-createComment.html	createComment(null)
+Document-createComment.html	createComment(undefined)
 Document-createElement.html	createElement("") in HTML document
 Document-createElement.html	createElement("-foo") in HTML document
 Document-createElement.html	createElement(".foo") in HTML document
@@ -1461,6 +1591,16 @@ Document-createEvent.https.html	svgevents should be an alias for Event.
 Document-createEvent.https.html	uievent should be an alias for UIEvent.
 Document-createEvent.https.html	uievents should be an alias for UIEvent.
 Document-createProcessingInstruction.html	Document.createProcessingInstruction in HTML documents
+Document-createTextNode.html	createTextNode("-b")
+Document-createTextNode.html	createTextNode("\\v")
+Document-createTextNode.html	createTextNode("a -- b")
+Document-createTextNode.html	createTextNode("a-")
+Document-createTextNode.html	createTextNode(null)
+Document-createTextNode.html	createTextNode(undefined)
+Document-createTreeWalker.html	Optional arguments to createTreeWalker should be optional (1 passed).
+Document-createTreeWalker.html	Optional arguments to createTreeWalker should be optional (2 passed).
+Document-createTreeWalker.html	Optional arguments to createTreeWalker should be optional (3 passed, function).
+Document-createTreeWalker.html	Optional arguments to createTreeWalker should be optional (3 passed, null).
 Document-createTreeWalker.html	Required arguments to createTreeWalker should be required.
 Document-doctype.html	Window document with doctype
 Document-getElementById.html	Calling document.getElementById with a null argument.
@@ -2492,8 +2632,18 @@ MutationObserver-callback-order.window.html	Mutation observers are notified in t
 MutationObserver-callback-order.window.html	The mutation observer microtask is only queued once a record is queued for an observer
 MutationObserver-callback-tricky.html	Calling observe in callback should not lead to more calls
 MutationObserver-callback-tricky.html	Disconnect and re-observe in callback should not lead to more calls
+MutationObserver-characterData.html	characterData Text.appendData: empty string mutation
+MutationObserver-characterData.html	characterData Text.appendData: null string mutation
+MutationObserver-characterData.html	characterData Text.appendData: simple mutation
 MutationObserver-characterData.html	characterData Text.data: simple mutation
 MutationObserver-characterData.html	characterData Text.data: simple mutation without oldValue
+MutationObserver-characterData.html	characterData Text.deleteData: empty mutation
+MutationObserver-characterData.html	characterData Text.deleteData: simple mutation
+MutationObserver-characterData.html	characterData Text.insertData: empty string mutation
+MutationObserver-characterData.html	characterData Text.insertData: null string mutation
+MutationObserver-characterData.html	characterData Text.insertData: simple mutation
+MutationObserver-characterData.html	characterData Text.replaceData: empty mutation
+MutationObserver-characterData.html	characterData Text.replaceData: simple mutation
 MutationObserver-childList.html	childList Node.appendChild: addition mutation
 MutationObserver-childList.html	childList Node.appendChild: addition outside document tree mutation
 MutationObserver-childList.html	childList Node.appendChild: fragment addition mutations
