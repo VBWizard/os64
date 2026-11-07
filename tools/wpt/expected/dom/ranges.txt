@@ -23385,6 +23385,14 @@ Range-isPointInRange.html	Set up for range 7 [paras[5].firstChild, 1, paras[5].f
 Range-isPointInRange.html	Set up for range 8 [detachedPara1.firstChild, 0, detachedPara1.firstChild, 0]
 Range-isPointInRange.html	Set up for range 9 [detachedPara1.firstChild, 2, detachedPara1.firstChild, 8]
 Range-isPointInRange.html	Setup
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range collapsed at (detachedDiv, detachedDiv.childNodes.length - 1)
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range collapsed at (detachedDiv, detachedDiv.childNodes.length)
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range collapsed at (detachedDiv.lastChild, 0)
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range collapsed at (detachedDiv.lastChild, 1)
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range on detachedDiv from detachedDiv.childNodes.length - 1 to detachedDiv.childNodes.length
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range on detachedDiv from detachedDiv.childNodes.length - 2 to detachedDiv.childNodes.length
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range on detachedDiv from detachedDiv.childNodes.length - 2 to detachedDiv.childNodes.length - 1
+Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with selected range on detachedDiv.lastChild from 0 to 1
 Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with unselected range collapsed at (detachedDiv, detachedDiv.childNodes.length - 1)
 Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with unselected range collapsed at (detachedDiv, detachedDiv.childNodes.length)
 Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with unselected range collapsed at (detachedDiv.lastChild, 0)
@@ -23393,14 +23401,29 @@ Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild),
 Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with unselected range on detachedDiv from detachedDiv.childNodes.length - 2 to detachedDiv.childNodes.length
 Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with unselected range on detachedDiv from detachedDiv.childNodes.length - 2 to detachedDiv.childNodes.length - 1
 Range-mutations-appendChild.html	detachedDiv.appendChild(detachedDiv.lastChild), with unselected range on detachedDiv.lastChild from 0 to 1
+Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with selected range collapsed at (foreignDoc, foreignDoc.childNodes.length - 1)
+Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with selected range collapsed at (foreignDoc, foreignDoc.childNodes.length)
+Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with selected range on detachedComment from 0 to 5
+Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with selected range on foreignDoc from foreignDoc.childNodes.length - 1 to foreignDoc.childNodes.length
 Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with unselected range collapsed at (foreignDoc, foreignDoc.childNodes.length - 1)
 Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with unselected range collapsed at (foreignDoc, foreignDoc.childNodes.length)
 Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with unselected range on detachedComment from 0 to 5
 Range-mutations-appendChild.html	foreignDoc.appendChild(detachedComment), with unselected range on foreignDoc from foreignDoc.childNodes.length - 1 to foreignDoc.childNodes.length
+Range-mutations-appendChild.html	paras[0].appendChild(document), with selected range on paras[0] from 0 to 1
 Range-mutations-appendChild.html	paras[0].appendChild(document), with unselected range on paras[0] from 0 to 1
+Range-mutations-appendChild.html	paras[0].appendChild(document.doctype), with selected range on paras[0] from 0 to 1
 Range-mutations-appendChild.html	paras[0].appendChild(document.doctype), with unselected range on paras[0] from 0 to 1
+Range-mutations-appendChild.html	paras[0].appendChild(foreignDoc), with selected range on paras[0] from 0 to 1
 Range-mutations-appendChild.html	paras[0].appendChild(foreignDoc), with unselected range on paras[0] from 0 to 1
+Range-mutations-appendChild.html	paras[0].appendChild(paras[0]), with selected range on paras[0] from 0 to 1
 Range-mutations-appendChild.html	paras[0].appendChild(paras[0]), with unselected range on paras[0] from 0 to 1
+Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with selected range collapsed at (paras[0], 0)
+Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with selected range collapsed at (paras[0], 1)
+Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with selected range collapsed at (testDiv, 1)
+Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with selected range on paras[0] from 0 to 1
+Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with selected range on testDiv from 0 to 1
+Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with selected range on testDiv from 0 to 2
+Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with selected range on testDiv from 1 to 2
 Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with unselected range collapsed at (paras[0], 0)
 Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with unselected range collapsed at (paras[0], 1)
 Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with unselected range collapsed at (testDiv, 1)
@@ -23408,10 +23431,22 @@ Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with unselected
 Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with unselected range on testDiv from 0 to 1
 Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with unselected range on testDiv from 0 to 2
 Range-mutations-appendChild.html	paras[0].appendChild(paras[1]), with unselected range on testDiv from 1 to 2
+Range-mutations-appendChild.html	paras[0].appendChild(testDiv), with selected range on paras[0] from 0 to 1
 Range-mutations-appendChild.html	paras[0].appendChild(testDiv), with unselected range on paras[0] from 0 to 1
+Range-mutations-appendChild.html	paras[0].appendChild(xmlTextNode), with selected range collapsed at (paras[0], 0)
+Range-mutations-appendChild.html	paras[0].appendChild(xmlTextNode), with selected range collapsed at (paras[0], 1)
+Range-mutations-appendChild.html	paras[0].appendChild(xmlTextNode), with selected range on paras[0] from 0 to 1
 Range-mutations-appendChild.html	paras[0].appendChild(xmlTextNode), with unselected range collapsed at (paras[0], 0)
 Range-mutations-appendChild.html	paras[0].appendChild(xmlTextNode), with unselected range collapsed at (paras[0], 1)
 Range-mutations-appendChild.html	paras[0].appendChild(xmlTextNode), with unselected range on paras[0] from 0 to 1
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range collapsed at (testDiv, testDiv.childNodes.length - 1)
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range collapsed at (testDiv, testDiv.childNodes.length)
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range collapsed at (testDiv.lastChild, 0)
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range collapsed at (testDiv.lastChild, 1)
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range on testDiv from testDiv.childNodes.length - 1 to testDiv.childNodes.length
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range on testDiv from testDiv.childNodes.length - 2 to testDiv.childNodes.length
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range on testDiv from testDiv.childNodes.length - 2 to testDiv.childNodes.length - 1
+Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with selected range on testDiv.lastChild from 0 to 1
 Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with unselected range collapsed at (testDiv, testDiv.childNodes.length - 1)
 Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with unselected range collapsed at (testDiv, testDiv.childNodes.length)
 Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with unselected range collapsed at (testDiv.lastChild, 0)
@@ -23420,6 +23455,13 @@ Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with un
 Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with unselected range on testDiv from testDiv.childNodes.length - 2 to testDiv.childNodes.length
 Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with unselected range on testDiv from testDiv.childNodes.length - 2 to testDiv.childNodes.length - 1
 Range-mutations-appendChild.html	testDiv.appendChild(testDiv.lastChild), with unselected range on testDiv.lastChild from 0 to 1
+Range-mutations-appendData.html	comment.appendData(""), with selected range collapsed at (comment, 0)
+Range-mutations-appendData.html	comment.appendData(""), with selected range collapsed at (comment, 1)
+Range-mutations-appendData.html	comment.appendData(""), with selected range collapsed at (comment, comment.length)
+Range-mutations-appendData.html	comment.appendData(""), with selected range on comment from 0 to 1
+Range-mutations-appendData.html	comment.appendData(""), with selected range on comment from 0 to comment.length
+Range-mutations-appendData.html	comment.appendData(""), with selected range on comment from 1 to 3
+Range-mutations-appendData.html	comment.appendData(""), with selected range on comment from 1 to comment.length
 Range-mutations-appendData.html	comment.appendData(""), with unselected range collapsed at (comment, 0)
 Range-mutations-appendData.html	comment.appendData(""), with unselected range collapsed at (comment, 1)
 Range-mutations-appendData.html	comment.appendData(""), with unselected range collapsed at (comment, comment.length)
@@ -23427,6 +23469,13 @@ Range-mutations-appendData.html	comment.appendData(""), with unselected range on
 Range-mutations-appendData.html	comment.appendData(""), with unselected range on comment from 0 to comment.length
 Range-mutations-appendData.html	comment.appendData(""), with unselected range on comment from 1 to 3
 Range-mutations-appendData.html	comment.appendData(""), with unselected range on comment from 1 to comment.length
+Range-mutations-appendData.html	comment.appendData("foo"), with selected range collapsed at (comment, 0)
+Range-mutations-appendData.html	comment.appendData("foo"), with selected range collapsed at (comment, 1)
+Range-mutations-appendData.html	comment.appendData("foo"), with selected range collapsed at (comment, comment.length)
+Range-mutations-appendData.html	comment.appendData("foo"), with selected range on comment from 0 to 1
+Range-mutations-appendData.html	comment.appendData("foo"), with selected range on comment from 0 to comment.length
+Range-mutations-appendData.html	comment.appendData("foo"), with selected range on comment from 1 to 3
+Range-mutations-appendData.html	comment.appendData("foo"), with selected range on comment from 1 to comment.length
 Range-mutations-appendData.html	comment.appendData("foo"), with unselected range collapsed at (comment, 0)
 Range-mutations-appendData.html	comment.appendData("foo"), with unselected range collapsed at (comment, 1)
 Range-mutations-appendData.html	comment.appendData("foo"), with unselected range collapsed at (comment, comment.length)
@@ -23434,6 +23483,13 @@ Range-mutations-appendData.html	comment.appendData("foo"), with unselected range
 Range-mutations-appendData.html	comment.appendData("foo"), with unselected range on comment from 0 to comment.length
 Range-mutations-appendData.html	comment.appendData("foo"), with unselected range on comment from 1 to 3
 Range-mutations-appendData.html	comment.appendData("foo"), with unselected range on comment from 1 to comment.length
+Range-mutations-appendData.html	detachedComment.appendData(""), with selected range collapsed at (detachedComment, 0)
+Range-mutations-appendData.html	detachedComment.appendData(""), with selected range collapsed at (detachedComment, 1)
+Range-mutations-appendData.html	detachedComment.appendData(""), with selected range collapsed at (detachedComment, detachedComment.length)
+Range-mutations-appendData.html	detachedComment.appendData(""), with selected range on detachedComment from 0 to 1
+Range-mutations-appendData.html	detachedComment.appendData(""), with selected range on detachedComment from 0 to detachedComment.length
+Range-mutations-appendData.html	detachedComment.appendData(""), with selected range on detachedComment from 1 to 3
+Range-mutations-appendData.html	detachedComment.appendData(""), with selected range on detachedComment from 1 to detachedComment.length
 Range-mutations-appendData.html	detachedComment.appendData(""), with unselected range collapsed at (detachedComment, 0)
 Range-mutations-appendData.html	detachedComment.appendData(""), with unselected range collapsed at (detachedComment, 1)
 Range-mutations-appendData.html	detachedComment.appendData(""), with unselected range collapsed at (detachedComment, detachedComment.length)
@@ -23441,6 +23497,13 @@ Range-mutations-appendData.html	detachedComment.appendData(""), with unselected 
 Range-mutations-appendData.html	detachedComment.appendData(""), with unselected range on detachedComment from 0 to detachedComment.length
 Range-mutations-appendData.html	detachedComment.appendData(""), with unselected range on detachedComment from 1 to 3
 Range-mutations-appendData.html	detachedComment.appendData(""), with unselected range on detachedComment from 1 to detachedComment.length
+Range-mutations-appendData.html	detachedComment.appendData("foo"), with selected range collapsed at (detachedComment, 0)
+Range-mutations-appendData.html	detachedComment.appendData("foo"), with selected range collapsed at (detachedComment, 1)
+Range-mutations-appendData.html	detachedComment.appendData("foo"), with selected range collapsed at (detachedComment, detachedComment.length)
+Range-mutations-appendData.html	detachedComment.appendData("foo"), with selected range on detachedComment from 0 to 1
+Range-mutations-appendData.html	detachedComment.appendData("foo"), with selected range on detachedComment from 0 to detachedComment.length
+Range-mutations-appendData.html	detachedComment.appendData("foo"), with selected range on detachedComment from 1 to 3
+Range-mutations-appendData.html	detachedComment.appendData("foo"), with selected range on detachedComment from 1 to detachedComment.length
 Range-mutations-appendData.html	detachedComment.appendData("foo"), with unselected range collapsed at (detachedComment, 0)
 Range-mutations-appendData.html	detachedComment.appendData("foo"), with unselected range collapsed at (detachedComment, 1)
 Range-mutations-appendData.html	detachedComment.appendData("foo"), with unselected range collapsed at (detachedComment, detachedComment.length)
@@ -23448,6 +23511,13 @@ Range-mutations-appendData.html	detachedComment.appendData("foo"), with unselect
 Range-mutations-appendData.html	detachedComment.appendData("foo"), with unselected range on detachedComment from 0 to detachedComment.length
 Range-mutations-appendData.html	detachedComment.appendData("foo"), with unselected range on detachedComment from 1 to 3
 Range-mutations-appendData.html	detachedComment.appendData("foo"), with unselected range on detachedComment from 1 to detachedComment.length
+Range-mutations-appendData.html	detachedForeignComment.appendData(""), with selected range collapsed at (detachedForeignComment, 0)
+Range-mutations-appendData.html	detachedForeignComment.appendData(""), with selected range collapsed at (detachedForeignComment, 1)
+Range-mutations-appendData.html	detachedForeignComment.appendData(""), with selected range collapsed at (detachedForeignComment, detachedForeignComment.length)
+Range-mutations-appendData.html	detachedForeignComment.appendData(""), with selected range on detachedForeignComment from 0 to 1
+Range-mutations-appendData.html	detachedForeignComment.appendData(""), with selected range on detachedForeignComment from 0 to detachedForeignComment.length
+Range-mutations-appendData.html	detachedForeignComment.appendData(""), with selected range on detachedForeignComment from 1 to 3
+Range-mutations-appendData.html	detachedForeignComment.appendData(""), with selected range on detachedForeignComment from 1 to detachedForeignComment.length
 Range-mutations-appendData.html	detachedForeignComment.appendData(""), with unselected range collapsed at (detachedForeignComment, 0)
 Range-mutations-appendData.html	detachedForeignComment.appendData(""), with unselected range collapsed at (detachedForeignComment, 1)
 Range-mutations-appendData.html	detachedForeignComment.appendData(""), with unselected range collapsed at (detachedForeignComment, detachedForeignComment.length)
@@ -23455,6 +23525,13 @@ Range-mutations-appendData.html	detachedForeignComment.appendData(""), with unse
 Range-mutations-appendData.html	detachedForeignComment.appendData(""), with unselected range on detachedForeignComment from 0 to detachedForeignComment.length
 Range-mutations-appendData.html	detachedForeignComment.appendData(""), with unselected range on detachedForeignComment from 1 to 3
 Range-mutations-appendData.html	detachedForeignComment.appendData(""), with unselected range on detachedForeignComment from 1 to detachedForeignComment.length
+Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with selected range collapsed at (detachedForeignComment, 0)
+Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with selected range collapsed at (detachedForeignComment, 1)
+Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with selected range collapsed at (detachedForeignComment, detachedForeignComment.length)
+Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with selected range on detachedForeignComment from 0 to 1
+Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with selected range on detachedForeignComment from 0 to detachedForeignComment.length
+Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with selected range on detachedForeignComment from 1 to 3
+Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with selected range on detachedForeignComment from 1 to detachedForeignComment.length
 Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with unselected range collapsed at (detachedForeignComment, 0)
 Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with unselected range collapsed at (detachedForeignComment, 1)
 Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with unselected range collapsed at (detachedForeignComment, detachedForeignComment.length)
@@ -23462,6 +23539,13 @@ Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with u
 Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with unselected range on detachedForeignComment from 0 to detachedForeignComment.length
 Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with unselected range on detachedForeignComment from 1 to 3
 Range-mutations-appendData.html	detachedForeignComment.appendData("foo"), with unselected range on detachedForeignComment from 1 to detachedForeignComment.length
+Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with selected range collapsed at (detachedForeignTextNode, 0)
+Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with selected range collapsed at (detachedForeignTextNode, 1)
+Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with selected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
+Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with selected range on detachedForeignTextNode from 0 to 1
+Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with selected range on detachedForeignTextNode from 0 to detachedForeignTextNode.length
+Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with selected range on detachedForeignTextNode from 1 to 3
+Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with selected range on detachedForeignTextNode from 1 to detachedForeignTextNode.length
 Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with unselected range collapsed at (detachedForeignTextNode, 0)
 Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with unselected range collapsed at (detachedForeignTextNode, 1)
 Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with unselected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
@@ -23469,6 +23553,13 @@ Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with uns
 Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with unselected range on detachedForeignTextNode from 0 to detachedForeignTextNode.length
 Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with unselected range on detachedForeignTextNode from 1 to 3
 Range-mutations-appendData.html	detachedForeignTextNode.appendData(""), with unselected range on detachedForeignTextNode from 1 to detachedForeignTextNode.length
+Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with selected range collapsed at (detachedForeignTextNode, 0)
+Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with selected range collapsed at (detachedForeignTextNode, 1)
+Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with selected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
+Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with selected range on detachedForeignTextNode from 0 to 1
+Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with selected range on detachedForeignTextNode from 0 to detachedForeignTextNode.length
+Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with selected range on detachedForeignTextNode from 1 to 3
+Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with selected range on detachedForeignTextNode from 1 to detachedForeignTextNode.length
 Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with unselected range collapsed at (detachedForeignTextNode, 0)
 Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with unselected range collapsed at (detachedForeignTextNode, 1)
 Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with unselected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
@@ -23476,6 +23567,13 @@ Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with 
 Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with unselected range on detachedForeignTextNode from 0 to detachedForeignTextNode.length
 Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with unselected range on detachedForeignTextNode from 1 to 3
 Range-mutations-appendData.html	detachedForeignTextNode.appendData("foo"), with unselected range on detachedForeignTextNode from 1 to detachedForeignTextNode.length
+Range-mutations-appendData.html	detachedTextNode.appendData(""), with selected range collapsed at (detachedTextNode, 0)
+Range-mutations-appendData.html	detachedTextNode.appendData(""), with selected range collapsed at (detachedTextNode, 1)
+Range-mutations-appendData.html	detachedTextNode.appendData(""), with selected range collapsed at (detachedTextNode, detachedTextNode.length)
+Range-mutations-appendData.html	detachedTextNode.appendData(""), with selected range on detachedTextNode from 0 to 1
+Range-mutations-appendData.html	detachedTextNode.appendData(""), with selected range on detachedTextNode from 0 to detachedTextNode.length
+Range-mutations-appendData.html	detachedTextNode.appendData(""), with selected range on detachedTextNode from 1 to 3
+Range-mutations-appendData.html	detachedTextNode.appendData(""), with selected range on detachedTextNode from 1 to detachedTextNode.length
 Range-mutations-appendData.html	detachedTextNode.appendData(""), with unselected range collapsed at (detachedTextNode, 0)
 Range-mutations-appendData.html	detachedTextNode.appendData(""), with unselected range collapsed at (detachedTextNode, 1)
 Range-mutations-appendData.html	detachedTextNode.appendData(""), with unselected range collapsed at (detachedTextNode, detachedTextNode.length)
@@ -23483,6 +23581,13 @@ Range-mutations-appendData.html	detachedTextNode.appendData(""), with unselected
 Range-mutations-appendData.html	detachedTextNode.appendData(""), with unselected range on detachedTextNode from 0 to detachedTextNode.length
 Range-mutations-appendData.html	detachedTextNode.appendData(""), with unselected range on detachedTextNode from 1 to 3
 Range-mutations-appendData.html	detachedTextNode.appendData(""), with unselected range on detachedTextNode from 1 to detachedTextNode.length
+Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with selected range collapsed at (detachedTextNode, 0)
+Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with selected range collapsed at (detachedTextNode, 1)
+Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with selected range collapsed at (detachedTextNode, detachedTextNode.length)
+Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with selected range on detachedTextNode from 0 to 1
+Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with selected range on detachedTextNode from 0 to detachedTextNode.length
+Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with selected range on detachedTextNode from 1 to 3
+Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with selected range on detachedTextNode from 1 to detachedTextNode.length
 Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with unselected range collapsed at (detachedTextNode, 0)
 Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with unselected range collapsed at (detachedTextNode, 1)
 Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with unselected range collapsed at (detachedTextNode, detachedTextNode.length)
@@ -23490,6 +23595,13 @@ Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with unselec
 Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with unselected range on detachedTextNode from 0 to detachedTextNode.length
 Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with unselected range on detachedTextNode from 1 to 3
 Range-mutations-appendData.html	detachedTextNode.appendData("foo"), with unselected range on detachedTextNode from 1 to detachedTextNode.length
+Range-mutations-appendData.html	detachedXmlComment.appendData(""), with selected range collapsed at (detachedXmlComment, 0)
+Range-mutations-appendData.html	detachedXmlComment.appendData(""), with selected range collapsed at (detachedXmlComment, 1)
+Range-mutations-appendData.html	detachedXmlComment.appendData(""), with selected range collapsed at (detachedXmlComment, detachedXmlComment.length)
+Range-mutations-appendData.html	detachedXmlComment.appendData(""), with selected range on detachedXmlComment from 0 to 1
+Range-mutations-appendData.html	detachedXmlComment.appendData(""), with selected range on detachedXmlComment from 0 to detachedXmlComment.length
+Range-mutations-appendData.html	detachedXmlComment.appendData(""), with selected range on detachedXmlComment from 1 to 3
+Range-mutations-appendData.html	detachedXmlComment.appendData(""), with selected range on detachedXmlComment from 1 to detachedXmlComment.length
 Range-mutations-appendData.html	detachedXmlComment.appendData(""), with unselected range collapsed at (detachedXmlComment, 0)
 Range-mutations-appendData.html	detachedXmlComment.appendData(""), with unselected range collapsed at (detachedXmlComment, 1)
 Range-mutations-appendData.html	detachedXmlComment.appendData(""), with unselected range collapsed at (detachedXmlComment, detachedXmlComment.length)
@@ -23497,6 +23609,13 @@ Range-mutations-appendData.html	detachedXmlComment.appendData(""), with unselect
 Range-mutations-appendData.html	detachedXmlComment.appendData(""), with unselected range on detachedXmlComment from 0 to detachedXmlComment.length
 Range-mutations-appendData.html	detachedXmlComment.appendData(""), with unselected range on detachedXmlComment from 1 to 3
 Range-mutations-appendData.html	detachedXmlComment.appendData(""), with unselected range on detachedXmlComment from 1 to detachedXmlComment.length
+Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with selected range collapsed at (detachedXmlComment, 0)
+Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with selected range collapsed at (detachedXmlComment, 1)
+Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with selected range collapsed at (detachedXmlComment, detachedXmlComment.length)
+Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with selected range on detachedXmlComment from 0 to 1
+Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with selected range on detachedXmlComment from 0 to detachedXmlComment.length
+Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with selected range on detachedXmlComment from 1 to 3
+Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with selected range on detachedXmlComment from 1 to detachedXmlComment.length
 Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with unselected range collapsed at (detachedXmlComment, 0)
 Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with unselected range collapsed at (detachedXmlComment, 1)
 Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with unselected range collapsed at (detachedXmlComment, detachedXmlComment.length)
@@ -23504,6 +23623,13 @@ Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with unsel
 Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with unselected range on detachedXmlComment from 0 to detachedXmlComment.length
 Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with unselected range on detachedXmlComment from 1 to 3
 Range-mutations-appendData.html	detachedXmlComment.appendData("foo"), with unselected range on detachedXmlComment from 1 to detachedXmlComment.length
+Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with selected range collapsed at (detachedXmlTextNode, 0)
+Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with selected range collapsed at (detachedXmlTextNode, 1)
+Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with selected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
+Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with selected range on detachedXmlTextNode from 0 to 1
+Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with selected range on detachedXmlTextNode from 0 to detachedXmlTextNode.length
+Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with selected range on detachedXmlTextNode from 1 to 3
+Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with selected range on detachedXmlTextNode from 1 to detachedXmlTextNode.length
 Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with unselected range collapsed at (detachedXmlTextNode, 0)
 Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with unselected range collapsed at (detachedXmlTextNode, 1)
 Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with unselected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
@@ -23511,6 +23637,13 @@ Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with unselec
 Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with unselected range on detachedXmlTextNode from 0 to detachedXmlTextNode.length
 Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with unselected range on detachedXmlTextNode from 1 to 3
 Range-mutations-appendData.html	detachedXmlTextNode.appendData(""), with unselected range on detachedXmlTextNode from 1 to detachedXmlTextNode.length
+Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with selected range collapsed at (detachedXmlTextNode, 0)
+Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with selected range collapsed at (detachedXmlTextNode, 1)
+Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with selected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
+Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with selected range on detachedXmlTextNode from 0 to 1
+Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with selected range on detachedXmlTextNode from 0 to detachedXmlTextNode.length
+Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with selected range on detachedXmlTextNode from 1 to 3
+Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with selected range on detachedXmlTextNode from 1 to detachedXmlTextNode.length
 Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with unselected range collapsed at (detachedXmlTextNode, 0)
 Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with unselected range collapsed at (detachedXmlTextNode, 1)
 Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with unselected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
@@ -23518,6 +23651,13 @@ Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with unse
 Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with unselected range on detachedXmlTextNode from 0 to detachedXmlTextNode.length
 Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with unselected range on detachedXmlTextNode from 1 to 3
 Range-mutations-appendData.html	detachedXmlTextNode.appendData("foo"), with unselected range on detachedXmlTextNode from 1 to detachedXmlTextNode.length
+Range-mutations-appendData.html	foreignComment.appendData(""), with selected range collapsed at (foreignComment, 0)
+Range-mutations-appendData.html	foreignComment.appendData(""), with selected range collapsed at (foreignComment, 1)
+Range-mutations-appendData.html	foreignComment.appendData(""), with selected range collapsed at (foreignComment, foreignComment.length)
+Range-mutations-appendData.html	foreignComment.appendData(""), with selected range on foreignComment from 0 to 1
+Range-mutations-appendData.html	foreignComment.appendData(""), with selected range on foreignComment from 0 to foreignComment.length
+Range-mutations-appendData.html	foreignComment.appendData(""), with selected range on foreignComment from 1 to 3
+Range-mutations-appendData.html	foreignComment.appendData(""), with selected range on foreignComment from 1 to foreignComment.length
 Range-mutations-appendData.html	foreignComment.appendData(""), with unselected range collapsed at (foreignComment, 0)
 Range-mutations-appendData.html	foreignComment.appendData(""), with unselected range collapsed at (foreignComment, 1)
 Range-mutations-appendData.html	foreignComment.appendData(""), with unselected range collapsed at (foreignComment, foreignComment.length)
@@ -23525,6 +23665,13 @@ Range-mutations-appendData.html	foreignComment.appendData(""), with unselected r
 Range-mutations-appendData.html	foreignComment.appendData(""), with unselected range on foreignComment from 0 to foreignComment.length
 Range-mutations-appendData.html	foreignComment.appendData(""), with unselected range on foreignComment from 1 to 3
 Range-mutations-appendData.html	foreignComment.appendData(""), with unselected range on foreignComment from 1 to foreignComment.length
+Range-mutations-appendData.html	foreignComment.appendData("foo"), with selected range collapsed at (foreignComment, 0)
+Range-mutations-appendData.html	foreignComment.appendData("foo"), with selected range collapsed at (foreignComment, 1)
+Range-mutations-appendData.html	foreignComment.appendData("foo"), with selected range collapsed at (foreignComment, foreignComment.length)
+Range-mutations-appendData.html	foreignComment.appendData("foo"), with selected range on foreignComment from 0 to 1
+Range-mutations-appendData.html	foreignComment.appendData("foo"), with selected range on foreignComment from 0 to foreignComment.length
+Range-mutations-appendData.html	foreignComment.appendData("foo"), with selected range on foreignComment from 1 to 3
+Range-mutations-appendData.html	foreignComment.appendData("foo"), with selected range on foreignComment from 1 to foreignComment.length
 Range-mutations-appendData.html	foreignComment.appendData("foo"), with unselected range collapsed at (foreignComment, 0)
 Range-mutations-appendData.html	foreignComment.appendData("foo"), with unselected range collapsed at (foreignComment, 1)
 Range-mutations-appendData.html	foreignComment.appendData("foo"), with unselected range collapsed at (foreignComment, foreignComment.length)
@@ -23532,6 +23679,13 @@ Range-mutations-appendData.html	foreignComment.appendData("foo"), with unselecte
 Range-mutations-appendData.html	foreignComment.appendData("foo"), with unselected range on foreignComment from 0 to foreignComment.length
 Range-mutations-appendData.html	foreignComment.appendData("foo"), with unselected range on foreignComment from 1 to 3
 Range-mutations-appendData.html	foreignComment.appendData("foo"), with unselected range on foreignComment from 1 to foreignComment.length
+Range-mutations-appendData.html	foreignTextNode.appendData(""), with selected range collapsed at (foreignTextNode, 0)
+Range-mutations-appendData.html	foreignTextNode.appendData(""), with selected range collapsed at (foreignTextNode, 1)
+Range-mutations-appendData.html	foreignTextNode.appendData(""), with selected range collapsed at (foreignTextNode, foreignTextNode.length)
+Range-mutations-appendData.html	foreignTextNode.appendData(""), with selected range on foreignTextNode from 0 to 1
+Range-mutations-appendData.html	foreignTextNode.appendData(""), with selected range on foreignTextNode from 0 to foreignTextNode.length
+Range-mutations-appendData.html	foreignTextNode.appendData(""), with selected range on foreignTextNode from 1 to 3
+Range-mutations-appendData.html	foreignTextNode.appendData(""), with selected range on foreignTextNode from 1 to foreignTextNode.length
 Range-mutations-appendData.html	foreignTextNode.appendData(""), with unselected range collapsed at (foreignTextNode, 0)
 Range-mutations-appendData.html	foreignTextNode.appendData(""), with unselected range collapsed at (foreignTextNode, 1)
 Range-mutations-appendData.html	foreignTextNode.appendData(""), with unselected range collapsed at (foreignTextNode, foreignTextNode.length)
@@ -23539,6 +23693,13 @@ Range-mutations-appendData.html	foreignTextNode.appendData(""), with unselected 
 Range-mutations-appendData.html	foreignTextNode.appendData(""), with unselected range on foreignTextNode from 0 to foreignTextNode.length
 Range-mutations-appendData.html	foreignTextNode.appendData(""), with unselected range on foreignTextNode from 1 to 3
 Range-mutations-appendData.html	foreignTextNode.appendData(""), with unselected range on foreignTextNode from 1 to foreignTextNode.length
+Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with selected range collapsed at (foreignTextNode, 0)
+Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with selected range collapsed at (foreignTextNode, 1)
+Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with selected range collapsed at (foreignTextNode, foreignTextNode.length)
+Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with selected range on foreignTextNode from 0 to 1
+Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with selected range on foreignTextNode from 0 to foreignTextNode.length
+Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with selected range on foreignTextNode from 1 to 3
+Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with selected range on foreignTextNode from 1 to foreignTextNode.length
 Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with unselected range collapsed at (foreignTextNode, 0)
 Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with unselected range collapsed at (foreignTextNode, 1)
 Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with unselected range collapsed at (foreignTextNode, foreignTextNode.length)
@@ -23546,6 +23707,18 @@ Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with unselect
 Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with unselected range on foreignTextNode from 0 to foreignTextNode.length
 Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with unselected range on foreignTextNode from 1 to 3
 Range-mutations-appendData.html	foreignTextNode.appendData("foo"), with unselected range on foreignTextNode from 1 to foreignTextNode.length
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range collapsed at (paras[0], 0)
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range collapsed at (paras[0], 1)
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range collapsed at (paras[0].firstChild, 0)
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range collapsed at (paras[0].firstChild, 1)
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range on paras[0] from 0 to 1
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range on paras[0].firstChild from 0 to 1
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range on paras[0].firstChild from 0 to paras[0].firstChild.length
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range on paras[0].firstChild from 1 to 3
+Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with selected range on paras[0].firstChild from 1 to paras[0].firstChild.length
 Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with unselected range collapsed at (paras[0], 0)
 Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with unselected range collapsed at (paras[0], 1)
 Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with unselected range collapsed at (paras[0].firstChild, 0)
@@ -23558,6 +23731,18 @@ Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with unselec
 Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with unselected range on paras[0].firstChild from 0 to paras[0].firstChild.length
 Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with unselected range on paras[0].firstChild from 1 to 3
 Range-mutations-appendData.html	paras[0].firstChild.appendData(""), with unselected range on paras[0].firstChild from 1 to paras[0].firstChild.length
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range collapsed at (paras[0], 0)
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range collapsed at (paras[0], 1)
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range collapsed at (paras[0].firstChild, 0)
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range collapsed at (paras[0].firstChild, 1)
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range on paras[0] from 0 to 1
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range on paras[0].firstChild from 0 to 1
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range on paras[0].firstChild from 0 to paras[0].firstChild.length
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range on paras[0].firstChild from 1 to 3
+Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with selected range on paras[0].firstChild from 1 to paras[0].firstChild.length
 Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with unselected range collapsed at (paras[0], 0)
 Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with unselected range collapsed at (paras[0], 1)
 Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with unselected range collapsed at (paras[0].firstChild, 0)
@@ -23570,6 +23755,13 @@ Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with unse
 Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with unselected range on paras[0].firstChild from 0 to paras[0].firstChild.length
 Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with unselected range on paras[0].firstChild from 1 to 3
 Range-mutations-appendData.html	paras[0].firstChild.appendData("foo"), with unselected range on paras[0].firstChild from 1 to paras[0].firstChild.length
+Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with selected range collapsed at (paras[1].firstChild, 0)
+Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with selected range collapsed at (paras[1].firstChild, 1)
+Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with selected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
+Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with selected range on paras[1].firstChild from 0 to 1
+Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with selected range on paras[1].firstChild from 0 to paras[1].firstChild.length
+Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with selected range on paras[1].firstChild from 1 to 3
+Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with selected range on paras[1].firstChild from 1 to paras[1].firstChild.length
 Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with unselected range collapsed at (paras[1].firstChild, 0)
 Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with unselected range collapsed at (paras[1].firstChild, 1)
 Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with unselected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
@@ -23577,6 +23769,13 @@ Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with unselec
 Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with unselected range on paras[1].firstChild from 0 to paras[1].firstChild.length
 Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with unselected range on paras[1].firstChild from 1 to 3
 Range-mutations-appendData.html	paras[1].firstChild.appendData(""), with unselected range on paras[1].firstChild from 1 to paras[1].firstChild.length
+Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with selected range collapsed at (paras[1].firstChild, 0)
+Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with selected range collapsed at (paras[1].firstChild, 1)
+Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with selected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
+Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with selected range on paras[1].firstChild from 0 to 1
+Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with selected range on paras[1].firstChild from 0 to paras[1].firstChild.length
+Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with selected range on paras[1].firstChild from 1 to 3
+Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with selected range on paras[1].firstChild from 1 to paras[1].firstChild.length
 Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with unselected range collapsed at (paras[1].firstChild, 0)
 Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with unselected range collapsed at (paras[1].firstChild, 1)
 Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with unselected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
@@ -23584,6 +23783,13 @@ Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with unse
 Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with unselected range on paras[1].firstChild from 0 to paras[1].firstChild.length
 Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with unselected range on paras[1].firstChild from 1 to 3
 Range-mutations-appendData.html	paras[1].firstChild.appendData("foo"), with unselected range on paras[1].firstChild from 1 to paras[1].firstChild.length
+Range-mutations-appendData.html	xmlComment.appendData(""), with selected range collapsed at (xmlComment, 0)
+Range-mutations-appendData.html	xmlComment.appendData(""), with selected range collapsed at (xmlComment, 1)
+Range-mutations-appendData.html	xmlComment.appendData(""), with selected range collapsed at (xmlComment, xmlComment.length)
+Range-mutations-appendData.html	xmlComment.appendData(""), with selected range on xmlComment from 0 to 1
+Range-mutations-appendData.html	xmlComment.appendData(""), with selected range on xmlComment from 0 to xmlComment.length
+Range-mutations-appendData.html	xmlComment.appendData(""), with selected range on xmlComment from 1 to 3
+Range-mutations-appendData.html	xmlComment.appendData(""), with selected range on xmlComment from 1 to xmlComment.length
 Range-mutations-appendData.html	xmlComment.appendData(""), with unselected range collapsed at (xmlComment, 0)
 Range-mutations-appendData.html	xmlComment.appendData(""), with unselected range collapsed at (xmlComment, 1)
 Range-mutations-appendData.html	xmlComment.appendData(""), with unselected range collapsed at (xmlComment, xmlComment.length)
@@ -23591,6 +23797,13 @@ Range-mutations-appendData.html	xmlComment.appendData(""), with unselected range
 Range-mutations-appendData.html	xmlComment.appendData(""), with unselected range on xmlComment from 0 to xmlComment.length
 Range-mutations-appendData.html	xmlComment.appendData(""), with unselected range on xmlComment from 1 to 3
 Range-mutations-appendData.html	xmlComment.appendData(""), with unselected range on xmlComment from 1 to xmlComment.length
+Range-mutations-appendData.html	xmlComment.appendData("foo"), with selected range collapsed at (xmlComment, 0)
+Range-mutations-appendData.html	xmlComment.appendData("foo"), with selected range collapsed at (xmlComment, 1)
+Range-mutations-appendData.html	xmlComment.appendData("foo"), with selected range collapsed at (xmlComment, xmlComment.length)
+Range-mutations-appendData.html	xmlComment.appendData("foo"), with selected range on xmlComment from 0 to 1
+Range-mutations-appendData.html	xmlComment.appendData("foo"), with selected range on xmlComment from 0 to xmlComment.length
+Range-mutations-appendData.html	xmlComment.appendData("foo"), with selected range on xmlComment from 1 to 3
+Range-mutations-appendData.html	xmlComment.appendData("foo"), with selected range on xmlComment from 1 to xmlComment.length
 Range-mutations-appendData.html	xmlComment.appendData("foo"), with unselected range collapsed at (xmlComment, 0)
 Range-mutations-appendData.html	xmlComment.appendData("foo"), with unselected range collapsed at (xmlComment, 1)
 Range-mutations-appendData.html	xmlComment.appendData("foo"), with unselected range collapsed at (xmlComment, xmlComment.length)
@@ -23598,6 +23811,13 @@ Range-mutations-appendData.html	xmlComment.appendData("foo"), with unselected ra
 Range-mutations-appendData.html	xmlComment.appendData("foo"), with unselected range on xmlComment from 0 to xmlComment.length
 Range-mutations-appendData.html	xmlComment.appendData("foo"), with unselected range on xmlComment from 1 to 3
 Range-mutations-appendData.html	xmlComment.appendData("foo"), with unselected range on xmlComment from 1 to xmlComment.length
+Range-mutations-appendData.html	xmlTextNode.appendData(""), with selected range collapsed at (xmlTextNode, 0)
+Range-mutations-appendData.html	xmlTextNode.appendData(""), with selected range collapsed at (xmlTextNode, 1)
+Range-mutations-appendData.html	xmlTextNode.appendData(""), with selected range collapsed at (xmlTextNode, xmlTextNode.length)
+Range-mutations-appendData.html	xmlTextNode.appendData(""), with selected range on xmlTextNode from 0 to 1
+Range-mutations-appendData.html	xmlTextNode.appendData(""), with selected range on xmlTextNode from 0 to xmlTextNode.length
+Range-mutations-appendData.html	xmlTextNode.appendData(""), with selected range on xmlTextNode from 1 to 3
+Range-mutations-appendData.html	xmlTextNode.appendData(""), with selected range on xmlTextNode from 1 to xmlTextNode.length
 Range-mutations-appendData.html	xmlTextNode.appendData(""), with unselected range collapsed at (xmlTextNode, 0)
 Range-mutations-appendData.html	xmlTextNode.appendData(""), with unselected range collapsed at (xmlTextNode, 1)
 Range-mutations-appendData.html	xmlTextNode.appendData(""), with unselected range collapsed at (xmlTextNode, xmlTextNode.length)
@@ -23605,6 +23825,13 @@ Range-mutations-appendData.html	xmlTextNode.appendData(""), with unselected rang
 Range-mutations-appendData.html	xmlTextNode.appendData(""), with unselected range on xmlTextNode from 0 to xmlTextNode.length
 Range-mutations-appendData.html	xmlTextNode.appendData(""), with unselected range on xmlTextNode from 1 to 3
 Range-mutations-appendData.html	xmlTextNode.appendData(""), with unselected range on xmlTextNode from 1 to xmlTextNode.length
+Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with selected range collapsed at (xmlTextNode, 0)
+Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with selected range collapsed at (xmlTextNode, 1)
+Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with selected range collapsed at (xmlTextNode, xmlTextNode.length)
+Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with selected range on xmlTextNode from 0 to 1
+Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with selected range on xmlTextNode from 0 to xmlTextNode.length
+Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with selected range on xmlTextNode from 1 to 3
+Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with selected range on xmlTextNode from 1 to xmlTextNode.length
 Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with unselected range collapsed at (xmlTextNode, 0)
 Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with unselected range collapsed at (xmlTextNode, 1)
 Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with unselected range collapsed at (xmlTextNode, xmlTextNode.length)
@@ -23612,19 +23839,39 @@ Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with unselected r
 Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with unselected range on xmlTextNode from 0 to xmlTextNode.length
 Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with unselected range on xmlTextNode from 1 to 3
 Range-mutations-appendData.html	xmlTextNode.appendData("foo"), with unselected range on xmlTextNode from 1 to xmlTextNode.length
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with selected range collapsed at (foreignDoc, 0)
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with selected range collapsed at (foreignDoc, 1)
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with selected range on foreignDoc from 0 to 1
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with selected range on foreignDoc from 0 to 2
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with unselected range collapsed at (foreignDoc, 0)
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with unselected range collapsed at (foreignDoc, 1)
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with unselected range on foreignDoc from 0 to 1
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.doctype), with unselected range on foreignDoc from 0 to 2
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with selected range collapsed at (foreignDoc, 0)
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with selected range collapsed at (foreignDoc, 1)
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with selected range on foreignDoc from 0 to 1
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with selected range on foreignDoc from 0 to 2
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with unselected range collapsed at (foreignDoc, 0)
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with unselected range collapsed at (foreignDoc, 1)
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with unselected range on foreignDoc from 0 to 1
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, foreignDoc.documentElement), with unselected range on foreignDoc from 0 to 2
+Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, null), with selected range on foreignDoc from 0 to 1
 Range-mutations-insertBefore.html	foreignDoc.insertBefore(detachedComment, null), with unselected range on foreignDoc from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(document, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(document, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(document.doctype, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(document.doctype, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(foreignDoc, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(foreignDoc, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[0], paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[0], paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with selected range collapsed at (paras[0], 0)
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with selected range collapsed at (paras[0], 1)
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with selected range collapsed at (testDiv, 1)
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with selected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with selected range on testDiv from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with selected range on testDiv from 0 to 2
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with selected range on testDiv from 1 to 2
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with unselected range collapsed at (paras[0], 0)
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with unselected range collapsed at (paras[0], 1)
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with unselected range collapsed at (testDiv, 1)
@@ -23632,6 +23879,13 @@ Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with un
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with unselected range on testDiv from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with unselected range on testDiv from 0 to 2
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], null), with unselected range on testDiv from 1 to 2
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with selected range collapsed at (paras[0], 0)
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with selected range collapsed at (paras[0], 1)
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with selected range collapsed at (testDiv, 1)
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with selected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with selected range on testDiv from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with selected range on testDiv from 0 to 2
+Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with selected range on testDiv from 1 to 2
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with unselected range collapsed at (paras[0], 0)
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with unselected range collapsed at (paras[0], 1)
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with unselected range collapsed at (testDiv, 1)
@@ -23639,10 +23893,21 @@ Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].first
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with unselected range on testDiv from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with unselected range on testDiv from 0 to 2
 Range-mutations-insertBefore.html	paras[0].insertBefore(paras[1], paras[0].firstChild), with unselected range on testDiv from 1 to 2
+Range-mutations-insertBefore.html	paras[0].insertBefore(testDiv, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(testDiv, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	paras[0].insertBefore(xmlTextNode, paras[0].firstChild), with selected range collapsed at (paras[0], 0)
+Range-mutations-insertBefore.html	paras[0].insertBefore(xmlTextNode, paras[0].firstChild), with selected range collapsed at (paras[0], 1)
+Range-mutations-insertBefore.html	paras[0].insertBefore(xmlTextNode, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-insertBefore.html	paras[0].insertBefore(xmlTextNode, paras[0].firstChild), with unselected range collapsed at (paras[0], 0)
 Range-mutations-insertBefore.html	paras[0].insertBefore(xmlTextNode, paras[0].firstChild), with unselected range collapsed at (paras[0], 1)
 Range-mutations-insertBefore.html	paras[0].insertBefore(xmlTextNode, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with selected range collapsed at (paras[0], 0)
+Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with selected range collapsed at (paras[0], 1)
+Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with selected range collapsed at (testDiv, 1)
+Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with selected range collapsed at (testDiv, 2)
+Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with selected range on paras[0] from 0 to 1
+Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with selected range on testDiv from 0 to 2
+Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with selected range on testDiv from 1 to 2
 Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with unselected range collapsed at (paras[0], 0)
 Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with unselected range collapsed at (paras[0], 1)
 Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with unselected range collapsed at (testDiv, 1)
@@ -23650,136 +23915,273 @@ Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with
 Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with unselected range on paras[0] from 0 to 1
 Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with unselected range on testDiv from 0 to 2
 Range-mutations-insertBefore.html	testDiv.insertBefore(paras[0], paras[1]), with unselected range on testDiv from 1 to 2
+Range-mutations-insertData.html	comment.insertData(0, ""), with selected range collapsed at (comment, 0)
 Range-mutations-insertData.html	comment.insertData(0, ""), with unselected range collapsed at (comment, 0)
+Range-mutations-insertData.html	comment.insertData(0, "foo"), with selected range collapsed at (comment, 0)
 Range-mutations-insertData.html	comment.insertData(0, "foo"), with unselected range collapsed at (comment, 0)
+Range-mutations-insertData.html	comment.insertData(1, ""), with selected range collapsed at (comment, 1)
+Range-mutations-insertData.html	comment.insertData(1, ""), with selected range on comment from 1 to 3
 Range-mutations-insertData.html	comment.insertData(1, ""), with unselected range collapsed at (comment, 1)
 Range-mutations-insertData.html	comment.insertData(1, ""), with unselected range on comment from 1 to 3
+Range-mutations-insertData.html	comment.insertData(1, "foo"), with selected range collapsed at (comment, 1)
+Range-mutations-insertData.html	comment.insertData(1, "foo"), with selected range on comment from 1 to 3
 Range-mutations-insertData.html	comment.insertData(1, "foo"), with unselected range collapsed at (comment, 1)
 Range-mutations-insertData.html	comment.insertData(1, "foo"), with unselected range on comment from 1 to 3
+Range-mutations-insertData.html	comment.insertData(2, ""), with selected range on comment from 1 to 3
 Range-mutations-insertData.html	comment.insertData(2, ""), with unselected range on comment from 1 to 3
+Range-mutations-insertData.html	comment.insertData(2, "foo"), with selected range on comment from 1 to 3
 Range-mutations-insertData.html	comment.insertData(2, "foo"), with unselected range on comment from 1 to 3
+Range-mutations-insertData.html	comment.insertData(3, ""), with selected range on comment from 1 to 3
 Range-mutations-insertData.html	comment.insertData(3, ""), with unselected range on comment from 1 to 3
+Range-mutations-insertData.html	comment.insertData(3, "foo"), with selected range on comment from 1 to 3
 Range-mutations-insertData.html	comment.insertData(3, "foo"), with unselected range on comment from 1 to 3
+Range-mutations-insertData.html	comment.insertData(376, ""), with selected range on comment from 0 to 1
 Range-mutations-insertData.html	comment.insertData(376, ""), with unselected range on comment from 0 to 1
+Range-mutations-insertData.html	comment.insertData(376, "foo"), with selected range on comment from 0 to 1
 Range-mutations-insertData.html	comment.insertData(376, "foo"), with unselected range on comment from 0 to 1
+Range-mutations-insertData.html	comment.insertData(comment.length, ""), with selected range collapsed at (comment, comment.length)
 Range-mutations-insertData.html	comment.insertData(comment.length, ""), with unselected range collapsed at (comment, comment.length)
+Range-mutations-insertData.html	comment.insertData(comment.length, "foo"), with selected range collapsed at (comment, comment.length)
 Range-mutations-insertData.html	comment.insertData(comment.length, "foo"), with unselected range collapsed at (comment, comment.length)
+Range-mutations-insertData.html	detachedComment.insertData(0, ""), with selected range collapsed at (detachedComment, 0)
 Range-mutations-insertData.html	detachedComment.insertData(0, ""), with unselected range collapsed at (detachedComment, 0)
+Range-mutations-insertData.html	detachedComment.insertData(0, "foo"), with selected range collapsed at (detachedComment, 0)
 Range-mutations-insertData.html	detachedComment.insertData(0, "foo"), with unselected range collapsed at (detachedComment, 0)
+Range-mutations-insertData.html	detachedComment.insertData(1, ""), with selected range collapsed at (detachedComment, 1)
+Range-mutations-insertData.html	detachedComment.insertData(1, ""), with selected range on detachedComment from 1 to 3
 Range-mutations-insertData.html	detachedComment.insertData(1, ""), with unselected range collapsed at (detachedComment, 1)
 Range-mutations-insertData.html	detachedComment.insertData(1, ""), with unselected range on detachedComment from 1 to 3
+Range-mutations-insertData.html	detachedComment.insertData(1, "foo"), with selected range collapsed at (detachedComment, 1)
+Range-mutations-insertData.html	detachedComment.insertData(1, "foo"), with selected range on detachedComment from 1 to 3
 Range-mutations-insertData.html	detachedComment.insertData(1, "foo"), with unselected range collapsed at (detachedComment, 1)
 Range-mutations-insertData.html	detachedComment.insertData(1, "foo"), with unselected range on detachedComment from 1 to 3
+Range-mutations-insertData.html	detachedComment.insertData(2, ""), with selected range on detachedComment from 1 to 3
 Range-mutations-insertData.html	detachedComment.insertData(2, ""), with unselected range on detachedComment from 1 to 3
+Range-mutations-insertData.html	detachedComment.insertData(2, "foo"), with selected range on detachedComment from 1 to 3
 Range-mutations-insertData.html	detachedComment.insertData(2, "foo"), with unselected range on detachedComment from 1 to 3
+Range-mutations-insertData.html	detachedComment.insertData(3, ""), with selected range on detachedComment from 1 to 3
 Range-mutations-insertData.html	detachedComment.insertData(3, ""), with unselected range on detachedComment from 1 to 3
+Range-mutations-insertData.html	detachedComment.insertData(3, "foo"), with selected range on detachedComment from 1 to 3
 Range-mutations-insertData.html	detachedComment.insertData(3, "foo"), with unselected range on detachedComment from 1 to 3
+Range-mutations-insertData.html	detachedComment.insertData(376, ""), with selected range on detachedComment from 0 to 1
 Range-mutations-insertData.html	detachedComment.insertData(376, ""), with unselected range on detachedComment from 0 to 1
+Range-mutations-insertData.html	detachedComment.insertData(376, "foo"), with selected range on detachedComment from 0 to 1
 Range-mutations-insertData.html	detachedComment.insertData(376, "foo"), with unselected range on detachedComment from 0 to 1
+Range-mutations-insertData.html	detachedComment.insertData(detachedComment.length, ""), with selected range collapsed at (detachedComment, detachedComment.length)
 Range-mutations-insertData.html	detachedComment.insertData(detachedComment.length, ""), with unselected range collapsed at (detachedComment, detachedComment.length)
+Range-mutations-insertData.html	detachedComment.insertData(detachedComment.length, "foo"), with selected range collapsed at (detachedComment, detachedComment.length)
 Range-mutations-insertData.html	detachedComment.insertData(detachedComment.length, "foo"), with unselected range collapsed at (detachedComment, detachedComment.length)
+Range-mutations-insertData.html	detachedForeignComment.insertData(0, ""), with selected range collapsed at (detachedForeignComment, 0)
 Range-mutations-insertData.html	detachedForeignComment.insertData(0, ""), with unselected range collapsed at (detachedForeignComment, 0)
+Range-mutations-insertData.html	detachedForeignComment.insertData(0, "foo"), with selected range collapsed at (detachedForeignComment, 0)
 Range-mutations-insertData.html	detachedForeignComment.insertData(0, "foo"), with unselected range collapsed at (detachedForeignComment, 0)
+Range-mutations-insertData.html	detachedForeignComment.insertData(1, ""), with selected range collapsed at (detachedForeignComment, 1)
+Range-mutations-insertData.html	detachedForeignComment.insertData(1, ""), with selected range on detachedForeignComment from 1 to 3
 Range-mutations-insertData.html	detachedForeignComment.insertData(1, ""), with unselected range collapsed at (detachedForeignComment, 1)
 Range-mutations-insertData.html	detachedForeignComment.insertData(1, ""), with unselected range on detachedForeignComment from 1 to 3
+Range-mutations-insertData.html	detachedForeignComment.insertData(1, "foo"), with selected range collapsed at (detachedForeignComment, 1)
+Range-mutations-insertData.html	detachedForeignComment.insertData(1, "foo"), with selected range on detachedForeignComment from 1 to 3
 Range-mutations-insertData.html	detachedForeignComment.insertData(1, "foo"), with unselected range collapsed at (detachedForeignComment, 1)
 Range-mutations-insertData.html	detachedForeignComment.insertData(1, "foo"), with unselected range on detachedForeignComment from 1 to 3
+Range-mutations-insertData.html	detachedForeignComment.insertData(2, ""), with selected range on detachedForeignComment from 1 to 3
 Range-mutations-insertData.html	detachedForeignComment.insertData(2, ""), with unselected range on detachedForeignComment from 1 to 3
+Range-mutations-insertData.html	detachedForeignComment.insertData(2, "foo"), with selected range on detachedForeignComment from 1 to 3
 Range-mutations-insertData.html	detachedForeignComment.insertData(2, "foo"), with unselected range on detachedForeignComment from 1 to 3
+Range-mutations-insertData.html	detachedForeignComment.insertData(3, ""), with selected range on detachedForeignComment from 1 to 3
 Range-mutations-insertData.html	detachedForeignComment.insertData(3, ""), with unselected range on detachedForeignComment from 1 to 3
+Range-mutations-insertData.html	detachedForeignComment.insertData(3, "foo"), with selected range on detachedForeignComment from 1 to 3
 Range-mutations-insertData.html	detachedForeignComment.insertData(3, "foo"), with unselected range on detachedForeignComment from 1 to 3
+Range-mutations-insertData.html	detachedForeignComment.insertData(376, ""), with selected range on detachedForeignComment from 0 to 1
 Range-mutations-insertData.html	detachedForeignComment.insertData(376, ""), with unselected range on detachedForeignComment from 0 to 1
+Range-mutations-insertData.html	detachedForeignComment.insertData(376, "foo"), with selected range on detachedForeignComment from 0 to 1
 Range-mutations-insertData.html	detachedForeignComment.insertData(376, "foo"), with unselected range on detachedForeignComment from 0 to 1
+Range-mutations-insertData.html	detachedForeignComment.insertData(detachedForeignComment.length, ""), with selected range collapsed at (detachedForeignComment, detachedForeignComment.length)
 Range-mutations-insertData.html	detachedForeignComment.insertData(detachedForeignComment.length, ""), with unselected range collapsed at (detachedForeignComment, detachedForeignComment.length)
+Range-mutations-insertData.html	detachedForeignComment.insertData(detachedForeignComment.length, "foo"), with selected range collapsed at (detachedForeignComment, detachedForeignComment.length)
 Range-mutations-insertData.html	detachedForeignComment.insertData(detachedForeignComment.length, "foo"), with unselected range collapsed at (detachedForeignComment, detachedForeignComment.length)
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(0, ""), with selected range collapsed at (detachedForeignTextNode, 0)
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(0, ""), with unselected range collapsed at (detachedForeignTextNode, 0)
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(0, "foo"), with selected range collapsed at (detachedForeignTextNode, 0)
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(0, "foo"), with unselected range collapsed at (detachedForeignTextNode, 0)
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, ""), with selected range collapsed at (detachedForeignTextNode, 1)
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, ""), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, ""), with unselected range collapsed at (detachedForeignTextNode, 1)
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, ""), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, "foo"), with selected range collapsed at (detachedForeignTextNode, 1)
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, "foo"), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, "foo"), with unselected range collapsed at (detachedForeignTextNode, 1)
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(1, "foo"), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(2, ""), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(2, ""), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(2, "foo"), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(2, "foo"), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(3, ""), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(3, ""), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(3, "foo"), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(3, "foo"), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(376, ""), with selected range on detachedForeignTextNode from 0 to 1
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(376, ""), with unselected range on detachedForeignTextNode from 0 to 1
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(376, "foo"), with selected range on detachedForeignTextNode from 0 to 1
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(376, "foo"), with unselected range on detachedForeignTextNode from 0 to 1
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(detachedForeignTextNode.length, ""), with selected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(detachedForeignTextNode.length, ""), with unselected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
+Range-mutations-insertData.html	detachedForeignTextNode.insertData(detachedForeignTextNode.length, "foo"), with selected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
 Range-mutations-insertData.html	detachedForeignTextNode.insertData(detachedForeignTextNode.length, "foo"), with unselected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
+Range-mutations-insertData.html	detachedTextNode.insertData(0, ""), with selected range collapsed at (detachedTextNode, 0)
 Range-mutations-insertData.html	detachedTextNode.insertData(0, ""), with unselected range collapsed at (detachedTextNode, 0)
+Range-mutations-insertData.html	detachedTextNode.insertData(0, "foo"), with selected range collapsed at (detachedTextNode, 0)
 Range-mutations-insertData.html	detachedTextNode.insertData(0, "foo"), with unselected range collapsed at (detachedTextNode, 0)
+Range-mutations-insertData.html	detachedTextNode.insertData(1, ""), with selected range collapsed at (detachedTextNode, 1)
+Range-mutations-insertData.html	detachedTextNode.insertData(1, ""), with selected range on detachedTextNode from 1 to 3
 Range-mutations-insertData.html	detachedTextNode.insertData(1, ""), with unselected range collapsed at (detachedTextNode, 1)
 Range-mutations-insertData.html	detachedTextNode.insertData(1, ""), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-insertData.html	detachedTextNode.insertData(1, "foo"), with selected range collapsed at (detachedTextNode, 1)
+Range-mutations-insertData.html	detachedTextNode.insertData(1, "foo"), with selected range on detachedTextNode from 1 to 3
 Range-mutations-insertData.html	detachedTextNode.insertData(1, "foo"), with unselected range collapsed at (detachedTextNode, 1)
 Range-mutations-insertData.html	detachedTextNode.insertData(1, "foo"), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-insertData.html	detachedTextNode.insertData(2, ""), with selected range on detachedTextNode from 1 to 3
 Range-mutations-insertData.html	detachedTextNode.insertData(2, ""), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-insertData.html	detachedTextNode.insertData(2, "foo"), with selected range on detachedTextNode from 1 to 3
 Range-mutations-insertData.html	detachedTextNode.insertData(2, "foo"), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-insertData.html	detachedTextNode.insertData(3, ""), with selected range on detachedTextNode from 1 to 3
 Range-mutations-insertData.html	detachedTextNode.insertData(3, ""), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-insertData.html	detachedTextNode.insertData(3, "foo"), with selected range on detachedTextNode from 1 to 3
 Range-mutations-insertData.html	detachedTextNode.insertData(3, "foo"), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-insertData.html	detachedTextNode.insertData(376, ""), with selected range on detachedTextNode from 0 to 1
 Range-mutations-insertData.html	detachedTextNode.insertData(376, ""), with unselected range on detachedTextNode from 0 to 1
+Range-mutations-insertData.html	detachedTextNode.insertData(376, "foo"), with selected range on detachedTextNode from 0 to 1
 Range-mutations-insertData.html	detachedTextNode.insertData(376, "foo"), with unselected range on detachedTextNode from 0 to 1
+Range-mutations-insertData.html	detachedTextNode.insertData(detachedTextNode.length, ""), with selected range collapsed at (detachedTextNode, detachedTextNode.length)
 Range-mutations-insertData.html	detachedTextNode.insertData(detachedTextNode.length, ""), with unselected range collapsed at (detachedTextNode, detachedTextNode.length)
+Range-mutations-insertData.html	detachedTextNode.insertData(detachedTextNode.length, "foo"), with selected range collapsed at (detachedTextNode, detachedTextNode.length)
 Range-mutations-insertData.html	detachedTextNode.insertData(detachedTextNode.length, "foo"), with unselected range collapsed at (detachedTextNode, detachedTextNode.length)
+Range-mutations-insertData.html	detachedXmlComment.insertData(0, ""), with selected range collapsed at (detachedXmlComment, 0)
 Range-mutations-insertData.html	detachedXmlComment.insertData(0, ""), with unselected range collapsed at (detachedXmlComment, 0)
+Range-mutations-insertData.html	detachedXmlComment.insertData(0, "foo"), with selected range collapsed at (detachedXmlComment, 0)
 Range-mutations-insertData.html	detachedXmlComment.insertData(0, "foo"), with unselected range collapsed at (detachedXmlComment, 0)
+Range-mutations-insertData.html	detachedXmlComment.insertData(1, ""), with selected range collapsed at (detachedXmlComment, 1)
+Range-mutations-insertData.html	detachedXmlComment.insertData(1, ""), with selected range on detachedXmlComment from 1 to 3
 Range-mutations-insertData.html	detachedXmlComment.insertData(1, ""), with unselected range collapsed at (detachedXmlComment, 1)
 Range-mutations-insertData.html	detachedXmlComment.insertData(1, ""), with unselected range on detachedXmlComment from 1 to 3
+Range-mutations-insertData.html	detachedXmlComment.insertData(1, "foo"), with selected range collapsed at (detachedXmlComment, 1)
+Range-mutations-insertData.html	detachedXmlComment.insertData(1, "foo"), with selected range on detachedXmlComment from 1 to 3
 Range-mutations-insertData.html	detachedXmlComment.insertData(1, "foo"), with unselected range collapsed at (detachedXmlComment, 1)
 Range-mutations-insertData.html	detachedXmlComment.insertData(1, "foo"), with unselected range on detachedXmlComment from 1 to 3
+Range-mutations-insertData.html	detachedXmlComment.insertData(2, ""), with selected range on detachedXmlComment from 1 to 3
 Range-mutations-insertData.html	detachedXmlComment.insertData(2, ""), with unselected range on detachedXmlComment from 1 to 3
+Range-mutations-insertData.html	detachedXmlComment.insertData(2, "foo"), with selected range on detachedXmlComment from 1 to 3
 Range-mutations-insertData.html	detachedXmlComment.insertData(2, "foo"), with unselected range on detachedXmlComment from 1 to 3
+Range-mutations-insertData.html	detachedXmlComment.insertData(3, ""), with selected range on detachedXmlComment from 1 to 3
 Range-mutations-insertData.html	detachedXmlComment.insertData(3, ""), with unselected range on detachedXmlComment from 1 to 3
+Range-mutations-insertData.html	detachedXmlComment.insertData(3, "foo"), with selected range on detachedXmlComment from 1 to 3
 Range-mutations-insertData.html	detachedXmlComment.insertData(3, "foo"), with unselected range on detachedXmlComment from 1 to 3
+Range-mutations-insertData.html	detachedXmlComment.insertData(376, ""), with selected range on detachedXmlComment from 0 to 1
 Range-mutations-insertData.html	detachedXmlComment.insertData(376, ""), with unselected range on detachedXmlComment from 0 to 1
+Range-mutations-insertData.html	detachedXmlComment.insertData(376, "foo"), with selected range on detachedXmlComment from 0 to 1
 Range-mutations-insertData.html	detachedXmlComment.insertData(376, "foo"), with unselected range on detachedXmlComment from 0 to 1
+Range-mutations-insertData.html	detachedXmlComment.insertData(detachedXmlComment.length, ""), with selected range collapsed at (detachedXmlComment, detachedXmlComment.length)
 Range-mutations-insertData.html	detachedXmlComment.insertData(detachedXmlComment.length, ""), with unselected range collapsed at (detachedXmlComment, detachedXmlComment.length)
+Range-mutations-insertData.html	detachedXmlComment.insertData(detachedXmlComment.length, "foo"), with selected range collapsed at (detachedXmlComment, detachedXmlComment.length)
 Range-mutations-insertData.html	detachedXmlComment.insertData(detachedXmlComment.length, "foo"), with unselected range collapsed at (detachedXmlComment, detachedXmlComment.length)
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(0, ""), with selected range collapsed at (detachedXmlTextNode, 0)
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(0, ""), with unselected range collapsed at (detachedXmlTextNode, 0)
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(0, "foo"), with selected range collapsed at (detachedXmlTextNode, 0)
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(0, "foo"), with unselected range collapsed at (detachedXmlTextNode, 0)
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, ""), with selected range collapsed at (detachedXmlTextNode, 1)
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, ""), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, ""), with unselected range collapsed at (detachedXmlTextNode, 1)
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, ""), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, "foo"), with selected range collapsed at (detachedXmlTextNode, 1)
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, "foo"), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, "foo"), with unselected range collapsed at (detachedXmlTextNode, 1)
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(1, "foo"), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(2, ""), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(2, ""), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(2, "foo"), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(2, "foo"), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(3, ""), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(3, ""), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(3, "foo"), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(3, "foo"), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(376, ""), with selected range on detachedXmlTextNode from 0 to 1
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(376, ""), with unselected range on detachedXmlTextNode from 0 to 1
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(376, "foo"), with selected range on detachedXmlTextNode from 0 to 1
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(376, "foo"), with unselected range on detachedXmlTextNode from 0 to 1
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(detachedXmlTextNode.length, ""), with selected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(detachedXmlTextNode.length, ""), with unselected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
+Range-mutations-insertData.html	detachedXmlTextNode.insertData(detachedXmlTextNode.length, "foo"), with selected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
 Range-mutations-insertData.html	detachedXmlTextNode.insertData(detachedXmlTextNode.length, "foo"), with unselected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
+Range-mutations-insertData.html	foreignComment.insertData(0, ""), with selected range collapsed at (foreignComment, 0)
 Range-mutations-insertData.html	foreignComment.insertData(0, ""), with unselected range collapsed at (foreignComment, 0)
+Range-mutations-insertData.html	foreignComment.insertData(0, "foo"), with selected range collapsed at (foreignComment, 0)
 Range-mutations-insertData.html	foreignComment.insertData(0, "foo"), with unselected range collapsed at (foreignComment, 0)
+Range-mutations-insertData.html	foreignComment.insertData(1, ""), with selected range collapsed at (foreignComment, 1)
+Range-mutations-insertData.html	foreignComment.insertData(1, ""), with selected range on foreignComment from 1 to 3
 Range-mutations-insertData.html	foreignComment.insertData(1, ""), with unselected range collapsed at (foreignComment, 1)
 Range-mutations-insertData.html	foreignComment.insertData(1, ""), with unselected range on foreignComment from 1 to 3
+Range-mutations-insertData.html	foreignComment.insertData(1, "foo"), with selected range collapsed at (foreignComment, 1)
+Range-mutations-insertData.html	foreignComment.insertData(1, "foo"), with selected range on foreignComment from 1 to 3
 Range-mutations-insertData.html	foreignComment.insertData(1, "foo"), with unselected range collapsed at (foreignComment, 1)
 Range-mutations-insertData.html	foreignComment.insertData(1, "foo"), with unselected range on foreignComment from 1 to 3
+Range-mutations-insertData.html	foreignComment.insertData(2, ""), with selected range on foreignComment from 1 to 3
 Range-mutations-insertData.html	foreignComment.insertData(2, ""), with unselected range on foreignComment from 1 to 3
+Range-mutations-insertData.html	foreignComment.insertData(2, "foo"), with selected range on foreignComment from 1 to 3
 Range-mutations-insertData.html	foreignComment.insertData(2, "foo"), with unselected range on foreignComment from 1 to 3
+Range-mutations-insertData.html	foreignComment.insertData(3, ""), with selected range on foreignComment from 1 to 3
 Range-mutations-insertData.html	foreignComment.insertData(3, ""), with unselected range on foreignComment from 1 to 3
+Range-mutations-insertData.html	foreignComment.insertData(3, "foo"), with selected range on foreignComment from 1 to 3
 Range-mutations-insertData.html	foreignComment.insertData(3, "foo"), with unselected range on foreignComment from 1 to 3
+Range-mutations-insertData.html	foreignComment.insertData(376, ""), with selected range on foreignComment from 0 to 1
 Range-mutations-insertData.html	foreignComment.insertData(376, ""), with unselected range on foreignComment from 0 to 1
+Range-mutations-insertData.html	foreignComment.insertData(376, "foo"), with selected range on foreignComment from 0 to 1
 Range-mutations-insertData.html	foreignComment.insertData(376, "foo"), with unselected range on foreignComment from 0 to 1
+Range-mutations-insertData.html	foreignComment.insertData(foreignComment.length, ""), with selected range collapsed at (foreignComment, foreignComment.length)
 Range-mutations-insertData.html	foreignComment.insertData(foreignComment.length, ""), with unselected range collapsed at (foreignComment, foreignComment.length)
+Range-mutations-insertData.html	foreignComment.insertData(foreignComment.length, "foo"), with selected range collapsed at (foreignComment, foreignComment.length)
 Range-mutations-insertData.html	foreignComment.insertData(foreignComment.length, "foo"), with unselected range collapsed at (foreignComment, foreignComment.length)
+Range-mutations-insertData.html	foreignTextNode.insertData(0, ""), with selected range collapsed at (foreignTextNode, 0)
 Range-mutations-insertData.html	foreignTextNode.insertData(0, ""), with unselected range collapsed at (foreignTextNode, 0)
+Range-mutations-insertData.html	foreignTextNode.insertData(0, "foo"), with selected range collapsed at (foreignTextNode, 0)
 Range-mutations-insertData.html	foreignTextNode.insertData(0, "foo"), with unselected range collapsed at (foreignTextNode, 0)
+Range-mutations-insertData.html	foreignTextNode.insertData(1, ""), with selected range collapsed at (foreignTextNode, 1)
+Range-mutations-insertData.html	foreignTextNode.insertData(1, ""), with selected range on foreignTextNode from 1 to 3
 Range-mutations-insertData.html	foreignTextNode.insertData(1, ""), with unselected range collapsed at (foreignTextNode, 1)
 Range-mutations-insertData.html	foreignTextNode.insertData(1, ""), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-insertData.html	foreignTextNode.insertData(1, "foo"), with selected range collapsed at (foreignTextNode, 1)
+Range-mutations-insertData.html	foreignTextNode.insertData(1, "foo"), with selected range on foreignTextNode from 1 to 3
 Range-mutations-insertData.html	foreignTextNode.insertData(1, "foo"), with unselected range collapsed at (foreignTextNode, 1)
 Range-mutations-insertData.html	foreignTextNode.insertData(1, "foo"), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-insertData.html	foreignTextNode.insertData(2, ""), with selected range on foreignTextNode from 1 to 3
 Range-mutations-insertData.html	foreignTextNode.insertData(2, ""), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-insertData.html	foreignTextNode.insertData(2, "foo"), with selected range on foreignTextNode from 1 to 3
 Range-mutations-insertData.html	foreignTextNode.insertData(2, "foo"), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-insertData.html	foreignTextNode.insertData(3, ""), with selected range on foreignTextNode from 1 to 3
 Range-mutations-insertData.html	foreignTextNode.insertData(3, ""), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-insertData.html	foreignTextNode.insertData(3, "foo"), with selected range on foreignTextNode from 1 to 3
 Range-mutations-insertData.html	foreignTextNode.insertData(3, "foo"), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-insertData.html	foreignTextNode.insertData(376, ""), with selected range on foreignTextNode from 0 to 1
 Range-mutations-insertData.html	foreignTextNode.insertData(376, ""), with unselected range on foreignTextNode from 0 to 1
+Range-mutations-insertData.html	foreignTextNode.insertData(376, "foo"), with selected range on foreignTextNode from 0 to 1
 Range-mutations-insertData.html	foreignTextNode.insertData(376, "foo"), with unselected range on foreignTextNode from 0 to 1
+Range-mutations-insertData.html	foreignTextNode.insertData(foreignTextNode.length, ""), with selected range collapsed at (foreignTextNode, foreignTextNode.length)
 Range-mutations-insertData.html	foreignTextNode.insertData(foreignTextNode.length, ""), with unselected range collapsed at (foreignTextNode, foreignTextNode.length)
+Range-mutations-insertData.html	foreignTextNode.insertData(foreignTextNode.length, "foo"), with selected range collapsed at (foreignTextNode, foreignTextNode.length)
 Range-mutations-insertData.html	foreignTextNode.insertData(foreignTextNode.length, "foo"), with unselected range collapsed at (foreignTextNode, foreignTextNode.length)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(0, ""), with selected range collapsed at (paras[0].firstChild, 0)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(0, ""), with unselected range collapsed at (paras[0].firstChild, 0)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(0, "foo"), with selected range collapsed at (paras[0].firstChild, 0)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(0, "foo"), with unselected range collapsed at (paras[0].firstChild, 0)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, ""), with selected range collapsed at (paras[0].firstChild, 1)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, ""), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, ""), with unselected range collapsed at (paras[0].firstChild, 1)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, ""), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with selected range collapsed at (paras[0], 0)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with selected range collapsed at (paras[0], 1)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with selected range collapsed at (paras[0].firstChild, 1)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with selected range on paras[0] from 0 to 1
+Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with unselected range collapsed at (paras[0], 0)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with unselected range collapsed at (paras[0], 1)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with unselected range collapsed at (paras[0].firstChild, 1)
@@ -23787,65 +24189,129 @@ Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with u
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with unselected range from (paras[0].firstChild, 1) to (paras[0], 1)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with unselected range on paras[0] from 0 to 1
 Range-mutations-insertData.html	paras[0].firstChild.insertData(1, "foo"), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[0].firstChild.insertData(2, ""), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[0].firstChild.insertData(2, ""), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[0].firstChild.insertData(2, "foo"), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(2, "foo"), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(2, "foo"), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[0].firstChild.insertData(2, "foo"), with unselected range from (paras[0], 0) to (paras[0].firstChild, 3)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(2, "foo"), with unselected range from (paras[0].firstChild, 1) to (paras[0], 1)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(2, "foo"), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[0].firstChild.insertData(3, ""), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[0].firstChild.insertData(3, ""), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[0].firstChild.insertData(3, "foo"), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(3, "foo"), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(3, "foo"), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[0].firstChild.insertData(3, "foo"), with unselected range from (paras[0], 0) to (paras[0].firstChild, 3)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(3, "foo"), with unselected range from (paras[0].firstChild, 1) to (paras[0], 1)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(3, "foo"), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[0].firstChild.insertData(376, ""), with selected range on paras[0].firstChild from 0 to 1
 Range-mutations-insertData.html	paras[0].firstChild.insertData(376, ""), with unselected range on paras[0].firstChild from 0 to 1
+Range-mutations-insertData.html	paras[0].firstChild.insertData(376, "foo"), with selected range on paras[0].firstChild from 0 to 1
 Range-mutations-insertData.html	paras[0].firstChild.insertData(376, "foo"), with unselected range on paras[0].firstChild from 0 to 1
+Range-mutations-insertData.html	paras[0].firstChild.insertData(paras[0].firstChild.length, ""), with selected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(paras[0].firstChild.length, ""), with unselected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
+Range-mutations-insertData.html	paras[0].firstChild.insertData(paras[0].firstChild.length, "foo"), with selected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
 Range-mutations-insertData.html	paras[0].firstChild.insertData(paras[0].firstChild.length, "foo"), with unselected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
+Range-mutations-insertData.html	paras[1].firstChild.insertData(0, ""), with selected range collapsed at (paras[1].firstChild, 0)
 Range-mutations-insertData.html	paras[1].firstChild.insertData(0, ""), with unselected range collapsed at (paras[1].firstChild, 0)
+Range-mutations-insertData.html	paras[1].firstChild.insertData(0, "foo"), with selected range collapsed at (paras[1].firstChild, 0)
 Range-mutations-insertData.html	paras[1].firstChild.insertData(0, "foo"), with unselected range collapsed at (paras[1].firstChild, 0)
+Range-mutations-insertData.html	paras[1].firstChild.insertData(1, ""), with selected range collapsed at (paras[1].firstChild, 1)
+Range-mutations-insertData.html	paras[1].firstChild.insertData(1, ""), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[1].firstChild.insertData(1, ""), with unselected range collapsed at (paras[1].firstChild, 1)
 Range-mutations-insertData.html	paras[1].firstChild.insertData(1, ""), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[1].firstChild.insertData(1, "foo"), with selected range collapsed at (paras[1].firstChild, 1)
+Range-mutations-insertData.html	paras[1].firstChild.insertData(1, "foo"), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[1].firstChild.insertData(1, "foo"), with unselected range collapsed at (paras[1].firstChild, 1)
 Range-mutations-insertData.html	paras[1].firstChild.insertData(1, "foo"), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[1].firstChild.insertData(2, ""), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[1].firstChild.insertData(2, ""), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[1].firstChild.insertData(2, "foo"), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[1].firstChild.insertData(2, "foo"), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[1].firstChild.insertData(3, ""), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[1].firstChild.insertData(3, ""), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[1].firstChild.insertData(3, "foo"), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-insertData.html	paras[1].firstChild.insertData(3, "foo"), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-insertData.html	paras[1].firstChild.insertData(376, ""), with selected range on paras[1].firstChild from 0 to 1
 Range-mutations-insertData.html	paras[1].firstChild.insertData(376, ""), with unselected range on paras[1].firstChild from 0 to 1
+Range-mutations-insertData.html	paras[1].firstChild.insertData(376, "foo"), with selected range on paras[1].firstChild from 0 to 1
 Range-mutations-insertData.html	paras[1].firstChild.insertData(376, "foo"), with unselected range on paras[1].firstChild from 0 to 1
+Range-mutations-insertData.html	paras[1].firstChild.insertData(paras[1].firstChild.length, ""), with selected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
 Range-mutations-insertData.html	paras[1].firstChild.insertData(paras[1].firstChild.length, ""), with unselected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
+Range-mutations-insertData.html	paras[1].firstChild.insertData(paras[1].firstChild.length, "foo"), with selected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
 Range-mutations-insertData.html	paras[1].firstChild.insertData(paras[1].firstChild.length, "foo"), with unselected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
+Range-mutations-insertData.html	xmlComment.insertData(0, ""), with selected range collapsed at (xmlComment, 0)
 Range-mutations-insertData.html	xmlComment.insertData(0, ""), with unselected range collapsed at (xmlComment, 0)
+Range-mutations-insertData.html	xmlComment.insertData(0, "foo"), with selected range collapsed at (xmlComment, 0)
 Range-mutations-insertData.html	xmlComment.insertData(0, "foo"), with unselected range collapsed at (xmlComment, 0)
+Range-mutations-insertData.html	xmlComment.insertData(1, ""), with selected range collapsed at (xmlComment, 1)
+Range-mutations-insertData.html	xmlComment.insertData(1, ""), with selected range on xmlComment from 1 to 3
 Range-mutations-insertData.html	xmlComment.insertData(1, ""), with unselected range collapsed at (xmlComment, 1)
 Range-mutations-insertData.html	xmlComment.insertData(1, ""), with unselected range on xmlComment from 1 to 3
+Range-mutations-insertData.html	xmlComment.insertData(1, "foo"), with selected range collapsed at (xmlComment, 1)
+Range-mutations-insertData.html	xmlComment.insertData(1, "foo"), with selected range on xmlComment from 1 to 3
 Range-mutations-insertData.html	xmlComment.insertData(1, "foo"), with unselected range collapsed at (xmlComment, 1)
 Range-mutations-insertData.html	xmlComment.insertData(1, "foo"), with unselected range on xmlComment from 1 to 3
+Range-mutations-insertData.html	xmlComment.insertData(2, ""), with selected range on xmlComment from 1 to 3
 Range-mutations-insertData.html	xmlComment.insertData(2, ""), with unselected range on xmlComment from 1 to 3
+Range-mutations-insertData.html	xmlComment.insertData(2, "foo"), with selected range on xmlComment from 1 to 3
 Range-mutations-insertData.html	xmlComment.insertData(2, "foo"), with unselected range on xmlComment from 1 to 3
+Range-mutations-insertData.html	xmlComment.insertData(3, ""), with selected range on xmlComment from 1 to 3
 Range-mutations-insertData.html	xmlComment.insertData(3, ""), with unselected range on xmlComment from 1 to 3
+Range-mutations-insertData.html	xmlComment.insertData(3, "foo"), with selected range on xmlComment from 1 to 3
 Range-mutations-insertData.html	xmlComment.insertData(3, "foo"), with unselected range on xmlComment from 1 to 3
+Range-mutations-insertData.html	xmlComment.insertData(376, ""), with selected range on xmlComment from 0 to 1
 Range-mutations-insertData.html	xmlComment.insertData(376, ""), with unselected range on xmlComment from 0 to 1
+Range-mutations-insertData.html	xmlComment.insertData(376, "foo"), with selected range on xmlComment from 0 to 1
 Range-mutations-insertData.html	xmlComment.insertData(376, "foo"), with unselected range on xmlComment from 0 to 1
+Range-mutations-insertData.html	xmlComment.insertData(xmlComment.length, ""), with selected range collapsed at (xmlComment, xmlComment.length)
 Range-mutations-insertData.html	xmlComment.insertData(xmlComment.length, ""), with unselected range collapsed at (xmlComment, xmlComment.length)
+Range-mutations-insertData.html	xmlComment.insertData(xmlComment.length, "foo"), with selected range collapsed at (xmlComment, xmlComment.length)
 Range-mutations-insertData.html	xmlComment.insertData(xmlComment.length, "foo"), with unselected range collapsed at (xmlComment, xmlComment.length)
+Range-mutations-insertData.html	xmlTextNode.insertData(0, ""), with selected range collapsed at (xmlTextNode, 0)
 Range-mutations-insertData.html	xmlTextNode.insertData(0, ""), with unselected range collapsed at (xmlTextNode, 0)
+Range-mutations-insertData.html	xmlTextNode.insertData(0, "foo"), with selected range collapsed at (xmlTextNode, 0)
 Range-mutations-insertData.html	xmlTextNode.insertData(0, "foo"), with unselected range collapsed at (xmlTextNode, 0)
+Range-mutations-insertData.html	xmlTextNode.insertData(1, ""), with selected range collapsed at (xmlTextNode, 1)
+Range-mutations-insertData.html	xmlTextNode.insertData(1, ""), with selected range on xmlTextNode from 1 to 3
 Range-mutations-insertData.html	xmlTextNode.insertData(1, ""), with unselected range collapsed at (xmlTextNode, 1)
 Range-mutations-insertData.html	xmlTextNode.insertData(1, ""), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-insertData.html	xmlTextNode.insertData(1, "foo"), with selected range collapsed at (xmlTextNode, 1)
+Range-mutations-insertData.html	xmlTextNode.insertData(1, "foo"), with selected range on xmlTextNode from 1 to 3
 Range-mutations-insertData.html	xmlTextNode.insertData(1, "foo"), with unselected range collapsed at (xmlTextNode, 1)
 Range-mutations-insertData.html	xmlTextNode.insertData(1, "foo"), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-insertData.html	xmlTextNode.insertData(2, ""), with selected range on xmlTextNode from 1 to 3
 Range-mutations-insertData.html	xmlTextNode.insertData(2, ""), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-insertData.html	xmlTextNode.insertData(2, "foo"), with selected range on xmlTextNode from 1 to 3
 Range-mutations-insertData.html	xmlTextNode.insertData(2, "foo"), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-insertData.html	xmlTextNode.insertData(3, ""), with selected range on xmlTextNode from 1 to 3
 Range-mutations-insertData.html	xmlTextNode.insertData(3, ""), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-insertData.html	xmlTextNode.insertData(3, "foo"), with selected range on xmlTextNode from 1 to 3
 Range-mutations-insertData.html	xmlTextNode.insertData(3, "foo"), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-insertData.html	xmlTextNode.insertData(376, ""), with selected range on xmlTextNode from 0 to 1
 Range-mutations-insertData.html	xmlTextNode.insertData(376, ""), with unselected range on xmlTextNode from 0 to 1
+Range-mutations-insertData.html	xmlTextNode.insertData(376, "foo"), with selected range on xmlTextNode from 0 to 1
 Range-mutations-insertData.html	xmlTextNode.insertData(376, "foo"), with unselected range on xmlTextNode from 0 to 1
+Range-mutations-insertData.html	xmlTextNode.insertData(xmlTextNode.length, ""), with selected range collapsed at (xmlTextNode, xmlTextNode.length)
 Range-mutations-insertData.html	xmlTextNode.insertData(xmlTextNode.length, ""), with unselected range collapsed at (xmlTextNode, xmlTextNode.length)
+Range-mutations-insertData.html	xmlTextNode.insertData(xmlTextNode.length, "foo"), with selected range collapsed at (xmlTextNode, xmlTextNode.length)
 Range-mutations-insertData.html	xmlTextNode.insertData(xmlTextNode.length, "foo"), with unselected range collapsed at (xmlTextNode, xmlTextNode.length)
 Range-mutations-normalize.html	Live range updates properly when collapsed into single merged text node in range of multiple
 Range-mutations-normalize.html	Live range updates properly when its boundaries are initially indices to merged nodes
 Range-mutations-normalize.html	Live range updates properly when its boundaries span multiple merged text nodes
 Range-mutations-normalize.html	Live range updates properly when text nodes merged before and after them
+Range-mutations-removeChild.html	foreignDoc.documentElement.parentNode.removeChild(foreignDoc.documentElement), with selected range on foreignDoc from 0 to foreignDoc.childNodes.length
 Range-mutations-removeChild.html	foreignDoc.documentElement.parentNode.removeChild(foreignDoc.documentElement), with unselected range on foreignDoc from 0 to foreignDoc.childNodes.length
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range collapsed at (paras[0], 0)
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range collapsed at (paras[0], 1)
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range collapsed at (testDiv, 0)
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range collapsed at (testDiv, 1)
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range collapsed at (testDiv, 2)
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range on paras[0] from 0 to 1
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range on testDiv from 0 to 1
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range on testDiv from 0 to 2
+Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with selected range on testDiv from 1 to 2
 Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with unselected range collapsed at (paras[0], 0)
 Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with unselected range collapsed at (paras[0], 1)
 Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with unselected range collapsed at (testDiv, 0)
@@ -23855,18 +24321,37 @@ Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with
 Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with unselected range on testDiv from 0 to 1
 Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with unselected range on testDiv from 0 to 2
 Range-mutations-removeChild.html	paras[0].parentNode.removeChild(paras[0]), with unselected range on testDiv from 1 to 2
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with selected range collapsed at (foreignDoc, 0)
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with selected range collapsed at (foreignDoc, 1)
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with selected range on foreignDoc from 0 to 1
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with selected range on foreignDoc from 0 to 2
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with unselected range collapsed at (foreignDoc, 0)
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with unselected range collapsed at (foreignDoc, 1)
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with unselected range on foreignDoc from 0 to 1
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.doctype), with unselected range on foreignDoc from 0 to 2
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with selected range collapsed at (foreignDoc, 0)
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with selected range collapsed at (foreignDoc, 1)
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with selected range on foreignDoc from 0 to 1
+Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with selected range on foreignDoc from 0 to 2
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with unselected range collapsed at (foreignDoc, 0)
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with unselected range collapsed at (foreignDoc, 1)
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with unselected range on foreignDoc from 0 to 1
 Range-mutations-replaceChild.html	foreignDoc.replaceChild(detachedComment, foreignDoc.documentElement), with unselected range on foreignDoc from 0 to 2
+Range-mutations-replaceChild.html	paras[0].replaceChild(document, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-replaceChild.html	paras[0].replaceChild(document, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	paras[0].replaceChild(document.doctype, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-replaceChild.html	paras[0].replaceChild(document.doctype, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	paras[0].replaceChild(foreignDoc, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-replaceChild.html	paras[0].replaceChild(foreignDoc, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[0], paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-replaceChild.html	paras[0].replaceChild(paras[0], paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with selected range collapsed at (paras[0], 0)
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with selected range collapsed at (paras[0], 1)
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with selected range collapsed at (testDiv, 1)
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with selected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with selected range on testDiv from 0 to 1
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with selected range on testDiv from 0 to 2
+Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with selected range on testDiv from 1 to 2
 Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with unselected range collapsed at (paras[0], 0)
 Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with unselected range collapsed at (paras[0], 1)
 Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with unselected range collapsed at (testDiv, 1)
@@ -23874,10 +24359,21 @@ Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].first
 Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with unselected range on testDiv from 0 to 1
 Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with unselected range on testDiv from 0 to 2
 Range-mutations-replaceChild.html	paras[0].replaceChild(paras[1], paras[0].firstChild), with unselected range on testDiv from 1 to 2
+Range-mutations-replaceChild.html	paras[0].replaceChild(testDiv, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-replaceChild.html	paras[0].replaceChild(testDiv, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	paras[0].replaceChild(xmlTextNode, paras[0].firstChild), with selected range collapsed at (paras[0], 0)
+Range-mutations-replaceChild.html	paras[0].replaceChild(xmlTextNode, paras[0].firstChild), with selected range collapsed at (paras[0], 1)
+Range-mutations-replaceChild.html	paras[0].replaceChild(xmlTextNode, paras[0].firstChild), with selected range on paras[0] from 0 to 1
 Range-mutations-replaceChild.html	paras[0].replaceChild(xmlTextNode, paras[0].firstChild), with unselected range collapsed at (paras[0], 0)
 Range-mutations-replaceChild.html	paras[0].replaceChild(xmlTextNode, paras[0].firstChild), with unselected range collapsed at (paras[0], 1)
 Range-mutations-replaceChild.html	paras[0].replaceChild(xmlTextNode, paras[0].firstChild), with unselected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with selected range collapsed at (paras[0], 0)
+Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with selected range collapsed at (paras[0], 1)
+Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with selected range collapsed at (testDiv, 1)
+Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with selected range collapsed at (testDiv, 2)
+Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with selected range on paras[0] from 0 to 1
+Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with selected range on testDiv from 0 to 2
+Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with selected range on testDiv from 1 to 2
 Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with unselected range collapsed at (paras[0], 0)
 Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with unselected range collapsed at (paras[0], 1)
 Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with unselected range collapsed at (testDiv, 1)
@@ -23885,35 +24381,71 @@ Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with
 Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with unselected range on paras[0] from 0 to 1
 Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with unselected range on testDiv from 0 to 2
 Range-mutations-replaceChild.html	testDiv.replaceChild(paras[0], paras[0]), with unselected range on testDiv from 1 to 2
+Range-mutations-splitText.html	detachedForeignTextNode.splitText(0), with selected range collapsed at (detachedForeignTextNode, 0)
 Range-mutations-splitText.html	detachedForeignTextNode.splitText(0), with unselected range collapsed at (detachedForeignTextNode, 0)
+Range-mutations-splitText.html	detachedForeignTextNode.splitText(1), with selected range collapsed at (detachedForeignTextNode, 1)
+Range-mutations-splitText.html	detachedForeignTextNode.splitText(1), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-splitText.html	detachedForeignTextNode.splitText(1), with unselected range collapsed at (detachedForeignTextNode, 1)
 Range-mutations-splitText.html	detachedForeignTextNode.splitText(1), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-splitText.html	detachedForeignTextNode.splitText(2), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-splitText.html	detachedForeignTextNode.splitText(2), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-splitText.html	detachedForeignTextNode.splitText(3), with selected range on detachedForeignTextNode from 1 to 3
 Range-mutations-splitText.html	detachedForeignTextNode.splitText(3), with unselected range on detachedForeignTextNode from 1 to 3
+Range-mutations-splitText.html	detachedForeignTextNode.splitText(376), with selected range on detachedForeignTextNode from 0 to 1
 Range-mutations-splitText.html	detachedForeignTextNode.splitText(376), with unselected range on detachedForeignTextNode from 0 to 1
+Range-mutations-splitText.html	detachedForeignTextNode.splitText(detachedForeignTextNode.length), with selected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
 Range-mutations-splitText.html	detachedForeignTextNode.splitText(detachedForeignTextNode.length), with unselected range collapsed at (detachedForeignTextNode, detachedForeignTextNode.length)
+Range-mutations-splitText.html	detachedTextNode.splitText(0), with selected range collapsed at (detachedTextNode, 0)
 Range-mutations-splitText.html	detachedTextNode.splitText(0), with unselected range collapsed at (detachedTextNode, 0)
+Range-mutations-splitText.html	detachedTextNode.splitText(1), with selected range collapsed at (detachedTextNode, 1)
+Range-mutations-splitText.html	detachedTextNode.splitText(1), with selected range on detachedTextNode from 1 to 3
 Range-mutations-splitText.html	detachedTextNode.splitText(1), with unselected range collapsed at (detachedTextNode, 1)
 Range-mutations-splitText.html	detachedTextNode.splitText(1), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-splitText.html	detachedTextNode.splitText(2), with selected range on detachedTextNode from 1 to 3
 Range-mutations-splitText.html	detachedTextNode.splitText(2), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-splitText.html	detachedTextNode.splitText(3), with selected range on detachedTextNode from 1 to 3
 Range-mutations-splitText.html	detachedTextNode.splitText(3), with unselected range on detachedTextNode from 1 to 3
+Range-mutations-splitText.html	detachedTextNode.splitText(376), with selected range on detachedTextNode from 0 to 1
 Range-mutations-splitText.html	detachedTextNode.splitText(376), with unselected range on detachedTextNode from 0 to 1
+Range-mutations-splitText.html	detachedTextNode.splitText(detachedTextNode.length), with selected range collapsed at (detachedTextNode, detachedTextNode.length)
 Range-mutations-splitText.html	detachedTextNode.splitText(detachedTextNode.length), with unselected range collapsed at (detachedTextNode, detachedTextNode.length)
+Range-mutations-splitText.html	detachedXmlTextNode.splitText(0), with selected range collapsed at (detachedXmlTextNode, 0)
 Range-mutations-splitText.html	detachedXmlTextNode.splitText(0), with unselected range collapsed at (detachedXmlTextNode, 0)
+Range-mutations-splitText.html	detachedXmlTextNode.splitText(1), with selected range collapsed at (detachedXmlTextNode, 1)
+Range-mutations-splitText.html	detachedXmlTextNode.splitText(1), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-splitText.html	detachedXmlTextNode.splitText(1), with unselected range collapsed at (detachedXmlTextNode, 1)
 Range-mutations-splitText.html	detachedXmlTextNode.splitText(1), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-splitText.html	detachedXmlTextNode.splitText(2), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-splitText.html	detachedXmlTextNode.splitText(2), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-splitText.html	detachedXmlTextNode.splitText(3), with selected range on detachedXmlTextNode from 1 to 3
 Range-mutations-splitText.html	detachedXmlTextNode.splitText(3), with unselected range on detachedXmlTextNode from 1 to 3
+Range-mutations-splitText.html	detachedXmlTextNode.splitText(376), with selected range on detachedXmlTextNode from 0 to 1
 Range-mutations-splitText.html	detachedXmlTextNode.splitText(376), with unselected range on detachedXmlTextNode from 0 to 1
+Range-mutations-splitText.html	detachedXmlTextNode.splitText(detachedXmlTextNode.length), with selected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
 Range-mutations-splitText.html	detachedXmlTextNode.splitText(detachedXmlTextNode.length), with unselected range collapsed at (detachedXmlTextNode, detachedXmlTextNode.length)
+Range-mutations-splitText.html	foreignTextNode.splitText(0), with selected range collapsed at (foreignTextNode, 0)
 Range-mutations-splitText.html	foreignTextNode.splitText(0), with unselected range collapsed at (foreignTextNode, 0)
+Range-mutations-splitText.html	foreignTextNode.splitText(1), with selected range collapsed at (foreignTextNode, 1)
+Range-mutations-splitText.html	foreignTextNode.splitText(1), with selected range on foreignTextNode from 1 to 3
 Range-mutations-splitText.html	foreignTextNode.splitText(1), with unselected range collapsed at (foreignTextNode, 1)
 Range-mutations-splitText.html	foreignTextNode.splitText(1), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-splitText.html	foreignTextNode.splitText(2), with selected range on foreignTextNode from 1 to 3
 Range-mutations-splitText.html	foreignTextNode.splitText(2), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-splitText.html	foreignTextNode.splitText(3), with selected range on foreignTextNode from 1 to 3
 Range-mutations-splitText.html	foreignTextNode.splitText(3), with unselected range on foreignTextNode from 1 to 3
+Range-mutations-splitText.html	foreignTextNode.splitText(376), with selected range on foreignTextNode from 0 to 1
 Range-mutations-splitText.html	foreignTextNode.splitText(376), with unselected range on foreignTextNode from 0 to 1
+Range-mutations-splitText.html	foreignTextNode.splitText(foreignTextNode.length), with selected range collapsed at (foreignTextNode, foreignTextNode.length)
 Range-mutations-splitText.html	foreignTextNode.splitText(foreignTextNode.length), with unselected range collapsed at (foreignTextNode, foreignTextNode.length)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(0), with selected range collapsed at (paras[0].firstChild, 0)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(0), with unselected range collapsed at (paras[0].firstChild, 0)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with selected range collapsed at (paras[0], 0)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with selected range collapsed at (paras[0], 1)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with selected range collapsed at (paras[0].firstChild, 1)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with selected range on paras[0] from 0 to 1
+Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with unselected range collapsed at (paras[0], 0)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with unselected range collapsed at (paras[0], 1)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with unselected range collapsed at (paras[0].firstChild, 1)
@@ -23921,27 +24453,49 @@ Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with unselected
 Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with unselected range from (paras[0].firstChild, 1) to (paras[0], 1)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with unselected range on paras[0] from 0 to 1
 Range-mutations-splitText.html	paras[0].firstChild.splitText(1), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-splitText.html	paras[0].firstChild.splitText(2), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(2), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(2), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-splitText.html	paras[0].firstChild.splitText(2), with unselected range from (paras[0], 0) to (paras[0].firstChild, 3)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(2), with unselected range from (paras[0].firstChild, 1) to (paras[0], 1)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(2), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-splitText.html	paras[0].firstChild.splitText(3), with selected range from (paras[0], 0) to (paras[0].firstChild, 3)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(3), with selected range from (paras[0].firstChild, 1) to (paras[0], 1)
+Range-mutations-splitText.html	paras[0].firstChild.splitText(3), with selected range on paras[0].firstChild from 1 to 3
 Range-mutations-splitText.html	paras[0].firstChild.splitText(3), with unselected range from (paras[0], 0) to (paras[0].firstChild, 3)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(3), with unselected range from (paras[0].firstChild, 1) to (paras[0], 1)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(3), with unselected range on paras[0].firstChild from 1 to 3
+Range-mutations-splitText.html	paras[0].firstChild.splitText(376), with selected range on paras[0].firstChild from 0 to 1
 Range-mutations-splitText.html	paras[0].firstChild.splitText(376), with unselected range on paras[0].firstChild from 0 to 1
+Range-mutations-splitText.html	paras[0].firstChild.splitText(paras[0].firstChild.length), with selected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
 Range-mutations-splitText.html	paras[0].firstChild.splitText(paras[0].firstChild.length), with unselected range collapsed at (paras[0].firstChild, paras[0].firstChild.length)
+Range-mutations-splitText.html	paras[1].firstChild.splitText(0), with selected range collapsed at (paras[1].firstChild, 0)
 Range-mutations-splitText.html	paras[1].firstChild.splitText(0), with unselected range collapsed at (paras[1].firstChild, 0)
+Range-mutations-splitText.html	paras[1].firstChild.splitText(1), with selected range collapsed at (paras[1].firstChild, 1)
+Range-mutations-splitText.html	paras[1].firstChild.splitText(1), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-splitText.html	paras[1].firstChild.splitText(1), with unselected range collapsed at (paras[1].firstChild, 1)
 Range-mutations-splitText.html	paras[1].firstChild.splitText(1), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-splitText.html	paras[1].firstChild.splitText(2), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-splitText.html	paras[1].firstChild.splitText(2), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-splitText.html	paras[1].firstChild.splitText(3), with selected range on paras[1].firstChild from 1 to 3
 Range-mutations-splitText.html	paras[1].firstChild.splitText(3), with unselected range on paras[1].firstChild from 1 to 3
+Range-mutations-splitText.html	paras[1].firstChild.splitText(376), with selected range on paras[1].firstChild from 0 to 1
 Range-mutations-splitText.html	paras[1].firstChild.splitText(376), with unselected range on paras[1].firstChild from 0 to 1
+Range-mutations-splitText.html	paras[1].firstChild.splitText(paras[1].firstChild.length), with selected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
 Range-mutations-splitText.html	paras[1].firstChild.splitText(paras[1].firstChild.length), with unselected range collapsed at (paras[1].firstChild, paras[1].firstChild.length)
+Range-mutations-splitText.html	xmlTextNode.splitText(0), with selected range collapsed at (xmlTextNode, 0)
 Range-mutations-splitText.html	xmlTextNode.splitText(0), with unselected range collapsed at (xmlTextNode, 0)
+Range-mutations-splitText.html	xmlTextNode.splitText(1), with selected range collapsed at (xmlTextNode, 1)
+Range-mutations-splitText.html	xmlTextNode.splitText(1), with selected range on xmlTextNode from 1 to 3
 Range-mutations-splitText.html	xmlTextNode.splitText(1), with unselected range collapsed at (xmlTextNode, 1)
 Range-mutations-splitText.html	xmlTextNode.splitText(1), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-splitText.html	xmlTextNode.splitText(2), with selected range on xmlTextNode from 1 to 3
 Range-mutations-splitText.html	xmlTextNode.splitText(2), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-splitText.html	xmlTextNode.splitText(3), with selected range on xmlTextNode from 1 to 3
 Range-mutations-splitText.html	xmlTextNode.splitText(3), with unselected range on xmlTextNode from 1 to 3
+Range-mutations-splitText.html	xmlTextNode.splitText(376), with selected range on xmlTextNode from 0 to 1
 Range-mutations-splitText.html	xmlTextNode.splitText(376), with unselected range on xmlTextNode from 0 to 1
+Range-mutations-splitText.html	xmlTextNode.splitText(xmlTextNode.length), with selected range collapsed at (xmlTextNode, xmlTextNode.length)
 Range-mutations-splitText.html	xmlTextNode.splitText(xmlTextNode.length), with unselected range collapsed at (xmlTextNode, xmlTextNode.length)
 Range-selectNode.html	comment: #comment node, XML doc's range, type 8
 Range-selectNode.html	comment: #comment node, current doc's range, type 8

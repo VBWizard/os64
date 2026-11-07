@@ -1283,7 +1283,8 @@ static JSValue registry_member(JSContext *ctx, JSValueConst self, int argc, JSVa
 /* ── [CEReactions] (cut b2) ──────────────────────────────────────────── *
  *
  * Every [CEReactions] member the standard's IDL names (tools/ce_reactions.py
- * writes the table from WPT's dom.idl, html.idl and cssom.idl) is wrapped by
+ * writes the table from WPT's dom.idl, html.idl, cssom.idl and
+ * selection-api.idl) is wrapped by
  * one trampoline at install: it pushes an element queue, calls the member,
  * and pops the queue, which runs what the member queued before it returns,
  * and though it threw (d_reactions_pop). A method's function is replaced;
