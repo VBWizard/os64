@@ -295,7 +295,8 @@ The design:
   with `os64_text_caret`, in CSS pixels of the viewport of the document the
   range is in. A text rect is the text box's own (its font's content
   area), not the line box.
-- `getBoundingClientRect` is their union (or the empty rect).
+- `getBoundingClientRect` is the union of the rects with area; the first
+  rect when none has any; a zero rect when there are none (CSSOM View).
 - Generated content and list markers name their element, not a Text node,
   and are skipped, as other browsers skip them.
 

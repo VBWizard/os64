@@ -115,11 +115,17 @@ size_t yonder_text_rects(const os64_html_document_t *document, const flow_tree_t
         os64_text_caret_t c0, c1;
         if (os64_text_caret(box->run, s - begin, OS64_TEXT_BEFORE, &c0) != OS64_FONT_OK ||
             os64_text_caret(box->run, e - begin, OS64_TEXT_BEFORE, &c1) != OS64_FONT_OK) continue;
-        os64_gui_rect_t rect = flow_box_doc_rect(box, scroll);
+        // The selected slice in the box's own coordinates (device pixels,
+        // the carets rounded to them), taken out through the box's offset
+        // and every matrix it is drawn through, as the snapshot takes an
+        // element's box: a scaled or rotated text's slice is the painted one.
+        int32_t x0 = box->rect.x + (int32_t)((c0.x + 32) / 64), x1 = box->rect.x + (int32_t)((c1.x + 32) / 64);
+        os64_gui_rect_t local = {x0, box->rect.y, x1 > x0 ? x1 - x0 : 0, box->rect.h};
+        os64_gui_rect_t rect = flow_box_doc_rect_of(box, local, scroll);
         if (count < cap) {
-            out[4 * count] = (rect.x + c0.x / 64.0 - scroll.x) * scale;
+            out[4 * count] = (rect.x - scroll.x) * scale;
             out[4 * count + 1] = (rect.y - scroll.y) * scale;
-            out[4 * count + 2] = (c1.x - c0.x) / 64.0 * scale;
+            out[4 * count + 2] = rect.w * scale;
             out[4 * count + 3] = rect.h * scale;
         }
         count++;

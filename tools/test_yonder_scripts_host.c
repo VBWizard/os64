@@ -5335,7 +5335,8 @@ static void range_rect_cases(void)
     s_ranges = true;
     probe_page("<!doctype html><style>html,body{margin:0;padding:0;font:16px monospace}"
         "p{margin:0;height:20px}#box{width:50px;height:30px}</style>"
-        "<p id=one>abcdef</p><p id=two>a    b</p><p id=three>a b</p><div id=box></div><script>"
+        "<p id=one>abcdef</p><p id=two>a    b</p><p id=three>a b</p><div id=box></div>"
+        "<p id=big style='transform:scale(2);transform-origin:0 0;position:absolute;top:200px'>abcdef</p><script>"
         "function eq(a,b,m){if(a!==b)throw Error((m||'')+': '+a+' != '+b)};"
         "function near(a,b,m){if(Math.abs(a-b)>0.6)throw Error((m||'')+': '+a+' !~ '+b)};"
         "try{var t=document.getElementById('one').firstChild,r=document.createRange();"
@@ -5351,6 +5352,8 @@ static void range_rect_cases(void)
         "eq(rs.length,2,'the text and the element');eq(rs[1].width,50,'the box');eq(rs[1].height,30);"
         "var bb=r.getBoundingClientRect();eq(bb.top,rs[0].top,'union top');near(bb.bottom,90,'union bottom');eq(bb.width,50);"
         "var empty=document.createRange();eq(empty.getBoundingClientRect().width,0,'nothing selected');"
+        "var g=document.getElementById('big').firstChild;r.setStart(g,2);r.setEnd(g,4);var sc=r.getClientRects()[0];"
+        "near(sc.left,2*w/3,'a scaled text slice starts where it is painted');near(sc.width,2*w/3,'and is as wide as painted');"
         "box.setAttribute('data-rect-pass','yes');"
         "}catch(e){document.getElementById('box').setAttribute('data-rect-error',String(e))}"
         "</script>",true);
