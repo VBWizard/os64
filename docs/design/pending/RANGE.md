@@ -283,15 +283,20 @@ exclusion exists for exactly this).
 The design:
 - **libflow keeps the item's source start and entry state**, and offers
   the replay (DOM byte → processed offset) beside its other text queries.
-- **A range-rects provider** beside the geometry one in dom.h
-  (`os64_dom_range_rects_provider_t(opaque, start, start16, end, end16,
-  out, cap)`): libdom hands the boundary points; yonder makes the layout
-  current (as `script_geometry` does), walks the boxes of the nodes the
-  range touches, and for a partly selected TEXT box measures the
-  selected processed bytes with `os64_text_caret`; it answers CSS-pixel
-  rects in the viewport of the document the range is in — the same choice
-  the geometry provider makes for a frame's document, which this follows.
-- `getBoundingClientRect` is their union (or the empty rect).
+- **A text-rects provider** beside the geometry one in dom.h
+  (`os64_dom_text_rects_provider_t(opaque, node, from, to, out, cap)`):
+  libdom walks the range and asks it, per Text node the range selects or
+  partly selects, for the rects of those bytes of the node's data; each
+  selected element whose parent is not selected answers its border box
+  through the geometry provider, as `element.getClientRects` does. yonder
+  makes the layout current (as `script_geometry` does) and
+  `yonder_text_rects` walks the node's TEXT boxes, maps the two bytes
+  through `flow_text_processed`, and measures the selected processed bytes
+  with `os64_text_caret`, in CSS pixels of the viewport of the document the
+  range is in. A text rect is the text box's own (its font's content
+  area), not the line box.
+- `getBoundingClientRect` is the union of the rects with area; the first
+  rect when none has any; a zero rect when there are none (CSSOM View).
 - Generated content and list markers name their element, not a Text node,
   and are skipped, as other browsers skip them.
 

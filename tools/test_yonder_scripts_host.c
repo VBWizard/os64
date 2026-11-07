@@ -5326,6 +5326,56 @@ static void hit_cases(void)
     probe_drop();
 }
 
+// A range's rects (RANGE.md § 7): the selected part of each text, measured
+// over white-space-processed text, and each selected element's border box;
+// the bounding rect their union.
+static void range_rect_cases(void)
+{
+    bool had = s_ranges;
+    s_ranges = true;
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0;font:16px monospace}"
+        "p{margin:0;height:20px}#box{width:50px;height:30px}</style>"
+        "<p id=one>abcdef</p><p id=two>a    b</p><p id=three>a b</p><div id=box></div>"
+        "<p id=big style='transform:scale(2);transform-origin:0 0;position:absolute;top:200px'>abcdef</p>"
+        "<p id=just style='text-align:justify;width:70px;position:absolute;top:300px'>aa bb cc dd</p>"
+        "<p id=accent style='position:absolute;top:400px'>a\u0301b</p>"
+        "<p id=turned style='text-align:justify;width:70px;position:absolute;top:500px;transform:rotate(90deg)'>aa bb cc dd</p><script>"
+        "function eq(a,b,m){if(a!==b)throw Error((m||'')+': '+a+' != '+b)};"
+        "function near(a,b,m){if(Math.abs(a-b)>0.6)throw Error((m||'')+': '+a+' !~ '+b)};"
+        "try{var t=document.getElementById('one').firstChild,r=document.createRange();"
+        "r.selectNodeContents(t);var whole=r.getClientRects();eq(whole.length,1,'one line');"
+        "var w=whole[0].width;if(!(w>0))throw Error('width');near(whole[0].left,0,'left');"
+        "r.setStart(t,2);r.setEnd(t,4);var part=r.getClientRects()[0];near(part.width,w/3,'two of six');near(part.left,w/3,'starts at the third');"
+        "r.collapse(true);var at=r.getClientRects();eq(at.length,1,'collapsed');eq(at[0].width,0,'zero width');near(at[0].left,w/3,'at its point');"
+        "var two=document.getElementById('two').firstChild,three=document.getElementById('three').firstChild;"
+        "r.setStart(two,5);r.setEnd(two,6);var b1=r.getClientRects()[0];"
+        "r.setStart(three,2);r.setEnd(three,3);var b2=r.getClientRects()[0];"
+        "near(b1.left,b2.left,'collapsed white space measures as laid out');near(b1.width,b2.width,'one character');"
+        "var box=document.getElementById('box');r.setStart(three,0);r.setEndAfter(box);var rs=r.getClientRects();"
+        "eq(rs.length,2,'the text and the element');eq(rs[1].width,50,'the box');eq(rs[1].height,30);"
+        "var bb=r.getBoundingClientRect();eq(bb.top,rs[0].top,'union top');near(bb.bottom,90,'union bottom');eq(bb.width,50);"
+        "var empty=document.createRange();eq(empty.getBoundingClientRect().width,0,'nothing selected');"
+        "var g=document.getElementById('big').firstChild;r.setStart(g,2);r.setEnd(g,4);var sc=r.getClientRects()[0];"
+        "near(sc.left,2*w/3,'a scaled text slice starts where it is painted');near(sc.width,2*w/3,'and is as wide as painted');"
+        "var j=document.getElementById('just').firstChild;r.setStart(j,2);r.setEnd(j,3);var jr=r.getClientRects();"
+        "eq(jr.length,1,'a justified gap is a rect');if(!(jr[0].width>0))throw Error('the gap has width');"
+        "var tj=document.getElementById('turned').firstChild;r.setStart(tj,2);r.setEnd(tj,3);var tr=r.getClientRects();"
+        "eq(tr.length,1,'a turned justified gap is a rect');near(tr[0].width,jr[0].height,'turned, the gap is as wide as the line is tall');"
+        "near(tr[0].height,jr[0].width,'and as tall as the gap is wide');"
+        "var ac=document.getElementById('accent').firstChild;r.setStart(ac,0);r.setEnd(ac,1);var ar=r.getClientRects();"
+        "eq(ar.length,1,'a cluster');if(!(ar[0].width>0))throw Error('a selected cluster has its width');"
+        "box.setAttribute('data-rect-pass','yes');"
+        "}catch(e){document.getElementById('box').setAttribute('data-rect-error',String(e))}"
+        "</script>",true);
+    check(script_turn(), "range rect script task completes");
+    const os64_html_attr_t *why=os64_html_attr(probe_id("box"),"data-rect-error");
+    if (why!=NULL) fprintf(stderr,"range rects: %s\n",why->value);
+    const os64_html_attr_t *passed=os64_html_attr(probe_id("box"),"data-rect-pass");
+    check(passed!=NULL && os64_streq(passed->value,"yes"), "range rect script reaches every assertion");
+    probe_drop();
+    s_ranges = had;
+}
+
 // An element's geometry is its own box's, not its pseudo-elements'
 // (GENERATED_CONTENT.md § 4): a ::before laid wide and away widens nothing,
 // and its text does not either.
@@ -11626,6 +11676,7 @@ int main(void)
     classic_hover_profile();
     geometry_cases();
     hit_cases();
+    range_rect_cases();
     svg_fill_hit_cases();
     geometry_pseudo_cases();
     geometry_body_cases();

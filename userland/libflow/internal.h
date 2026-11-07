@@ -774,6 +774,12 @@ struct FItem {
     // that slice with its case changed and its length kept.
     const char *text;
     uint32_t len, offset;
+    // TEXT from a node: the node's source byte the slice's processing
+    // began at, and whether white space was collapsing there (the space
+    // state f_collapse_white started in), so a source byte's processed
+    // offset can be replayed (flow_text_processed).
+    uint32_t source;
+    bool source_space;
     bool generated;                 // TEXT the sheet made: a quote mark, a ruby parenthesis
     bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
     FInline *inl;                   // OPEN, CLOSE

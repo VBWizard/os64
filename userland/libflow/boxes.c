@@ -558,7 +558,7 @@ static void transform(char *t, uint32_t n, flow_text_transform_t how, bool word_
 
 static void text_item(Flow *f, FBox *ifc, const os64_html_node_t *node,
                       const flow_style_t *style, const char *text, uint32_t len,
-                      uint32_t offset, bool generated)
+                      uint32_t offset, uint32_t source, bool source_space, bool generated)
 {
     if (!generated && len > 0 && style->text_transform != FLOW_TRANSFORM_NONE) {
         char *copy = alloc(f->b, len);
@@ -578,6 +578,8 @@ static void text_item(Flow *f, FBox *ifc, const os64_html_node_t *node,
     item->text = text;
     item->len = len;
     item->offset = offset;
+    item->source = source;
+    item->source_space = source_space;
     item->generated = generated;
 }
 
@@ -619,7 +621,7 @@ static void text_node(Flow *f, const os64_html_node_t *n)
             if (i < n->text_len && n->text[i] != '\n')
                 continue;
             if (i > start)
-                text_item(f, ifc, n, s, n->text + start, i - start, start, false);
+                text_item(f, ifc, n, s, n->text + start, i - start, start, start, false, false);
             if (i < n->text_len && new_item(b, ifc, FI_BREAK, NULL, s) == NULL)
                 return;
             start = i + 1;
@@ -631,7 +633,7 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     // one space, or none after another.
     if (!text_significant(b, n)) {
         if (f->target != NULL && !f->target->collapse_space) {
-            text_item(f, f->target, n, s, " ", 1, 0, false);
+            text_item(f, f->target, n, s, " ", 1, 0, 0, false, false);
             f->target->collapse_space = true;
         }
         return;
@@ -648,11 +650,14 @@ static void text_node(Flow *f, const os64_html_node_t *n)
             return;
         uint32_t len = 0, seg = 0;
         bool space = ifc->collapse_space;
-        size_t from = 0;
+        size_t from = 0, line_from = 0;
+        bool line_space = space;
         for (size_t i = 0; i <= n->text_len; i++) {
             bool kept = i < n->text_len && n->text[i] == '\n';
             if (i < n->text_len && !kept)
                 continue;
+            line_from = from;
+            line_space = space;
             len += f_collapse_white(n->text + from, (uint32_t)(i - from), copy + len, &space);
             from = i + 1;
             if (!kept)
@@ -660,7 +665,7 @@ static void text_node(Flow *f, const os64_html_node_t *n)
             if (len > seg && copy[len - 1] == ' ')
                 len--;
             if (len > seg)
-                text_item(f, ifc, n, s, copy + seg, len - seg, seg, false);
+                text_item(f, ifc, n, s, copy + seg, len - seg, seg, (uint32_t)line_from, line_space, false);
             if (new_item(b, ifc, FI_BREAK, NULL, s) == NULL)
                 return;
             seg = len;
@@ -668,13 +673,13 @@ static void text_node(Flow *f, const os64_html_node_t *n)
         }
         ifc->collapse_space = space;
         if (len > seg)
-            text_item(f, ifc, n, s, copy + seg, len - seg, seg, false);
+            text_item(f, ifc, n, s, copy + seg, len - seg, seg, (uint32_t)line_from, line_space, false);
         return;
     }
     // Point into the tree when processing changes nothing — no tab or
     // newline, no space after a space, no leading space after one — and
     // copy only when it does: the box tree copies no text it can point at.
-    bool space = ifc->collapse_space;
+    bool space = ifc->collapse_space, entry = space;
     bool changes = false;
     for (size_t i = 0; i < n->text_len && !changes; i++) {
         char ch = n->text[i];
@@ -693,7 +698,7 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     }
     ifc->collapse_space = space;
     if (len > 0)
-        text_item(f, ifc, n, s, text, len, 0, false);
+        text_item(f, ifc, n, s, text, len, 0, 0, entry, false);
 }
 
 static void generated(Flow *f, const os64_html_node_t *el, const flow_style_t *s,
@@ -702,7 +707,7 @@ static void generated(Flow *f, const os64_html_node_t *el, const flow_style_t *s
     FBox *ifc = target(f);
     if (ifc == NULL)
         return;
-    text_item(f, ifc, el, s, text, (uint32_t)os64_strlen(text), 0, true);
+    text_item(f, ifc, el, s, text, (uint32_t)os64_strlen(text), 0, 0, false, true);
     ifc->collapse_space = false;
 }
 
