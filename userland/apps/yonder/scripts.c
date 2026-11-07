@@ -539,6 +539,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
     os64_dom_set_svg_hit(s->dom, s->options.svg_hit, s->options.opaque);
     os64_dom_set_hit(s->dom, s->options.hit, s->options.opaque);
+    os64_dom_set_text_rects(s->dom, s->options.text_rects, s->options.opaque);
     os64_dom_set_intersections(s->dom, s->options.intersections, s->options.opaque);
     os64_dom_set_resizes(s->dom, s->options.resizes, s->options.opaque);
     if (s->options.view.read != NULL)

@@ -625,6 +625,18 @@ void os64_dom_set_svg_hit(os64_dom_t *, os64_dom_svg_hit_provider_t, void *);
 typedef size_t (*os64_dom_hit_provider_t)(void *opaque, double x, double y, const os64_html_node_t **out,
                                           size_t cap, os64_dom_geometry_stats_t *cost);
 void os64_dom_set_hit(os64_dom_t *dom, os64_dom_hit_provider_t provider, void *opaque);
+/* A range's text rects (CSSOM View § 6.1's Range.getClientRects; RANGE.md
+ * § 7): for bytes [from, to) of Text node `node`'s data, one rect per
+ * laid-out piece of the node's text that the bytes reach, measured over
+ * the white-space-processed text, in CSS pixels of the viewport of the
+ * page's document: x, y, width, height into `out[4*i]`, up to `cap` rects;
+ * the count there is. `from == to` asks for the zero-width rect at that
+ * point. 0 for a node with no laid-out text. The same contract as the
+ * geometry provider: a current layout, no JS, cost recorded. */
+typedef size_t (*os64_dom_text_rects_provider_t)(void *opaque, const os64_html_node_t *node, size_t from,
+                                                 size_t to, double *out, size_t cap,
+                                                 os64_dom_geometry_stats_t *cost);
+void os64_dom_set_text_rects(os64_dom_t *dom, os64_dom_text_rects_provider_t provider, void *opaque);
 
 /* What making the style current cost, added to os64_dom_geometry_stats. */
 void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t elapsed_us);

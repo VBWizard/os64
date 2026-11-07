@@ -360,6 +360,9 @@ struct os64_dom {
     /* elementFromPoint's hit provider (hit.c). */
     os64_dom_hit_provider_t hit;
     void *hit_opaque;
+    /* A range's text rects (range.c). */
+    os64_dom_text_rects_provider_t text_rects;
+    void *text_rects_opaque;
     DValue *svg_graphics_proto, *svg_geometry_proto;
     /* ShadowRoot's and HTMLSlotElement's prototypes, refining a shadow
      * root's DocumentFragment kind and a slot's HTMLElement kind (shadow.c);
@@ -1873,6 +1876,9 @@ void d_walkers_free(os64_dom_t *dom);
 int d_rect_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 JSValue d_rect_new(os64_dom_t *dom, JSContext *ctx, bool readonly, double x, double y, double width,
                    double height);
+/* A DOMRectList of `count` DOMRects, x, y, width, height four by four in
+ * `rects` (a range's getClientRects, range.c). */
+JSValue d_rect_list_new(os64_dom_t *dom, JSContext *ctx, const double *rects, size_t count);
 /* WebIDL's iteration of an iterable (§ 3.2.20, "create a sequence from an
  * iterable"): `each` handed every value in turn, borrowed for the call, 0
  * to go on and -1, with an exception pending, to stop. `method` is the
