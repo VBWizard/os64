@@ -74,6 +74,7 @@ WPT_DIRS=(
     html/webappapis/structured-clone
     requestidlecallback
     webmessaging/without-ports
+    webmessaging/message-channels
     html/semantics/document-metadata/the-link-element
     html/semantics/document-metadata/the-style-element
     preload

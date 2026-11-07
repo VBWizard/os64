@@ -745,6 +745,33 @@ static size_t p2b_detach_run(size_t cut)
     return count;
 }
 
+/* A port's postMessage refused anywhere, the binding's allocations or the
+ * engine's, leaves its transfer list attached: the message node is
+ * allocated before the clone is written and the list detached. */
+static size_t p2b_port_detach_run(size_t cut, bool engine)
+{
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return 0;
+    dom_script(&f, "globalThis.c=new MessageChannel();c.port1.onmessage=()=>{};"
+                   "globalThis.go=function(){const b=new ArrayBuffer(8);const v={a:[1,2],u:new Uint8Array(b,2,4)};"
+                   "let ok=false;try{c.port2.postMessage(v,[b]);ok=true}catch(e){}"
+                   "if(b.byteLength===0&&!ok)globalThis.wrong=new ArrayBuffer(8<<20)}",
+               "port detach sweep: setup");
+    size_t start = engine ? attempts : dom_attempts, asks = large_asks;
+    if (cut != 0) {
+        if (engine) fail_at = attempts + cut;
+        else dom_fail_at = dom_attempts + cut;
+    }
+    os64_js_outcome_t outcome;
+    os64_js_run(f.runtime, "go()", 4, "port-detach.js", &outcome);
+    fail_at = dom_fail_at = 0;
+    size_t count = (engine ? attempts : dom_attempts) - start;
+    check(large_asks == asks, "channel: a port's message refused anywhere leaves its transfer list attached");
+    fixture_free(&f);
+    return count;
+}
+
 static void dom_p2b_sweep_cases(void)
 {
     size_t points = p2b_detach_run(0);
@@ -753,10 +780,22 @@ static void dom_p2b_sweep_cases(void)
         p2b_detach_run(cut);
         dom_sweeps++;
     }
+    for (int engine = 0; engine < 2; engine++) {
+        size_t port_points = p2b_port_detach_run(0, engine);
+        printf("p2b port detach %s allocation points: %zu\n", engine ? "engine" : "binding", port_points);
+        for (size_t cut = 1; cut <= port_points; cut++) {
+            p2b_port_detach_run(cut, engine);
+            dom_sweeps++;
+        }
+    }
     static const struct { const char *operation; int drive; } kOperations[] = {
         {"const b=new ArrayBuffer(8,{maxByteLength:16});structuredClone([v,b],{transfer:[b]})", 0},
         {"const b=new ArrayBuffer(2);postMessage(v,'*',[b]);postMessage(1,{targetOrigin:'https://example.test/'})", 1},
         {"requestIdleCallback(d=>d.timeRemaining());requestIdleCallback(()=>{},{timeout:5})", 2},
+        /* A channel: made, started by its handler, posted to; and a port
+         * sent to before it starts, then started, then closed. */
+        {"const c=new MessageChannel();c.port1.onmessage=()=>{};c.port2.postMessage(v);"
+         "const d=new MessageChannel();d.port2.postMessage([v]);d.port1.start();d.port2.close()", 1},
     };
     for (size_t op = 0; op < sizeof(kOperations) / sizeof(kOperations[0]); op++)
         for (int engine = 0; engine < 2; engine++) {
@@ -771,6 +810,64 @@ static void dom_p2b_sweep_cases(void)
         }
 }
 
+/* ── MessageChannel and MessagePort ─────────────────────────────────── */
+
+static void dom_channel_cases(void)
+{
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    p2b_ms = 700;
+    p2b_script(&f,
+        "const c=new MessageChannel();assert(c instanceof MessageChannel&&c.port1===c.port1&&c.port1!==c.port2,"
+        "'two ports, the same each read');"
+        "assert(c.port1 instanceof MessagePort&&c.port1 instanceof EventTarget&&Object.getPrototypeOf(MessagePort)===EventTarget);"
+        "let bad=false;try{new MessagePort()}catch(e){bad=e instanceof TypeError}assert(bad,'MessagePort does not construct');"
+        "assert(c.port1.onmessage===null&&typeof c.port1.postMessage==='function'&&c.port1.postMessage.length===1);"
+        "globalThis.got=[];globalThis.ch=c;"
+        "c.port1.onmessage=e=>got.push([e.data.x,e.target===c.port1,e.origin,e.source,e.ports.length,e instanceof MessageEvent]);"
+        "c.port2.postMessage({x:1});assert(got.length===0,'nothing runs at once');",
+        "channel: a scheduler's post");
+    check(os64_dom_message_next(f.binding) == 700, "channel: the message is on the window's queue");
+    check(p2b_message(&f, &outcome) && outcome.status == OS64_JS_OK, "channel: its task runs");
+    p2b_script(&f,
+        "assert(got.length===1&&got[0][0]===1&&got[0][1]&&got[0][2]===''&&got[0][3]===null&&got[0][4]===0&&got[0][5],"
+        "'a MessageEvent at the port, no origin, no source, no ports');"
+        "got.length=0;const d=new MessageChannel();globalThis.d=d;"
+        "d.port1.addEventListener('message',e=>got.push('l'+e.data));d.port2.postMessage(1);d.port2.postMessage(2);",
+        "channel: a listener alone does not start the port");
+    check(os64_dom_message_next(f.binding) == UINT64_MAX, "channel: an unstarted port's messages wait on it");
+    p2b_script(&f, "d.port1.start();postMessage('w');", "channel: start");
+    check(p2b_message(&f, &outcome) && p2b_message(&f, &outcome), "channel: both waiting messages run");
+    p2b_script(&f,
+        "assert(got.join()==='l1,l2','in the order sent');"
+        "let e1=null,e2=null;try{d.port1.postMessage(1,[d.port1])}catch(e){e1=e.name}"
+        "try{d.port1.postMessage(1,{transfer:[d.port2]})}catch(e){e2=e.name}"
+        "assert(e1==='DataCloneError'&&e2==='DataCloneError','a port in a transfer list');"
+        "const g=new MessageChannel();g.port1.postMessage({get x(){g.port1.close();return 1}});"
+        "const h=(new MessageChannel()).port1;h.postMessage({get x(){h.close();return 1}});"
+        "const b=new ArrayBuffer(4);const s=new MessageChannel();s.port2.postMessage(b,new Set([b]));"
+        "assert(b.byteLength===0,'a Set is a transfer sequence');"
+        "d.port1.close();d.port2.postMessage(3);d.port1.postMessage(4);",
+        "channel: close");
+    /* The window's own 'w' is still queued; nothing more after it. */
+    p2b_script(&f, "got.length=0;onmessage=()=>got.push('w');", "channel: hear the window");
+    check(p2b_message(&f, &outcome) && !p2b_message(&f, &outcome), "channel: a closed pair carries nothing");
+    p2b_script(&f, "assert(got.join()==='w','only the window message');", "channel: closed");
+    /* A pair lives while either port is reachable: only the posting port is
+     * kept, and the hearing one still hears after a collection. */
+    p2b_script(&f,
+        "got.length=0;globalThis.sender=(()=>{const k=new MessageChannel();k.port1.onmessage=e=>got.push('k'+e.data);"
+        "return k.port2})();",
+        "channel: keep only the sender");
+    JS_RunGC(JS_GetRuntime(os64_js_context(f.runtime, OS64_JS_ABI_ID, &outcome)));
+    p2b_script(&f, "sender.postMessage(5);", "channel: post after a collection");
+    check(p2b_message(&f, &outcome), "channel: the kept pair's message runs");
+    p2b_script(&f, "assert(got.join()==='k5','the unreferenced port heard it');", "channel: entangled lives");
+    fixture_free(&f);
+}
+
 static void dom_p2b_cases(void)
 {
     dom_clone_value_cases();
@@ -778,6 +875,7 @@ static void dom_p2b_cases(void)
     dom_clone_bound_cases();
     dom_clone_interrupt_cases();
     dom_message_cases();
+    dom_channel_cases();
     dom_message_event_cases();
     dom_idle_cases();
     dom_idle_failure_cases();

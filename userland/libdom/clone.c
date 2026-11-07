@@ -50,8 +50,10 @@
  * detach a buffer but not hand its bytes over; DEBTS.md), and are new
  * buffers in the copy wherever the value named them. They are detached
  * only once the clone has succeeded whole (d_clone_detach, the caller's:
- * structuredClone's copy made, postMessage's message queued), so a refusal
- * anywhere, the writer's or the reader's, detaches none, where HTML
+ * structuredClone's copy made, window postMessage's message queued, a
+ * port's message written, whether or not a port is there to receive it, as
+ * the standard serializes it regardless), so a refusal anywhere, the
+ * writer's or the reader's, detaches none, where HTML
  * detaches them one by one as it serializes and a refusal after can leave
  * some detached.
  *
