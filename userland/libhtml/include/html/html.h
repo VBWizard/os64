@@ -788,6 +788,18 @@ os64_html_node_t *os64_html_parse_fragment_root(os64_html_document_t *doc,
 size_t os64_html_serialize(const os64_html_node_t *node, bool children_only,
                            bool scripting, char *out, size_t cap);
 
+/* XML serialization (DOM Parsing § 3.2.1 with require well-formed false):
+ * what XMLSerializer.serializeToString makes of `node` and its subtree, a
+ * document or fragment being its children. Namespaces are declared where
+ * they change and attributes' prefixes resolved as the browsers do
+ * (serialize_xml.c). Answers the total length excluding NUL and writes as
+ * os64_html_serialize does (at most cap-1 bytes and a NUL; cap 0 writes
+ * nothing), or OS64_HTML_NO_MEMORY when its namespace map or its stack of
+ * open elements could not grow;
+ * the same tree gives the same answer twice. NULL node is empty. Do not
+ * run this concurrently with a mutation of the node's document. */
+int64_t os64_html_serialize_xml(const os64_html_node_t *node, char *out, size_t cap);
+
 #pragma GCC visibility pop
 
 #endif

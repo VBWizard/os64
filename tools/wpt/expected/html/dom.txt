@@ -8737,6 +8737,7 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new DO
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new ImageData(10, 10)
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new MessageEvent("message", { data: 5 })
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new PopStateEvent("popstate", { data: {} })
+idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of new XMLSerializer()
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of sessionStorage
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of window.external
 idlharness.https.html?exclude=(Document|Window|HTML.+)	Stringification of window.history
@@ -8789,6 +8790,15 @@ idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator includes 
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator includes NavigatorOnLine: member names are unique
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkerNavigator interface: existence and properties of interface object
 idlharness.https.html?exclude=(Document|Window|HTML.+)	WorkletGlobalScope interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface object length
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface object name
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: calling serializeToString(Node) on new XMLSerializer() with too few arguments must throw TypeError
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface prototype object
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface prototype object's "constructor" property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer interface: new XMLSerializer() must inherit property "serializeToString(Node)" with the proper type
+idlharness.https.html?exclude=(Document|Window|HTML.+)	XMLSerializer must be primary interface of new XMLSerializer()
 idlharness.https.html?exclude=(Document|Window|HTML.+)	idl_test setup
 idlharness.https.html?exclude=(Document|Window|HTML.+)	idl_test validation
 reflection-embedded.html	area.alt: IDL get with DOM attribute unset
@@ -23362,6 +23372,40 @@ reflection-metadata.html	link.lang: setAttribute() to object "test-valueOf"
 reflection-metadata.html	link.lang: setAttribute() to true
 reflection-metadata.html	link.lang: setAttribute() to undefined
 reflection-metadata.html	link.lang: typeof IDL attribute
+reflection-metadata.html	link.media: IDL get with DOM attribute unset
+reflection-metadata.html	link.media: IDL set to ""
+reflection-metadata.html	link.media: IDL set to "+100"
+reflection-metadata.html	link.media: IDL set to ".5"
+reflection-metadata.html	link.media: IDL set to "5%"
+reflection-metadata.html	link.media: IDL set to -Infinity
+reflection-metadata.html	link.media: IDL set to 1.5
+reflection-metadata.html	link.media: IDL set to 7
+reflection-metadata.html	link.media: IDL set to Infinity
+reflection-metadata.html	link.media: IDL set to NaN
+reflection-metadata.html	link.media: IDL set to false
+reflection-metadata.html	link.media: IDL set to null
+reflection-metadata.html	link.media: IDL set to object "[object Object]"
+reflection-metadata.html	link.media: IDL set to object "test-toString"
+reflection-metadata.html	link.media: IDL set to object "test-valueOf"
+reflection-metadata.html	link.media: IDL set to true
+reflection-metadata.html	link.media: IDL set to undefined
+reflection-metadata.html	link.media: setAttribute() to ""
+reflection-metadata.html	link.media: setAttribute() to "+100"
+reflection-metadata.html	link.media: setAttribute() to ".5"
+reflection-metadata.html	link.media: setAttribute() to "5%"
+reflection-metadata.html	link.media: setAttribute() to -Infinity
+reflection-metadata.html	link.media: setAttribute() to 1.5
+reflection-metadata.html	link.media: setAttribute() to 7
+reflection-metadata.html	link.media: setAttribute() to Infinity
+reflection-metadata.html	link.media: setAttribute() to NaN
+reflection-metadata.html	link.media: setAttribute() to false
+reflection-metadata.html	link.media: setAttribute() to null
+reflection-metadata.html	link.media: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.media: setAttribute() to object "test-toString"
+reflection-metadata.html	link.media: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.media: setAttribute() to true
+reflection-metadata.html	link.media: setAttribute() to undefined
+reflection-metadata.html	link.media: typeof IDL attribute
 reflection-metadata.html	link.nonce: IDL set to " \\0\\x01\\x02\\x03\\x04\\x05\\x06\\x07 \\b\\t\\n\\v\\f\\r\\x0e\\x0f \\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17 \\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f  foo "
 reflection-metadata.html	link.nonce: IDL set to ""
 reflection-metadata.html	link.nonce: IDL set to "+100"
@@ -23464,6 +23508,40 @@ reflection-metadata.html	link.title: setAttribute() to object "test-valueOf"
 reflection-metadata.html	link.title: setAttribute() to true
 reflection-metadata.html	link.title: setAttribute() to undefined
 reflection-metadata.html	link.title: typeof IDL attribute
+reflection-metadata.html	link.type: IDL get with DOM attribute unset
+reflection-metadata.html	link.type: IDL set to ""
+reflection-metadata.html	link.type: IDL set to "+100"
+reflection-metadata.html	link.type: IDL set to ".5"
+reflection-metadata.html	link.type: IDL set to "5%"
+reflection-metadata.html	link.type: IDL set to -Infinity
+reflection-metadata.html	link.type: IDL set to 1.5
+reflection-metadata.html	link.type: IDL set to 7
+reflection-metadata.html	link.type: IDL set to Infinity
+reflection-metadata.html	link.type: IDL set to NaN
+reflection-metadata.html	link.type: IDL set to false
+reflection-metadata.html	link.type: IDL set to null
+reflection-metadata.html	link.type: IDL set to object "[object Object]"
+reflection-metadata.html	link.type: IDL set to object "test-toString"
+reflection-metadata.html	link.type: IDL set to object "test-valueOf"
+reflection-metadata.html	link.type: IDL set to true
+reflection-metadata.html	link.type: IDL set to undefined
+reflection-metadata.html	link.type: setAttribute() to ""
+reflection-metadata.html	link.type: setAttribute() to "+100"
+reflection-metadata.html	link.type: setAttribute() to ".5"
+reflection-metadata.html	link.type: setAttribute() to "5%"
+reflection-metadata.html	link.type: setAttribute() to -Infinity
+reflection-metadata.html	link.type: setAttribute() to 1.5
+reflection-metadata.html	link.type: setAttribute() to 7
+reflection-metadata.html	link.type: setAttribute() to Infinity
+reflection-metadata.html	link.type: setAttribute() to NaN
+reflection-metadata.html	link.type: setAttribute() to false
+reflection-metadata.html	link.type: setAttribute() to null
+reflection-metadata.html	link.type: setAttribute() to object "[object Object]"
+reflection-metadata.html	link.type: setAttribute() to object "test-toString"
+reflection-metadata.html	link.type: setAttribute() to object "test-valueOf"
+reflection-metadata.html	link.type: setAttribute() to true
+reflection-metadata.html	link.type: setAttribute() to undefined
+reflection-metadata.html	link.type: typeof IDL attribute
 reflection-metadata.html	meta.autofocus: IDL set to true
 reflection-metadata.html	meta.className (<meta class>): IDL get with DOM attribute unset
 reflection-metadata.html	meta.className (<meta class>): IDL set to ""

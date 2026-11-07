@@ -584,6 +584,55 @@ static JSValue parse_from_string(JSContext *ctx, JSValueConst self, int argc, JS
     return result;
 }
 
+/* ── XMLSerializer (DOM Parsing § 3.1) ───────────────────────────────── */
+
+static JSClassID serializer_slot;
+
+/* `new XMLSerializer()`: stateless as DOMParser is, of new.target's
+ * prototype (a subclass's) or XMLSerializer's. */
+static JSValue serializer_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    if (d_binding(ctx) == NULL) return JS_EXCEPTION;
+    JSClassID id = os64_js_class_id(&serializer_slot);
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue made = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
+    JS_FreeValue(ctx, prototype);
+    if (!JS_IsException(made)) JS_SetOpaque(made, &serializer_slot);
+    return made;
+}
+
+/* serializeToString(root): the XML serialization of a node and its subtree
+ * (libhtml's os64_html_serialize_xml, require well-formed false, so no
+ * node is refused as unserializable); an Attr's is the empty string. A
+ * root that is no Node is a TypeError, and running out of memory a
+ * QuotaExceededError. */
+static JSValue serialize_to_string(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                   JSValue *data)
+{
+    (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (JS_GetOpaque(self, os64_js_class_id(&serializer_slot)) == NULL)
+        return JS_ThrowTypeError(ctx, "Expected an XMLSerializer");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "serializeToString needs a node");
+    DAttrView view;
+    int attr = d_attr_view(dom, ctx, argv[0], &view);
+    if (attr < 0) return JS_EXCEPTION;
+    if (attr == 1) return JS_NewString(ctx, "");
+    const os64_html_node_t *node = d_node(dom, ctx, argv[0]);
+    if (node == NULL) return JS_EXCEPTION;
+    int64_t length = os64_html_serialize_xml(node, NULL, 0);
+    if (length < 0) return d_html_error(ctx, length);
+    char *buffer = (uint64_t)length >= SIZE_MAX ? NULL : d_alloc(dom, (size_t)length + 1);
+    if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM serialization quota exceeded");
+    int64_t written = os64_html_serialize_xml(node, buffer, (size_t)length + 1);
+    JSValue result = written < 0 ? d_html_error(ctx, written) : JS_NewStringLen(ctx, buffer, (size_t)length);
+    d_free(dom, buffer);
+    return result;
+}
+
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue f = d_interface_new(ctx, "DOMImplementation", 0, NULL, dom->implementation_prototype->value,
@@ -602,6 +651,17 @@ int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
     JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
     if (d_method(dom, ctx, prototype, "parseFromString", parse_from_string, 2, 0) < 0) return -1;
     JSValue parser = d_interface_new(ctx, "DOMParser", 0, parser_construct, prototype, JS_UNDEFINED);
-    if (JS_IsException(parser)) return -1;
-    return JS_DefinePropertyValueStr(ctx, global, "DOMParser", parser, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    if (JS_IsException(parser) ||
+        JS_DefinePropertyValueStr(ctx, global, "DOMParser", parser, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    static const JSClassDef serializer_definition = {.class_name = "XMLSerializer"};
+    id = os64_js_class_id(&serializer_slot);
+    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &serializer_definition) < 0) return -1;
+    prototype = JS_NewObject(ctx);
+    if (d_retain(dom, ctx, prototype) == NULL) return -1;
+    JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
+    if (d_method(dom, ctx, prototype, "serializeToString", serialize_to_string, 1, 0) < 0) return -1;
+    JSValue serializer = d_interface_new(ctx, "XMLSerializer", 0, serializer_construct, prototype, JS_UNDEFINED);
+    if (JS_IsException(serializer)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "XMLSerializer", serializer, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
