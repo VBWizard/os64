@@ -107,6 +107,61 @@ ui_key_t os64_ui_decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch)
 	return K_NONE;   // other control bytes are the APP's (Ctrl+S et al.)
 }
 
+// Word motion groups ASCII whitespace, letters/digits/underscore, and
+// punctuation. Non-ASCII bytes travel with words; snapping the result keeps
+// UTF-8 and combining clusters intact without laying out the skipped text.
+static unsigned word_class(unsigned char c)
+{
+	if (c == ' ' || (c >= '\t' && c <= '\r')) return 0;
+	if (c >= 0x80 || (c >= 'a' && c <= 'z') ||
+	    (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') return 1;
+	return 2;
+}
+
+static size_t word_step(const char *s, size_t len, size_t at, bool forward)
+{
+	if (at > len) at = len;
+	if (forward) {
+		if (at < len) {
+			unsigned kind = word_class((unsigned char)s[at]);
+			while (at < len && word_class((unsigned char)s[at]) == kind) ++at;
+		}
+		while (at < len && word_class((unsigned char)s[at]) == 0) ++at;
+	} else {
+		while (at && word_class((unsigned char)s[at - 1]) == 0) --at;
+		if (at) {
+			unsigned kind = word_class((unsigned char)s[at - 1]);
+			while (at && word_class((unsigned char)s[at - 1]) == kind) --at;
+		}
+	}
+	return os64_ui_text_snap(s, len, at, forward);
+}
+
+// A capped stem with a contrasting outline stays recognizable over both
+// text and selection backgrounds, while retaining the theme's caret colour.
+// Clip each piece to the editor so edge positions cannot paint its furniture.
+static void paint_caret(os64_draw_ctx_t *ctx, os64_gui_rect_t clip,
+                        int32_t x, int32_t y, int32_t height, uint32_t color)
+{
+	if (height <= 0) return;
+	unsigned light = 299 * ((color >> 16) & 255) +
+	                 587 * ((color >> 8) & 255) + 114 * (color & 255);
+	uint32_t outline = light >= 128000 ? OS64_GUI_COLOR_BLACK : OS64_GUI_COLOR_WHITE;
+	int32_t cap = height < 2 ? height : 2;
+	int32_t rim = height < 4 ? height : 4;
+	os64_gui_rect_t pieces[] = {
+		{x - 1, y, 4, height}, {x - 3, y, 8, rim},
+		{x - 3, y + height - rim, 8, rim},
+		{x, y, 2, height}, {x - 2, y, 6, cap},
+		{x - 2, y + height - cap, 6, cap}
+	};
+	for (unsigned i = 0; i < sizeof(pieces) / sizeof(pieces[0]); ++i) {
+		os64_gui_rect_t painted;
+		if (os64_rect_intersect(pieces[i], clip, &painted))
+			os64_draw_fill_rect(&ctx->surf, painted, i < 3 ? outline : color);
+	}
+}
+
 // ── ui_scrollbar ────────────────────────────────────────────────────────────
 
 // Thumb geometry along the LONG axis (y for the classic bar, x when
@@ -539,10 +594,7 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	}
 	int32_t cx = 0;
 	if (w->focused && geom_caret(&g, tf->cursor, &cx) == OS64_FONT_OK) {
-		os64_gui_rect_t caret = { origin + cx, ty, 2, row };
-		os64_gui_rect_t clipped;
-		if (os64_rect_intersect(caret, inner, &clipped))
-			os64_draw_fill_rect(&ctx->surf, clipped, t->text_caret);
+		paint_caret(ctx, inner, origin + cx, ty, row, t->text_caret);
 	}
 }
 
@@ -599,6 +651,8 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 
 	case OS64_GUI_EVENT_KEY_DOWN: {
 		bool shift = (ev->key.modifiers & OS64_GUI_MOD_SHIFT) != 0;
+		bool ctrl = (ev->key.modifiers & OS64_GUI_MOD_CTRL) != 0 &&
+		            !(ev->key.modifiers & OS64_GUI_MOD_ALT);
 		if (!tf->seq && (ev->key.modifiers & OS64_GUI_MOD_CTRL) &&
 			!(ev->key.modifiers & OS64_GUI_MOD_ALT)) {
 			unsigned key = (unsigned char)ev->key.ascii;
@@ -664,10 +718,14 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			}
 			break;
 		case K_LEFT:
-			tf->cursor = selection && !shift ? lo : os64_ui_text_step(tf->buf, tf->len, tf->cursor, false);
+			tf->cursor = selection && !shift ? lo : ctrl
+			    ? word_step(tf->buf, tf->len, tf->cursor, false)
+			    : os64_ui_text_step(tf->buf, tf->len, tf->cursor, false);
 			break;
 		case K_RIGHT:
-			tf->cursor = selection && !shift ? hi : os64_ui_text_step(tf->buf, tf->len, tf->cursor, true);
+			tf->cursor = selection && !shift ? hi : ctrl
+			    ? word_step(tf->buf, tf->len, tf->cursor, true)
+			    : os64_ui_text_step(tf->buf, tf->len, tf->cursor, true);
 			break;
 		case K_HOME:  tf->cursor = 0;       break;
 		case K_END:   tf->cursor = tf->len; break;
@@ -1671,10 +1729,7 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		if (w->focused && li == tv->cur_line) {
 			int32_t cx = 0;
 			if (geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK) {
-				os64_gui_rect_t caret = { origin + cx, y, 2, pitch };
-				os64_gui_rect_t painted;
-				if (os64_rect_intersect(caret, clip, &painted))
-					os64_draw_fill_rect(&ctx->surf, painted, t->text_caret);
+				paint_caret(ctx, clip, origin + cx, y, pitch, t->text_caret);
 			}
 		}
 		os64_ui_run_release(spare);
@@ -1870,12 +1925,19 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 
 	case OS64_GUI_EVENT_KEY_DOWN: {
 		bool shift = (ev->key.modifiers & OS64_GUI_MOD_SHIFT) != 0;
+		bool ctrl = (ev->key.modifiers & OS64_GUI_MOD_CTRL) != 0 &&
+		            !(ev->key.modifiers & OS64_GUI_MOD_ALT);
 		bool can_edit = tv_editable(tv);
 		bool changed = false;
 		char c = 0;
 		size_t len;
 		const char *ln;
 
+		if (!tv->seq && ctrl && ev->key.ascii == 1) {
+			tv_line(tv, count - 1, &len);
+			os64_ui_textview_select(ui, tv, 0, 0, count - 1, len);
+			return true;
+		}
 		ui_key_t k = os64_ui_decode_key(&tv->seq, ev, &c);
 		switch (k) {
 		case K_CHAR:
@@ -1954,7 +2016,10 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			// accented letter the caret moves past the whole letter rather
 			// than into the middle of it.
 			if (tv->cur_col > 0) {
-				tv_step_caret(tv, false);
+				if (ctrl) {
+					ln = tv_line(tv, tv->cur_line, &len);
+					tv->cur_col = word_step(ln, len, tv->cur_col, false);
+				} else tv_step_caret(tv, false);
 			} else if (tv->cur_line > 0) {
 				tv->cur_line--;
 				tv_line(tv, tv->cur_line, &len);
@@ -1966,7 +2031,8 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			tv_motion_prologue(tv, shift);
 			ln = tv_line(tv, tv->cur_line, &len);
 			if (tv->cur_col < len) {
-				tv_step_caret(tv, true);
+				if (ctrl) tv->cur_col = word_step(ln, len, tv->cur_col, true);
+				else tv_step_caret(tv, true);
 			} else if (tv->cur_line + 1 < count) {
 				tv->cur_line++;
 				tv->cur_col = 0;
@@ -1975,11 +2041,13 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			break;
 		case K_HOME:
 			tv_motion_prologue(tv, shift);
+			if (ctrl) tv->cur_line = 0;
 			tv->cur_col = 0;
 			tv_set_goal(tv, 0);
 			break;
 		case K_END:
 			tv_motion_prologue(tv, shift);
+			if (ctrl) tv->cur_line = count - 1;
 			ln = tv_line(tv, tv->cur_line, &len);
 			tv->cur_col = len;
 			tv_remember_goal(tv, ui);

@@ -305,6 +305,104 @@ static bool sh_caret_legal(void)
            os64_ui_text_snap(ln, len, g.view.cur_col, false) == g.view.cur_col;
 }
 
+/* Exercise the app shortcut router as well as the widget's escape parser.
+ * Both keyboard families stamp a navigation burst with the physical key. */
+static void sh_command_key(char ascii, uint8_t mods, uint8_t scan)
+{
+    os64_gui_event_t ev = {.type = OS64_GUI_EVENT_KEY_DOWN};
+    ev.key.ascii = ascii; ev.key.modifiers = mods; ev.key.scancode = scan;
+    commands(NULL, &ev);
+    ev.type = OS64_GUI_EVENT_KEY_UP;
+    commands(NULL, &ev);
+}
+
+static void sh_command_burst(const char *seq, uint8_t mods, uint8_t scan)
+{
+    sh_command_key(27, mods, scan);
+    for (const char *p = seq; *p; ++p) sh_command_key(*p, mods, scan);
+}
+
+static void scribe_navigation(void)
+{
+    current = "scribe navigation";
+    const uint8_t ctrl = OS64_GUI_MOD_CTRL, both = ctrl | OS64_GUI_MOD_SHIFT;
+    char doc[8192]; size_t n = 0;
+    for (unsigned i = 0; i < 200; ++i)
+        n += (size_t)snprintf(doc + n, sizeof(doc) - n, "log row %u\n", i);
+    memcpy(doc + n, "last caf\xc3\xa9", 10); n += 10;
+    sh_scribe(16, doc, n); g.running = true;
+    for (unsigned hid = 0; hid < 2; ++hid) {
+        uint8_t device = hid ? OS64_GUI_MOD_HID : 0;
+        uint8_t home = hid ? 0x4a : 0x47, end = hid ? 0x4d : 0x4f;
+        sh_command_burst("[F", ctrl | device, end);
+        CHECK(g.view.cur_line == 200 && g.view.cur_col == 10);
+        CHECK(g.view.top > 0 && g.view.cur_line >= g.view.top &&
+              g.view.cur_line < g.view.top + (size_t)os64_ui_textview_rows(&g.view, &g.ui.theme));
+        CHECK(!g.buf.dirty && !g.view.sel);
+        sh_command_burst("[H", both | device, home);
+        CHECK(g.view.cur_line == 0 && g.view.cur_col == 0 && g.view.top == 0);
+        CHECK(g.view.sel && g.view.sel_line == 200 && g.view.sel_col == 10);
+        sh_command_burst("[F", both | device, end);
+        CHECK(g.view.sel_line == 200 && g.view.sel_col == 10);
+        sh_command_burst("[H", ctrl | device, home);
+        CHECK(!g.view.sel && g.view.cur_line == 0 && g.view.cur_col == 0);
+        sh_caret(50, 3);
+        sh_command_burst("[F", device, end);
+        CHECK(g.view.cur_line == 50 && g.view.cur_col == 10);
+        sh_command_burst("[H", device, home);
+        CHECK(g.view.cur_line == 50 && g.view.cur_col == 0);
+    }
+    sh_command_key(1, ctrl, 0x1e);
+    CHECK(g.view.sel && g.view.sel_line == 0 && g.view.sel_col == 0);
+    CHECK(g.view.cur_line == 200 && g.view.cur_col == 10 && !g.buf.dirty);
+    CHECK(os64_ui_textview_copy(&g.view) == (int64_t)n);
+    sh_file_t *clip = sh_find(OS64_CLIPBOARD_PATH, false);
+    CHECK(clip && clip->len == n && !memcmp(clip->bytes, doc, n));
+    help_toggle();
+    sh_command_burst("[F", ctrl, 0x4f);
+    CHECK(g.view.cur_line == sizeof(kHelpLines) / sizeof(kHelpLines[0]) - 1);
+    sh_command_key(1, ctrl, 0x04);
+    CHECK(g.view.sel && g.view.sel_line == 0 && !g.buf.dirty);
+    help_leave();
+    sh_close();
+
+    const char words[] = "one,  caf\xc3\xa9 e\xcc\x81nd\nnext";
+    sh_scribe(16, words, sizeof(words) - 1); g.running = true;
+    sh_command_burst("[C", ctrl, 0x4d);
+    CHECK(g.view.cur_col == 3);
+    sh_command_burst("[C", ctrl, 0x4d);
+    CHECK(g.view.cur_col == 6);
+    sh_command_burst("[C", both, 0x4d);
+    CHECK(g.view.sel && g.view.sel_col == 6 && g.view.cur_col == 12);
+    sh_command_burst("[C", both, 0x4d);
+    CHECK(g.view.sel_col == 6 && g.view.cur_col == 17 && sh_caret_legal());
+    sh_command_burst("[C", ctrl, 0x4d);
+    CHECK(g.view.cur_line == 1 && g.view.cur_col == 0 && !g.view.sel);
+    sh_command_burst("[D", ctrl, 0x4b);
+    CHECK(g.view.cur_line == 0 && g.view.cur_col == 17);
+    sh_command_burst("[D", ctrl, 0x4b);
+    CHECK(g.view.cur_col == 12 && sh_caret_legal());
+    sh_command_burst("[D", ctrl, 0x4b);
+    CHECK(g.view.cur_col == 6 && sh_caret_legal());
+    CHECK(SH_DOC_IS("one,  caf\xc3\xa9 e\xcc\x81nd\nnext") && !g.buf.dirty);
+    enter_mode(MODE_FIND, "find:", "one two");
+    sh_command_burst("[D", ctrl, 0x4b);
+    CHECK(g.field.cursor == 4);
+    sh_command_burst("[D", both, 0x4b);
+    CHECK(g.field.cursor == 0 && g.field.anchor == 4 && g.field.selected);
+    leave_mode();
+    sh_close();
+
+    sh_scribe(16, "", 0); g.running = true;
+    sh_command_burst("[F", both, 0x4f);
+    sh_command_burst("[H", ctrl, 0x47);
+    sh_command_key(1, ctrl, 0x04);
+    CHECK(g.view.cur_line == 0 && g.view.cur_col == 0 && g.view.top == 0);
+    CHECK(!g.buf.dirty);
+    sh_close();
+    sh_rm(OS64_CLIPBOARD_PATH); sh_rm("/doc"); current = "";
+}
+
 /* ── C2-R1: deletion is by cluster, through the real handler ──────────── */
 
 static void scribe_deletes_whole_letters(void)
@@ -1452,6 +1550,7 @@ int scribe_host_tests(int argc, char **argv)
     sh_dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
     (void)ui_test_suite_main;
 
+    scribe_navigation();
     scribe_deletes_whole_letters();
     scribe_keys_under_refusal();
     scribe_font_change_stages_its_extent();

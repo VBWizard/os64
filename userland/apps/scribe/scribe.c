@@ -12,7 +12,8 @@
 //   scribe             start empty; Save As names it
 //
 // Keys: type to insert; arrows/Home/End/PgUp/PgDn move; Shift+motion
-// selects; click places, drag selects. Ctrl+S save, Ctrl+F find (Enter =
+// selects; Ctrl+Home/End jump to document ends, Ctrl+Left/Right by word,
+// Ctrl+A selects all; click places, drag selects. Ctrl+S save, Ctrl+F find (Enter =
 // next hit), Ctrl+O open, Ctrl+Q quit. Esc leaves the entry field.
 
 #include "os64/os64.h"
@@ -130,6 +131,10 @@ static const char *kHelpLines[] = {
     "",
     "KEYS",
     "  arrows, Home, End, PgUp, PgDn   move (Shift extends the selection)",
+    "  Ctrl+Home, Ctrl+End             start / end of the document",
+    "  Ctrl+Left, Ctrl+Right           previous / next word",
+    "  Ctrl+Shift+motion               extend selection by word / to end",
+    "  Ctrl+A                          select all",
     "  click / drag                    place the caret / select",
     "  Backspace, Delete               erase (a selection, if one is lit)",
     "  Enter                           split the line",
