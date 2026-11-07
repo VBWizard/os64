@@ -202,6 +202,22 @@ static int adjacent(JSContext *ctx, const os64_html_node_t *self, char *word,
     return *parent != NULL ? 1 : 0;
 }
 
+/* One body element, made on first use and held for the binding's life:
+ * libhtml keeps a node that was never inserted charged to its document
+ * until the document goes, so a body made for each parse would fill the
+ * arena of a page that parses fragments without end (an endless feed). A
+ * fragment parse only reads its context. */
+const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status)
+{
+    if (dom->body_context == NULL) {
+        os64_html_node_t *body = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "body", status);
+        if (body == NULL) return NULL;
+        os64_html_hold(dom->document, body);
+        dom->body_context = body;
+    }
+    return dom->body_context;
+}
+
 /* After the arguments are converted (the position, then the HTML or the
  * text, both strings; or the element). */
 static JSValue adjacent_steps(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self, int magic,
@@ -219,7 +235,7 @@ static JSValue adjacent_steps(os64_dom_t *dom, JSContext *ctx, const os64_html_n
         int64_t status = OS64_HTML_OK;
         const os64_html_node_t *context = parent;
         if (!is_element(context) || is_html(context, OS64_HTML_TAG_HTML))
-            context = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "body", &status);
+            context = d_body_context(dom, &status);
         os64_html_node_t *fragment = context == NULL ? NULL :
             os64_html_parse_fragment(dom->document, context, text->data, text->length, d_scripting(dom, parent), &status);
         if (fragment == NULL) return d_html_error(ctx, status);

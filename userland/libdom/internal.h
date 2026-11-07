@@ -656,6 +656,8 @@ struct os64_dom {
     struct DWalks *walks;
     /* DOM Range's records (range.c). */
     struct DRanges *ranges;
+    /* d_body_context's element, made on first use; held. */
+    const os64_html_node_t *body_context;
     /* ResizeObserver (resize.c), the same three. */
     struct DResizes *resizes;
     size_t resizes_held;
@@ -1533,6 +1535,10 @@ bool d_tree_precedes(const os64_html_node_t *a, const os64_html_node_t *b);
  * releases the rest, before the document goes. */
 int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 const char *d_ranges_name(size_t index);
+/* The context a fragment parse takes when it has no element of its own to
+ * take (insertAdjacentHTML, createContextualFragment; mixin.c). NULL with
+ * `*status` saying why. */
+const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status);
 void d_ranges_sweep(os64_dom_t *dom);
 void d_ranges_free(os64_dom_t *dom);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its

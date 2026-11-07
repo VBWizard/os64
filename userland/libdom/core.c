@@ -517,6 +517,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_resizes_free(dom);
     d_walkers_free(dom);
     d_ranges_free(dom);
+    if (dom->body_context != NULL) os64_html_release(dom->document, dom->body_context);
     d_performance_free(dom);
     d_kept_free_all(dom);
     for (DValue *entry = dom->values; entry != NULL;) {

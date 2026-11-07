@@ -659,8 +659,8 @@ static JSValue stringify(os64_dom_t *dom, JSContext *ctx, const DRange *r)
 
 /* createContextualFragment (DOM Parsing § 7.1): the markup parsed with the
  * start node as context when it is an element, its parent element when it
- * is text or a comment, and a new body otherwise or in place of an HTML
- * document's html. Its scripts are not marked started (innerHTML's and
+ * is text or a comment, and a body otherwise or in place of an HTML
+ * document's html (d_body_context). Its scripts are not marked started (innerHTML's and
  * insertAdjacentHTML's are), so each runs when the fragment is inserted. */
 static JSValue contextual_fragment(os64_dom_t *dom, JSContext *ctx, const DRange *r, const DString *markup)
 {
@@ -676,9 +676,8 @@ static JSValue contextual_fragment(os64_dom_t *dom, JSContext *ctx, const DRange
     if (element == NULL ||
         (d_document_type(dom, document) == D_DOCUMENT_HTML && element->ns == OS64_HTML_NS_HTML &&
          element->tag == OS64_HTML_TAG_HTML)) {
-        os64_html_node_t *body = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "body", &status);
-        if (body == NULL) return d_html_error(ctx, status);
-        element = body;
+        element = d_body_context(dom, &status);
+        if (element == NULL) return d_html_error(ctx, status);
     }
     /* Scripting is the start node's document's: a substituted body is no
      * node of any document's tree to ask. */

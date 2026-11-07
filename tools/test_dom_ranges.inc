@@ -228,6 +228,32 @@ static void dom_range_lifetime_cases(void)
     fixture_free(&f);
 }
 
+/* A fragment parse with no element of its own for context takes the
+ * binding's one held body, not a new one each call: libhtml keeps a node
+ * that was never inserted charged to its document until the document goes,
+ * so a feed parsing pieces forever would fill the arena with bodies.
+ * insertAdjacentHTML's fragment is reclaimed once inserted, so it leaves
+ * nothing; createContextualFragment hands its fragment back, which stays
+ * charged as any never-inserted node does (a dropped createDocumentFragment
+ * too) — one node a call, never the body besides. */
+static void dom_range_context_cases(void)
+{
+    os64_dom_options_t options = range_options();
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, RANGE_ASSERT "globalThis.cr=new Range();cr.createContextualFragment('<b>0</b>');"
+               "document.documentElement.insertAdjacentHTML('afterbegin','');", "range-context-first");
+    size_t before = f.document->node_count;
+    dom_script(&f, RANGE_ASSERT "for(var i=0;i<100;i++)document.documentElement.insertAdjacentHTML('afterbegin','');",
+               "range-context-adjacent");
+    check(f.document->node_count == before, "ranges: insertAdjacentHTML's body-context parses make no node");
+    dom_script(&f, RANGE_ASSERT "for(var i=0;i<100;i++)cr.createContextualFragment('');", "range-context-many");
+    if (f.document->node_count != before + 100)
+        fprintf(stderr, "nodes: %zu -> %zu\n", before, f.document->node_count);
+    check(f.document->node_count == before + 100, "ranges: a contextual fragment leaves its fragment, no body");
+    fixture_free(&f);
+}
+
 static void dom_range_cases(void)
 {
     dom_range_switch_cases();
@@ -236,4 +262,5 @@ static void dom_range_cases(void)
     dom_range_contextual_cases();
     dom_range_static_cases();
     dom_range_lifetime_cases();
+    dom_range_context_cases();
 }
