@@ -745,6 +745,33 @@ static size_t p2b_detach_run(size_t cut)
     return count;
 }
 
+/* A port's postMessage refused anywhere, the binding's allocations or the
+ * engine's, leaves its transfer list attached: the message node is
+ * allocated before the clone is written and the list detached. */
+static size_t p2b_port_detach_run(size_t cut, bool engine)
+{
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return 0;
+    dom_script(&f, "globalThis.c=new MessageChannel();c.port1.onmessage=()=>{};"
+                   "globalThis.go=function(){const b=new ArrayBuffer(8);const v={a:[1,2],u:new Uint8Array(b,2,4)};"
+                   "let ok=false;try{c.port2.postMessage(v,[b]);ok=true}catch(e){}"
+                   "if(b.byteLength===0&&!ok)globalThis.wrong=new ArrayBuffer(8<<20)}",
+               "port detach sweep: setup");
+    size_t start = engine ? attempts : dom_attempts, asks = large_asks;
+    if (cut != 0) {
+        if (engine) fail_at = attempts + cut;
+        else dom_fail_at = dom_attempts + cut;
+    }
+    os64_js_outcome_t outcome;
+    os64_js_run(f.runtime, "go()", 4, "port-detach.js", &outcome);
+    fail_at = dom_fail_at = 0;
+    size_t count = (engine ? attempts : dom_attempts) - start;
+    check(large_asks == asks, "channel: a port's message refused anywhere leaves its transfer list attached");
+    fixture_free(&f);
+    return count;
+}
+
 static void dom_p2b_sweep_cases(void)
 {
     size_t points = p2b_detach_run(0);
@@ -752,6 +779,14 @@ static void dom_p2b_sweep_cases(void)
     for (size_t cut = 1; cut <= points; cut++) {
         p2b_detach_run(cut);
         dom_sweeps++;
+    }
+    for (int engine = 0; engine < 2; engine++) {
+        size_t port_points = p2b_port_detach_run(0, engine);
+        printf("p2b port detach %s allocation points: %zu\n", engine ? "engine" : "binding", port_points);
+        for (size_t cut = 1; cut <= port_points; cut++) {
+            p2b_port_detach_run(cut, engine);
+            dom_sweeps++;
+        }
     }
     static const struct { const char *operation; int drive; } kOperations[] = {
         {"const b=new ArrayBuffer(8,{maxByteLength:16});structuredClone([v,b],{transfer:[b]})", 0},

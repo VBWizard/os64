@@ -40,9 +40,11 @@
  * entangled MessagePorts; what one posts goes to the other, a MessageEvent
  * with no origin, no source and no ports, fired at the port receiving it.
  * A port's messages ride the window's queue above as tasks of their own,
- * so the host runs them as it runs the window's (os64_dom_message_fire), in
- * posting order; a port that has not started (start(), or its onmessage
- * set) keeps what it is sent on a list of its own until it does. Each port
+ * so the host runs them as it runs the window's (os64_dom_message_fire),
+ * each port's in the order sent; a port that has not started (start(), or
+ * its onmessage set) keeps what it is sent on a list of its own until it
+ * does, and those join the queue then, behind whatever was posted
+ * meanwhile, as the standard's separate task sources allow. Each port
  * holds its partner, traced, so an entangled pair lives while either is
  * reachable, as a scheduler's channel must (React posts to one port and
  * hears on the other); a queued message holds the port it goes to until
@@ -52,7 +54,9 @@
  *
  * The queue's nodes are the binding's memory; a message's clone is the
  * engine's, charged as the page's own values are; the poster's window each
- * holds is one of the registry's values (messages_held). */
+ * holds is one of the registry's values (messages_held). A port's message
+ * holds its port instead, an engine value no registry counts, freed with
+ * the message (d_message_drain at teardown). */
 
 /* What a message's targetOrigin asked for. An opaque origin is the same
  * as itself only: "/" from a document with one is the poster's own, which
@@ -437,16 +441,26 @@ static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
                                                                      : "A MessagePort is not transferred here");
             converted = -1;
         }
+    /* The node first, so a quota refusal detaches nothing; then the message
+     * written and the transfer list detached, which happens even with no
+     * port to receive it, as the standard serializes it all the same. */
+    DPort *target = port_of(p->partner);
+    bool live = target != NULL && !target->closed;
+    DMessage *message = converted == 0 && live ? d_alloc(dom, sizeof(*message)) : NULL;
+    if (converted == 0 && live && message == NULL) {
+        d_error(ctx, "QuotaExceededError", "DOM message quota exceeded");
+        converted = -1;
+    }
     DClone *clone = converted == 0 ? d_clone_write(dom, ctx, argv[0], transfer, count) : NULL;
     if (clone != NULL) d_clone_detach(ctx, transfer, count);
     d_sequence_free(ctx, transfer, count);
-    if (clone == NULL) return JS_EXCEPTION;
-    DPort *target = port_of(p->partner);
-    DMessage *message = target != NULL && !target->closed ? d_alloc(dom, sizeof(*message)) : NULL;
-    if (message == NULL) {
+    if (clone == NULL) {
+        d_free(dom, message);
+        return JS_EXCEPTION;
+    }
+    if (!live) {
         d_clone_free(dom->engine, clone);
-        return target != NULL && !target->closed ? d_error(ctx, "QuotaExceededError", "DOM message quota exceeded")
-                                                 : JS_UNDEFINED;
+        return JS_UNDEFINED;
     }
     *message = (DMessage){.clone = clone, .source = JS_UNDEFINED, .port = JS_UNDEFINED, .target_kind = T_ANY,
                           .posted = now_ms(dom)};
