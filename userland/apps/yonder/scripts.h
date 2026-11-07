@@ -74,6 +74,9 @@ typedef struct {
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
     os64_dom_svg_hit_provider_t svg_hit;
+    // elementFromPoint's hit provider (dom.h), given `opaque`. NULL: every
+    // point answers null.
+    os64_dom_hit_provider_t hit;
     // The intersection observations' batch (INTERSECTION_OBSERVER.md),
     // given `opaque`: answered only from a layout already current, false
     // when there is none. NULL: the page's observers never observe.

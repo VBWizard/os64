@@ -611,6 +611,20 @@ typedef os64_geometry_status_t (*os64_dom_svg_hit_provider_t)(void *,
     const os64_html_node_t *, double x, double y, const os64_geometry_memory_t *,
     bool (*cancelled)(void *), void *, bool *inside, os64_dom_geometry_stats_t *cost);
 void os64_dom_set_svg_hit(os64_dom_t *, os64_dom_svg_hit_provider_t, void *);
+/* elementFromPoint's and elementsFromPoint's (CSSOM View § 5.1; RANGE.md
+ * § 8): the elements under (x, y), CSS pixels in the viewport of the page's
+ * document, topmost first: the one the pointer's hit test finds there (a
+ * hit on text answers the element holding it in the flat tree, one over an
+ * image map's region its area), then that element's flat-tree ancestors; a
+ * point inside the viewport on bare canvas answers the root element. Up to
+ * `cap` into `out`; the count there is, which past `cap` means the rest
+ * were cut. 0 for a point outside the viewport or a document not laid out.
+ * The provider makes the layout current, records attempted layouts and
+ * elapsed work in `cost` even on refusal, and must not enter JS. Borrowed
+ * nodes expire on return. */
+typedef size_t (*os64_dom_hit_provider_t)(void *opaque, double x, double y, const os64_html_node_t **out,
+                                          size_t cap, os64_dom_geometry_stats_t *cost);
+void os64_dom_set_hit(os64_dom_t *dom, os64_dom_hit_provider_t provider, void *opaque);
 
 /* What making the style current cost, added to os64_dom_geometry_stats. */
 void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t elapsed_us);

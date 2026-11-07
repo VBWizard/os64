@@ -181,6 +181,9 @@ matchMedia-display-none-iframe.html	needs iframe
 matchMedia.html	needs iframe: half its tests ask an iframe's window, so the page never ends (its first five, on window, pass)
 scrollingElement.html	needs iframe: every case is a document in one
 [passing]
+CaretPosition-001.html	Element at (400, 100)
+CaretPosition-001.html	Element at (400, 900)
+DOMRectList.html	Element getClientRects()
 GetBoundingRect.html	getBoundingClientRect
 HTMLBody-ScrollArea_quirksmode.html	Ensure that body element is loaded.
 HTMLBody-ScrollArea_quirksmode.html	Ensure that style.overflowY can be set properly.
@@ -202,6 +205,8 @@ cssom-geometryutils-element-types.html	getBoxQuads() returns quads for exposed C
 cssom-getBoundingClientRect-001.html	getBoundingClientRect() should return a DOMRect where height=bottom-top
 cssom-getBoundingClientRect-001.html	getBoundingClientRect() should return a DOMRect where width=right-left
 cssom-getBoundingClientRect-002.html	getBoundingClientRect on a newly-created Element not yet inserted into the DOM should return an all-zeroes DOMRect
+cssom-getClientRects-002.html	CSSOM View - GetClientRects().length is the same regardless source new lines
+cssom-getClientRects.html	getClientRects on a newly-created Element not yet inserted into the DOM should return an empty DOMRectList
 cssom-view-window-screen-interface.html	window.screen.availHeight >= 0 && window.screen.availHeight <= window.screen.height
 cssom-view-window-screen-interface.html	window.screen.availWidth >= 0 && window.screen.availWidth <= window.screen.width
 cssom-view-window-screen-interface.html	window.screen.colorDepth == 0 || window.screen.colorDepth == 16 || window.screen.colorDepth == 24 || window.screen.colorDepth == 30 || window.screen.colorDepth == 32
@@ -229,10 +234,53 @@ element-scroll-arguments.html	scrollBy with 0 arguments
 element-scroll-arguments.html	scrollBy with a valid ScrollToOptions argument
 element-scroll-arguments.html	scrollTo with 0 arguments
 element-scroll-arguments.html	scrollTo with a valid ScrollToOptions argument
+elementFromPoint-001.html	CSSOM View - 5 - extensions to the Document interface
+elementFromPoint-dynamic-anon-box.html	Link should be clickable after hiding a scrollbox with an anonymous table inside
+elementFromPoint-ellipsis-in-inline-box.html	elementFromPoint-ellipsis-in-inline-box
+elementFromPoint-ellipsis-in-inline-box.html	elementFromPoint-ellipsis-in-inline-box 1
+elementFromPoint-ellipsis-in-inline-box.html	elementFromPoint-ellipsis-in-inline-box 2
+elementFromPoint-float-in-relative.html	elementFromPoint-float-in-relative
+elementFromPoint-float-in-table.html	float-in-div
+elementFromPoint-float-in-table.html	float-in-table
+elementFromPoint-list-001.html	<li>Image Inside 1</li>
+elementFromPoint-list-001.html	<li>Image Inside 2</li>
+elementFromPoint-list-001.html	<li>Image Outside 1</li>
+elementFromPoint-list-001.html	<li>Image Outside 2</li>
+elementFromPoint-list-001.html	<li>Inside 1</li>
+elementFromPoint-list-001.html	<li>Inside 2</li>
+elementFromPoint-list-001.html	<li>Inside 3</li>
+elementFromPoint-list-001.html	<li>Outside 1</li>
+elementFromPoint-list-001.html	<li>Outside 2</li>
+elementFromPoint-list-001.html	<li>Outside 3</li>
+elementFromPoint-negative-z-index-inline.html	A negative z-index child with pointer-events:none falls through to its stacking context
+elementFromPoint-negative-z-index-inline.html	Negative z-index inline-block inside a stacking context is hit
+elementFromPoint-negative-z-index-inline.html	Negative z-index input inside a stacking context is hit
+elementFromPoint-negative-z-index-inline.html	elementsFromPoint places a negative z-index child before its stacking context background
 elementFromPoint-parameters.html	document.elementFromPoint: Parameters are mandatory.
 elementFromPoint-parameters.html	document.elementFromPoint: Parameters should be finite floating point values.
 elementFromPoint-parameters.html	document.elementsFromPoint: Parameters are mandatory.
 elementFromPoint-parameters.html	document.elementsFromPoint: Parameters should be finite floating point values.
+elementFromPoint-subpixel.html	Hit test bottom left corner of box
+elementFromPoint-subpixel.html	Hit test lower left corner of box
+elementFromPoint-subpixel.html	Hit test top left corner of box
+elementFromPoint-subpixel.html	Hit test top right corner of box
+elementFromPoint-visibility-hidden-resizer.html	elementFromPoint on resizer area of an element with visibility:hidden
+elementFromPoint.html	First element to get mouse events with pointer-events css
+elementFromPoint.html	Negative co-ordinates
+elementFromPoint.html	No viewport available
+elementFromPoint.html	Return first element that is the target for hit testing
+elementFromPoint.html	co-ordinates larger than the viewport
+elementFromPosition.html	 test negative x 
+elementFromPosition.html	 test negative y 
+elementFromPosition.html	Point (0, 0), return root element(HTML)
+elementFromPosition.html	document.elementFromPoint
+elementFromPosition.html	document.elementFromPoint is a Function
+elementFromPosition.html	test outside of viewport
+elementFromPosition.html	test some point of the element: inside
+elementFromPosition.html	test some point of the element: left line
+elementFromPosition.html	test some point of the element: top left corner
+elementFromPosition.html	test some point of the element: top line
+elementFromPosition.html	test the top of layer
 elementScroll.html	Element scroll maximum test
 elementScroll.html	Element scroll test (one argument)
 elementScroll.html	Element scroll test (two arguments)
@@ -241,12 +289,28 @@ elementScroll.html	Element scrollBy test (two arguments)
 elementScroll.html	Element scrollTo test (one argument)
 elementScroll.html	Element scrollTo test (two arguments)
 elementScroll.html	Element scrollTop/Left getter/setter test
+elementsFromPoint-inline-htb-ltr.html	elementsFromPoint should return all elements under a point
+elementsFromPoint-inline-nested.html	elementsFromPoint should return all elements under a point, including nested inline elements
+elementsFromPoint-inline-vlr-ltr.html	elementsFromPoint should return all elements under a point
+elementsFromPoint-invalid-cases.html	An empty sequence is returned for queries outside the viewport
+elementsFromPoint-invalid-cases.html	The root element is the last element returned for otherwise empty queries within the viewport
+elementsFromPoint-invalid-cases.html	The root element is the last element returned for valid queries
+elementsFromPoint.html	First element to get mouse events with pointer-events css
+elementsFromPoint.html	Negative co-ordinates
+elementsFromPoint.html	No viewport available
+elementsFromPoint.html	Return first element that is the target for hit testing
+elementsFromPoint.html	co-ordinates larger than the viewport
 getBoundingClientRect-empty-inline-002.html	width
 getBoundingClientRect-empty-inline-002.html	x
 getBoundingClientRect-scroll.html	getBoundingClientRect for a scrolled display none box
 getBoundingClientRect-zoom.html	getBoundingClientRect for elements with css zoom
 getBoundingClientRect-zoom.html	getBoundingClientRect for elements with css zoom 1
+getClientRects-inline-atomic-child.html	getClientRects-inline-atomic-child
+getClientRects-inline-atomic-child.html	getClientRects-inline-atomic-child 1
+getClientRects-inline-atomic-child.html	getClientRects-inline-atomic-child 2
+getClientRects-inline-inline-child.html	sub element in a child inline box should not be included
 getClientRects-zoom.html	getBoundingClientRect for elements with css zoom
+getClientRects-zoom.html	getBoundingClientRect for elements with css zoom 1
 historical.html	Support for ClientRect
 historical.html	Support for ClientRectList
 idlharness.html	CSSPseudoElement includes GeometryUtils: member names are unique
@@ -258,6 +322,10 @@ idlharness.html	Document includes GlobalEventHandlers: member names are unique
 idlharness.html	Document includes NonElementParentNode: member names are unique
 idlharness.html	Document includes ParentNode: member names are unique
 idlharness.html	Document includes XPathEvaluatorBase: member names are unique
+idlharness.html	Document interface: calling elementFromPoint(double, double) on document with too few arguments must throw TypeError
+idlharness.html	Document interface: calling elementsFromPoint(double, double) on document with too few arguments must throw TypeError
+idlharness.html	Document interface: document must inherit property "elementFromPoint(double, double)" with the proper type
+idlharness.html	Document interface: document must inherit property "elementsFromPoint(double, double)" with the proper type
 idlharness.html	Document interface: document must inherit property "scrollingElement" with the proper type
 idlharness.html	Element includes ChildNode: member names are unique
 idlharness.html	Element includes GeometryUtils: member names are unique
@@ -266,21 +334,28 @@ idlharness.html	Element includes ParentNode: member names are unique
 idlharness.html	Element includes Slottable: member names are unique
 idlharness.html	Element interface: calling scroll(optional ScrollToOptions) on document.createElement("div") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scroll(optional ScrollToOptions) on document.createElement("img") with too few arguments must throw TypeError
+idlharness.html	Element interface: calling scroll(optional ScrollToOptions) on document.createElementNS("x", "y") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scroll(unrestricted double, unrestricted double) on document.createElement("div") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scroll(unrestricted double, unrestricted double) on document.createElement("img") with too few arguments must throw TypeError
+idlharness.html	Element interface: calling scroll(unrestricted double, unrestricted double) on document.createElementNS("x", "y") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollBy(optional ScrollToOptions) on document.createElement("div") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollBy(optional ScrollToOptions) on document.createElement("img") with too few arguments must throw TypeError
+idlharness.html	Element interface: calling scrollBy(optional ScrollToOptions) on document.createElementNS("x", "y") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollBy(unrestricted double, unrestricted double) on document.createElement("div") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollBy(unrestricted double, unrestricted double) on document.createElement("img") with too few arguments must throw TypeError
+idlharness.html	Element interface: calling scrollBy(unrestricted double, unrestricted double) on document.createElementNS("x", "y") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollTo(optional ScrollToOptions) on document.createElement("div") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollTo(optional ScrollToOptions) on document.createElement("img") with too few arguments must throw TypeError
+idlharness.html	Element interface: calling scrollTo(optional ScrollToOptions) on document.createElementNS("x", "y") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollTo(unrestricted double, unrestricted double) on document.createElement("div") with too few arguments must throw TypeError
 idlharness.html	Element interface: calling scrollTo(unrestricted double, unrestricted double) on document.createElement("img") with too few arguments must throw TypeError
+idlharness.html	Element interface: calling scrollTo(unrestricted double, unrestricted double) on document.createElementNS("x", "y") with too few arguments must throw TypeError
 idlharness.html	Element interface: document.createElement("div") must inherit property "clientHeight" with the proper type
 idlharness.html	Element interface: document.createElement("div") must inherit property "clientLeft" with the proper type
 idlharness.html	Element interface: document.createElement("div") must inherit property "clientTop" with the proper type
 idlharness.html	Element interface: document.createElement("div") must inherit property "clientWidth" with the proper type
 idlharness.html	Element interface: document.createElement("div") must inherit property "getBoundingClientRect()" with the proper type
+idlharness.html	Element interface: document.createElement("div") must inherit property "getClientRects()" with the proper type
 idlharness.html	Element interface: document.createElement("div") must inherit property "scroll(optional ScrollToOptions)" with the proper type
 idlharness.html	Element interface: document.createElement("div") must inherit property "scroll(unrestricted double, unrestricted double)" with the proper type
 idlharness.html	Element interface: document.createElement("div") must inherit property "scrollBy(optional ScrollToOptions)" with the proper type
@@ -296,6 +371,7 @@ idlharness.html	Element interface: document.createElement("img") must inherit pr
 idlharness.html	Element interface: document.createElement("img") must inherit property "clientTop" with the proper type
 idlharness.html	Element interface: document.createElement("img") must inherit property "clientWidth" with the proper type
 idlharness.html	Element interface: document.createElement("img") must inherit property "getBoundingClientRect()" with the proper type
+idlharness.html	Element interface: document.createElement("img") must inherit property "getClientRects()" with the proper type
 idlharness.html	Element interface: document.createElement("img") must inherit property "scroll(optional ScrollToOptions)" with the proper type
 idlharness.html	Element interface: document.createElement("img") must inherit property "scroll(unrestricted double, unrestricted double)" with the proper type
 idlharness.html	Element interface: document.createElement("img") must inherit property "scrollBy(optional ScrollToOptions)" with the proper type
@@ -306,6 +382,22 @@ idlharness.html	Element interface: document.createElement("img") must inherit pr
 idlharness.html	Element interface: document.createElement("img") must inherit property "scrollTo(unrestricted double, unrestricted double)" with the proper type
 idlharness.html	Element interface: document.createElement("img") must inherit property "scrollTop" with the proper type
 idlharness.html	Element interface: document.createElement("img") must inherit property "scrollWidth" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "clientHeight" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "clientLeft" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "clientTop" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "clientWidth" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "getBoundingClientRect()" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "getClientRects()" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scroll(optional ScrollToOptions)" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scroll(unrestricted double, unrestricted double)" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollBy(optional ScrollToOptions)" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollBy(unrestricted double, unrestricted double)" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollHeight" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollLeft" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollTo(optional ScrollToOptions)" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollTo(unrestricted double, unrestricted double)" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollTop" with the proper type
+idlharness.html	Element interface: document.createElementNS("x", "y") must inherit property "scrollWidth" with the proper type
 idlharness.html	HTMLElement includes ElementCSSInlineStyle: member names are unique
 idlharness.html	HTMLElement includes ElementContentEditable: member names are unique
 idlharness.html	HTMLElement includes GlobalEventHandlers: member names are unique
@@ -429,6 +521,7 @@ idlharness.html	Window interface: window must inherit property "scrollY" with th
 idlharness.html	idl_test setup
 idlharness.html	idl_test validation
 mouseEvent.html	MouseEvent's x and y must be equal to clientX and clientY.
+negativeMargins.html	cssom-view - elementFromPoint and elementsFromPoint dealing with negative margins
 offsetParent-body-and-html.html	The offsetParent of 'the body element' is null
 offsetParent-body-and-html.html	The offsetParent of a <html> element which is not the root is computed normally
 offsetParent-body-and-html.html	The offsetParent of the root element is null
@@ -759,6 +852,7 @@ scrollWidthHeight-overflow-visible-negative-margins.html	scroll{Width,Height} wi
 scrollWidthHeight-overflow-visible-negative-margins.html	scroll{Width,Height} with negative margins with overflow: visible, padding: 10px 20px, border: 3px solid, display: flow-root
 scrollWidthHeight-overflow-visible-negative-margins.html	scroll{Width,Height} with negative margins with overflow: visible, padding: 10px 20px, border: 3px solid, display: inline-block
 scrollWidthHeight-overflow-visible-negative-margins.html	scroll{Width,Height} with negative margins with overflow: visible, padding: 10px 20px, border: 3px solid, display: inline-flex
+scrolling-no-browsing-context.html	Element get and set scrollTop, scrollLeft, scroll() and scrollTo() test
 table-border-collapse-client-width-height.html	Table's clientWidth/Height and OffsetWidth/Height should be the same
 table-border-separate-client-width-height.html	Table's clientWidth/Height and OffsetWidth/Height should be the same
 table-client-props.html	Basic table
@@ -772,6 +866,9 @@ table-scroll-props.html	Basic table
 table-scroll-props.html	Bottom caption
 table-scroll-props.html	Overall test to make sure there are no exceptions
 table-scroll-props.html	Table with padding
+ttwf-js-cssomview-getclientrects-length.html	assert_length_of_getClientRects_from_Button
+ttwf-js-cssomview-getclientrects-length.html	assert_length_of_getClientRects_from_Link
+ttwf-js-cssomview-getclientrects-length.html	assert_length_of_getClientRects_from_Parent
 window-screen-height-immutable.html	immutability test
 window-screen-height.html	positive check
 window-screen-height.html	upper bound check

@@ -254,6 +254,85 @@ static void dom_range_context_cases(void)
     fixture_free(&f);
 }
 
+/* elementFromPoint and elementsFromPoint (libdom/hit.c) over a fake hit
+ * provider: what it answers, retargeted against the root asked. */
+static const os64_html_node_t *hit_answer[8];
+static size_t hit_count, hit_listed, hit_calls;
+static double hit_x, hit_y;
+
+static size_t fake_hit(void *opaque, double x, double y, const os64_html_node_t **out, size_t cap,
+                       os64_dom_geometry_stats_t *cost)
+{
+    (void)opaque;
+    hit_calls++;
+    hit_x = x;
+    hit_y = y;
+    cost->layouts = 1;
+    /* hit_listed answers past the 8 held repeat the last: a deep list. */
+    size_t listed = hit_listed > hit_count ? hit_listed : hit_count;
+    for (size_t i = 0; i < listed && i < cap; i++) out[i] = hit_answer[i < hit_count ? i : hit_count - 1];
+    return listed;
+}
+
+static void dom_hit_cases(void)
+{
+    os64_dom_options_t options = range_options();
+    options.shadow_trees = true;
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, RANGE_ASSERT
+        "assert(document.elementFromPoint(1,1)===null&&document.elementsFromPoint(1,1).length===0,'no provider');"
+        "var host=document.createElement('div');host.id='host';document.body.appendChild(host);"
+        "var root=host.attachShadow({mode:'open'});root.innerHTML='<p><b id=inner>x</b></p><slot></slot>';"
+        "var light=document.createElement('i');light.id='light';host.appendChild(light);"
+        "globalThis.root=root;",
+        "hit-setup");
+    const os64_html_node_t *host = native_id(f.document->document, "host");
+    const os64_html_node_t *light = native_id(f.document->document, "light");
+    const os64_html_node_t *inner = host != NULL && host->shadow_root != NULL
+        ? native_id(host->shadow_root->first_child, "inner") : NULL;
+    check(host != NULL && light != NULL && inner != NULL, "hit: the nodes are there");
+    if (host == NULL || light == NULL || inner == NULL) { fixture_free(&f); return; }
+    os64_dom_set_hit(f.binding, fake_hit, NULL);
+    /* A hit inside the shadow tree: inner, its p, the host; then body, html. */
+    hit_count = 0;
+    hit_answer[hit_count++] = inner;
+    hit_answer[hit_count++] = inner->parent;
+    hit_answer[hit_count++] = host;
+    hit_answer[hit_count++] = host->parent;
+    hit_answer[hit_count++] = host->parent->parent;
+    hit_calls = 0;
+    dom_script(&f, RANGE_ASSERT
+        "assert(document.elementFromPoint(12.5,7)===document.getElementById('host'),'retargeted to the host');"
+        "var all=document.elementsFromPoint(3,4);"
+        "assert(all.length===3&&all[0].id==='host'&&all[1]===document.body&&all[2]===document.documentElement,"
+        "'the host once, then its ancestors');"
+        "assert(root.elementFromPoint(1,1).id==='inner','a shadow root keeps its own');"
+        "assert(root.elementsFromPoint(1,1).length===5,'and lists every element there');"
+        "var bad=0;try{document.elementFromPoint(NaN,1)}catch(e){bad+=e instanceof TypeError}"
+        "try{document.elementsFromPoint(1,Infinity)}catch(e){bad+=e instanceof TypeError}"
+        "try{document.elementFromPoint(1)}catch(e){bad+=e instanceof TypeError}"
+        "assert(bad===3,'two finite doubles');"
+        "var other=document.implementation.createHTMLDocument('');"
+        "assert(other.elementFromPoint(1,1)===null&&other.elementsFromPoint(1,1).length===0,'a document of its own has no viewport');",
+        "hit-answers");
+    check(hit_calls == 4 && hit_x == 1 && hit_y == 1, "hit: the provider is asked for the window's points only");
+    hit_count = 1;
+    hit_answer[0] = light;
+    dom_script(&f, RANGE_ASSERT "assert(document.elementFromPoint(5,5).id==='light'&&root.elementFromPoint(5,5).id==='light',"
+               "'a light-tree hit answers itself to both');", "hit-light");
+    /* A list longer than the first ask's room is asked again, and both
+     * asks' layouts are charged. */
+    hit_listed = 70;
+    os64_dom_geometry_stats(f.binding, true);
+    hit_calls = 0;
+    dom_script(&f, RANGE_ASSERT "assert(document.elementsFromPoint(5,5).length===1,'the repeats folded');", "hit-deep");
+    os64_dom_geometry_stats_t stats = os64_dom_geometry_stats(f.binding, false);
+    check(hit_calls == 2 && stats.layouts == 2, "hit: a re-ask charges both asks' layouts");
+    hit_listed = 0;
+    fixture_free(&f);
+}
+
 static void dom_range_cases(void)
 {
     dom_range_switch_cases();
@@ -263,4 +342,5 @@ static void dom_range_cases(void)
     dom_range_static_cases();
     dom_range_lifetime_cases();
     dom_range_context_cases();
+    dom_hit_cases();
 }

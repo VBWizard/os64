@@ -357,6 +357,9 @@ struct os64_dom {
     void *geometry_opaque;
     os64_dom_svg_hit_provider_t svg_hit;
     void *svg_hit_opaque;
+    /* elementFromPoint's hit provider (hit.c). */
+    os64_dom_hit_provider_t hit;
+    void *hit_opaque;
     DValue *svg_graphics_proto, *svg_geometry_proto;
     /* ShadowRoot's and HTMLSlotElement's prototypes, refining a shadow
      * root's DocumentFragment kind and a slot's HTMLElement kind (shadow.c);
@@ -1540,6 +1543,9 @@ int d_tables_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* Node's comparisons, isSameNode, isEqualNode and compareDocumentPosition,
  * on Node's prototype and Attr's (compare.c). */
 int d_compare_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* elementFromPoint and elementsFromPoint (hit.c), on Document's prototype
+ * and, with shadow trees, ShadowRoot's. */
+int d_hit_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The plain tree (compare.c): a node's root by ->parent; whether `ancestor`
  * is a proper ancestor of `node`; whether `a` comes before `b`, two
  * different nodes of one tree, in tree order. */
