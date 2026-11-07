@@ -104,17 +104,40 @@ size_t yonder_text_rects(const os64_html_document_t *document, const flow_tree_t
     double scale = 1000.0 / (zoom != 0 ? zoom : 1000);
     bool point = from == to;
     size_t count = 0;
+    const flow_box_t *prev = NULL;
     for (const flow_box_t *box = flow_root(tree); box != NULL; box = next_box(box)) {
         if (box->kind != FLOW_BOX_TEXT || box->node != node || box->pseudo != 0 || box->run == NULL) continue;
         uint32_t pf, pt;
         if (!flow_text_processed(box, from, &pf) || !flow_text_processed(box, to, &pt)) continue;
         uint32_t begin = box->begin, end = box->begin + box->length;
+        // A justified line lays each word out as a box of its own and the
+        // space between two in no box: bytes the selection reaches in that
+        // gap take its room, from the word before's right edge to this
+        // one's left.
+        const flow_box_t *before = prev;
+        prev = box;
+        uint32_t gap = before != NULL ? before->begin + before->length : begin;
+        if (!point && before != NULL && before->parent == box->parent && gap < begin &&
+            (pf > gap ? pf : gap) < (pt < begin ? pt : begin)) {
+            os64_gui_rect_t l = flow_box_doc_rect(before, scroll), r = flow_box_doc_rect(box, scroll);
+            int32_t left = l.x + l.w;
+            if (count < cap) {
+                out[4 * count] = (left - scroll.x) * scale;
+                out[4 * count + 1] = (l.y - scroll.y) * scale;
+                out[4 * count + 2] = (r.x > left ? r.x - left : 0) * scale;
+                out[4 * count + 3] = l.h * scale;
+            }
+            count++;
+        }
         uint32_t s = pf > begin ? pf : begin, e = pt < end ? pt : end;
         if (point ? pf < begin || pf > end : s >= e) continue;
         if (point) e = s;
+        // A selected end inside a cluster takes the whole cluster: the start
+        // rounds back to the cluster's start, the end on to its end.
         os64_text_caret_t c0, c1;
         if (os64_text_caret(box->run, s - begin, OS64_TEXT_BEFORE, &c0) != OS64_FONT_OK ||
-            os64_text_caret(box->run, e - begin, OS64_TEXT_BEFORE, &c1) != OS64_FONT_OK) continue;
+            os64_text_caret(box->run, e - begin, point ? OS64_TEXT_BEFORE : OS64_TEXT_AFTER, &c1) != OS64_FONT_OK)
+            continue;
         // The selected slice in the box's own coordinates (device pixels,
         // the carets rounded to them), taken out through the box's offset
         // and every matrix it is drawn through, as the snapshot takes an
