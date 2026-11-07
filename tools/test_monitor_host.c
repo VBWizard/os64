@@ -292,8 +292,26 @@ static void task_events(void)
     assert(!os64_monitor_task_events(NULL,1,&e) && !os64_monitor_task_events(m,1,NULL));
     os64_monitor_destroy(m);
 }
+static void system_only(void)
+{
+    setup();os64_monitor_t *m=os64_monitor_create(1,0,4);assert(m);
+    const os64_monitor_snapshot_t *s=NULL;
+    // A failed /proc source cannot block a system-only monitor.
+    fail_proc=true;
+    assert(!os64_monitor_sample_system(m,&s) && s && !s->summary_valid);
+    advance();
+    assert(!os64_monitor_sample_system(m,&s) && s->summary_valid && s->memory_valid);
+    assert(!s->task_count && !s->thread_count && !s->threads_sampled && !s->partial);
+    assert(s->machine_percent[0]==50 && s->machine_percent[1]==45 && s->machine_percent[2]==5);
+    fail_memory=true;advance();
+    assert(!os64_monitor_sample_system(m,&s) && s->summary_valid && !s->memory_valid);
+    fail_proc=false;fail_memory=false;advance();
+    s=sample(m,false);assert(!task(s,1)->cpu.valid);
+    advance();s=sample(m,false);assert(task(s,1)->cpu.valid);
+    os64_monitor_destroy(m);
+}
 int main(void)
 {
-    independent_consumers();gaps_and_resets();optional_sources();rounding_and_clocks();allocation_failures();task_events();
+    system_only();independent_consumers();gaps_and_resets();optional_sources();rounding_and_clocks();allocation_failures();task_events();
     assert(!live_allocations && !open_handles);puts("monitor: independent consumers, lifecycle, clocks, parsing, bounds and 1000 rounding intervals PASS");
 }
