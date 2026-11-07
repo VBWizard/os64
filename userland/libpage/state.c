@@ -1690,7 +1690,7 @@ static int64_t node_set_attr(os64_page_state_t *state, const os64_html_node_t *n
         *copy = (os64_html_attr_t){.name = name, .value = terminated, .ns = by_ns ? ns : NULL};
         *tail = copy;
     }
-    if (os64_streq(name, "form") && !remove && !(by_ns && ns != NULL))
+    if (os64_streq(name, "form") && !remove)
         view.form_owner = NULL;
     size_t count = 1;
     PNodeState *edit = p_state_find(state, node);

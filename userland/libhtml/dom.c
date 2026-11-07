@@ -1471,6 +1471,18 @@ static HAttr **change_slot(HNode *e, const os64_html_attr_change_t *c)
         slot = &(*slot)->next;
     return slot;
 }
+/* The namespace a change touches on the list `had`: its own when by
+ * namespace, else the namespace of the record its qualified name finds,
+ * none for a new record. */
+static const char *change_touches(const HAttr *had, const os64_html_attr_change_t *c)
+{
+    if (c->by_ns)
+        return c->ns;
+    for (const HAttr *a = had; a; a = a->next)
+        if (h_eq(a->name, c->name))
+            return a->ns;
+    return NULL;
+}
 /* Whether two changes of a batch address the same record, as tell_attrs
  * replays the batch for its listener report: two by namespace that agree
  * on namespace and local name, or otherwise the same qualified name. That
@@ -1638,9 +1650,11 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     *h_word(e) |= H_ATTRS_PRIVATE;
     d->version++;
-    /* HTML's `form` attribute is the one in no namespace. */
+    /* HTML's `form` attribute is the one in no namespace, and the namespace
+     * a change touches is the record's it finds (a qualified name may find a
+     * namespaced one), a new record by name being in none. */
     for (size_t i = 0; i < count; i++)
-        if (!changes[i].remove && (!changes[i].by_ns || !changes[i].ns))
+        if (!changes[i].remove && !change_touches(old, &changes[i]))
             form_attr_set(d, e, changes[i].name);
     tell_attrs(d, e, old, changes, count, true);
     if (private)
@@ -1685,7 +1699,10 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
     fresh->next = old ? old->next : NULL;
     *slot = fresh;
     d->form_inputs = d->form_inputs - form_input + d_form_input(e);
-    form_attr_set(d, e, name);
+    /* A set keeps the namespace of the record it replaces: HTML's `form`
+     * attribute is the one in none. */
+    if (!fresh->ns)
+        form_attr_set(d, e, name);
     tell_attr(d, e, name, fresh->ns, old ? old->value : NULL, old ? h_len(old->value) : 0, true);
     d_retire(d, old);
     return OS64_HTML_OK;
