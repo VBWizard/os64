@@ -1633,9 +1633,12 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
             d_ranges_replaced(d, n, 0, was_units, was_units);
         return OS64_HTML_OK;
     }
+    /* Counted before put_text, which may retire the buffer `utf8` lies in
+     * (a caller may pass the node's own text). */
+    uint32_t units = d->ranges ? h_utf16_length(utf8, len) : 0;
     int64_t why = put_text(d, n, utf8, len);
     if (why == OS64_HTML_OK && d->ranges)
-        d_ranges_replaced(d, n, 0, was_units, h_utf16_length(utf8, len));
+        d_ranges_replaced(d, n, 0, was_units, units);
     return why;
 }
 
@@ -1706,10 +1709,13 @@ int64_t os64_html_replace_data(os64_html_document_t *doc, HNode *n, uint32_t off
         copy_bytes(joined + from, utf8, len);
     if (n->text_len - to)
         copy_bytes(joined + from + len, n->text + to, n->text_len - to);
+    /* Counted before put_text, which may retire the buffer `utf8` lies in
+     * (a caller may pass the node's own text). */
+    uint32_t added = d->ranges ? h_utf16_length(utf8, len) : 0;
     why = put_text(d, n, joined, total);
     h_free(d, joined);
     if (why == OS64_HTML_OK && d->ranges)
-        d_ranges_replaced(d, n, offset, count, h_utf16_length(utf8, len));
+        d_ranges_replaced(d, n, offset, count, added);
     return why;
 }
 

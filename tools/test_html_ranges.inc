@@ -540,9 +540,36 @@ static void t_ranges_split_failure(void)
     check(failed > 0 && intact, "ranges: a split that fails (%d allocations failed in turn) changes nothing", failed);
 }
 
+/* New text that lies in the node's own buffer, which installing it retires:
+ * the range steps count it first (ASan reads a late count as a use after
+ * free). */
+static void t_ranges_aliased_text(void)
+{
+    os64_html_document_t *doc = parse("<body><p id=a>x</p></body>");
+    HNode *t = id_in(doc, "a")->first_child;
+    os64_html_set_text(doc, t, "abcdef", 6);
+    os64_html_range_t *r = os64_html_range_new(doc);
+    os64_html_range_set(r, 0, t, 6);
+    os64_html_range_set(r, 1, t, 6);
+    int64_t set = os64_html_set_text(doc, t, t->text + 1, 5);
+    const os64_html_node_t *n;
+    uint32_t o0, o1;
+    os64_html_range_get(r, 0, &n, &o0);
+    bool collapsed = set == OS64_HTML_OK && t->text_len == 5 && !memcmp(t->text, "bcdef", 5) && n == t && o0 == 0;
+    os64_html_range_set(r, 1, t, 5);
+    int64_t replaced = os64_html_replace_data(doc, t, 0, 1, t->text + 2, 2);
+    os64_html_range_get(r, 1, &n, &o1);
+    check(collapsed && replaced == OS64_HTML_OK && t->text_len == 6 && !memcmp(t->text, "decdef", 6) &&
+              n == t && o1 == 6,
+          "ranges: text taken from the node's own buffer is counted before it is retired");
+    os64_html_range_free(r);
+    os64_html_document_free(doc);
+}
+
 static void t_ranges(void)
 {
     t_ranges_split_failure();
+    t_ranges_aliased_text();
     for (uint32_t seed = 1; seed <= 24 && !checks_failed; seed++)
         (void)t_ranges_walk(0x52a00000u + seed, (int)(seed % 6) + 1, 3000);
     check(!checks_failed, "ranges: every boundary follows the standard's steps across random mutation");
