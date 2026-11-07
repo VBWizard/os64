@@ -15,6 +15,11 @@ findings on what the vendored BearSSL does and does not do are folded in
 below: AES-CTR's counter, CBC's padding and the raw block door are ours
 (§ 4); RSA-PSS and X25519 are in BearSSL after all (§ 2).*
 
+*Chris took every lean on questions 1, 2, 3 and 6 the same day ("unless
+Fable disagreed with any of them, your leans are my leans"): `subtle`
+ships, in these tiers; ECDH stays in tier 3; RSA-PSS and X25519 stay out,
+booked as cheap; I build it, a PR per tier.*
+
 ## 1. Why now, and what pages ask
 
 Two pages on the P5 die on the missing member today:
