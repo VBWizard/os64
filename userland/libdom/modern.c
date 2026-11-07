@@ -159,6 +159,9 @@ static const DModernRow kModern[] = {
     /* Node's comparisons, members of Node's and Attr's prototypes and none
      * of window's. */
     {(const char *const[]){NULL}, d_compare_install},
+    /* elementFromPoint and elementsFromPoint (hit.c): members of Document's
+     * prototype, and ShadowRoot's with shadow trees, none of window's. */
+    {(const char *const[]){NULL}, d_hit_install},
     /* 0f's P3b: a form's controls collection and RadioNodeList, over the
      * interfaces row's HTMLCollection and NodeList; and the form's,
      * label's, fieldset's, legend's and output's own members. */

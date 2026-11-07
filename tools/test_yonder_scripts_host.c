@@ -5284,6 +5284,48 @@ static void geometry_cases(void)
     probe_drop();
 }
 
+// elementFromPoint and elementsFromPoint through yonder's hit provider
+// (script_hit, RANGE.md § 8): the pointer's hit test at a CSS-pixel point,
+// then the flat-tree ancestors; bare canvas inside the viewport answers the
+// root element, a point outside it nothing; a zoomed page answers the same
+// CSS-pixel point.
+static void hit_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#outer{position:relative;width:200px;height:120px}"
+        "#box{position:absolute;left:20px;top:30px;width:100px;height:40px}"
+        "</style><div id=outer><div id=box>x</div></div><script>"
+        "function eq(a,b){if(a!==b)throw Error(a+' != '+b)};"
+        "var box=document.getElementById('box'),outer=document.getElementById('outer');"
+        "eq(document.elementFromPoint(25,35),box);eq(document.elementFromPoint(150,100),outer);"
+        "var all=document.elementsFromPoint(25,35);eq(all.length,4);eq(all[0],box);eq(all[1],outer);"
+        "eq(all[2],document.body);eq(all[3],document.documentElement);"
+        "eq(document.elementFromPoint(700,500),document.documentElement);eq(document.elementFromPoint(110,35),box);"
+        "eq(document.elementFromPoint(-1,5),null);eq(document.elementFromPoint(900,5),null);"
+        "eq(document.elementsFromPoint(5,900).length,0);"
+        "box.setAttribute('data-hit-pass','yes');"
+        "</script>",true);
+    check(script_turn(), "hit script task completes");
+    const os64_html_attr_t *passed=os64_html_attr(probe_id("box"),"data-hit-pass");
+    check(passed!=NULL && os64_streq(passed->value,"yes"), "hit script reaches every assertion");
+    const os64_html_node_t *out[8];
+    os64_dom_geometry_stats_t cost={0};
+    probe_drop();
+    // A click beside a block link's text follows the link: the line box
+    // hit there carries none, so the element answered gives it.
+    probe_page("<!doctype html><style>html,body{margin:0}a{display:block;width:300px}</style>"
+        "<a id=go href=/next>x</a><div id=box style='position:absolute;left:20px;top:30px;width:100px;height:40px'>x</div>",true);
+    const os64_html_node_t *link=NULL;
+    const os64_html_node_t *at=element_hit(g.view.bounds.x+250,g.view.bounds.y+5,&link,NULL);
+    check(at==probe_id("go") && link==probe_id("go"), "hit: beside a block link's text is the link");
+    g.zoom=2000;
+    check(lay_out_page(&g.page,800,600), "hit zoom layout");
+    size_t n=script_hit(g.page.way.doc,25,35,out,8,&cost);
+    check(n==3 && out[0]==probe_id("box"), "hit: a zoomed page answers the same CSS-pixel point");
+    g.zoom=1000;
+    probe_drop();
+}
+
 // An element's geometry is its own box's, not its pseudo-elements'
 // (GENERATED_CONTENT.md § 4): a ::before laid wide and away widens nothing,
 // and its text does not either.
@@ -11583,6 +11625,7 @@ int main(void)
     hover_batch_cases();
     classic_hover_profile();
     geometry_cases();
+    hit_cases();
     svg_fill_hit_cases();
     geometry_pseudo_cases();
     geometry_body_cases();
