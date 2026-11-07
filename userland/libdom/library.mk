@@ -32,6 +32,8 @@ LIBDOM_SRCS += libdom/shadow.c
 LIBDOM_SRCS += libdom/range.c
 # CDATASection and ProcessingInstruction, and Document's members that make them.
 LIBDOM_SRCS += libdom/data_nodes.c
+# RANGE.md § 8: elementFromPoint and elementsFromPoint.
+LIBDOM_SRCS += libdom/hit.c
 # 0f P1a: the select's options and the Option factory.
 LIBDOM_SRCS += libdom/options.c
 # 0f P2's core: the text controls' selection and the window's Selection.

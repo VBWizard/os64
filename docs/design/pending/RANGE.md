@@ -308,17 +308,21 @@ shadow tree answers its host to the document) — the one FLAT walk in
 this design, in SHADOW_DOM.md Appendix A's vocabulary.
 
 A point inside the viewport but on bare canvas answers **the root
-element**, never null (the canvas is the root's box), and
-`elementsFromPoint` ends in `body, html` for the same reason; if
-`element_hit` answers otherwise there for the pointer, the provider
-adjusts it. Like the geometry provider, the hit provider serves the
+element**, never null (the canvas is the root's box): `element_hit`
+answers nothing there for the pointer, and the provider answers the root
+in its place, so `elementsFromPoint` on bare canvas is the root alone and
+every other list ends in it. Like the geometry provider, the hit provider serves the
 document it is asked about: a call on a frame's document hit-tests in
 that frame's viewport, in its coordinates.
 
 `elementsFromPoint` needs every box at the point in paint order, which
-libflow does not have: a `flow_hit_all` beside `flow_hit` collects them
-in the order painting would draw them, topmost first. Points outside the
-viewport answer null and an empty list, as the standard says.
+libflow does not have. R3a answers the topmost hit and its flat-tree
+ancestors instead, which is what a list under a point holds unless boxes
+that are not each other's ancestors overlap there; a `flow_hit_all` beside
+`flow_hit`, collecting every box topmost first, is a DEBTS row. A hit on a
+box no node made (a line beside its text) is the nearest nodeful
+ancestor's, for the pointer too. Points outside the viewport answer null
+and an empty list, as the standard says.
 `caretPositionFromPoint` (3 hosts) waits: a DEBTS row.
 
 ## 9. The page Selection

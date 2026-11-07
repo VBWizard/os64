@@ -9581,6 +9581,7 @@ static void view_read(void *opaque, os64_dom_view_t *out);
 static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
 static bool view_scroll_element(void *opaque, const os64_html_node_t *element, double x, double y, bool by,
                                 os64_dom_geometry_stats_t *cost);
+static size_t script_hit(void *, double, double, const os64_html_node_t **, size_t, os64_dom_geometry_stats_t *);
 static os64_geometry_status_t script_svg_hit(void *, const os64_html_node_t *, double, double,
     const os64_geometry_memory_t *, bool (*)(void *), void *, bool *, os64_dom_geometry_stats_t *);
 static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
@@ -9647,7 +9648,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .kept_module = script_kept_module,
-        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit,
+        .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .hit = script_hit,
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed,
         .images={canvas_source,canvas_source_release,doc},
@@ -10820,6 +10821,72 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
     return ready && ended >= began;
+}
+
+static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html_node_t **link,
+                                           const os64_html_node_t **boxed);
+
+// A document's root element: its first element child.
+static const os64_html_node_t *root_element(const os64_html_document_t *doc)
+{
+    for (const os64_html_node_t *c = doc->document->first_child; c != NULL; c = c->next)
+        if (c->kind == OS64_HTML_ELEMENT)
+            return c;
+    return NULL;
+}
+
+// elementFromPoint's hit provider (RANGE.md § 8), whose opaque is its page's
+// document: the point, CSS pixels of the viewport, taken to device pixels
+// through the zoom; the layout made current as script_geometry makes it;
+// then the element the pointer would hit there (element_hit, an image map's
+// area included) for the page on screen, or the element holding the box
+// flow_hit finds for a page measured beside it; then that element's
+// flat-tree ancestors. Bare canvas inside the viewport is the root
+// element's, as a box the root's canvas is.
+static size_t script_hit(void *opaque, double x, double y, const os64_html_node_t **out, size_t cap,
+                         os64_dom_geometry_stats_t *cost)
+{
+    const os64_html_document_t *doc = opaque;
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    double scale = (g.zoom != 0 ? g.zoom : 1000) / 1000.0, dx = x * scale, dy = y * scale;
+    bool inside = began >= 0 && dx >= 0 && dy >= 0 && dx < width && dy < height;
+    bool ready = false;
+    const os64_html_node_t *hit = NULL;
+    if (inside && doc == page_doc(&g.page)) {
+        ready = script_rebuild();
+        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                      g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed))
+            ready = relayout(true);
+        if (ready)
+            hit = element_hit(g.view.bounds.x + (int32_t)dx, g.view.bounds.y + (int32_t)dy, NULL, NULL);
+    } else if (inside && measured_for(doc, width, height)) {
+        ready = true;
+        const flow_box_t *b = flow_hit(s_measured.tree, (int32_t)dx, (int32_t)dy, (flow_point_t){0, 0});
+        while (b != NULL && b->node == NULL)
+            b = b->parent;
+        hit = b != NULL ? b->node : NULL;
+        while (hit != NULL && hit->kind != OS64_HTML_ELEMENT)
+            hit = os64_html_flat_parent(doc, hit);
+    }
+    size_t count = 0;
+    if (ready) {
+        if (hit == NULL)
+            hit = root_element(doc);
+        for (const os64_html_node_t *n = hit; n != NULL; n = os64_html_flat_parent(doc, n)) {
+            if (n->kind != OS64_HTML_ELEMENT)
+                continue;
+            if (count < cap)
+                out[count] = n;
+            count++;
+        }
+    }
+    int64_t ended = os64_micros();
+    cost->layouts = geometry_layout_total - before;
+    cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return count;
 }
 
 // ── Intersection observations (INTERSECTION_OBSERVER.md) ────────────────
@@ -12100,8 +12167,14 @@ static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html
     const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     if (b == NULL)
         return NULL;
+    // A box no node made (a line, an anonymous block) is its nearest
+    // nodeful ancestor's: the point beside a line's text is in the block
+    // whose line it is, as other browsers' hit tests answer.
+    const flow_box_t *owner = b;
+    while (owner != NULL && owner->node == NULL)
+        owner = owner->parent;
     if (boxed != NULL)
-        *boxed = element_of(b->node);
+        *boxed = owner != NULL ? element_of(owner->node) : NULL;
     // Where in the picture: the point taken into the box, through any
     // transform it is drawn through, and then into the content box the
     // painter draws the picture in. That is yonder_box_edge's, not the
@@ -12123,7 +12196,7 @@ static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html
         const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
         *link = l != NULL ? l->node : NULL;
     }
-    return element_of(b->node);
+    return owner != NULL ? element_of(owner->node) : NULL;
 }
 
 static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link)
