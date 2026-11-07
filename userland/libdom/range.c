@@ -1239,11 +1239,13 @@ static JSValue selection_new_range(os64_dom_t *dom, JSContext *ctx, const os64_h
 }
 
 /* A point a member is handed, converted: its node, NULL for an Attr (no
- * node of the tree, and so never in the window's document), its offset,
- * and the node's length, an Attr's 0. Each member checks them in its own
- * order, as the standard does. 0, or -1 thrown. */
+ * node of the tree, and so never in the window's document), and its
+ * offset. Converting an offset runs the page's valueOf, which may change
+ * any node, so a member converts every argument before it reads a length
+ * or the selection, and checks them in its own order, as the standard
+ * does. 0, or -1 thrown. */
 static int selection_take(os64_dom_t *dom, JSContext *ctx, JSValueConst node_value, JSValueConst offset_value,
-                          const os64_html_node_t **node, uint32_t *offset, uint32_t *length)
+                          const os64_html_node_t **node, uint32_t *offset)
 {
     DAttrView view;
     int attr = d_attr_view(dom, ctx, node_value, &view);
@@ -1252,8 +1254,13 @@ static int selection_take(os64_dom_t *dom, JSContext *ctx, JSValueConst node_val
     if (attr != 1 && (*node = d_node(dom, ctx, node_value)) == NULL) return -1;
     *offset = 0;
     if (!JS_IsUndefined(offset_value) && JS_ToUint32(ctx, offset, offset_value) < 0) return -1;
-    *length = *node != NULL ? os64_html_node_length(*node) : 0;
     return 0;
+}
+
+/* A taken node's length as it stands: an Attr's is 0. */
+static uint32_t selection_length(const os64_html_node_t *node)
+{
+    return node != NULL ? os64_html_node_length(node) : 0;
 }
 
 /* Whether the window's document is a shadow-including inclusive ancestor
@@ -1265,10 +1272,10 @@ static bool selection_in_document(os64_dom_t *dom, const os64_html_node_t *node)
 
 /* The checks "set the start or end" makes of a point, for a member about
  * to set one: 0, or -1 thrown. */
-static int selection_settable(JSContext *ctx, const os64_html_node_t *node, uint32_t offset, uint32_t length)
+static int selection_settable(JSContext *ctx, const os64_html_node_t *node, uint32_t offset)
 {
     if (node != NULL && node->kind == OS64_HTML_DOCTYPE) return throw_status(ctx, OS64_HTML_INVALID_NODE_TYPE);
-    return offset > length ? throw_status(ctx, OS64_HTML_INDEX_SIZE) : 0;
+    return offset > selection_length(node) ? throw_status(ctx, OS64_HTML_INDEX_SIZE) : 0;
 }
 
 static JSValue selection_ranges_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
@@ -1338,16 +1345,20 @@ static JSValue selection_ranges_member(JSContext *ctx, JSValueConst self, int ar
         if (selection_set(dom, ctx, JS_UNDEFINED, D_DIR_NONE) < 0) result = JS_EXCEPTION;
         break;
     case S_COLLAPSE: {
-        /* collapse(node, offset) and setPosition: null empties it. */
+        /* collapse(node, offset) and setPosition: null empties it, once
+         * the offset is converted as every argument is. */
         if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing node"); break; }
         if (JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
-            if (selection_set(dom, ctx, JS_UNDEFINED, D_DIR_NONE) < 0) result = JS_EXCEPTION;
+            uint32_t unused;
+            if ((argc > 1 && !JS_IsUndefined(argv[1]) && JS_ToUint32(ctx, &unused, argv[1]) < 0) ||
+                selection_set(dom, ctx, JS_UNDEFINED, D_DIR_NONE) < 0)
+                result = JS_EXCEPTION;
             break;
         }
         const os64_html_node_t *n;
-        uint32_t o, length;
-        if (selection_take(dom, ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, &n, &o, &length) < 0 ||
-            selection_settable(ctx, n, o, length) < 0) {
+        uint32_t o;
+        if (selection_take(dom, ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, &n, &o) < 0 ||
+            selection_settable(ctx, n, o) < 0) {
             result = JS_EXCEPTION;
             break;
         }
@@ -1367,15 +1378,15 @@ static JSValue selection_ranges_member(JSContext *ctx, JSValueConst self, int ar
     case S_EXTEND: {
         if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing node"); break; }
         const os64_html_node_t *n;
-        uint32_t o, length;
-        if (selection_take(dom, ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, &n, &o, &length) < 0 ||
+        uint32_t o;
+        if (selection_take(dom, ctx, argv[0], argc > 1 ? argv[1] : JS_UNDEFINED, &n, &o) < 0 ||
             selection_read(dom, ctx, &range, &r, &b, &backward) < 0) {
             result = JS_EXCEPTION;
             break;
         }
         if (!selection_in_document(dom, n)) break;
         if (r == NULL) { result = d_error(ctx, "InvalidStateError", "The selection is empty"); break; }
-        if (selection_settable(ctx, n, o, length) < 0) { result = JS_EXCEPTION; break; }
+        if (selection_settable(ctx, n, o) < 0) { result = JS_EXCEPTION; break; }
         const os64_html_node_t *an = backward ? b.end : b.start;
         uint32_t ao = backward ? b.end_offset : b.start_offset;
         bool focus_first = d_tree_root(an) == d_tree_root(n) && position(n, o, an, ao) < 0;
@@ -1389,15 +1400,19 @@ static JSValue selection_ranges_member(JSContext *ctx, JSValueConst self, int ar
     case S_BASE_EXTENT: {
         if (argc < 4) { result = JS_ThrowTypeError(ctx, "setBaseAndExtent needs four arguments"); break; }
         const os64_html_node_t *an, *fn;
-        uint32_t ao, fo, al, fl;
-        if (selection_take(dom, ctx, argv[0], argv[1], &an, &ao, &al) < 0 ||
-            selection_take(dom, ctx, argv[2], argv[3], &fn, &fo, &fl) < 0) {
+        uint32_t ao, fo;
+        if (selection_take(dom, ctx, argv[0], argv[1], &an, &ao) < 0 ||
+            selection_take(dom, ctx, argv[2], argv[3], &fn, &fo) < 0) {
             result = JS_EXCEPTION;
             break;
         }
-        if (ao > al || fo > fl) { throw_status(ctx, OS64_HTML_INDEX_SIZE); result = JS_EXCEPTION; break; }
+        if (ao > selection_length(an) || fo > selection_length(fn)) {
+            throw_status(ctx, OS64_HTML_INDEX_SIZE);
+            result = JS_EXCEPTION;
+            break;
+        }
         if (!selection_in_document(dom, an) || !selection_in_document(dom, fn)) break;
-        if (selection_settable(ctx, an, ao, al) < 0 || selection_settable(ctx, fn, fo, fl) < 0) {
+        if (selection_settable(ctx, an, ao) < 0 || selection_settable(ctx, fn, fo) < 0) {
             result = JS_EXCEPTION;
             break;
         }
@@ -1411,9 +1426,8 @@ static JSValue selection_ranges_member(JSContext *ctx, JSValueConst self, int ar
     case S_SELECT_ALL: {
         if (argc < 1) { result = JS_ThrowTypeError(ctx, "Missing node"); break; }
         const os64_html_node_t *n;
-        uint32_t o, length;
-        if (selection_take(dom, ctx, argv[0], JS_UNDEFINED, &n, &o, &length) < 0 ||
-            selection_settable(ctx, n, 0, 0) < 0) {
+        uint32_t o;
+        if (selection_take(dom, ctx, argv[0], JS_UNDEFINED, &n, &o) < 0 || selection_settable(ctx, n, 0) < 0) {
             result = JS_EXCEPTION;
             break;
         }
@@ -1434,10 +1448,11 @@ static JSValue selection_ranges_member(JSContext *ctx, JSValueConst self, int ar
         /* False when empty or when the node's root is not the document
          * (an Attr's root is itself). */
         const os64_html_node_t *n;
-        uint32_t o, length;
-        if (selection_take(dom, ctx, argv[0], JS_UNDEFINED, &n, &o, &length) < 0) { result = JS_EXCEPTION; break; }
+        uint32_t o;
+        if (selection_take(dom, ctx, argv[0], JS_UNDEFINED, &n, &o) < 0) { result = JS_EXCEPTION; break; }
         bool partial = argc > 1 && JS_ToBool(ctx, argv[1]);
         if (r == NULL || n == NULL || d_tree_root(n) != dom->document->document) { result = JS_FALSE; break; }
+        uint32_t length = selection_length(n);
         result = JS_NewBool(ctx, partial
             ? position(b.start, b.start_offset, n, length) <= 0 && position(b.end, b.end_offset, n, 0) >= 0
             : position(b.start, b.start_offset, n, 0) <= 0 && position(b.end, b.end_offset, n, length) >= 0);
