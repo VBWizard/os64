@@ -255,12 +255,10 @@ does not know.
   (256 MiB), and SHA-256 or AES-GCM in BearSSL's portable code is on the
   order of a few hundred MB/s on the P5, so the worst call is under a
   second, and a page cannot make it worse than its own heap allows. Tier
-  1's PR measures it on the P5 with `/tests/digestbench`, which times
-  `subtle_core.c` itself over the BearSSL objects libdom links, at sizes
-  up to 192 MiB (the script heap is 256 MiB), and reports the numbers. It
-  is a program and not a page because a page in `/tests/pages` is a
-  `file:` page, which libway does not count a secure context (DEBTS), so
-  `crypto.subtle` is absent there.
+  1's PR measures it on the P5 with the timing section of tier 1's
+  validation page (`/tests/pages/webcrypto-tier1.html`, § 6), which times
+  a whole `digest` call at sizes up to 192 MiB (the script heap is 256
+  MiB), and reports the numbers.
 - **RSA key generation blocks the page** for as long as it takes (a 2048-bit
   key is the slow case; to be measured on the P5 in tier 3). One host in
   the corpus generates RSA keys at all. If the P5 says it is too slow,
@@ -271,11 +269,7 @@ does not know.
   already takes platform objects (Blob, File, DOMException, ImageData),
   so the row is small, a key's three slots and a byte copy; DEBTS, sized
   S. No corpus page posts a key.
-- **A `file:` page has no `crypto.subtle`**, because libway does not count
-  it a secure context (a file URL's origin is opaque), where Chrome and
-  Firefox both do. That is libway's rule and older than this design, and a
-  DEBTS row; it is why the timing in § 5 is a program.
-- **Window only, for now.** `crypto` and `subtle` are
+- **Window only.** `crypto` and `subtle` are
   `[Exposed=(Window,Worker)]`, and a worker-based challenge calls
   `crypto.subtle` first thing; WORKERS.md gives the rows table `[Exposed]`
   bits, and the row is marked when they exist. BearSSL is safe across
@@ -332,7 +326,26 @@ does not know.
   after it, absence on an insecure page).
 - The social network's sign-in page, replayed from its P5 record with
   this build: every request carries a real transaction id, the same bytes
-  the JavaScript SHA-256 stand-in produced.
+  the JavaScript SHA-256 stand-in produced. On the P5 the dialog's
+  sign-in step now loads (its fetch answers 200, 6.5 KB), and the next
+  wall is `window.open`, the popup the identity provider's button opens
+  (IFRAME.md keeps popups out; a design about windows).
+- `tools/pages/webcrypto-tier1.html`: 29 checks, every one PASS in yonder
+  and in a Chrome-equivalent engine (node's WebCrypto).
+- **A validation page per tier, and a live page** (Chris, 2026-11-07:
+  each tier shows it works on a page, ours or one on the Internet). Ours
+  are `tools/pages/webcrypto-tier<n>.html`, which ship to `/tests/pages`:
+  each check a published vector or a behaviour the spec requires, PASS or
+  FAIL on the page, every expectation confirmed in a Chrome-equivalent
+  engine before it ships, and written so a later tier does not turn it
+  red (its NotSupportedError checks name algorithms no browser knows). A
+  page from disk is a secure context, as Chrome and Firefox count one
+  (`d_secure_context`; tier 1 brought that, or `crypto.subtle` would be
+  absent there). The live page is a public WebCrypto examples site whose
+  table marks every algorithm and operation the visiting browser supports
+  with ✓ or ✗: Chrome beside yonder, tier by tier, the ✓s should grow to
+  match (its legacy algorithms, AES-CFB, AES-CMAC, DH, CONCAT and
+  HKDF-CTR, are ✗ in every current browser).
 - **Chrome as the referee** where WPT is silent: the error a given misuse
   gets, captured as INTL.md's capture page does it, only if a case comes
   up.

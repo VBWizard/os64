@@ -96,7 +96,7 @@ static void dom_window_member_cases(void)
         {"http://example.test:8080/x", false, "http://example.test:8080"},
         {"http://127.0.0.1/x", true, "http://127.0.0.1"},
         {"http://localhost/x", false, "http://localhost"},
-        {"file:///home/page.html", false, "null"},
+        {"file:///home/page.html", true, "null"},
         {"about:srcdoc", true, "null"},
         {"about:blank?x", false, "null"},
         {NULL, true, "null"},

@@ -1,0 +1,121 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>crypto.subtle, tier 1</title>
+<style>
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.pass{color:#080}.fail{color:#c00}
+button{margin:.2em}
+</style>
+</head><body>
+<h1>crypto.subtle, tier 1</h1>
+<p>WEB_CRYPTO.md's tier 1: <code>SubtleCrypto</code> and <code>CryptoKey</code>
+whole, every algorithm normalized, and <code>digest</code> with SHA-1, SHA-256,
+SHA-384 and SHA-512. Each line below is a check against a published value
+(FIPS 180-2's example messages) or the behaviour Web Cryptography requires;
+another browser shows every line PASS, and so should yonder. The checks that
+want NotSupportedError use a name no browser knows, so they stay true when
+later tiers add algorithms.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+<h2>How long a digest holds the page</h2>
+<p>yonder does a digest's work on the call (WEB_CRYPTO.md § 5), so the page
+waits while it runs. Each button hashes a buffer of that size with each
+algorithm and prints the time and the rate. The script heap is 256 MiB, so the
+largest size leaves room for the rest of the page.</p>
+<p id="sizes"></p>
+<pre id="timing">Pick a size.</pre>
+<script>
+const lines = [];
+let passed = 0, failed = 0;
+function record(ok, what, detail) {
+  if (ok) passed++; else failed++;
+  lines.push((ok ? 'PASS ' : 'FAIL ') + what + (ok || !detail ? '' : '\n     ' + detail));
+}
+function hex(b) { return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join(''); }
+async function digestIs(what, algorithm, data, want) {
+  try {
+    const got = hex(await crypto.subtle.digest(algorithm, data));
+    record(got === want, what, 'got ' + got + ', want ' + want);
+  } catch (e) { record(false, what, 'rejected: ' + e.name + ' ' + e.message); }
+}
+async function rejectsWith(what, make, name) {
+  let promise;
+  try { promise = make(); } catch (e) { record(false, what, 'threw instead of rejecting: ' + e.name); return; }
+  if (!(promise instanceof Promise)) { record(false, what, 'no promise'); return; }
+  try { await promise; record(false, what, 'resolved; want ' + name); }
+  catch (e) { record(e.name === name, what, 'rejected with ' + e.name + ', want ' + name); }
+}
+async function checks() {
+  record(window.isSecureContext === true, 'this page is a secure context');
+  record('subtle' in crypto && crypto.subtle === crypto.subtle, 'crypto.subtle is here, the same object each time');
+  record(typeof SubtleCrypto === 'function' && crypto.subtle instanceof SubtleCrypto, 'crypto.subtle is a SubtleCrypto');
+  record(typeof CryptoKey === 'function', 'CryptoKey is an interface');
+  const enc = s => new TextEncoder().encode(s);
+  const empty = new Uint8Array(0), abc = enc('abc'),
+        m448 = enc('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq');
+  const vectors = {
+    'SHA-1': ['da39a3ee5e6b4b0d3255bfef95601890afd80709', 'a9993e364706816aba3e25717850c26c9cd0d89d',
+              '84983e441c3bd26ebaae4aa1f95129e5e54670f1'],
+    'SHA-256': ['e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+                '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1'],
+    'SHA-384': ['38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b',
+                'cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7',
+                '3391fdddfc8dc7393707a65b1b4709397cf8b1d162af05abfe8f450de5f36bc6b0455a8520bc4e6f5fe95b1fe3c8452b'],
+    'SHA-512': ['cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e',
+                'ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f',
+                '204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445'],
+  };
+  for (const [name, want] of Object.entries(vectors)) {
+    await digestIs(name + ' of the empty message', name, empty, want[0]);
+    await digestIs(name + ' of "abc"', name, abc, want[1]);
+    await digestIs(name + ' of the 448-bit message', name, m448, want[2]);
+  }
+  await digestIs('SHA-256 of a million "a"', 'SHA-256', new Uint8Array(1000000).fill(97),
+                 'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0');
+  await digestIs('a lowercase name', 'sha-256', abc, vectors['SHA-256'][1]);
+  await digestIs('a dictionary with a mixed-case name', {name: 'Sha-256'}, abc, vectors['SHA-256'][1]);
+  await digestIs('an ArrayBuffer', 'SHA-256', abc.buffer, vectors['SHA-256'][1]);
+  await digestIs('a view into a larger buffer', 'SHA-256', enc('xabcx').subarray(1, 4), vectors['SHA-256'][1]);
+  await digestIs('a DataView', 'SHA-256', new DataView(abc.buffer), vectors['SHA-256'][1]);
+  await rejectsWith('an algorithm no browser knows: NotSupportedError', () => crypto.subtle.digest('NOT-AN-ALGORITHM', abc), 'NotSupportedError');
+  await rejectsWith('a dictionary with no name: TypeError', () => crypto.subtle.digest({}, abc), 'TypeError');
+  await rejectsWith('too few arguments: a rejection, not a throw', () => crypto.subtle.digest('SHA-256'), 'TypeError');
+  await rejectsWith('a string is no BufferSource: TypeError', () => crypto.subtle.digest('SHA-256', 'abc'), 'TypeError');
+  await rejectsWith('generateKey with an unknown algorithm: NotSupportedError',
+                    () => crypto.subtle.generateKey({name: 'NOT-AN-ALGORITHM'}, true, ['sign']), 'NotSupportedError');
+  await rejectsWith('importKey with an unknown format: TypeError',
+                    () => crypto.subtle.importKey('bogus', abc, 'HMAC', true, ['sign']), 'TypeError');
+  await rejectsWith('encrypt with something that is no key: TypeError',
+                    () => crypto.subtle.encrypt('AES-GCM', {}, abc), 'TypeError');
+}
+checks().catch(e => record(false, 'the checks themselves', e.name + ' ' + e.message)).then(() => {
+  document.getElementById('checks').textContent = lines.join('\n');
+  const summary = document.getElementById('summary');
+  summary.textContent = passed + ' passed, ' + failed + ' failed';
+  summary.className = failed ? 'fail' : 'pass';
+});
+
+async function time(mib) {
+  const out = document.getElementById('timing');
+  out.textContent = 'Filling ' + mib + ' MiB...';
+  let data;
+  try { data = new Uint8Array(mib * 1024 * 1024); } catch (e) { out.textContent = 'Could not allocate ' + mib + ' MiB: ' + e; return; }
+  for (let i = 0; i < data.length; i += 4096) data[i] = i & 255;
+  const rows = [mib + ' MiB:'];
+  for (const name of ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512']) {
+    const t0 = performance.now();
+    await crypto.subtle.digest(name, data);
+    const ms = performance.now() - t0;
+    rows.push('  ' + name.padEnd(8) + ms.toFixed(1).padStart(9) + ' ms  ' + (mib / (ms / 1000)).toFixed(1).padStart(8) + ' MiB/s');
+    out.textContent = rows.join('\n');
+  }
+}
+for (const mib of [1, 16, 64, 128, 192]) {
+  const b = document.createElement('button');
+  b.textContent = mib + ' MiB';
+  b.onclick = () => time(mib);
+  document.getElementById('sizes').appendChild(b);
+}
+</script>
+</body></html>

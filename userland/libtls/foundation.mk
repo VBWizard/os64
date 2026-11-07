@@ -33,8 +33,6 @@ $(BEARSSL_ARCHIVE): $(BEARSSL_OBJS) libtls/sources.mk libtls/foundation.mk
 $(OBJ)/tests/bearssltest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
 $(OBJ)/tests/tlstrusttest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
 $(OBJ)/tests/tlsinputtest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
-# digestbench times libdom's subtle_core.c, which it compiles in (WEB_CRYPTO.md § 5).
-$(OBJ)/tests/digestbench/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
 -include $(BEARSSL_OBJS:.o=.d)
 -include $(TLS_TRUST_TEST_OBJS:.o=.d)
 -include $(TLS_INPUT_TEST_OBJS:.o=.d)

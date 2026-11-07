@@ -1321,11 +1321,14 @@ assignment of anything but null makes it window's own data property),
 their arguments, `captureEvents` and `releaseEvents` no-ops,
 `clientInformation` the navigator, `frameElement` null,
 `crossOriginIsolated` false, `originAgentCluster` true, `origin` the page's
-origin serialized (`d_origin`), and `isSecureContext` whether the page's
-address is potentially trustworthy as libway judges it
-(`way_url_trustworthy`, the browser's one copy of that judgement: about:blank
-and about:srcdoc are, as Secure Contexts says, so a binding with no address
-is; the name `localhost` is not). `ononline`,
+origin serialized (`d_origin`), and `isSecureContext` whether the page is a
+secure context (`d_secure_context`): its address potentially trustworthy as
+libway judges it (`way_url_trustworthy`, the browser's one copy of that
+judgement: about:blank and about:srcdoc are, as Secure Contexts says, so a
+binding with no address is; the name `localhost` is not), or a `file:` page,
+which Chrome and Firefox both count secure, though Secure Contexts would not
+(a file URL's origin is opaque). The mixed-content rules ask libway's
+judgement alone, so a file page's secure context changes nothing there. `ononline`,
 `onoffline` and `onlanguagechange` are window's handler slots, whose events
 nothing fires. `queueMicrotask(callback)` queues a job on the engine's one
 job queue, in order with promise reactions; the checkpoint that drains the
