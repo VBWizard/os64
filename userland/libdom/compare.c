@@ -59,12 +59,13 @@ static bool same_attributes(const os64_html_node_t *a, const os64_html_node_t *b
     return true;
 }
 
-/* DOM's "equals" for two nodes, their children aside. A libhtml kind is
- * one nodeType. A template's contents are not its children, so they are
- * not compared, as DOM says. */
+/* DOM's "equals" for two nodes, their children aside. Their nodeTypes first
+ * (d_node_type: a CDATA section is a TEXT kind with a nodeType of its own).
+ * A template's contents are not its children, so they are not compared, as
+ * DOM says. */
 static bool alike(const os64_html_node_t *a, const os64_html_node_t *b)
 {
-    if (a->kind != b->kind) return false;
+    if (d_node_type(a) != d_node_type(b)) return false;
     switch (a->kind) {
     case OS64_HTML_DOCTYPE:
         return same_text(a->name, b->name) && same_text(a->public_id, b->public_id) &&

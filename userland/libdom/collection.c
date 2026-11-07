@@ -125,7 +125,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
     if (query->named != NULL && !d_named_match(node, query->named)) return false;
     if (query->name == NULL || os64_strcmp(query->name, "*") == 0) return true;
     return node->kind == OS64_HTML_ELEMENT && node->name != NULL &&
-        qualified_is(node, node->ns == OS64_HTML_NS_HTML ? query->folded : query->name);
+        qualified_is(node, node->ns == OS64_HTML_NS_HTML && query->html_document ? query->folded : query->name);
 }
 
 /* The next node a query looks at after `at` (NULL: the first): the select's
@@ -211,6 +211,7 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
     os64_html_hold(dom->document, root);
     query->descendants = descendants;
     query->elements = elements;
+    query->html_document = d_document_type(dom, d_node_document(dom, root)) == D_DOCUMENT_HTML;
     if (name != NULL) {
         size_t size = os64_strlen(name) + 1;
         query->name = d_alloc(dom, size);

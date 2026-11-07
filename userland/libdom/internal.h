@@ -245,7 +245,8 @@ struct DValue {
     void (*listeners_changed)(JSRuntime *rt, DValue *entry);
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
- * HTML documents; createDocument makes an XML document, whose createElement
+ * HTML documents; createDocument and `new Document()` make XML documents
+ * (the latter as if made for no namespace), whose createElement
  * makes HTML elements when it was made for the HTML namespace
  * (application/xhtml+xml) and elements in no namespace otherwise. An SVG
  * one is an XML document made for the SVG namespace, which differs from
@@ -257,6 +258,9 @@ struct DQuery {
     DQuery *next;
     DValue *entry;
     char *name, *folded, *named;
+    /* The root's node document was an HTML document when the query was
+     * made: an HTML element's name is then matched against `folded`. */
+    bool html_document;
     unsigned kind;
     const os64_html_node_t **nodes;
     size_t count;
@@ -1552,6 +1556,9 @@ const char *d_ranges_name(size_t index);
  * take (insertAdjacentHTML, createContextualFragment; mixin.c). NULL with
  * `*status` saying why. */
 const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status);
+/* The context a fragment parse takes for `element` (mixin.c): the element,
+ * or d_body_context's body for one in no namespace or another one. */
+const os64_html_node_t *d_fragment_context(os64_dom_t *dom, const os64_html_node_t *element, int64_t *status);
 void d_ranges_sweep(os64_dom_t *dom);
 void d_ranges_free(os64_dom_t *dom);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its

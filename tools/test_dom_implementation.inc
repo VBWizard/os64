@@ -580,7 +580,15 @@ static void implementation_data_cases(void)
         "assert(host.childNodes[1].wholeText==='z1234a','a CDATA section\\'s own takes the exclusive Text beside it');"
         "host.normalize();assert(host.childNodes.length===3&&host.childNodes[1].nodeType===4,'normalize leaves it alone');"
         "var tail=host.childNodes[1].splitText(2);assert(tail.nodeType===4&&tail.data==='34','its split tail is one too');"
-        "host.appendChild(p);assert(host.lastChild===p&&p.parentNode===host,'a PI goes in a tree');",
+        "host.appendChild(p);assert(host.lastChild===p&&p.parentNode===host,'a PI goes in a tree');"
+        "assert(!d.createCDATASection('x').isEqualNode(d.createTextNode('x')),'a CDATA section equals no Text');"
+        "var z=document.createElementNS(null,'z');z.innerHTML='<b>y</b>';"
+        "assert(z.firstChild.localName==='b'&&z.textContent==='y','innerHTML in no namespace parses');"
+        "var X='http://www.w3.org/1999/xhtml',d2=new Document();d2.appendChild(d2.createElementNS(X,'DIV'));"
+        "assert(d2.getElementsByTagName('DIV').length===1&&d2.getElementsByTagName('div').length===0,"
+        "'an XML document matches an HTML element\\'s name as written');"
+        "assert(document.createElementNS(X,'x:div').outerHTML==='<div></div>','a known namespace serializes its local name');"
+        "assert(d.createElementNS('urn:o','o:k').outerHTML==='<o:k></o:k>','another one its qualified name');",
         "new Document(), CDATASection, ProcessingInstruction");
     fixture_free(&f);
 }

@@ -66,9 +66,14 @@ static const HNode *children(const HNode *n)
     return html(n) && h_eq(n->name, "template") && n->template_contents
                ? n->template_contents : n->first_child;
 }
+/* An element's tag name as HTML's serialization writes it: the local name
+ * in the HTML, SVG and MathML namespaces, the qualified name (prefix ':'
+ * local name) in any other or none. A doctype is its name. */
 static void qualified(SWriter *w, const HNode *n)
 {
-    if (n->prefix) {
+    bool known = n->kind == OS64_HTML_ELEMENT && (n->ns == OS64_HTML_NS_HTML || n->ns == OS64_HTML_NS_SVG ||
+                                                  n->ns == OS64_HTML_NS_MATHML);
+    if (n->prefix && !known) {
         literal(w, n->prefix);
         literal(w, ":");
     }

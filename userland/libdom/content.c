@@ -186,7 +186,9 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
         return JS_UNDEFINED;
     }
     if (property == D_INNER_HTML) {
-        os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, context, string.data,
+        const os64_html_node_t *parse_context = d_fragment_context(dom, context, &status);
+        os64_html_node_t *fragment = parse_context == NULL ? NULL :
+            os64_html_parse_fragment(dom->document, parse_context, string.data,
                                                string.length, d_scripting(dom, context), &status);
         /* A script innerHTML inserts never runs: it is born started. */
         if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;

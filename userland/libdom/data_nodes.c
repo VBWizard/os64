@@ -11,9 +11,12 @@
  * CDATASection's over Text's and ProcessingInstruction's over
  * CharacterData's, so every member and receiver check those kinds have
  * applies to them unchanged. The prototypes, and a PI's `target`, are the
- * binding's structure and exist whatever the Modern Web's switch says, as
- * every prototype level does; the switch takes away only what its row adds,
- * the two names on window and Document's creation members. */
+ * binding's structure and exist whatever the Modern Web's switch says (a
+ * processing instruction the XML builder made has CharacterData's members
+ * with it off too); the switch takes away only what its row adds, the two
+ * names on window and Document's creation members. Unlike ShadowRoot's,
+ * whose prototypes come and go with the shadow trees' switch, these levels
+ * are part of the tree every document can hold. */
 
 static JSValue data_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                            JSValue *data);
