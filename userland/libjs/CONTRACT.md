@@ -562,9 +562,20 @@ wrapper's module entry (`js_engine.h`) is built on that:
 - **A module's failure is an exception, never an unhandled rejection.**
   HTML reports a module script's error as it reports a classic script's
   (an `error` event). The engine rejects the evaluation's promise instead,
-  so the wrapper's tracker knows each handle's promise and takes its
-  rejection as the module's failure: kept for `module_state`, and handed
-  to a script host's `exception`, not its `rejected`. Patch 0012 also makes
+  so the wrapper takes that rejection as the module's failure: kept for
+  `module_state` under the module's name, and handed to a script host's
+  `exception`, not its `rejected`. A failure at once is the run's own
+  outcome. A module still evaluating when its run returns is **watched**:
+  the wrapper attaches a rejection handler of its own through the engine's
+  `then`, read at construction before any script ran (a page may replace
+  the one it can reach), so its failure is heard even when an `import()`
+  of it has handled the promise and the tracker stays silent; the tracker
+  still hears an unwatched one (a watch whose `then` threw). A failure
+  heard after the run returned has no call of its own, so it is **owed**
+  to the outcome of the call whose jobs surfaced it, as an EXCEPTION
+  naming the module, when that outcome is still OK; another waits for the
+  next call that runs jobs or checkpoints (never a task's begin), in the
+  order they failed, so each is reported once. Patch 0012 also makes
   handled the inner promise of a module body the engine takes as the
   module's error, which the tracker otherwise heard as a second, unhandled
   rejection.
@@ -592,13 +603,19 @@ order; a syntax error (the compile's alone, the host hearing nothing), an
 import nobody can load, a missing export and an evaluation that throws,
 each the module's own and the last heard once as an exception and never as
 a rejection; a top-level await pending after its
-task and fulfilled, or rejected, in a later one; and a failed resolve
+task and fulfilled, or rejected in a later one and that call's outcome,
+reported once; a late failure an `import()` also waits on; two late
+failures surfaced by one call, the first its outcome and the second the
+next call's; and a failed resolve
 reached again, by a graph sharing a module whose import failed and, for a
 cycle whose entry failed, by a later graph and by `import()`. The module
 sweep fails
 every allocation of a graph's run in turn, on the target core and the
 instrumented engine, under RECLAIM; it compiles uncut, because a compile
-under memory pressure is DEBTS.md's 0011b row. The module bytecode cases
+under memory pressure is DEBTS.md's 0011b row. The watch sweep does the
+same to a watched module's life, its run and the later task that fails
+it: each refusal either leaves the failure reported or ends the runtime,
+and destroy reclaims all. The module bytecode cases
 run a graph compiled keeping its blobs, then read from them in another
 runtime (requests named, imports found by name, nothing loaded); an inline
 module's blob read under another URL; blobs refused for another module's

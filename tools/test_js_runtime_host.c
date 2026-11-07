@@ -1749,12 +1749,56 @@ static void module_cases(void)
     check(module_task(runtime, later, &outcome) == OS64_JS_OK &&
           os64_js_task_begin(runtime, OS64_JS_ABI_ID, "fail", &outcome) == OS64_JS_OK &&
           task_call(runtime, "failLater", NULL, &outcome) == OS64_JS_OK &&
-          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_EXCEPTION &&
+          strstr(closing.message, "later") != NULL && !strcmp(closing.source_name, "https://m.test/later.js") &&
           os64_js_module_state(runtime, later, &failure) == OS64_JS_MODULE_REJECTED && strstr(failure.message, "later") != NULL,
-          "a rejection after a turn is the module's failure");
+          "a rejection after a turn is the module's failure, and the outcome of the call that surfaced it, "
+          "under the module's name");
     check(!strcmp(host_heard, "exception:Error: later") &&
           !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
           "heard as an exception, and not left as an unhandled rejection");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "next", &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_OK,
+          "and reported once: the next call's outcome is its own");
+
+    // A late failure while an import() of the module waits: the import's
+    // handler on the evaluation means the tracker never hears it, and the
+    // module's own watch does.
+    os64_js_module_t *awaited = module_compile(runtime, "https://m.test/awaited.js",
+        "await new Promise((_, j) => globalThis.failAwaited = () => j(Error('awaited')));", &outcome);
+    os64_js_module_t *importer = module_compile(runtime, "https://m.test/importer.js",
+        "import('./awaited.js').catch(e => globalThis.importSaw = String(e));", &outcome);
+    host_heard[0] = '\0';
+    check(module_task(runtime, awaited, &outcome) == OS64_JS_OK && module_task(runtime, importer, &outcome) == OS64_JS_OK &&
+          os64_js_task_begin(runtime, OS64_JS_ABI_ID, "fail", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "failAwaited", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_EXCEPTION &&
+          strstr(closing.message, "awaited") != NULL && !strcmp(closing.source_name, "https://m.test/awaited.js") &&
+          !strcmp(host_heard, "exception:Error: awaited"),
+          "a late failure an import() also waits on is the module's failure, reported once");
+    JSValue saw = task_global(runtime, "importSaw");
+    check(host_value_is(saw, "Error: awaited"), "and the import's own catch still hears it");
+    task_free(runtime, saw);
+
+    // Two late failures surfaced by one call: the first is that call's
+    // outcome, the second the next call's.
+    os64_js_module_t *one = module_compile(runtime, "https://m.test/one.js",
+        "await new Promise((_, j) => globalThis.failOne = () => j(Error('one')));", &outcome);
+    os64_js_module_t *two = module_compile(runtime, "https://m.test/two.js",
+        "await new Promise((_, j) => globalThis.failTwo = () => j(Error('two')));", &outcome);
+    check(module_task(runtime, one, &outcome) == OS64_JS_OK && module_task(runtime, two, &outcome) == OS64_JS_OK,
+          "two awaiting modules run");
+    const char *both = "globalThis.failBoth = () => { failOne(); failTwo(); };";
+    check(os64_js_eval(runtime, both, strlen(both), "both", &outcome) == OS64_JS_OK, "a function failing both is made");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "both", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "failBoth", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_EXCEPTION &&
+          !strcmp(closing.source_name, "https://m.test/one.js"),
+          "the first late failure is the outcome of the call that surfaced both");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "after", &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_EXCEPTION &&
+          !strcmp(closing.source_name, "https://m.test/two.js"),
+          "the second is the next call's, so neither is lost");
 
     // A module two graphs share, whose resolve fails partway in the first
     // (one import found, one not): marked unresolved again, so the second
@@ -1871,6 +1915,63 @@ static void module_sweep_cases(void)
     }
     check(failed == 0, "every failed allocation of a module graph is reclaimed");
     printf("libjs modules: %zu allocations swept\n", inventory);
+}
+
+/* A watched module's life (module_watch): run while it awaits, then failed
+ * from a later task. True when that task's outcome reported the failure
+ * under the module's name. */
+static bool module_watch_scenario(os64_js_runtime_t *runtime, os64_js_module_t *module)
+{
+    os64_js_outcome_t outcome, closing;
+    if (os64_js_task_begin(runtime, OS64_JS_ABI_ID, "run", &outcome) != OS64_JS_OK) return false;
+    os64_js_module_run(runtime, OS64_JS_ABI_ID, module, &outcome);
+    os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing);
+    if (os64_js_task_begin(runtime, OS64_JS_ABI_ID, "fail", &outcome) != OS64_JS_OK) return false;
+    JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+    JSValue global = context != NULL ? JS_GetGlobalObject(context) : JS_UNDEFINED;
+    JSValue fail = context != NULL ? JS_GetPropertyStr(context, global, "failWatched") : JS_UNDEFINED;
+    if (JS_IsFunction(context, fail))
+        os64_js_call(runtime, OS64_JS_ABI_ID, fail, JS_UNDEFINED, 0, NULL, NULL, &outcome);
+    if (context != NULL) {
+        JS_FreeValue(context, fail);
+        JS_FreeValue(context, global);
+    }
+    return os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_EXCEPTION &&
+           strstr(closing.message, "watched") != NULL && !strcmp(closing.source_name, "https://m.test/watched.js");
+}
+/* Every allocation of that life refused in turn, under the reclaim policy:
+ * the late failure is reported, or the refusal ended the runtime loudly;
+ * either way destroy reclaims all. */
+static void module_watch_sweep_cases(void)
+{
+    static const char source[] = "await new Promise((_, j) => globalThis.failWatched = () => j(Error('watched')));";
+    os64_js_config_t config = fixture_config();
+    size_t inventory = 0, failed = 0, silent = 0;
+    for (size_t cut = 0; cut == 0 || cut <= inventory; cut++) {
+        os64_js_outcome_t outcome;
+        os64_js_runtime_t *runtime = NULL;
+        os64_js_module_t *module = NULL;
+        os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID, &runtime, &outcome);
+        if (!runtime) { check(false, "watch sweep runtime"); return; }
+        os64_js_module_compile(runtime, OS64_JS_ABI_ID, source, strlen(source), "https://m.test/watched.js", NULL,
+                               &module, &outcome);
+        size_t start = attempts;
+        if (cut > 0) fail_at = attempts + cut;
+        bool reported = module != NULL && module_watch_scenario(runtime, module);
+        fail_at = 0;
+        if (cut == 0) {
+            inventory = attempts - start;
+            check(reported, "uncut, a watched module's late failure is its failing task's outcome");
+        }
+        // Alive and unreported is the one wrong answer.
+        silent += !reported && os64_js_eval(runtime, "0", 1, "alive", &outcome) == OS64_JS_OK;
+        os64_js_teardown_report_t report;
+        os64_js_destroy_report(runtime, &report);
+        failed += live != 0;
+    }
+    check(inventory > 0 && failed == 0, "every refused allocation of a watched module's life is reclaimed");
+    check(silent == 0, "and none leaves a live runtime that never reported the late failure");
+    printf("libjs module watch: %zu allocations swept\n", inventory);
 }
 
 /* BYTECODE_CACHE.md § 4: a classic script's blob, kept and run from. */
@@ -2402,6 +2503,7 @@ int main(int argc, char **argv)
     script_host_cases();
     module_cases();
     module_sweep_cases();
+    module_watch_sweep_cases();
     bytecode_cases();
     module_bytecode_cases();
     intl_cases();
