@@ -1,0 +1,30 @@
+# WPT's webmessaging/message-channels in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh webmessaging/message-channels --update
+# rewrites [passing].
+[required]
+# MessageChannel and MessagePort (libdom/message.c): every pass here is theirs.
+basics.any.html	basic messagechannel test
+close.any.html	Close in onmessage should not cancel inflight messages.
+close.any.html	Inflight messages should be delivered even when sending port is closed afterwards.
+close.any.html	Message sent from closed port should not arrive.
+close.any.html	Message sent to closed port should not arrive.
+dictionary-transferrable.any.html	basic messagechannel with transfer
+historical.any.html	MessagePort should not have an onclose event handler IDL attribute
+historical.any.html	No close event should be fired on a port when it is closed
+historical.any.html	No close event should be fired when an entangled port is closed
+implied-start.any.html	onmessage implied start()
+no-start.any.html	without start()
+[excluded]
+[passing]
+basics.any.html	basic messagechannel test
+close.any.html	Close in onmessage should not cancel inflight messages.
+close.any.html	Inflight messages should be delivered even when sending port is closed afterwards.
+close.any.html	Message sent from closed port should not arrive.
+close.any.html	Message sent to closed port should not arrive.
+dictionary-transferrable.any.html	basic messagechannel with transfer
+historical.any.html	MessagePort should not have an onclose event handler IDL attribute
+historical.any.html	No close event should be fired on a port when it is closed
+historical.any.html	No close event should be fired when an entangled port is closed
+implied-start.any.html	onmessage implied start()
+no-start.any.html	without start()
