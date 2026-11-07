@@ -125,7 +125,7 @@ JSValue d_node_clone(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
         d_made_in(dom, copy, document);
         /* [CEReactions]: the copy's elements with a definition come back
          * upgraded (custom.c), which asks the document just recorded. */
-        if (d_custom_cloned(dom, ctx, copy) < 0) {
+        if (d_custom_upgrade_new(dom, ctx, copy) < 0) {
             JS_FreeValue(ctx, made);
             return JS_EXCEPTION;
         }

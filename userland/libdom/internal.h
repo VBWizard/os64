@@ -1775,9 +1775,11 @@ int d_reactions_pop(os64_dom_t *dom, JSContext *ctx);
  * which is reported) or JS_EXCEPTION. */
 int d_custom_create(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, const char *name,
                     JSValue *out);
-/* A clone's elements with a definition, upgraded before the clone is
- * handed back. 0, or -1 with an exception pending. */
-int d_custom_cloned(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *copy);
+/* A new detached subtree's elements with a definition, upgraded before it
+ * is handed back: a clone's (cloneNode, a range's contents) and a parsed
+ * fragment's (createContextualFragment). 0, or -1 with an exception
+ * pending. */
+int d_custom_upgrade_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root);
 /* adoptNode moved `root`'s tree from document `from` to `to`: each custom
  * element in it is owed an adoptedCallback. */
 void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *from,

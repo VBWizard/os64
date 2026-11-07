@@ -330,8 +330,10 @@ static JSValue contents(os64_dom_t *dom, JSContext *ctx, DRange *r, const Bounds
     int64_t status = OS64_HTML_OK;
     os64_html_node_t *made = os64_html_create_fragment(dom->document, &status);
     if (made == NULL) return d_html_error(ctx, status);
-    d_made_in(dom, made, document);
+    /* The wrapper first: d_made_in records the document on the node's
+     * wrapper, and a node with none keeps no record. */
     JSValue fragment = d_wrap(dom, ctx, made);
+    if (!JS_IsException(fragment)) d_made_in(dom, made, document);
     if (JS_IsException(fragment) || (b->start == b->end && b->start_offset == b->end_offset)) return fragment;
     /* A subrange's points were read before a clone ran page code that may
      * have moved one; points in two trees hold nothing to take. */
@@ -536,7 +538,6 @@ static int insert_node(os64_dom_t *dom, JSContext *ctx, DRange *r, const os64_ht
         if (status < 0) {
             failed = throw_status(ctx, status);
         } else {
-            d_made_in(dom, tail, d_node_document(dom, start));
             reference = tail;
         }
     }
@@ -677,14 +678,24 @@ static JSValue contextual_fragment(os64_dom_t *dom, JSContext *ctx, const DRange
          element->tag == OS64_HTML_TAG_HTML)) {
         os64_html_node_t *body = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "body", &status);
         if (body == NULL) return d_html_error(ctx, status);
-        d_made_in(dom, body, document);
         element = body;
     }
+    /* Scripting is the start node's document's: a substituted body is no
+     * node of any document's tree to ask. */
     os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, element, markup->data, markup->length,
-                                                          d_scripting(dom, element), &status);
+                                                          d_scripting(dom, node), &status);
     if (fragment == NULL) return d_html_error(ctx, status);
+    /* Wrapped first, so d_made_in has a wrapper to record the document
+     * on; then a defined custom element in it is upgraded before the
+     * fragment is handed back, as a clone's is. */
+    JSValue wrapped = d_wrap(dom, ctx, fragment);
+    if (JS_IsException(wrapped)) return wrapped;
     d_made_in(dom, fragment, document);
-    return d_wrap(dom, ctx, fragment);
+    if (d_custom_upgrade_new(dom, ctx, fragment) < 0) {
+        JS_FreeValue(ctx, wrapped);
+        return JS_EXCEPTION;
+    }
+    return wrapped;
 }
 
 /* ── Members ─────────────────────────────────────────────────────────── */

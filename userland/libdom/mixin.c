@@ -1230,8 +1230,11 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
     os64_html_node_t *tail = NULL;
     int64_t status = os64_page_node_split_text(dom->state, (os64_html_node_t *)self, offset, &tail);
     if (status < 0) return d_html_error(ctx, status);
-    d_made_in(dom, tail, d_node_document(dom, self));
-    return d_wrap(dom, ctx, tail);
+    /* Wrapped first: d_made_in records the document on the wrapper, which
+     * a parentless node's tail needs to keep its ownerDocument. */
+    JSValue wrapped = d_wrap(dom, ctx, tail);
+    if (!JS_IsException(wrapped)) d_made_in(dom, tail, d_node_document(dom, self));
+    return wrapped;
 }
 
 /* A template's `content` (HTML § 4.12.3): the fragment libhtml keeps its

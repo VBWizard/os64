@@ -168,7 +168,16 @@ static void dom_range_contextual_cases(void)
         "rows.firstChild.firstChild.localName==='tr','a table context keeps the row, in a tbody');"
         "var e=new Text('x');r.setStart(e,0);assert(r.createContextualFragment('<b>y</b>').firstChild.localName==='b',"
         "'a parentless text start parses in a body');"
-        "document.body.appendChild(f);",
+        "document.body.appendChild(f);"
+        "var d=document.implementation.createHTMLDocument('');var dr=d.createRange();dr.selectNodeContents(d.body);"
+        "var df=dr.createContextualFragment('<i>x</i>');assert(df.ownerDocument===d&&df.firstChild.ownerDocument===d,"
+        "'a contextual fragment is its document\\'s');var dt=d.createElement('p');d.body.appendChild(dt);"
+        "dt.textContent='ab';dr.selectNodeContents(dt);assert(dr.cloneContents().ownerDocument===d&&"
+        "dr.extractContents().ownerDocument===d,'cloned and extracted contents are their document\\'s');"
+        "var lone=d.createTextNode('ab');assert(lone.splitText(1).ownerDocument===d,'a parentless split tail too');"
+        "globalThis.built=[];customElements.define('x-range',class extends HTMLElement{constructor(){super();"
+        "built.push(this);this.ready=true}});var cf=r.createContextualFragment('<x-range></x-range>');"
+        "assert(cf.firstChild.ready===true&&built.length===1,'a defined custom element is upgraded at once');",
         "range-contextual");
     if (connected_count != 1) fprintf(stderr, "connected scripts: %u\n", connected_count);
     check(connected_count == 1, "ranges: a contextual fragment's script runs when it is inserted");
