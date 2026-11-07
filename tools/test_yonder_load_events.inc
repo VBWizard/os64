@@ -6,12 +6,15 @@
 
 /* The loop's turns, then the shown page's own (script_turn), which is
  * where an event owed after the page arrived is fired, until neither has
- * anything to do; then the page laid out again as the tree now stands. */
+ * anything to do; then the page laid out again as the tree now stands.
+ * False when that never happens: these pages settle in a few rounds, and
+ * one that tells an element again at each rebuild, whose listener changes
+ * the tree, would ask for another rebuild for ever. */
 static bool load_settle(void) {
-    for(int round=0;round<50;round++) {
+    for(int round=0;round<8;round++) {
         if(!loop_settle()) return false;
         bool ran=false;
-        for(int i=0;i<200 && script_turn();i++) ran=true;
+        for(int i=0;i<20 && script_turn();i++) ran=true;
         if(g.page.tree!=NULL) (void)script_rebuild();
         if(!ran) return true;
     }
@@ -71,27 +74,28 @@ static void load_handler_only_case(void) {
  * element's error but never its load. Across a rebuild (a timer changes
  * the tree) nothing is told twice: not the reused parses, not the failed
  * sheet fetched again and failing again. An href changed is a new fetch,
- * and its element is told again; so is a style whose text changed. A style
- * a script inserts and then measures, which the measuring page parses
- * inside that script, is told once, by its own page. */
+ * and its element is told again; so is a style whose text changed. The
+ * style the parse-time script inserts and then measures, which the
+ * measuring page (the layout of a page not yet shown) parses inside that
+ * script, is told once, by its own page. */
 static void load_sheets_case(void) {
     loop_page(LOAD_LOG "<style id=s1>p{}</style><link id=d rel=stylesheet href='data:text/css,p{}'>"
         "<link id=a rel=stylesheet href=a.css><link id=gone rel=stylesheet href=gone.css>"
         "<script>var st=document.createElement('style');st.id='s2';st.textContent='b{}';"
-        "document.head.appendChild(st);after=1;"
+        "document.head.appendChild(st);note('measured '+(document.getElementById('out').offsetWidth>0));after=1;"
         "document.addEventListener('load',e=>{if(e.target.id==='s2')note('s2 after '+after)},true);"
         "setTimeout(()=>{document.body.appendChild(document.createElement('div'));note('timer')},1000);"
         "setTimeout(()=>{document.getElementById('a').href='b.css'},2000);"
-        "setTimeout(()=>{var m=document.createElement('style');m.id='s3';m.textContent='#out{width:10px}';"
-        "document.head.appendChild(m);note('measured '+(document.getElementById('out').offsetWidth>0));"
-        "document.getElementById('s1').textContent='p{color:green}'},3000);</script>");
+        "setTimeout(()=>{var m=document.createElement('style');m.id='s3';m.textContent='b{}';"
+        "document.head.appendChild(m);document.getElementById('s1').textContent='p{color:green}'},3000);</script>");
     check(load_settle() && nsheet_jobs==2,"load events: the two fetchable sheets are sent for");
     check(sheet_land("/a.css","p{color:blue}") && sheet_land("/gone.css",NULL) && load_settle() &&
           g.page.tree!=NULL && script_rebuild() && load_settle(),"load events: the sheets' page arrives");
     const char *out=element_text("out");
-    check(strcmp(out,"load STYLE s1|window heard error LINK d|error LINK d|load LINK a|"
+    check(strcmp(out,"load STYLE s1|window heard error LINK d|error LINK d|measured true|load LINK a|"
                      "window heard error LINK gone|error LINK gone|load STYLE s2|s2 after 1")==0,
-          "load events: each style's load, each link's load or error once; the inserted style's after its script; "
+          "load events: each style's load, each link's load or error once; the inserted style's once, after its "
+          "script, though the measuring page parsed it inside that script; "
           "a data: sheet, which yonder does not fetch, fails; window hears errors, never an element's load");
     /* A rebuild, made by the page's timer changing the tree. */
     char before[1024];
@@ -108,10 +112,9 @@ static void load_sheets_case(void) {
     check(load_settle() && script_rebuild() && load_settle() && sheet_land("/b.css","p{}") && load_settle() &&
           count_in(element_text("out"),"load LINK a")==2,"load events: an href changed is told again");
     now_ms+=1000;
-    check(load_settle() && script_rebuild() && load_settle(),"load events: a timer inserts and measures a style");
+    check(load_settle() && script_rebuild() && load_settle(),"load events: a timer inserts a style and changes another");
     out=element_text("out");
-    check(count_in(out,"measured true")==1 && count_in(out,"load STYLE s3")==1,
-          "load events: a style a script measured is told once, after the script, by its own page");
+    check(count_in(out,"load STYLE s3")==1,"load events: a style a timer inserted on the shown page is told once");
     check(count_in(out,"load STYLE s1")==2,"load events: a style whose text changed is told again");
     loop_drop();
 }
