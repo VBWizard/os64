@@ -128,7 +128,8 @@ static const DModernRow kModern[] = {
                            "TransformStream", "TransformStreamDefaultController", "ByteLengthQueuingStrategy",
                            "CountQueuingStrategy", "TextDecoderStream", "TextEncoderStream", NULL},
      d_streams_install},
-    {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
+    {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", "MessagePort", "MessageChannel",
+                           NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
     {(const char *const[]){"requestAnimationFrame", "cancelAnimationFrame", NULL}, d_animation_install},
     /* INTERSECTION_OBSERVER.md: after the DOMRect row, whose rects its

@@ -407,8 +407,8 @@ Codex on each PR.
 
 ## 12. What waits (DEBTS rows the arc books)
 
-- `MessageChannel` and `MessagePort`, booked with R1 so the census's
-  largest missing name has its row while its slice waits.
+- `MessageChannel` and `MessagePort`, booked with R1 and built in their
+  own slice after R2 (libdom message.c); transferring a port stays a row.
 - `caretPositionFromPoint` / `caretRangeFromPoint`.
 - Painting the page Selection, a person's own text selection, and
   `selectionchange`.

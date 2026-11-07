@@ -36,6 +36,20 @@
  *   - A message posted during a message's task is a task of its own, after
  *     the task that posted it: the setImmediate trick's whole premise.
  *
+ * MESSAGE CHANNELS (HTML § 9.4): `new MessageChannel()` makes two
+ * entangled MessagePorts; what one posts goes to the other, a MessageEvent
+ * with no origin, no source and no ports, fired at the port receiving it.
+ * A port's messages ride the window's queue above as tasks of their own,
+ * so the host runs them as it runs the window's (os64_dom_message_fire), in
+ * posting order; a port that has not started (start(), or its onmessage
+ * set) keeps what it is sent on a list of its own until it does. Each port
+ * holds its partner, traced, so an entangled pair lives while either is
+ * reachable, as a scheduler's channel must (React posts to one port and
+ * hears on the other); a queued message holds the port it goes to until
+ * its task runs. close() disentangles the pair: what is posted after goes
+ * nowhere, and what reached the closed port is dropped. A MessagePort in a
+ * transfer list is refused (DEBTS.md).
+ *
  * The queue's nodes are the binding's memory; a message's clone is the
  * engine's, charged as the page's own values are; the poster's window each
  * holds is one of the registry's values (messages_held). */
@@ -50,6 +64,10 @@ struct DMessage {
     DMessage *next;
     DClone *clone;
     JSValue source;
+    /* A port's message: the MessagePort it goes to, held while the message
+     * is on the window's queue; JS_UNDEFINED for the window's own messages
+     * and for one waiting on its port's list for the port to start. */
+    JSValue port;
     char *origin;              /* the poster's document's origin, serialized */
     char *target;              /* T_ORIGIN: the origin the target's document must have */
     uint8_t target_kind;
@@ -78,6 +96,7 @@ static char *text_copy(os64_dom_t *dom, const char *text)
  * its node freed. */
 static void message_free(os64_dom_t *dom, DMessage *message)
 {
+    JS_FreeValueRT(dom->engine, message->port);
     if (!JS_IsUndefined(message->source)) {
         JS_FreeValueRT(dom->engine, message->source);
         dom->messages_held--;
@@ -162,7 +181,7 @@ static JSValue post_message(JSContext *ctx, JSValueConst self, int argc, JSValue
     }
     DMessage *message = converted == 0 ? d_alloc(target, sizeof(*message)) : NULL;
     if (message != NULL) {
-        *message = (DMessage){.source = JS_UNDEFINED, .posted = now_ms(target)};
+        *message = (DMessage){.source = JS_UNDEFINED, .port = JS_UNDEFINED, .posted = now_ms(target)};
         char origin[WAY_ORIGIN_TEXT_MAX];
         message->origin = text_copy(target, d_origin(page_address(poster), origin, sizeof(origin)) ? origin : "null");
         if (message->origin == NULL) {
@@ -211,13 +230,19 @@ static bool target_matches(const os64_dom_t *dom, const DMessage *message)
 static JSValue message_make(os64_dom_t *dom, JSContext *ctx, void *arg)
 {
     DMessage *message = arg;
+    /* A port's message has no origin and no source (HTML § 9.4.4). */
+    bool port = !JS_IsUndefined(message->port);
+    const char *origin = port ? "" : message->origin;
+    JSValueConst source = port ? JS_NULL : message->source;
     JSValue data = d_clone_read(dom, ctx, message->clone);
     if (!JS_IsException(data))
-        return d_message_event_new(dom, ctx, "message", data, message->origin, message->source);
+        return d_message_event_new(dom, ctx, "message", data, origin, source);
     if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
     JS_FreeValue(ctx, JS_GetException(ctx));
-    return d_message_event_new(dom, ctx, "messageerror", JS_NULL, message->origin, message->source);
+    return d_message_event_new(dom, ctx, "messageerror", JS_NULL, origin, source);
 }
+
+static DValue *port_target(JSValueConst port);
 
 uint64_t os64_dom_message_next(const os64_dom_t *dom)
 {
@@ -236,9 +261,15 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
         if (dropped && os64_dom_timer_next(dom) <= message->posted) return false;
         dom->messages = message->next;
         if (dom->messages == NULL) dom->messages_last = NULL;
-        bool heard = target_matches(dom, message) &&
-            (os64_dom_listens(dom, "message") || os64_dom_listens(dom, "messageerror"));
-        if (heard) d_host_dispatch(dom, NULL, NULL, "message", message_make, message, NULL, outcome);
+        /* A port's message goes to its port unless that port has closed;
+         * the window's to the window when its targetOrigin still holds and
+         * something listens. */
+        DValue *port = JS_IsUndefined(message->port) ? NULL : port_target(message->port);
+        bool heard = !JS_IsUndefined(message->port)
+            ? port != NULL
+            : target_matches(dom, message) &&
+              (os64_dom_listens(dom, "message") || os64_dom_listens(dom, "messageerror"));
+        if (heard) d_host_dispatch(dom, NULL, port, "message", message_make, message, NULL, outcome);
         message_free(dom, message);
         if (heard) return true;
     }
@@ -255,10 +286,320 @@ void d_message_drain(os64_dom_t *dom)
     dom->messages_last = NULL;
 }
 
+/* ── MessageChannel and MessagePort (HTML § 9.4) ─────────────────────── */
+
+static JSClassID port_slot, channel_slot;
+
+typedef struct {
+    DValue target;              /* first: the plain target's entry, in the object */
+    os64_dom_t *dom;
+    JSValue partner;            /* the entangled port, traced; JS_UNDEFINED once disentangled */
+    bool started, closed;
+    DMessage *pending, *pending_last;   /* sent before it started; each holding no port */
+} DPort;
+
+typedef struct {
+    JSValue port1, port2;
+} DChannel;
+
+static DPort *port_of(JSValueConst value)
+{
+    return JS_GetOpaque(value, os64_js_class_id(&port_slot));
+}
+
+/* The entry a port's message is dispatched at, or NULL once it closed. */
+static DValue *port_target(JSValueConst port)
+{
+    DPort *p = port_of(port);
+    return p != NULL && !p->closed ? &p->target : NULL;
+}
+
+static void message_enqueue(os64_dom_t *dom, DMessage *message)
+{
+    message->next = NULL;
+    if (dom->messages_last != NULL) dom->messages_last->next = message;
+    else dom->messages = message;
+    dom->messages_last = message;
+}
+
+/* What waited for the port goes on the window's queue, each now holding
+ * the port, in the order it was sent. */
+static void port_start(JSContext *ctx, JSValueConst self, DPort *p)
+{
+    if (p->started || p->closed) return;
+    p->started = true;
+    while (p->pending != NULL) {
+        DMessage *message = p->pending;
+        p->pending = message->next;
+        message->port = JS_DupValue(ctx, self);
+        message_enqueue(p->dom, message);
+    }
+    p->pending_last = NULL;
+}
+
+static void port_pending_free(JSRuntime *rt, DPort *p)
+{
+    (void)rt;
+    while (p->pending != NULL) {
+        DMessage *message = p->pending;
+        p->pending = message->next;
+        message_free(p->dom, message);
+    }
+    p->pending_last = NULL;
+}
+
+/* Disentangled: neither port holds the other, and what this one was sent
+ * and had not started on goes. */
+static void port_close(JSContext *ctx, DPort *p)
+{
+    p->closed = true;
+    DPort *other = port_of(p->partner);
+    JSValue partner = p->partner;
+    p->partner = JS_UNDEFINED;
+    if (other != NULL) {
+        JSValue back = other->partner;
+        other->partner = JS_UNDEFINED;
+        JS_FreeValue(ctx, back);
+    }
+    JS_FreeValue(ctx, partner);
+    port_pending_free(JS_GetRuntime(ctx), p);
+}
+
+static void port_finalizer(JSRuntime *rt, JSValue value)
+{
+    DPort *p = port_of(value);
+    if (p == NULL) return;
+    port_pending_free(rt, p);
+    JS_FreeValueRT(rt, p->partner);
+    d_event_target_finalize(rt, &p->target);
+    js_free_rt(rt, p);
+}
+
+static void port_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DPort *p = port_of(value);
+    if (p == NULL) return;
+    d_event_target_mark(rt, &p->target, mark);
+    JS_MarkValue(rt, p->partner, mark);
+}
+
+static JSValue port_new(os64_dom_t *dom, JSContext *ctx)
+{
+    JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&port_slot));
+    if (JS_IsException(object)) return object;
+    DPort *p = js_mallocz(ctx, sizeof(*p));
+    if (p == NULL) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    p->dom = dom;
+    p->partner = JS_UNDEFINED;
+    d_event_target_init(dom, &p->target, object);
+    JS_SetOpaque(object, p);
+    return object;
+}
+
+enum { P_POST, P_START, P_CLOSE };
+
+/* postMessage(message, transfer) and postMessage(message, {transfer})
+ * (HTML's message port post message steps): the overloads told apart by an
+ * array (a sequence; another iterable is read as the dictionary), the
+ * message serialized whatever becomes of it, then sent to the entangled
+ * port, or nowhere when there is none. */
+static JSValue port_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                           JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    DPort *p = port_of(self);
+    if (p == NULL) return JS_ThrowTypeError(ctx, "Expected a MessagePort");
+    if (magic == P_START) {
+        port_start(ctx, self, p);
+        return JS_UNDEFINED;
+    }
+    if (magic == P_CLOSE) {
+        port_close(ctx, p);
+        return JS_UNDEFINED;
+    }
+    if (argc < 1) return JS_ThrowTypeError(ctx, "postMessage needs a message");
+    JSValue *transfer = NULL;
+    size_t count = 0;
+    int converted;
+    if (argc > 1 && JS_IsArray(ctx, argv[1]) == 1) {
+        converted = d_sequence(dom, ctx, argv[1], D_SEQUENCE_MAX, &transfer, &count);
+        if (converted == 0) converted = d_clone_objects(ctx, transfer, count);
+    } else {
+        converted = d_clone_transfer(dom, ctx, argc, argv, 1, &transfer, &count);
+    }
+    for (size_t i = 0; converted == 0 && i < count; i++)
+        if (port_of(transfer[i]) != NULL) {
+            d_error(ctx, "DataCloneError", port_of(transfer[i]) == p ? "A port cannot transfer itself"
+                                                                     : "A MessagePort is not transferred here");
+            converted = -1;
+        }
+    DClone *clone = converted == 0 ? d_clone_write(dom, ctx, argv[0], transfer, count) : NULL;
+    if (clone != NULL) d_clone_detach(ctx, transfer, count);
+    d_sequence_free(ctx, transfer, count);
+    if (clone == NULL) return JS_EXCEPTION;
+    DPort *target = port_of(p->partner);
+    DMessage *message = target != NULL && !target->closed ? d_alloc(dom, sizeof(*message)) : NULL;
+    if (message == NULL) {
+        d_clone_free(dom->engine, clone);
+        return target != NULL && !target->closed ? d_error(ctx, "QuotaExceededError", "DOM message quota exceeded")
+                                                 : JS_UNDEFINED;
+    }
+    *message = (DMessage){.clone = clone, .source = JS_UNDEFINED, .port = JS_UNDEFINED, .target_kind = T_ANY,
+                          .posted = now_ms(dom)};
+    if (target->started) {
+        message->port = JS_DupValue(ctx, p->partner);
+        message_enqueue(dom, message);
+    } else {
+        if (target->pending_last != NULL) target->pending_last->next = message;
+        else target->pending = message;
+        target->pending_last = message;
+    }
+    return JS_UNDEFINED;
+}
+
+/* A port's onmessage starts it the first time it is set, as HTML's
+ * MessagePort has it; addEventListener does not. data[1] is the generic
+ * handler setter this one wraps. */
+static JSValue port_onmessage_set(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                  JSValue *data)
+{
+    (void)magic;
+    JSValue result = JS_Call(ctx, data[1], self, argc, argv);
+    DPort *p = port_of(self);
+    if (!JS_IsException(result) && p != NULL) port_start(ctx, self, p);
+    return result;
+}
+
+static int port_onmessage(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype)
+{
+    if (d_event_handler_named(dom, ctx, prototype, "message") < 0) return -1;
+    JSAtom atom = JS_NewAtom(ctx, "onmessage");
+    if (atom == JS_ATOM_NULL) return -1;
+    JSPropertyDescriptor desc;
+    int found = JS_GetOwnProperty(ctx, &desc, prototype, atom);
+    if (found <= 0) {
+        JS_FreeAtom(ctx, atom);
+        return -1;
+    }
+    JSValue wrap_data[2] = {dom->anchor->value, desc.setter};
+    JSValue set = JS_NewCFunctionData(ctx, port_onmessage_set, 1, 0, 2, wrap_data);
+    JS_FreeValue(ctx, desc.setter);
+    JS_FreeValue(ctx, desc.value);
+    int result = JS_IsException(set) ? -1
+               : JS_DefinePropertyGetSet(ctx, prototype, atom, desc.getter, set,
+                                         JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    if (JS_IsException(set)) JS_FreeValue(ctx, desc.getter);
+    JS_FreeAtom(ctx, atom);
+    return result < 0 ? -1 : 0;
+}
+
+static void channel_finalizer(JSRuntime *rt, JSValue value)
+{
+    DChannel *c = JS_GetOpaque(value, os64_js_class_id(&channel_slot));
+    if (c == NULL) return;
+    JS_FreeValueRT(rt, c->port1);
+    JS_FreeValueRT(rt, c->port2);
+    js_free_rt(rt, c);
+}
+
+static void channel_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DChannel *c = JS_GetOpaque(value, os64_js_class_id(&channel_slot));
+    if (c == NULL) return;
+    JS_MarkValue(rt, c->port1, mark);
+    JS_MarkValue(rt, c->port2, mark);
+}
+
+/* new MessageChannel(): two new ports, entangled. */
+static JSValue channel_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSClassID id = os64_js_class_id(&channel_slot);
+    JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(object)) return object;
+    DChannel *c = js_mallocz(ctx, sizeof(*c));
+    if (c == NULL) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    c->port1 = c->port2 = JS_UNDEFINED;
+    JS_SetOpaque(object, c);
+    c->port1 = port_new(dom, ctx);
+    c->port2 = JS_IsException(c->port1) ? JS_EXCEPTION : port_new(dom, ctx);
+    if (JS_IsException(c->port2)) {
+        if (JS_IsException(c->port1)) c->port1 = JS_UNDEFINED;
+        c->port2 = JS_UNDEFINED;
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    port_of(c->port1)->partner = JS_DupValue(ctx, c->port2);
+    port_of(c->port2)->partner = JS_DupValue(ctx, c->port1);
+    return object;
+}
+
+static JSValue channel_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                              JSValue *data)
+{
+    (void)argc; (void)argv;
+    if (d_callback(ctx, data, OS64_JS_ABI_ID) == NULL) return JS_EXCEPTION;
+    DChannel *c = JS_GetOpaque(self, os64_js_class_id(&channel_slot));
+    if (c == NULL) return JS_ThrowTypeError(ctx, "Expected a MessageChannel");
+    return JS_DupValue(ctx, magic == 0 ? c->port1 : c->port2);
+}
+
+/* The two interfaces: MessageChannel constructs; MessagePort is an Illegal
+ * constructor whose prototype inherits EventTarget's (the targets row makes
+ * the interface inherit EventTarget), with postMessage, start, close,
+ * onmessage and onmessageerror. */
+static int channel_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    static const JSClassDef port_def = {.class_name = "MessagePort", .finalizer = port_finalizer,
+                                        .gc_mark = port_mark};
+    static const JSClassDef channel_def = {.class_name = "MessageChannel", .finalizer = channel_finalizer,
+                                           .gc_mark = channel_mark};
+    JSClassID port_id = os64_js_class_id(&port_slot), channel_id = os64_js_class_id(&channel_slot);
+    if ((!JS_IsRegisteredClass(dom->engine, port_id) && JS_NewClass(dom->engine, port_id, &port_def) < 0) ||
+        (!JS_IsRegisteredClass(dom->engine, channel_id) && JS_NewClass(dom->engine, channel_id, &channel_def) < 0))
+        return -1;
+    DValue *port = d_retain(dom, ctx, JS_NewObjectProto(ctx, dom->event_target_prototype->value));
+    DValue *channel = port != NULL ? d_retain(dom, ctx, JS_NewObject(ctx)) : NULL;
+    if (channel == NULL) return -1;
+    JS_SetClassProto(ctx, port_id, JS_DupValue(ctx, port->value));
+    JS_SetClassProto(ctx, channel_id, JS_DupValue(ctx, channel->value));
+    if (d_event_target(dom, ctx, port->value, port_id, NULL) < 0 ||
+        d_method_named(dom, ctx, port->value, "postMessage", port_member, 1, P_POST) < 0 ||
+        d_method_named(dom, ctx, port->value, "start", port_member, 0, P_START) < 0 ||
+        d_method_named(dom, ctx, port->value, "close", port_member, 0, P_CLOSE) < 0 ||
+        port_onmessage(dom, ctx, port->value) < 0 ||
+        d_event_handler_named(dom, ctx, port->value, "messageerror") < 0 ||
+        d_accessor(dom, ctx, channel->value, "port1", channel_member, 0, false) < 0 ||
+        d_accessor(dom, ctx, channel->value, "port2", channel_member, 1, false) < 0)
+        return -1;
+    JSValue port_interface = d_interface_new(ctx, "MessagePort", 0, NULL, port->value, JS_UNDEFINED);
+    if (JS_IsException(port_interface) ||
+        JS_DefinePropertyValueStr(ctx, global, "MessagePort", port_interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    JSValue channel_interface = d_interface_new(ctx, "MessageChannel", 0, channel_construct, channel->value,
+                                                JS_UNDEFINED);
+    return JS_IsException(channel_interface) ||
+           JS_DefinePropertyValueStr(ctx, global, "MessageChannel", channel_interface,
+                                     JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ? -1 : 0;
+}
+
 int d_message_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_clone_setup(dom, ctx, global) < 0 || d_message_event_install(dom, ctx, global) < 0 ||
-        d_method_named(dom, ctx, global, "postMessage", post_message, 1, 0) < 0)
+        d_method_named(dom, ctx, global, "postMessage", post_message, 1, 0) < 0 ||
+        channel_install(dom, ctx, global) < 0)
         return -1;
     return d_event_handler(dom, ctx, global, D_EVENT_MESSAGE) < 0 ||
            d_event_handler(dom, ctx, global, D_EVENT_MESSAGEERROR) < 0 ? -1 : 0;
