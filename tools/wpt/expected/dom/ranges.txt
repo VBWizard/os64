@@ -1,0 +1,86 @@
+# WPT's dom/ranges in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh dom/ranges --update
+# rewrites [passing]. Run with --ranges (DOM Range's switch, RANGE.md § 2).
+[required]
+# RANGE.md R2: the Range interface, StaticRange and createContextualFragment. The
+# algorithm and mutation pages build their trees with dom/common.js, which needs
+# new Document() and createCDATASection; they join this list with the slice that
+# adds those (ruled 2026-11-06).
+Range-adopt-test.html	Parented range container moved to another document with appendChild: Moving the element to the other document must collapse the range
+Range-adopt-test.html	Parentless range container moved to another document with appendChild: Removing the only element in the range must collapse the range
+Range-adopt-test.html	Range container's parentless container moved to another document with appendChild: Removing the only element in the range must collapse the range
+Range-adopt-test.html	Range in document: Removing the only element in the range must collapse the range
+Range-attribute-nodes.html	comparePoint() with an Attr node not sharing the range's root throws WrongDocumentError
+Range-attribute-nodes.html	insertNode() with an Attr node argument throws HierarchyRequestError
+Range-attribute-nodes.html	intersectsNode() with an Attr node not sharing the range's root returns false
+Range-attribute-nodes.html	isPointInRange() with an Attr node not sharing the range's root returns false
+Range-attribute-nodes.html	selectNode() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setEnd() to an Attr node past its length (0) throws IndexSizeError
+Range-attribute-nodes.html	setEndAfter() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setEndBefore() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setStart() to an Attr node past its length (0) throws IndexSizeError
+Range-attribute-nodes.html	setStartAfter() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setStartBefore() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attributes.html	Range attributes
+Range-commonAncestorContainer-2.html	Detached Range
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer 1
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer 2
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer 3
+Range-comparePoint-2.html	Range.comparePoint
+Range-comparePoint-2.html	Range.comparePoint 1
+Range-comparePoint-2.html	Range.comparePoint 2
+Range-constructor.html	Range constructor test
+Range-detach.html	Range.detach
+Range-intersectsNode-2.html	Range.intersectsNode() simple cases
+Range-intersectsNode-binding.html	Calling intersectsNode without an argument or with an invalid argument should throw a TypeError.
+Range-mutations-normalize.html	Live range updates properly when collapsed into single merged text node in range of multiple
+Range-mutations-normalize.html	Live range updates properly when its boundaries are initially indices to merged nodes
+Range-mutations-normalize.html	Live range updates properly when its boundaries span multiple merged text nodes
+Range-mutations-normalize.html	Live range updates properly when text nodes merged before and after them
+Range-stringifier.html	Node contents of a single div
+Range-stringifier.html	Range stringifier
+Range-stringifier.html	Text node with offsets
+Range-stringifier.html	Three nodes with start offset and end offset on text nodes
+Range-stringifier.html	Two nodes, each with a text node
+[excluded]
+[passing]
+Range-adopt-test.html	Parented range container moved to another document with appendChild: Moving the element to the other document must collapse the range
+Range-adopt-test.html	Parentless range container moved to another document with appendChild: Removing the only element in the range must collapse the range
+Range-adopt-test.html	Range container's parentless container moved to another document with appendChild: Removing the only element in the range must collapse the range
+Range-adopt-test.html	Range in document: Removing the only element in the range must collapse the range
+Range-attribute-nodes.html	comparePoint() with an Attr node not sharing the range's root throws WrongDocumentError
+Range-attribute-nodes.html	insertNode() with an Attr node argument throws HierarchyRequestError
+Range-attribute-nodes.html	intersectsNode() with an Attr node not sharing the range's root returns false
+Range-attribute-nodes.html	isPointInRange() with an Attr node not sharing the range's root returns false
+Range-attribute-nodes.html	selectNode() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setEnd() to an Attr node past its length (0) throws IndexSizeError
+Range-attribute-nodes.html	setEndAfter() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setEndBefore() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setStart() to an Attr node past its length (0) throws IndexSizeError
+Range-attribute-nodes.html	setStartAfter() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attribute-nodes.html	setStartBefore() with an Attr node throws InvalidNodeTypeError (null parent)
+Range-attributes.html	Range attributes
+Range-commonAncestorContainer-2.html	Detached Range
+Range-commonAncestorContainer-2.html	Normal Ranges
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer 1
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer 2
+Range-commonAncestorContainer-2.html	Range.commonAncestorContainer 3
+Range-comparePoint-2.html	Range.comparePoint
+Range-comparePoint-2.html	Range.comparePoint 1
+Range-comparePoint-2.html	Range.comparePoint 2
+Range-constructor.html	Range constructor test
+Range-detach.html	Range.detach
+Range-intersectsNode-2.html	Range.intersectsNode() simple cases
+Range-intersectsNode-binding.html	Calling intersectsNode without an argument or with an invalid argument should throw a TypeError.
+Range-mutations-normalize.html	Live range updates properly when collapsed into single merged text node in range of multiple
+Range-mutations-normalize.html	Live range updates properly when its boundaries are initially indices to merged nodes
+Range-mutations-normalize.html	Live range updates properly when its boundaries span multiple merged text nodes
+Range-mutations-normalize.html	Live range updates properly when text nodes merged before and after them
+Range-stringifier.html	Node contents of a single div
+Range-stringifier.html	Range stringifier
+Range-stringifier.html	Text node with offsets
+Range-stringifier.html	Three nodes with start offset and end offset on text nodes
+Range-stringifier.html	Two nodes, each with a text node

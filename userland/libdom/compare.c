@@ -113,7 +113,10 @@ static bool attrs_equal(const DAttrView *a, const DAttrView *b)
            os64_memcmp(a->value, b->value, a->length) == 0;
 }
 
-static const os64_html_node_t *root_of(const os64_html_node_t *node)
+/* The plain tree's helpers (internal.h), which Range's boundary points
+ * (range.c) share: ->parent walks, so a shadow root and a template's
+ * contents are roots of their own. */
+const os64_html_node_t *d_tree_root(const os64_html_node_t *node)
 {
     while (node->parent != NULL) node = node->parent;
     return node;
@@ -126,7 +129,7 @@ static size_t depth_of(const os64_html_node_t *node)
     return depth;
 }
 
-static bool is_ancestor(const os64_html_node_t *ancestor, const os64_html_node_t *node)
+bool d_tree_ancestor(const os64_html_node_t *ancestor, const os64_html_node_t *node)
 {
     for (node = node->parent; node != NULL; node = node->parent)
         if (node == ancestor) return true;
@@ -136,7 +139,7 @@ static bool is_ancestor(const os64_html_node_t *ancestor, const os64_html_node_t
 /* Whether `a` comes before `b` in tree order: two different nodes of one
  * tree. The deeper is raised to its ancestor at the other's depth, then
  * both until they are siblings, whose order is the answer. */
-static bool precedes(const os64_html_node_t *a, const os64_html_node_t *b)
+bool d_tree_precedes(const os64_html_node_t *a, const os64_html_node_t *b)
 {
     size_t depth_a = depth_of(a), depth_b = depth_of(b);
     bool a_shallower = depth_a < depth_b;
@@ -182,19 +185,19 @@ static int position(const DOperand *self, const DOperand *other)
     /* Not in one tree. "Consistent" is the standard's whole demand, and
      * the order of the two roots' addresses meets it: a tree whose root,
      * or detached Attr, is at the lower address precedes. */
-    const os64_html_node_t *root1 = node1 != NULL ? root_of(node1) : NULL;
-    const os64_html_node_t *root2 = node2 != NULL ? root_of(node2) : NULL;
+    const os64_html_node_t *root1 = node1 != NULL ? d_tree_root(node1) : NULL;
+    const os64_html_node_t *root2 = node2 != NULL ? d_tree_root(node2) : NULL;
     if (root1 == NULL || root2 == NULL || root1 != root2) {
         uintptr_t key1 = root1 != NULL ? (uintptr_t)root1 : (uintptr_t)attr1->entry;
         uintptr_t key2 = root2 != NULL ? (uintptr_t)root2 : (uintptr_t)attr2->entry;
         return POSITION_DISCONNECTED | POSITION_IMPLEMENTATION_SPECIFIC |
                (key1 < key2 ? POSITION_PRECEDING : POSITION_FOLLOWING);
     }
-    if ((attr1 == NULL && is_ancestor(node1, node2)) || (attr2 != NULL && node1 == node2))
+    if ((attr1 == NULL && d_tree_ancestor(node1, node2)) || (attr2 != NULL && node1 == node2))
         return POSITION_CONTAINS | POSITION_PRECEDING;
-    if ((attr2 == NULL && is_ancestor(node2, node1)) || (attr1 != NULL && node1 == node2))
+    if ((attr2 == NULL && d_tree_ancestor(node2, node1)) || (attr1 != NULL && node1 == node2))
         return POSITION_CONTAINED_BY | POSITION_FOLLOWING;
-    return precedes(node1, node2) ? POSITION_PRECEDING : POSITION_FOLLOWING;
+    return d_tree_precedes(node1, node2) ? POSITION_PRECEDING : POSITION_FOLLOWING;
 }
 
 enum { C_SAME, C_EQUAL, C_POSITION };

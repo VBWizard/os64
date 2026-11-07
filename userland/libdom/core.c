@@ -516,6 +516,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_intersections_free(dom);
     d_resizes_free(dom);
     d_walkers_free(dom);
+    d_ranges_free(dom);
     d_performance_free(dom);
     d_kept_free_all(dom);
     for (DValue *entry = dom->values; entry != NULL;) {

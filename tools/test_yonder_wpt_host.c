@@ -3,7 +3,7 @@
  *
  *   test_yonder_wpt_host --wpt <checkout> --dir <dir> --expect <file>
  *                        [--pages <file>] [--update] [--only <substring>]
- *                        [--report <file>] [--modern-off] [--fault]
+ *                        [--report <file>] [--modern-off] [--ranges] [--fault]
  *                        [--short-read <path>]
  *
  * The window is the scripted-page host's (that file is included whole,
@@ -148,6 +148,9 @@ static size_t wpt_npages, wpt_pages_cap;
 static bool wpt_navigated;
 /* The window's modern switch is off (--modern-off). */
 static bool wpt_modern_off;
+/* DOM Range's switch is on (--ranges), which yonder's own settings leave
+ * off (settings.h); dom/ranges is run with it. */
+static bool wpt_ranges;
 /* --fault: a fault in the fakes after the last page, as if one had been
  * met, for the selftest to prove a faulted run rewrites nothing. */
 static bool wpt_fault;
@@ -988,6 +991,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     pool_submit_hook=wpt_submit;pool_cancel_hook=wpt_cancel_image;
     g.scripts_on=true; g.script_ms=5000; now_ms=100; clock_step=1000;
     g.modern=!wpt_modern_off;
+    s_ranges=wpt_ranges;
     wpt_navigated=false;
     start_trip(url,NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
     if(pool_work.job==NULL || !g.stream.active) {
@@ -1230,6 +1234,7 @@ int main(int argc, char **argv) {
         else if(i+1<argc && !strcmp(argv[i],"--only")) only=argv[++i];
         else if(i+1<argc && !strcmp(argv[i],"--report")) wpt_report=argv[++i];
         else if(!strcmp(argv[i],"--modern-off")) wpt_modern_off=true;
+        else if(!strcmp(argv[i],"--ranges")) wpt_ranges=true;
         else if(!strcmp(argv[i],"--fault")) wpt_fault=true;
         else if(i+1<argc && !strcmp(argv[i],"--short-read")) wpt_short_read=argv[++i];
         else return wpt_usage();

@@ -95,6 +95,8 @@ static bool s_reduce_motion;
 static bool s_animations = true;
 // yonder.conf's `shadow_dom` developer key (settings.h), read at start.
 static bool s_shadow_dom;
+// yonder.conf's `ranges` developer key (settings.h), read at start.
+static bool s_ranges;
 
 // PAGE STORAGE (storage.h): the window's store over the profile folder
 // (yonder.conf's `profile`), which every page's localStorage and
@@ -9651,7 +9653,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .images={canvas_source,canvas_source_release,doc},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
-        .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom,
+        .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom, .ranges = s_ranges,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus};
@@ -16800,6 +16802,7 @@ int main(int argc, char **argv)
     s_animations = yonder_settings_saved_animations();
     s_reduce_motion = yonder_settings_saved_reduce_motion();
     s_shadow_dom = yonder_settings_saved_shadow_dom();
+    s_ranges = yonder_settings_saved_ranges();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
     const char *modern_refused;

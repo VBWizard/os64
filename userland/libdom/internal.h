@@ -654,6 +654,8 @@ struct os64_dom {
     void *intersections_opaque;
     /* The traversal row's walkers and iterators (walker.c). */
     struct DWalks *walks;
+    /* DOM Range's records (range.c). */
+    struct DRanges *ranges;
     /* ResizeObserver (resize.c), the same three. */
     struct DResizes *resizes;
     size_t resizes_held;
@@ -1517,6 +1519,22 @@ int d_tables_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* Node's comparisons, isSameNode, isEqualNode and compareDocumentPosition,
  * on Node's prototype and Attr's (compare.c). */
 int d_compare_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The plain tree (compare.c): a node's root by ->parent; whether `ancestor`
+ * is a proper ancestor of `node`; whether `a` comes before `b`, two
+ * different nodes of one tree, in tree order. */
+const os64_html_node_t *d_tree_root(const os64_html_node_t *node);
+bool d_tree_ancestor(const os64_html_node_t *ancestor, const os64_html_node_t *node);
+bool d_tree_precedes(const os64_html_node_t *a, const os64_html_node_t *b);
+/* DOM Range (RANGE.md § 5-§ 6, range.c): AbstractRange, Range, StaticRange
+ * and Document's createRange, which d_modern_install puts on with
+ * options.ranges; the names it puts on window, by index, NULL past the
+ * last. Dead records are swept at the top of the binding's tree changes
+ * (d_insert, d_remove, d_replace) and at the next creation; d_ranges_free
+ * releases the rest, before the document goes. */
+int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+const char *d_ranges_name(size_t index);
+void d_ranges_sweep(os64_dom_t *dom);
+void d_ranges_free(os64_dom_t *dom);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its
  * `for` names, when the first element of its tree with that ID is one;
  * without `for`, its first labelable descendant. NULL for none, or for a

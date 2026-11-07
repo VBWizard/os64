@@ -175,20 +175,25 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 
 /* The binding's tree changes. A node one of them takes out of its tree
  * records first the document it leaves (d_leaving), whether or not the
- * change then happens: the record is read only while the node is a root. */
+ * change then happens: the record is read only while the node is a root.
+ * Each first frees the dead Range records (d_ranges_sweep), so a dropped
+ * range neither pins its nodes nor rides every mutation's range walk. */
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before)
 {
+    d_ranges_sweep(dom);
     return os64_page_node_insert(dom->state, parent, node, before);
 }
 int64_t d_remove(os64_dom_t *dom, os64_html_node_t *node)
 {
+    d_ranges_sweep(dom);
     d_leaving(dom, node);
     return os64_page_node_remove(dom->state, node);
 }
 int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                    os64_html_node_t *old)
 {
+    d_ranges_sweep(dom);
     d_leaving(dom, old);
     return os64_page_node_replace(dom->state, parent, node, old);
 }

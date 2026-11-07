@@ -123,6 +123,13 @@ typedef struct {
      * switch, because a page decides once from several names together.
      * Clear in the defaults. */
     bool shadow_trees;
+    /* DOM Range (docs/design/pending/RANGE.md § 2), with `modern`: set,
+     * AbstractRange, Range and StaticRange on window and the document's
+     * createRange exist; clear, none of them does, so a page that tests
+     * `typeof document.createRange` takes its fallback rather than meeting
+     * a Range with members missing. One switch for the same reason as
+     * shadow trees'. Clear in the defaults. */
+    bool ranges;
     /* The UTF-8 message is borrowed during this owner-thread call. The host
      * copies it if needed and must not enter JS or a nested event loop here. */
     void (*alert)(void *opaque, const char *utf8, size_t length);
