@@ -340,6 +340,27 @@ static bool x_holds(const XWriter *w, const char *ns, const char *prefix, size_t
     return bound >= 0 && h_eq(w->map[bound].ns, ns);
 }
 
+/* Whether the element has an xmlns:`prefix` attribute of its own, whatever
+ * recording made of it. */
+static bool own_declaration(const HNode *n, const char *prefix, size_t len)
+{
+    for (const HAttr *a = n->attrs; a; a = a->next) {
+        if (!h_eq(a->ns, kXMLNS))
+            continue;
+        const char *p, *local;
+        size_t p_len;
+        attr_parts(a, &p, &p_len, &local);
+        if (p && h_len(local) == len) {
+            bool same = true;
+            for (size_t i = 0; i < len && same; i++)
+                same = local[i] == prefix[i];
+            if (same)
+                return true;
+        }
+    }
+    return false;
+}
+
 /* Whether the element's own xmlns:* declarations (the map from `from` on,
  * marked local) bind `prefix`; its namespace in *ns. */
 static bool local_prefix(const XWriter *w, size_t from, const char *prefix, size_t len, const char **ns)
@@ -511,8 +532,10 @@ static bool x_start(XWriter *w, const HNode *n, const char *inherited)
                 inherited = *default_value ? default_value : NULL;
         } else if (prefix) {
             /* The element's own prefix, declared here, unless its own
-             * attributes bind that prefix to something else. */
-            ptrdiff_t made = local_prefix(w, mark, prefix, prefix_len, NULL)
+             * attributes declare that prefix (to something else, or
+             * redundantly to what an ancestor bound, which recording left
+             * out of the map): declaring it twice would not parse. */
+            ptrdiff_t made = own_declaration(n, prefix, prefix_len)
                                  ? x_generate(w, ns)
                                  : (x_declare(w, ns, prefix, prefix_len, 0, false) ? (ptrdiff_t)w->count - 1 : -1);
             if (made < 0)
