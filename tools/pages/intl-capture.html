@@ -11,10 +11,11 @@
 the strings libjs is held to byte for byte (INTL.md § 8). It formats fixed
 matrices of DateTimeFormat cases (option bags, zones, instants, ranges,
 parts), of NumberFormat and PluralRules cases (option bags, values, ranges,
-parts, plural categories), of RelativeTimeFormat and ListFormat cases and
-of Collator's comparisons,
+parts, plural categories), of RelativeTimeFormat and ListFormat cases, of
+Collator's comparisons and of Segmenter's segments at every granularity,
 asks the questions other browsers answer differently (an alias zone's
-name), and lists the browser's Intl surface.</p>
+name, words in the scripts browsers find with dictionaries), and lists the
+browser's Intl surface.</p>
 <p>Open it from <code>tools/intl_capture_server.py</code>, which serves this
 directory and saves what the page sends to the file it names; or press
 <b>Save</b> for a download.</p>
@@ -196,6 +197,22 @@ for (const type of ['conjunction', 'disjunction', 'unit']) for (const style of [
     capture.numberCases.push({kind: 'ListFormat', options, resolved: lf.resolvedOptions(),
                               lists: listInputs.map(l => [l, lf.format(l), lf.formatToParts(l)])});
 }
+// Segmenter (SEGMENTER.md): every granularity over texts that reach the
+// rules a page meets (marks, emoji sequences, flags, an Indic conjunct,
+// apostrophes, numbers, kana, abbreviations, characters whose category and
+// word class disagree), each segment with its index and word-likeness. The dictionary scripts are probes below, not cases.
+const segmenterTexts = ['Hello, world! It\'s 3.14 o\'clock.', '_', 'a_b __ 1_2', 'é\u{1F44D}\u{1F3FD}\u{1F1FA}\u{1F1F8}',
+    '\u{1F468}‍\u{1F469}‍\u{1F467} family', 'Mr. Smith went to Washington. He arrived at 3 p.m. today. OK?',
+    'क्षि नमस्ते', '\u{1F600}!', 'can\'t won’t', '  spaces\tand\nlines\r\n',
+    '1,234.56 and 7:30', 'ケーキ カタカナ', 'α βγ Ünïcödé',
+    'Is it “done”? Yes! (Really.) No… maybe.', '\uD800x\uDC00', '① ½ x² ⓐ', ''];
+const segmentsOf = (seg, t) => Array.from(seg.segment(t), d => [d.segment, d.index, d.isWordLike === undefined ? null : d.isWordLike]);
+for (const granularity of ['grapheme', 'word', 'sentence']) {
+    const options = {granularity};
+    const seg = new Intl.Segmenter('en-US', options);
+    capture.numberCases.push({kind: 'Segmenter', options, resolved: seg.resolvedOptions(),
+                              segments: segmenterTexts.map(t => [t, segmentsOf(seg, t)])});
+}
 // Collator: the sign of compare over fixed pairs and a seeded sample of
 // short strings (Latin, its marks, punctuation, a few characters beyond),
 // under every sensitivity, numeric, caseFirst and ignorePunctuation.
@@ -238,6 +255,12 @@ capture.probes['Date toLocaleDateString long'] = new Date(1.5e12).toLocaleDateSt
 capture.probes['getCanonicalLocales'] = attempt(() => Intl.getCanonicalLocales(['EN-us', 'en-latn-US', 'hy-SU']));
 for (const k of ['calendar', 'collation', 'currency', 'numberingSystem', 'timeZone', 'unit'])
     capture.probes['supportedValuesOf ' + k] = attempt(() => Intl.supportedValuesOf(k));
+// Words in the scripts other browsers find with dictionaries (SEGMENTER.md
+// § 3: UAX #29 has none, so these record a known difference).
+const wordsOf = t => attempt(() => Array.from(new Intl.Segmenter('en-US', {granularity: 'word'}).segment(t), d => d.segment));
+capture.probes['Segmenter words Thai'] = wordsOf('สวัสดีครับผม');
+capture.probes['Segmenter words Chinese'] = wordsOf('我喜欢吃苹果');
+capture.probes['Segmenter words Japanese'] = wordsOf('私は日本語を話します');
 // The surface: Intl's own names and each constructor's prototype's.
 capture.surface.Intl = Object.getOwnPropertyNames(Intl).sort();
 for (const name of capture.surface.Intl) {
