@@ -135,10 +135,7 @@ JSValue d_node_clone(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
         return made;
     }
     if (copy != NULL) status = OS64_HTML_NO_MEMORY;
-    dom->values = entry->next;
-    dom->retained--;
-    JS_FreeValue(ctx, entry->value);
-    d_free(dom, entry);
+    d_unretain(dom, ctx, entry);
     return d_html_error(ctx, status);
 }
 

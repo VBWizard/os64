@@ -536,14 +536,20 @@ static void dom_budget_cases(void)
         DomFixture f=fixture_base(mode==1?65536:0,mode==2?4096:0,0);
         os64_dom_options_t options=os64_dom_default_options();
         /* Room for the binding's own installation, whose peak (the custom
-         * row's wrap list over everything kept before it) is near 128 KiB,
-         * and less than what it keeps plus the 100000 bytes the script then
-         * asks for. */
+         * row's wrap list over everything kept before it) is near 128 KiB.
+         * The script then asks for text that fits the budget on its own, as
+         * a binding with room for what it keeps besides proves, but not on
+         * top of what this one keeps. */
         if(mode==0) options.max_bytes=163840;
         os64_js_outcome_t outcome;
         f.binding=os64_dom_create(f.runtime,f.document,f.state,&options,&outcome);
         if(!fixture_ready(&f))continue;
-        const char *source=mode==0?DOM_ASSERT "throws('QuotaExceededError',()=>document.body.textContent='x'.repeat(100000));assert(document.getElementById('one').textContent==='one');":
+        char kept_source[512];
+        size_t kept=os64_dom_bytes(f.binding),length=options.max_bytes-kept/2;
+        if(mode==0){
+            snprintf(kept_source,sizeof(kept_source),DOM_ASSERT "throws('QuotaExceededError',()=>document.body.textContent='x'.repeat(%zu));assert(document.getElementById('one').textContent==='one');",length);
+        }
+        const char *source=mode==0?kept_source:
             mode==1?DOM_ASSERT "throws('QuotaExceededError',()=>document.body.innerHTML='<p>'+ 'x'.repeat(100000)+'</p>');assert(document.getElementById('one').textContent==='one');":
             DOM_ASSERT "throws('QuotaExceededError',()=>document.getElementById('field').value='x'.repeat(10000));assert(document.getElementById('field').value==='default');";
         char *before=native_serialized(f.document->document);uint64_t version=os64_html_version(f.document);
@@ -553,6 +559,14 @@ static void dom_budget_cases(void)
         char *after=native_serialized(f.document->document);
         check(!strcmp(before,after)&&version==os64_html_version(f.document),"native quota preserves visible tree/version");
         free(before);free(after);fixture_free(&f);
+        if(mode!=0)continue;
+        /* After `f`: the teardown's accounting is global, one fixture at a time. */
+        os64_dom_options_t roomy=options;roomy.max_bytes=options.max_bytes+kept;
+        DomFixture control=fixture_new(&roomy);
+        if(!fixture_ready(&control))continue;
+        snprintf(kept_source,sizeof(kept_source),"document.body.textContent='x'.repeat(%zu)",length);
+        dom_script(&control,kept_source,"native-budget-control.js: the request fits a budget on its own");
+        fixture_free(&control);
     }
     /* Allow interface installation in both engine builds, then exhaust the
      * runtime with retained nodes rather than failing during setup. */

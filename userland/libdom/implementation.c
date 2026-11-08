@@ -371,13 +371,15 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         return JS_NULL;
     }
     DValue *entry = d_find(dom, node);
-    if (entry->implementation != NULL) return JS_DupValue(ctx, entry->implementation->value);
+    if (d_more_peek(entry)->implementation != NULL) return JS_DupValue(ctx, d_more_peek(entry)->implementation->value);
+    DValueMore *more = d_more(dom, ctx, entry);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectProtoClass(ctx, dom->implementation_prototype->value,
                                             os64_js_class_id(&implementation_slot));
     DValue *held = d_retain(dom, ctx, object);
     if (held == NULL) return JS_EXCEPTION;
     JS_SetOpaque(held->value, entry);
-    entry->implementation = held;
+    more->implementation = held;
     return JS_DupValue(ctx, held->value);
 }
 

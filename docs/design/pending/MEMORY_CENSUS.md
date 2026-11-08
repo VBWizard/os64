@@ -82,7 +82,10 @@ and the census prints names, never addresses, so a record reads the same
 whatever build wrote it. Three kinds cut across libdom and are what the
 feed showed matter: `wrapper` (a node wrapper's record; its script object
 is the engine's, counted under `script`),
-`retained` (any other value held for script) and `listener`. The rest are
+`retained` (any other value held for script) and `listener`. A fourth
+says how many of those records needed their rarely used half: `extra`
+(the DValueMore a wrapper or value makes when it first needs a view, a
+collection, canvas state or the like; internal.h). The rest are
 named for the part of libdom that made the block, which stays true as code
 moves: `attr`, `collection`, `mutation`, `intersection`, `resize`,
 `custom`, `range`, `timer`, `url`, `text` (copies made for content and

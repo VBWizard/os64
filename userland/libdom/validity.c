@@ -230,7 +230,9 @@ static JSValue validity_object(os64_dom_t *dom, JSContext *ctx, const os64_html_
 {
     DValue *owner = d_find(dom, node);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (owner->validity != NULL) return JS_DupValue(ctx, owner->validity->value);
+    if (d_more_peek(owner)->validity != NULL) return JS_DupValue(ctx, d_more_peek(owner)->validity->value);
+    DValueMore *more = d_more(dom, ctx, owner);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectClass(ctx, (int)os64_js_class_id(&validity_slot));
     DValue *entry = d_retain(dom, ctx, object);
     if (entry == NULL) return JS_EXCEPTION;
@@ -238,7 +240,7 @@ static JSValue validity_object(os64_dom_t *dom, JSContext *ctx, const os64_html_
     entry->target = node;
     os64_html_hold(dom->document, node);
     JS_SetOpaque(object, entry);
-    owner->validity = entry;
+    more->validity = entry;
     return JS_DupValue(ctx, object);
 }
 

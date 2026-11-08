@@ -1166,6 +1166,7 @@ static void media_release(os64_dom_t *dom)
         DValue *e = gone;
         gone = e->next;
         d_event_free(dom, e);
+        d_more_free(dom, e);
         JS_FreeValueRT(dom->engine, e->value);
         d_free(dom, e);
     }

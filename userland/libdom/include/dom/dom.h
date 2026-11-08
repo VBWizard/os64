@@ -753,6 +753,7 @@ typedef enum {
     OS64_DOM_MEM_OTHER,
     OS64_DOM_MEM_WRAPPER,     /* a node wrapper's record (its object is the engine's) */
     OS64_DOM_MEM_RETAINED,    /* any other value the binding holds for script */
+    OS64_DOM_MEM_EXTRA,       /* the rarely needed half of a wrapper's or value's record */
     OS64_DOM_MEM_LISTENER,    /* event listeners */
     OS64_DOM_MEM_ATTR,        /* Attr records and attribute maps */
     OS64_DOM_MEM_COLLECTION,  /* live collections and their snapshots */
