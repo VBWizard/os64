@@ -7,7 +7,8 @@ Branch: `codex/yonder-image-memory-design`.
 Implementation evidence: [M0 baseline](IMAGE_MEMORY_BASELINE.md) and
 [I0 stylesheet preload](IMAGE_MEMORY_I0.md). The M0 hardware baseline is captured;
 I0's hardware layout gate and gallery have passed; controlled memory comparison
-and independent verification of the capture's running cohort remain pending.
+remains pending. The user confirmed testing the frozen I0 build before switching
+to another branch.
 
 ## 1. Decision and scope
 

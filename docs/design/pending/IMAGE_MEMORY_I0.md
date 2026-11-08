@@ -112,8 +112,8 @@ not close the image-memory work. The report also lists unsupported features
 and a failed Clarity script fetch; the acceptance covers layout and the gallery,
 not complete site compatibility.
 
-The intended frozen source is `046dbff6`. A post-test executable readback
-matches a different build, while the saved reports contain the preload
-instrumentation. The running cohort at capture is not independently verified;
-retain this provenance limit when using these records. Repeated controlled
+The user confirmed testing the frozen I0 build from `046dbff6` before installing
+another branch. This explains why the post-test executable readback matches a
+different build; it cannot independently verify the executable at capture.
+The saved reports contain the preload instrumentation. Repeated controlled
 memory and timing comparisons remain separate from this visual acceptance.
