@@ -1337,6 +1337,36 @@ static int name_accessors(JSContext *ctx, JSAtom atom, const JSPropertyDescripto
     return result;
 }
 
+int d_idl_members(JSContext *ctx, JSValueConst prototype)
+{
+    JSPropertyEnum *names;
+    uint32_t count;
+    if (JS_GetOwnPropertyNames(ctx, &names, &count, prototype, JS_GPN_STRING_MASK) < 0) return -1;
+    JSAtom constructor = JS_NewAtom(ctx, "constructor");
+    int result = constructor == JS_ATOM_NULL ? -1 : 0;
+    for (uint32_t i = 0; result == 0 && i < count; i++) {
+        if (names[i].atom == constructor) continue;
+        JSPropertyDescriptor desc;
+        int has = JS_GetOwnProperty(ctx, &desc, prototype, names[i].atom);
+        if (has <= 0) {
+            result = has;
+            continue;
+        }
+        bool accessor = (desc.flags & JS_PROP_GETSET) != 0;
+        if (name_accessors(ctx, names[i].atom, &desc) < 0 ||
+            (!accessor && JS_IsFunction(ctx, desc.value) &&
+             JS_DefineProperty(ctx, prototype, names[i].atom, desc.value, JS_UNDEFINED, JS_UNDEFINED,
+                               JS_PROP_HAS_ENUMERABLE | JS_PROP_ENUMERABLE) < 0))
+            result = -1;
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+    }
+    if (constructor != JS_ATOM_NULL) JS_FreeAtom(ctx, constructor);
+    JS_FreePropertyEnum(ctx, names, count);
+    return result;
+}
+
 /* Every own property of `object` moved to `prototype`, as it was but that
  * an operation is enumerable and an attribute's functions are named, as
  * WebIDL makes an interface's members (its operations and attributes). */

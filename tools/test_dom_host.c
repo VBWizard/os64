@@ -139,7 +139,8 @@ static const char initial_html[] =
     "<input id=r1 type=radio name=g checked><input id=r2 type=radio name=g>"
     "<select id=select><option id=o1>A</option><option id=o2>B</option></select></form>"
     "<template id=template><b>inside</b></template></body></html>";
-static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap)
+/* The fixture's document and page state over a runtime built from `config`. */
+static DomFixture fixture_configured(size_t arena, size_t state_cap, const os64_js_config_t *config)
 {
     DomFixture fixture = {0};
     os64_html_options_t html_options = os64_html_options_default();
@@ -151,10 +152,14 @@ static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap
     os64_html_parser_feed(parser, initial_html, sizeof(initial_html) - 1);
     fixture.document = os64_html_parser_finish(parser);
     fixture.state = os64_page_state_create(fixture.document, state_cap);
+    fixture.runtime = create_fixture(config);
+    return fixture;
+}
+static DomFixture fixture_base(size_t arena, size_t state_cap, size_t engine_cap)
+{
     os64_js_config_t config = fixture_config();
     if(engine_cap) config.limits.memory_bytes=engine_cap;
-    fixture.runtime = create_fixture(&config);
-    return fixture;
+    return fixture_configured(arena, state_cap, &config);
 }
 /* A binding over a runtime capped at `engine_cap` bytes (0: the fixture's
  * default). */

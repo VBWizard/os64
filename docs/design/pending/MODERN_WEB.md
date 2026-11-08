@@ -2223,7 +2223,8 @@ adversarial and truth passes are done; the cold read is next.
 - **The six BarProps** and `BarProp`, `visible` true; **`external`** and
   `External`, whose two methods do nothing.
 - **`crypto`** (`crypto.c`) and `Crypto`: `getRandomValues` and
-  `randomUUID`, without `subtle` (ruling 1). The bytes come through a host
+  `randomUUID`, without `subtle` (ruling 1; WEB_CRYPTO.md brought it,
+  2026-11-07). The bytes come through a host
   hook, `options.entropy`; yonder's is libtls's `/dev/random` reader, made
   public as `os64_tls_entropy` so there is one reader, not two. The hook
   writes into the binding's scratch and the page gets the bytes only when
@@ -2374,8 +2375,8 @@ reading empty. html/dom is checked out whole for one test, its other 247
 pages excluded by name: a later phase un-excludes what it names.
 
 **Booked** (DEBTS.md § Classic browser scripting): the QuotaExceededError
-interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
-(DIVERGENCES.md).
+interface. Not booked, by ruling: `subtle` (ruling 1, until WEB_CRYPTO.md
+reversed it on 2026-11-07), and `close()` (DIVERGENCES.md).
 
 ### P1-Da, as built
 

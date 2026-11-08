@@ -2,13 +2,12 @@
 
 /* `crypto` (Web Cryptography's Crypto interface): getRandomValues and
  * randomUUID, over the host's entropy (options.entropy; yonder's is
- * /dev/random, through libtls's door). `subtle` is absent: SubtleCrypto is
- * a design of its own, and pages detect it apart from getRandomValues
- * (WINDOW_DOCUMENT.md, ruling 1), so a secure page's crypto lacks the one
- * member a browser's has, and what it has is whole. randomUUID is
- * [SecureContext]: it exists only in a secure context, as the window's
+ * /dev/random, through libtls's door), and `subtle`, SubtleCrypto and
+ * CryptoKey, which are subtle.c's (WEB_CRYPTO.md). randomUUID and subtle are
+ * [SecureContext]: they exist only in a secure context, as the window's
  * browsing context answers it (browsing.c's d_secure_context, the answer
- * isSecureContext reads).
+ * isSecureContext reads), and so do the SubtleCrypto and CryptoKey
+ * interfaces.
  *
  * THE BYTES ARE THE HOST'S OR NONE. A hook that fails throws an
  * OperationError, and nothing it wrote reaches the page: it writes into
@@ -24,9 +23,7 @@ enum { C_GET_RANDOM_VALUES, C_RANDOM_UUID, W_CRYPTO };
  * QuotaExceededError). */
 #define CRYPTO_QUOTA 65536
 
-/* `length` bytes of the host's entropy into `out`; false with the exception
- * pending. */
-static bool entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length)
+bool d_crypto_entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length)
 {
     if (length == 0) return true;
     uint8_t *scratch = d_alloc(dom, length);
@@ -36,6 +33,9 @@ static bool entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length
     }
     bool got = dom->options.entropy != NULL && dom->options.entropy(dom->options.host_opaque, scratch, length);
     if (got) os64_memcpy(out, scratch, length);
+    /* Zeroed before it is freed: for a generated key, these bytes are the key. */
+    volatile uint8_t *v = scratch;
+    for (size_t i = 0; i < length; i++) v[i] = 0;
     d_free(dom, scratch);
     if (!got) d_error(ctx, "OperationError", "This browser could not read the system's randomness");
     return got;
@@ -64,6 +64,18 @@ static int resizable_view(os64_dom_t *dom, JSContext *ctx, JSValueConst array, i
     if (JS_IsException(buffer)) return -1;
     JSValue resizable = JS_Call(ctx, dom->crypto_getters[1]->value, buffer, 0, NULL);
     JS_FreeValue(ctx, buffer);
+    if (JS_IsException(resizable)) return -1;
+    int answer = JS_ToBool(ctx, resizable);
+    JS_FreeValue(ctx, resizable);
+    return answer;
+}
+
+int d_resizable_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    int kind = d_view_kind(dom, ctx, value);
+    if (kind == -2) return -1;
+    if (kind >= 0) return resizable_view(dom, ctx, value, kind);
+    JSValue resizable = JS_Call(ctx, dom->crypto_getters[1]->value, value, 0, NULL);
     if (JS_IsException(resizable)) return -1;
     int answer = JS_ToBool(ctx, resizable);
     JS_FreeValue(ctx, resizable);
@@ -100,7 +112,7 @@ static JSValue get_random_values(os64_dom_t *dom, JSContext *ctx, int argc, JSVa
     if (span > CRYPTO_QUOTA)
         return d_error(ctx, "QuotaExceededError", "getRandomValues fills at most 65,536 bytes");
     if (offset > whole || span > whole - offset) return JS_DupValue(ctx, array);
-    if (!entropy(dom, ctx, bytes + offset, span)) return JS_EXCEPTION;
+    if (!d_crypto_entropy(dom, ctx, bytes + offset, span)) return JS_EXCEPTION;
     return JS_DupValue(ctx, array);
 }
 
@@ -110,7 +122,7 @@ static JSValue get_random_values(os64_dom_t *dom, JSContext *ctx, int argc, JSVa
 static JSValue random_uuid(os64_dom_t *dom, JSContext *ctx)
 {
     uint8_t b[16];
-    if (!entropy(dom, ctx, b, sizeof(b))) return JS_EXCEPTION;
+    if (!d_crypto_entropy(dom, ctx, b, sizeof(b))) return JS_EXCEPTION;
     b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
     b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
     static const char kHex[] = "0123456789abcdef";
@@ -198,5 +210,7 @@ int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->crypto = d_retain(dom, ctx, crypto);
     if (dom->crypto == NULL) return -1;
     JS_SetOpaque(crypto, &crypto_mark);
+    if (d_secure_context(dom) && d_subtle_install(dom, ctx, global, prototype) < 0) return -1;
+    if (d_idl_members(ctx, prototype) < 0) return -1;
     return d_accessor(dom, ctx, global, "crypto", crypto_member, W_CRYPTO, false);
 }

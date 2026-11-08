@@ -96,7 +96,7 @@ static void dom_window_member_cases(void)
         {"http://example.test:8080/x", false, "http://example.test:8080"},
         {"http://127.0.0.1/x", true, "http://127.0.0.1"},
         {"http://localhost/x", false, "http://localhost"},
-        {"file:///home/page.html", false, "null"},
+        {"file:///home/page.html", true, "null"},
         {"about:srcdoc", true, "null"},
         {"about:blank?x", false, "null"},
         {NULL, true, "null"},
@@ -105,13 +105,17 @@ static void dom_window_member_cases(void)
         options = window_options(kPages[i].url);
         f = fixture_new(&options);
         if (!fixture_ready(&f)) return;
-        char source[512];
+        char source[1024];
         snprintf(source, sizeof(source), STORAGE_ASSERT
                  "assert(isSecureContext===%s,'isSecureContext '+isSecureContext);"
                  "assert(origin==='%s','origin '+origin);"
                  "assert(('randomUUID' in crypto)===%s,'randomUUID is [SecureContext]');"
+                 "assert(('subtle' in crypto)===%s&&('SubtleCrypto' in window)===%s&&('CryptoKey' in window)===%s,"
+                 "'subtle and its interfaces are [SecureContext]');"
                  "assert(typeof crypto.getRandomValues==='function');",
-                 kPages[i].secure ? "true" : "false", kPages[i].origin, kPages[i].secure ? "true" : "false");
+                 kPages[i].secure ? "true" : "false", kPages[i].origin, kPages[i].secure ? "true" : "false",
+                 kPages[i].secure ? "true" : "false", kPages[i].secure ? "true" : "false",
+                 kPages[i].secure ? "true" : "false");
         dom_script(&f, source, kPages[i].url != NULL ? kPages[i].url : "window: a page with no address");
         fixture_free(&f);
     }
@@ -169,7 +173,7 @@ static void dom_window_crypto_cases(void)
     window_entropy_fail = false;
     dom_script(&f, STORAGE_ASSERT WINDOW_JS
         "assert(crypto instanceof Crypto&&crypto===window.crypto&&Object.prototype.toString.call(crypto)==='[object Crypto]');"
-        "assert(!('subtle' in crypto),'subtle is not here (ruled)');"
+        "assert(crypto.subtle instanceof SubtleCrypto,'subtle is here on a secure page (WEB_CRYPTO.md)');"
         "throws('TypeError',()=>new Crypto());crypto=1;assert(crypto instanceof Crypto,'read-only');"
         "assert(Crypto.prototype.getRandomValues.length===1&&Crypto.prototype.randomUUID.length===0);"
         /* each integer kind: the same array, filled from the fake's bytes */
@@ -333,11 +337,265 @@ static void dom_window_read_timing(void)
     fixture_free(&f);
 }
 
+/* crypto.subtle (WEB_CRYPTO.md, tier 1): the interfaces whole, digest
+ * over every buffer source, and every failure a rejection, never a throw.
+ * The digests' values are FIPS 180-2's (tools/test_subtle_core_host.sh
+ * holds the core to more). */
+#define SUBTLE_JS "function hex(b){return Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,'0')).join('')}" \
+    "function rejects(p,n,tag){assert(p instanceof Promise,tag+': a promise');" \
+    "p.then(()=>log.push(tag+': resolved'),e=>log.push(tag+': '+(e.name===n?'ok':e.name+' '+e.message)))}"
+
+/* crypto.subtle settles its promises from a task (a binding timer of no
+ * delay; subtle.c's settle_later): every timer due fired, and the tasks
+ * they queue in turn, before a script reads what the promises said. */
+static void subtle_settle(DomFixture *f)
+{
+    os64_js_outcome_t outcome;
+    for (int i = 0; i < 100000 && os64_dom_timer_fire(f->binding, UINT64_MAX - 1, &outcome); i++) {
+        if (outcome.status != OS64_JS_OK)
+            fprintf(stderr, "subtle task: status=%d limit=%d message=%s\n", outcome.status, outcome.limit, outcome.message);
+        check(outcome.status == OS64_JS_OK, "subtle: a task that settles a promise runs cleanly");
+        if (outcome.status != OS64_JS_OK) return;
+    }
+}
+
+static void dom_window_subtle_cases(void)
+{
+    os64_dom_options_t options = window_options(WINDOW_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "{const s=crypto.subtle;assert(s===crypto.subtle&&s instanceof SubtleCrypto,'one SubtleCrypto');"
+        "assert(Object.prototype.toString.call(s)==='[object SubtleCrypto]');"
+        "const d=Object.getOwnPropertyDescriptor(Crypto.prototype,'subtle');"
+        "assert(d&&typeof d.get==='function'&&d.set===undefined&&!Object.getOwnPropertyNames(crypto).includes('subtle'),"
+        "'subtle is an accessor on Crypto.prototype');"
+        "throws('TypeError',()=>d.get.call({}));"
+        "throws('TypeError',()=>new SubtleCrypto());throws('TypeError',()=>new CryptoKey());"
+        "const want={encrypt:3,decrypt:3,sign:3,verify:4,digest:2,generateKey:3,deriveKey:5,deriveBits:2,"
+        "importKey:5,exportKey:2,wrapKey:4,unwrapKey:7};"
+        "for(const m in want){const f=SubtleCrypto.prototype[m];"
+        "assert(typeof f==='function'&&f.length===want[m]&&f.name===m,m+'\\'s shape')}"
+        "for(const a of ['type','extractable','algorithm','usages']){"
+        "const k=Object.getOwnPropertyDescriptor(CryptoKey.prototype,a);"
+        "assert(k&&typeof k.get==='function'&&k.set===undefined,a);throws('TypeError',()=>k.get.call({}))}}",
+        "subtle: the interfaces");
+    dom_script(&f, STORAGE_ASSERT SUBTLE_JS
+        "globalThis.log=[];{const s=crypto.subtle,abc=new TextEncoder().encode('abc');"
+        "s.digest('SHA-256',abc).then(b=>log.push('256:'+(b instanceof ArrayBuffer)+hex(b)));"
+        "s.digest({name:'sha-1'},new Uint8Array(0)).then(b=>log.push('1:'+hex(b)));"
+        "s.digest('Sha-384',abc.buffer).then(b=>log.push('384:'+hex(b).slice(0,16)));"
+        "s.digest({name:'SHA-512'},new DataView(abc.buffer)).then(b=>log.push('512:'+hex(b).slice(0,16)));"
+        "const wide=new TextEncoder().encode('xabcx');"
+        "s.digest('SHA-256',wide.subarray(1,4)).then(b=>log.push('view:'+hex(b).slice(0,8)));"
+        "s.digest('SHA-256',new Int32Array(0)).then(b=>log.push('int32:'+hex(b).slice(0,8)));"
+        /* failures: rejections, each with its name */
+        "rejects(s.digest('AES-GCM',abc),'NotSupportedError','an algorithm that is no hash');"
+        "rejects(s.digest('\\u017fha-256',abc),'NotSupportedError','only ASCII folds');"
+        "rejects(s.digest({},abc),'TypeError','a dictionary with no name');"
+        "rejects(s.digest('SHA-256'),'TypeError','too few arguments');"
+        "rejects(s.digest('SHA-256','abc'),'TypeError','a string is no BufferSource');"
+        "rejects(s.digest('SHA-256',new ArrayBuffer(4,{maxByteLength:8})),'TypeError','a resizable buffer');"
+        "rejects(SubtleCrypto.prototype.digest.call({},'SHA-256',abc),'TypeError','the receiver');"
+        "rejects(s.digest({get name(){throw new RangeError('x')}},abc),'RangeError','a getter that throws');"
+        /* the bytes are read after the name: a getter that restores the
+         * buffer is seen, and one that detaches it leaves none */
+        "const m=new Uint8Array(abc);m[0]=0;"
+        "s.digest({get name(){m[0]=97;return 'SHA-256'}},m).then(b=>log.push('restored:'+hex(b).slice(0,8)));"
+        "const t=new Uint8Array(abc);let reads=0;"
+        "s.digest({get name(){reads++;if(!t.buffer.detached)t.buffer.transfer();return 'SHA-256'}},t).then(b=>log.push('detached:'+hex(b).slice(0,8)),"
+        "e=>log.push('detached: '+e.name+' '+e.message));"
+        "assert(reads===2,'the name is read twice, as the Algorithm dictionary and as its own: '+reads);"
+        "const late=new Uint8Array(abc);s.digest('SHA-256',late).then(b=>log.push('late:'+hex(b).slice(0,8)));late[0]=0;"
+        /* the other eleven: what the IDL refuses is a TypeError, and an
+         * algorithm nothing registers NotSupportedError */
+        "rejects(s.generateKey({name:'NOT-AN-ALGORITHM',length:128},true,['encrypt']),'NotSupportedError','generateKey');"
+        "rejects(s.generateKey('AES-GCM',true,['bogus']),'TypeError','an unknown usage');"
+        "rejects(s.importKey('raw',new Uint8Array(16),'NOT-AN-ALGORITHM',true,['encrypt']),'NotSupportedError','importKey');"
+        "rejects(s.importKey('jwk',{kty:'oct'},'NOT-AN-ALGORITHM',true,['sign']),'NotSupportedError','importKey of a JWK');"
+        "rejects(s.importKey('bogus',new Uint8Array(16),'AES-GCM',true,['encrypt']),'TypeError','an unknown format');"
+        "rejects(s.importKey('raw',5,'AES-GCM',true,['encrypt']),'TypeError','a number is no key data');"
+        "rejects(s.encrypt('AES-GCM',{},abc),'TypeError','an object that is no CryptoKey');"
+        "rejects(s.exportKey('raw',{}),'TypeError','exportKey wants a key');"
+        "rejects(s.deriveBits('HKDF',{},8),'TypeError','deriveBits wants a key');"
+        "rejects(s.unwrapKey('raw',abc,{},'AES-KW','AES-GCM',true,[]),'TypeError','unwrapKey wants a key');}",
+        "subtle: digest and the rejections");
+    subtle_settle(&f);
+    dom_script(&f, STORAGE_ASSERT
+        "{const want=['256:trueba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',"
+        "'1:da39a3ee5e6b4b0d3255bfef95601890afd80709','384:cb00753f45a35e8b','512:ddaf35a193617aba',"
+        "'view:ba7816bf','int32:e3b0c442',"
+        "'an algorithm that is no hash: ok','only ASCII folds: ok','a dictionary with no name: ok',"
+        "'too few arguments: ok','a string is no BufferSource: ok','a resizable buffer: ok','the receiver: ok',"
+        "'a getter that throws: ok','restored:ba7816bf','detached:e3b0c442','late:ba7816bf',"
+        "'generateKey: ok','an unknown usage: ok','importKey: ok','importKey of a JWK: ok','an unknown format: ok',"
+        "'a number is no key data: ok','an object that is no CryptoKey: ok','exportKey wants a key: ok',"
+        "'deriveBits wants a key: ok','unwrapKey wants a key: ok'];"
+        "for(let i=0;i<Math.max(log.length,want.length);i++)"
+        "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",
+        "subtle: answered in order");
+    /* WebIDL's shapes and conversions: members enumerable and named, a name
+     * converted with ToString, a usage sequence item by item, a JsonWebKey
+     * converted with the arguments (before the algorithm's name is read),
+     * and Level 2's enumerations. */
+    dom_script(&f, STORAGE_ASSERT SUBTLE_JS
+        "globalThis.log=[];{const s=crypto.subtle,abc=new TextEncoder().encode('abc');"
+        "for(const [P,m] of [[SubtleCrypto.prototype,'digest'],[SubtleCrypto.prototype,'unwrapKey'],"
+        "[Crypto.prototype,'getRandomValues'],[Crypto.prototype,'randomUUID']])"
+        "assert(Object.getOwnPropertyDescriptor(P,m).enumerable,m+' is enumerable');"
+        "for(const [P,a] of [[Crypto.prototype,'subtle'],[CryptoKey.prototype,'type'],[CryptoKey.prototype,'usages']]){"
+        "const d=Object.getOwnPropertyDescriptor(P,a);assert(d.enumerable&&d.get.name==='get '+a,a+'\\'s getter')}"
+        "assert(!Object.getOwnPropertyDescriptor(SubtleCrypto.prototype,'constructor').enumerable,'constructor is not');"
+        "s.digest({name:{toString(){return 'SHA-256'}}},abc).then(b=>log.push('tostring:'+hex(b).slice(0,8)));"
+        "function*g(){yield 'nope';log.push('pulled');yield 'sign'}"
+        "rejects(s.generateKey('AES-GCM',true,g()),'TypeError','a bad usage ends the iteration');"
+        "rejects(s.importKey('jwk',{get kty(){throw new RangeError('k')}},'AES-GCM',true,[]),'RangeError','a JWK getter');"
+        "rejects(s.importKey('raw',{key_ops:5},'AES-GCM',true,[]),'TypeError','a JWK member of the wrong type');"
+        "rejects(s.importKey('jwk',{oth:[5]},'AES-GCM',true,[]),'TypeError','oth holds dictionaries');"
+        "const order=[];"
+        "rejects(s.importKey('jwk',{get alg(){order.push('alg')},get kty(){order.push('kty')}},"
+        "{get name(){order.push('name');return 'AES-GCM'}},true,{*[Symbol.iterator](){order.push('usages')}}),"
+        "'DataError','the JWK is converted with the arguments');"
+        "assert(order.join()==='alg,kty,usages,name,name','conversion order '+order.join());"
+        "rejects(s.importKey('raw-secret',abc,{name:'HMAC',hash:'SHA-256'},true,['sign']),'NotSupportedError',"
+        "'a newer draft\\'s format, which HMAC does not import');"
+        "rejects(s.generateKey({name:'AES-GCM',length:128},true,['encapsulateKey']),'SyntaxError',"
+        "'a newer draft\\'s usage, which AES does not have');}",
+        "subtle: WebIDL's shapes and conversions");
+    subtle_settle(&f);
+    dom_script(&f, STORAGE_ASSERT
+        "{const want=['tostring:ba7816bf','a bad usage ends the iteration: ok','a JWK getter: ok',"
+        "'a JWK member of the wrong type: ok','oth holds dictionaries: ok','the JWK is converted with the arguments: ok',"
+        "'a newer draft\\'s format, which HMAC does not import: ok','a newer draft\\'s usage, which AES does not have: ok'];"
+        "for(let i=0;i<Math.max(log.length,want.length);i++)"
+        "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",
+        "subtle: the conversions answered, and nothing pulled past a bad usage");
+    fixture_free(&f);
+}
+
+/* crypto.subtle, tier 2 (WEB_CRYPTO.md): AES-CTR, AES-CBC and AES-GCM
+ * round trips, HMAC against RFC 4231's first case, the key object, JWK
+ * export, wrapping under each mode, the usage and extractability
+ * refusals, HMAC lengths within a byte and past what is generated, an
+ * unwrapped JWK read past a polluted Object.prototype, results that
+ * arrive in a task of their own, and more calls in flight than the page
+ * has timers. WPT's WebCryptoAPI holds the rest. */
+static void dom_window_subtle_tier2_cases(void)
+{
+    os64_dom_options_t options = window_options(WINDOW_URL);
+    /* An await chain and a 5000-promise Promise.all spend far more than the
+     * fixture's 100 jobs a turn; yonder's budget is 2^20 (scripts.c). */
+    os64_js_config_t config = fixture_config();
+    config.limits.jobs_per_turn = (uint64_t)1 << 20;
+    DomFixture f = fixture_configured(0, 0, &config);
+    if (f.runtime && f.state) {
+        os64_js_outcome_t outcome;
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
+    }
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT SUBTLE_JS
+        "globalThis.log=[];"
+        "(async()=>{const s=crypto.subtle,data=new TextEncoder().encode('tier two'),enc=t=>new TextEncoder().encode(t);"
+        "for(const name of ['AES-CTR','AES-CBC','AES-GCM']){"
+        "const key=await s.generateKey({name,length:128},true,['encrypt','decrypt']);"
+        "const p=name==='AES-CTR'?{name,counter:new Uint8Array(16),length:64}:{name,iv:new Uint8Array(name==='AES-GCM'?12:16)};"
+        "const ct=await s.encrypt(p,key,data);const pt=await s.decrypt(p,key,ct);"
+        "log.push(name+':'+new TextDecoder().decode(pt)+':'+ct.byteLength)}"
+        /* RFC 4231 test case 1 */
+        "const hk=await s.importKey('raw',new Uint8Array(20).fill(11),{name:'HMAC',hash:'SHA-256'},true,['sign','verify']);"
+        "const mac=await s.sign({name:'HMAC',hash:'SHA-1'},hk,enc('Hi There'));"
+        "log.push('hmac:'+hex(mac).slice(0,16));"
+        "log.push('verify:'+(await s.verify('HMAC',hk,mac,enc('Hi There')))+','+(await s.verify('HMAC',hk,mac.slice(1),enc('Hi There')))"
+        "+','+(await s.verify('HMAC',hk,mac,enc('Hi there'))));"
+        "const k=await s.generateKey({name:'aes-gcm',length:256},false,['decrypt','encrypt','encrypt']);"
+        "log.push('key:'+[k.type,k.extractable,k.algorithm.name,k.algorithm.length,k.algorithm===k.algorithm,"
+        "k.usages===k.usages,k.usages.join('/'),Object.prototype.toString.call(k)].join());"
+        "log.push('hmac key:'+[hk.algorithm.name,hk.algorithm.hash.name,hk.algorithm.length].join());"
+        "const jwk=await s.exportKey('jwk',hk);"
+        "const want=btoa(String.fromCharCode(...new Uint8Array(20).fill(11))).replace(/=+$/,'').replace(/\\+/g,'-').replace(/\\//g,'_');"
+        "log.push('jwk:'+[Object.keys(jwk).join('/'),jwk.kty,jwk.alg,jwk.k===want,jwk.key_ops.join('/'),jwk.ext].join());"
+        "const back=await s.importKey('jwk',jwk,{name:'HMAC',hash:'SHA-256'},false,['verify']);"
+        "log.push('jwk back:'+(await s.verify('HMAC',back,mac,enc('Hi There'))));"
+        "const wk=await s.generateKey({name:'AES-GCM',length:128},false,['wrapKey','unwrapKey']);"
+        "const gp={name:'AES-GCM',iv:new Uint8Array(12)};"
+        "for(const fmt of ['raw','jwk']){const w=await s.wrapKey(fmt,hk,wk,gp);"
+        "const u=await s.unwrapKey(fmt,w,wk,gp,{name:'HMAC',hash:'SHA-256'},true,['sign']);"
+        "log.push('wrap '+fmt+':'+hex(await s.exportKey('raw',u)).slice(0,8)+','+u.usages.join('/'))}"
+        "const refused=async(p,n,t)=>{try{await p;log.push(t+': resolved')}catch(e){log.push(t+': '+(e.name===n?'ok':e.name))}};"
+        "await refused(s.exportKey('raw',k),'InvalidAccessError','a key that is not extractable');"
+        "await refused(s.encrypt(gp,hk,data),'InvalidAccessError','another algorithm\\'s key');"
+        "const encOnly=await s.generateKey({name:'AES-GCM',length:128},true,['encrypt']);"
+        "await refused(s.decrypt(gp,encOnly,new Uint8Array(32)),'InvalidAccessError','a usage the key lacks');"
+        "await refused(s.decrypt(gp,k,new Uint8Array(32)),'OperationError','a tag that does not authenticate');"
+        "await refused(s.generateKey({name:'AES-CBC',length:100},true,['encrypt']),'OperationError','an AES length');"
+        "await refused(s.generateKey({name:'HMAC',hash:'SHA-256'},true,['encrypt']),'SyntaxError','an HMAC usage');"
+        "await refused(s.importKey('raw',new Uint8Array(16),'AES-CTR',true,[]),'SyntaxError','no usages');"
+        "await refused(s.importKey('jwk',{kty:'oct',k:'AAAA+A',alg:'A128GCM'},'AES-GCM',true,['encrypt']),'DataError','a k in the standard alphabet');"
+        "await refused(s.encrypt({name:'AES-GCM',iv:new Uint8Array(0)},encOnly,data),'OperationError','an empty GCM iv');"
+        "await refused(s.encrypt({name:'AES-CTR',counter:new Uint8Array(16),length:1},"
+        "await s.importKey('raw',new Uint8Array(16),'AES-CTR',false,['encrypt']),new Uint8Array(33)),'OperationError','a counter that would repeat');"
+        "const order=[];const p=s.digest('SHA-256',data).then(()=>order.push('crypto'));queueMicrotask(()=>order.push('micro'));await p;"
+        "log.push('order:'+order.join());"
+        /* An HMAC length within a byte: the key's last byte keeps that many
+         * bits; one past what is generated is refused, never wrapped. */
+        "const odd=await s.generateKey({name:'HMAC',hash:'SHA-256',length:161},true,['sign']);"
+        "const oddRaw=new Uint8Array(await s.exportKey('raw',odd));"
+        "const full=await s.importKey('raw',new Uint8Array(21).fill(255),{name:'HMAC',hash:'SHA-256',length:161},true,['sign']);"
+        "log.push('odd:'+[odd.algorithm.length,oddRaw.length,oddRaw[20]&127,new Uint8Array(await s.exportKey('raw',full))[20]].join());"
+        "await refused(s.generateKey({name:'HMAC',hash:'SHA-256',length:4294967295},true,['sign']),'OperationError','the longest HMAC length');"
+        "await refused(s.generateKey({name:'HMAC',hash:'SHA-256',length:524289},true,['sign']),'OperationError','past the generated cap');"
+        /* Wrapping under the other two modes, raw and JWK (CBC pads the
+         * JSON, CTR does not). */
+        "const others=[];"
+        "for(const [name,wp] of [['AES-CBC',{name:'AES-CBC',iv:new Uint8Array(16)}],['AES-CTR',{name:'AES-CTR',counter:new Uint8Array(16),length:64}]]){"
+        "const wk2=await s.generateKey({name,length:192},false,['wrapKey','unwrapKey']);"
+        "for(const fmt of ['raw','jwk']){const w=await s.wrapKey(fmt,hk,wk2,wp);"
+        "const u=await s.unwrapKey(fmt,w,wk2,wp,{name:'HMAC',hash:'SHA-256'},true,['sign']);"
+        "others.push(name+' '+fmt+'='+hex(await s.exportKey('raw',u)).slice(0,8))}}"
+        "log.push('wrap others:'+others.join());"
+        /* An unwrapped JWK is read as a new global would read it: nothing a
+         * page put on Object.prototype counts. */
+        "const ek=await s.generateKey({name:'AES-GCM',length:128},false,['encrypt','unwrapKey']);"
+        "const noKty=await s.encrypt(gp,ek,enc('{\"k\":\"CwsLCwsLCwsLCwsLCwsLCwsLCws\"}'));"
+        "const wj=await s.wrapKey('jwk',hk,wk,gp);"
+        "Object.defineProperty(Object.prototype,'alg',{get(){return 'x'},configurable:true});"
+        "Object.prototype.ext=false;Object.prototype.kty='oct';"
+        "try{const u=await s.unwrapKey('jwk',wj,wk,gp,{name:'HMAC',hash:'SHA-256'},true,['sign']);"
+        "log.push('pristine:'+hex(await s.exportKey('raw',u)).slice(0,8)+','+u.extractable);"
+        "await refused(s.unwrapKey('jwk',noKty,ek,gp,{name:'HMAC',hash:'SHA-256'},true,['sign']),'DataError','a JWK with no kty');"
+        "}finally{delete Object.prototype.alg;delete Object.prototype.ext;delete Object.prototype.kty}"
+        /* More calls in flight than the page has timers: they settle in the
+         * order they were made, and the page's own setTimeout still works. */
+        "const seen=[];const all=Array.from({length:5000},(_,i)=>s.digest('SHA-1',data).then(()=>seen.push(i)));"
+        "let timer='ok';try{setTimeout(()=>{},0)}catch(e){timer=e.name}"
+        "await Promise.all(all);"
+        "log.push('queue:'+timer+','+seen.length+','+seen.every((v,i)=>v===i));"
+        "})().catch(e=>log.push('threw: '+e.name+' '+e.message));",
+        "subtle tier 2: the calls");
+    subtle_settle(&f);
+    dom_script(&f, STORAGE_ASSERT
+        "{const want=['AES-CTR:tier two:8','AES-CBC:tier two:16','AES-GCM:tier two:24','hmac:b0344c61d8db3853',"
+        "'verify:true,false,false','key:secret,false,AES-GCM,256,true,true,encrypt/decrypt,[object CryptoKey]',"
+        "'hmac key:HMAC,SHA-256,160','jwk:alg/ext/k/key_ops/kty,oct,HS256,true,sign/verify,true','jwk back:true',"
+        "'wrap raw:0b0b0b0b,sign','wrap jwk:0b0b0b0b,sign','a key that is not extractable: ok',"
+        "'another algorithm\\'s key: ok','a usage the key lacks: ok','a tag that does not authenticate: ok',"
+        "'an AES length: ok','an HMAC usage: ok','no usages: ok','a k in the standard alphabet: ok','an empty GCM iv: ok',"
+        "'a counter that would repeat: ok','order:micro,crypto','odd:161,21,0,128','the longest HMAC length: ok',"
+        "'past the generated cap: ok','wrap others:AES-CBC raw=0b0b0b0b,AES-CBC jwk=0b0b0b0b,AES-CTR raw=0b0b0b0b,"
+        "AES-CTR jwk=0b0b0b0b','pristine:0b0b0b0b,true','a JWK with no kty: ok','queue:ok,5000,true'];"
+        "for(let i=0;i<Math.max(log.length,want.length);i++)"
+        "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",
+        "subtle tier 2: answered");
+    fixture_free(&f);
+}
+
 static void dom_window_cases(void)
 {
     dom_window_member_cases();
     dom_window_classic_cases();
     dom_window_crypto_cases();
+    dom_window_subtle_cases();
+    dom_window_subtle_tier2_cases();
     dom_window_microtask_cases();
     dom_window_sweep_cases();
 }

@@ -23,9 +23,8 @@
  *     a constant; for a root: frameElement null (no frame holds it),
  *     length 0, top and parent the window itself, origin the page's
  *     origin serialized (d_origin's, which storage keys on),
- *     isSecureContext whether the page's address is potentially
- *     trustworthy (libway's one judgement, way_url_trustworthy, which
- *     counts about:blank, what a binding with no address is), and
+ *     isSecureContext whether the page is a secure context
+ *     (d_secure_context, below), and
  *     originAgentCluster true (each page's runtime is its own, so its
  *     agent cluster is keyed by no more than its origin). top, parent and
  *     length are every page's (d_browsing_classic), the rest this file's
@@ -115,9 +114,20 @@ static const char *page_address(const os64_dom_t *dom)
  * window is the root of its tree, with no frame element, no child frames
  * and itself for top and parent; its address stands for HTML's top-level
  * creation URL, which for a root it is. */
+/* A SECURE CONTEXT: a page whose address is potentially trustworthy
+ * (libway's one judgement, way_url_trustworthy, which counts about:blank,
+ * what a binding with no address is), or a page read from disk. Secure
+ * Contexts would count a file: URL only through its origin, which the URL
+ * standard leaves opaque, and so not at all; Chrome and Firefox both count
+ * a file page secure, and a page yonder opens from /tests/pages is one, so
+ * this does too. Only the secure context changes: libway's trustworthiness,
+ * which the mixed-content rules ask, is untouched. */
 bool d_secure_context(const os64_dom_t *context)
 {
-    return way_url_trustworthy(page_address(context));
+    const char *url = page_address(context);
+    char scheme[OS64_URL_SCHEME_MAX];
+    if (os64_url_scheme_of(url, scheme, sizeof(scheme)) && os64_streq(scheme, "file")) return true;
+    return way_url_trustworthy(url);
 }
 
 static JSValue context_answer(os64_dom_t *context, JSContext *ctx, int question)
