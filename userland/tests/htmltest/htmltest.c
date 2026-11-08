@@ -363,7 +363,7 @@ static void attribute_batches(void)
     const os64_html_attr_t *old = os64_html_attr(input, "value");
     uint64_t version = os64_html_version(doc);
     const os64_html_attr_change_t changes[] = {
-        {"type", "hidden", 6, false}, {"value", "after", 5, false}
+        {"type", "hidden", 6, false, false, NULL}, {"value", "after", 5, false, false, NULL}
     };
     require(os64_html_set_attrs(doc, input, changes, 2) == OS64_HTML_OK &&
                 os64_html_version(doc) == version + 1 &&
@@ -375,7 +375,7 @@ static void attribute_batches(void)
     const os64_html_attr_t *current = input->attrs;
     size_t arena = doc->arena_bytes, peak = doc->peak_arena_bytes;
     const os64_html_attr_change_t invalid[] = {
-        {"type", "text", 4, false}, {"value", "\xff", 1, false}
+        {"type", "text", 4, false, false, NULL}, {"value", "\xff", 1, false, false, NULL}
     };
     require(os64_html_set_attrs(doc, input, invalid, 2) == OS64_HTML_BAD_TEXT &&
                 input->attrs == current && os64_html_version(doc) == version &&

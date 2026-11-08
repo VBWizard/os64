@@ -397,7 +397,8 @@ static const char *handler_attribute(const os64_html_node_t *node, int kind)
     char name[32] = "on";
     os64_strcopy(name + 2, sizeof(name) - 2, kinds[kind]);
     if (node->ns == OS64_HTML_NS_HTML) d_fold(name);
-    const os64_html_attr_t *attr = os64_html_attr(node, name);
+    /* An event handler content attribute is the one in no namespace. */
+    const os64_html_attr_t *attr = os64_html_attr_ns(node, NULL, name);
     return attr != NULL ? attr->value : NULL;
 }
 

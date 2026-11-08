@@ -446,7 +446,7 @@ static bool focusable(const os64_html_node_t *node)
 {
     if (node->ns != OS64_HTML_NS_HTML) return false;
     switch (node->tag) {
-    case OS64_HTML_TAG_A: case OS64_HTML_TAG_AREA: return os64_html_attr(node, "href") != NULL;
+    case OS64_HTML_TAG_A: case OS64_HTML_TAG_AREA: return os64_html_attr_ns(node, NULL, "href") != NULL;
     case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_SELECT:
     case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_IFRAME: case OS64_HTML_TAG_SUMMARY:
         return true;

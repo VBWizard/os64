@@ -35,7 +35,7 @@ static const os64_html_node_t *dom_root(const os64_html_node_t *node)
 bool d_named_match(const os64_html_node_t *node, const char *name)
 {
     if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML || *name == '\0') return false;
-    const os64_html_attr_t *id = os64_html_attr(node, "id"), *named = os64_html_attr(node, "name");
+    const os64_html_attr_t *id = os64_html_attr_ns(node, NULL, "id"), *named = os64_html_attr_ns(node, NULL, "name");
     return (id != NULL && os64_streq(id->value, name)) || (named != NULL && os64_streq(named->value, name));
 }
 
@@ -64,7 +64,7 @@ bool d_classic_match(const os64_html_node_t *root,
     case D_QUERY_IMAGES: return node->tag == OS64_HTML_TAG_IMG;
     case D_QUERY_FORMS: return node->tag == OS64_HTML_TAG_FORM;
     case D_QUERY_LINKS:
-        return (node->tag == OS64_HTML_TAG_A || node->tag == OS64_HTML_TAG_AREA) && os64_html_attr(node, "href") != NULL;
+        return (node->tag == OS64_HTML_TAG_A || node->tag == OS64_HTML_TAG_AREA) && os64_html_attr_ns(node, NULL, "href") != NULL;
     case D_QUERY_SCRIPTS: return node->tag == OS64_HTML_TAG_SCRIPT;
     case D_QUERY_DOCUMENT_NAMES:
         return node->tag == OS64_HTML_TAG_FORM || node->tag == OS64_HTML_TAG_IMG;

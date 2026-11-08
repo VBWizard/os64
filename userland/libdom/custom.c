@@ -366,7 +366,9 @@ static void attribute_changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
     const os64_html_node_t *element = c->target;
     if (element->ce != OS64_HTML_CE_CUSTOM) return;
-    const os64_html_attr_t *now = os64_html_attr(element, c->attr_name);
+    /* The attribute the change was to, by namespace and local name: another
+     * namespace may hold one of the same qualified name. */
+    const os64_html_attr_t *now = os64_html_attr_ns(element, c->attr_ns, c->attr_local);
     /* The old value is borrowed and not terminated: copied here, short. */
     char old[256];
     const char *was = NULL;

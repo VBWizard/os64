@@ -241,6 +241,12 @@ int64_t os64_html_parser_end(os64_html_parser_t *p);
 os64_html_document_t *os64_html_parser_document(os64_html_parser_t *p);
 os64_html_document_t *os64_html_parser_abandon(os64_html_parser_t *p);
 const os64_html_attr_t *os64_html_attr(const os64_html_node_t *element, const char *name);
+/* The attribute of namespace `ns` (NULL for none) and local name `local`
+ * (DOM's "get an attribute by namespace and local name"), NULL for none: a
+ * record's local name is its name after the colon when it is in a
+ * namespace, its whole name when it is in none. HTML's own attributes are
+ * the ones in no namespace. */
+const os64_html_attr_t *os64_html_attr_ns(const os64_html_node_t *element, const char *ns, const char *local);
 os64_html_tag_t os64_html_tag_from_name(const char *name);
 const char *os64_html_tag_name(os64_html_tag_t tag);
 const char *os64_html_status_name(int64_t status);
@@ -424,9 +430,13 @@ int64_t os64_html_remove(os64_html_document_t *doc, os64_html_node_t *node);
 /* An attribute by its qualified name, as os64_html_attr finds it. Setting
  * one that exists keeps its place in the list; a new one goes last.
  * `set_text` replaces a TEXT, COMMENT or PI node's data whole. */
-/* Changes are applied in order to one element's qualified attributes. A set
- * retains an existing record's namespace and position; a new name goes last.
- * A remove ignores value/value_len. All entries are validated before any
+/* Changes are applied in order to one element's attributes. A change finds
+ * its record by qualified name (first match, any namespace), or with
+ * `by_ns` by namespace `ns` (NULL for none) and the local part of `name`
+ * (after its colon when `ns` is set), which is unique on an element. A set
+ * retains an existing record's qualified name, namespace and position; a
+ * new record goes last, in `ns` when `by_ns` and in none otherwise. A
+ * remove ignores value/value_len. All entries are validated before any
  * change; failure preserves the tree, version, parse verdict and arena
  * accounting, including peak. Complete success publishes once, with replaced
  * records retired for existing pins. An unchanged final list is a no-op. */
@@ -434,6 +444,8 @@ typedef struct {
     const char *name, *value;
     size_t value_len;
     bool remove;
+    bool by_ns;
+    const char *ns;
 } os64_html_attr_change_t;
 int64_t os64_html_set_attrs(os64_html_document_t *doc, os64_html_node_t *element,
                             const os64_html_attr_change_t *changes, size_t count);

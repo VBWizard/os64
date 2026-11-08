@@ -280,11 +280,14 @@ void p_strmap_free(PStrMap *map)
 
 // ── Reading the tree ────────────────────────────────────────────────────
 
+// An HTML attribute is the one in no namespace: a namespaced attribute of
+// the same name (setAttributeNS('urn:x', 'type', ...)) is none of a
+// control's, and other browsers' controls ignore it too.
 const char *p_attr(const os64_html_node_t *n, const char *name)
 {
     if (n == NULL || n->kind != OS64_HTML_ELEMENT)
         return NULL;
-    const os64_html_attr_t *a = os64_html_attr(n, name);
+    const os64_html_attr_t *a = os64_html_attr_ns(n, NULL, name);
     return a != NULL ? a->value : NULL;
 }
 
