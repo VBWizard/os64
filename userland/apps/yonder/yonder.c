@@ -919,6 +919,16 @@ static void sheets_free(Page *p)
 
 static void diag_leave(Page *p);
 static void diag_census(Page *p, bool sample);
+// The census of a page being left (MEMORY_CENSUS.md § 6): taken before
+// anything it counts is let go — its scripts above all — and kept as the
+// record's last word. Called before a page's scripts are released; a
+// second call finds the census taken and does nothing.
+static void census_depart(Page *p)
+{
+    if (p->diag == NULL || p->census_left) return;
+    diag_census(p, true);
+    p->census_left = true;
+}
 static void page_event_free(PageEvent *e)
 {
     os64_free(e->old_url);
@@ -1004,12 +1014,7 @@ static void page_clear(Page *p)
     if (p->npics) layout_revision(&s_layout_resources.pictures);
     measured_forget(page_doc(p));
     page_session_free(p);
-    // The census of a page being left is taken while everything it counts
-    // is still here, the scripts included (diag_census).
-    if (p->diag != NULL) {
-        diag_census(p, true);
-        p->census_left = true;
-    }
+    census_depart(p);
     // The host borrows the record (its miss hook), so the record goes after
     // it, while the tree and the cascade it looks at are still here.
     yonder_scripts_free(p->scripts);
@@ -3086,8 +3091,11 @@ static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
     // the change records (os64_html_changes_bytes): both come from it.
     if (doc != NULL)
         yonder_census_owner(sheet, "html", doc->arena_bytes, doc->node_count, "nodes");
-    if (p->state != NULL)
-        yonder_census_owner(sheet, "page", os64_page_state_bytes(p->state), 0, NULL);
+    // The page's control state: its scripts' when it has them, else the
+    // one its model made for itself (as layout_inputs reads it).
+    const os64_page_state_t *state = p->state != NULL ? p->state : os64_page_shared_state(page_model(p));
+    if (state != NULL)
+        yonder_census_owner(sheet, "page", os64_page_state_bytes(state), 0, NULL);
     // Entries may share a parse (SheetParse.refs): each is counted once.
     uint64_t sheets = 0;
     for (int32_t i = 0; i < p->nsheets; i++) {
@@ -3929,6 +3937,7 @@ static void page_departs(void)
     // The compositor keeps a pressed window's grab across navigation.
     // Consume that physical tail even after the old document is gone.
     if (s_pointer_known && s_pointer_buttons) s_pointer_draining = true;
+    census_depart(&g.page);
     yonder_scripts_depart(g.page.scripts);
 }
 
@@ -4024,6 +4033,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     // The page on screen is being replaced, and its question and its
     // pictures in flight with it: a page that fails to lay out (above)
     // leaves them all where they were.
+    census_depart(&g.page);
     bar_forget();
     pictures_leave(&g.page);
     sheets_leave(&g.page);
@@ -16542,6 +16552,7 @@ static void settings_use(const char *agent, bool scripts, uint32_t script_second
     // The page on screen keeps its scripts while a navigation is only
     // asked for (they go when the next page's parse begins: page_departs),
     // and never across a change of the mode its document was parsed in.
+    census_depart(&g.page);
     inputs_drop();
     yonder_scripts_free(g.page.scripts);
     g.page.scripts = NULL;

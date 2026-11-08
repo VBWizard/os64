@@ -115,7 +115,9 @@ functions, arrays, shapes, atoms, bytecode — but only by walking all of it
 In the census tier the page is SAMPLED on a timer — the first sample at
 the record's first observation (its arrival), from which the timeline's
 times count, then every 10 seconds — and once more as the page is left,
-while its scripts still exist. Only a sample adds to the timeline, writes
+before its scripts are released (`census_depart`, wherever a page's scripts
+go: the next page's parse beginning, an arrival, scripts switched off, the
+page cleared). That last sample stands as the record's last word. Only a sample adds to the timeline, writes
 the detail lines and walks the script heap; any other time the record is
 observed (pictures in, a record asked for) refreshes the summary alone, so
 how often a record is looked at changes neither the timeline's spacing nor
@@ -198,10 +200,11 @@ would pass its budget drops its smallest owners and ends `;...`.
   needs it.
 - localStorage: held to its quota (a UTF-16 count, not bytes), so it is
   bounded and left out; what it holds shows in `uncounted`.
-- What the owners leave out of their own totals — the cascade's selector
-  indexes, the layout tree's maps and paint lists, the stylesheets' parse
-  tables outside their arenas — shows in `uncounted` too, which is why that
-  number is printed rather than hidden.
+- What the owners leave out of their own totals — the layout tree's maps
+  and paint lists, scratch a call frees before it returns — shows in
+  `uncounted` too, which is why that number is printed rather than hidden.
+  An owner counts what it holds once: an arena's reserved bytes already
+  include the tables carved from it, so those are never added again.
 - Per-frame (iframe) and per-worker censuses: each will be an owner when it
   exists (IFRAME.md, WORKERS.md).
 - Collecting node wrappers: DEBTS "Node collection beyond D6". The feed

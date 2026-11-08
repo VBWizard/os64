@@ -6971,6 +6971,10 @@ static void memory_census_cases(void) {
           "census: a timer sample is in the page's file at once, not only when the page is left");
     census_turn();
     check(g.page.census.n==1,"census: and the next not before its interval");
+    /* The next page's parse retires these scripts first (page_departs):
+     * the departure census is taken before they go. */
+    page_departs();
+    check(g.page.census_left && g.page.census.n==2,"census: a departure takes the last sample before the scripts go");
     loop_drop();
     const char *file=diag_file("/tmp/diag",name);
     check(has(file,"\nwritten: when the page was left\n") && has(file,"\nmemory: heap 64.0M (uncounted ") &&
