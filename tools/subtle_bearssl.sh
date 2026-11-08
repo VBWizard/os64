@@ -12,6 +12,20 @@ SUBTLE_BEARSSL_SOURCES=(
     userland/libtls/upstream/src/codec/enc32be.c
     userland/libtls/upstream/src/codec/dec64be.c
     userland/libtls/upstream/src/codec/enc64be.c
+    userland/libtls/upstream/src/codec/dec32le.c
+    userland/libtls/upstream/src/codec/enc32le.c
+    userland/libtls/upstream/src/codec/dec64le.c
+    userland/libtls/upstream/src/codec/enc64le.c
+    userland/libtls/upstream/src/symcipher/aes_common.c
+    userland/libtls/upstream/src/symcipher/aes_ct64.c
+    userland/libtls/upstream/src/symcipher/aes_ct64_enc.c
+    userland/libtls/upstream/src/symcipher/aes_ct64_dec.c
+    userland/libtls/upstream/src/symcipher/aes_ct64_cbcenc.c
+    userland/libtls/upstream/src/symcipher/aes_ct64_cbcdec.c
+    userland/libtls/upstream/src/symcipher/aes_ct64_ctr.c
+    userland/libtls/upstream/src/aead/gcm.c
+    userland/libtls/upstream/src/hash/ghash_ctmul64.c
+    userland/libtls/upstream/src/mac/hmac.c
 )
 SUBTLE_BEARSSL_FLAGS=(-D_DEFAULT_SOURCE -include userland/libtls/port/config.h
     -Iuserland/libtls/upstream/inc -Iuserland/libtls/upstream/src)
