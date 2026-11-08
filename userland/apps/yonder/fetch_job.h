@@ -1,16 +1,17 @@
 #ifndef YONDER_FETCH_JOB_H
 #define YONDER_FETCH_JOB_H
 
-// A script's request (fetch() and XMLHttpRequest's),
-// run by the Fetch standard's rules: ONE path, whether it runs on a pool
+// Shared fetch engine for scripts and native image/style consumers,
+// run by the Fetch standard's rules, whether it runs on a pool
 // worker or, for a synchronous XHR, inline on the window thread. The job
 // drives the redirect loop itself, one libfetch fetch per hop, and asks
 // libway's origin.c every question the standard asks of a hop (MODERN_WEB.md
 // § Slice 2's origins and CORS): the tainting, the preflight, the Origin
 // header, whether cookies go and Set-Cookie is heard, the Authorization
 // strip, the CORS check, and the Fetch Metadata the hop carries beside the
-// agent's preset lines. What it hands back is the FILTERED response: a
-// page never receives a header or a byte it may not see. A network error's
+// agent's preset lines. Script delivery receives a filtered response;
+// native entry points retain the bytes needed for decoding or parsing.
+// Their products must stay out of script-response delivery. A network error's
 // `why` is the page record's (yonder's request_record); the answer the
 // binding is handed carries none, and the page's TypeError says only
 // "Failed to fetch".
@@ -93,9 +94,9 @@ typedef struct {
     char why[256];
     bool mixed;                     // refused as mixed content (the page record says so)
     way_type_t type;
-    int32_t status;                 // 0 for opaque, opaqueredirect and error
+    int32_t status;                 // script delivery: 0 for opaque, opaqueredirect and error
     char status_text[HTTP_REASON_MAX];
-    char *url;                      // os64_malloc'd: the response's URL without its fragment ("" for opaque)
+    char *url;                      // os64_malloc'd: the response's URL without its fragment ("" for opaque except native styles)
     bool redirected;
     uint32_t hops;                  // redirects followed: each was a dial, and the record counts them
     char *headers;                  // os64_malloc'd filtered header block
@@ -132,6 +133,10 @@ typedef struct {
  * delivery. type still carries the origin-clean verdict (opaque taints). */
 int64_t yonder_fetch_image_run(void *job,bool (*cancelled)(void *),void *ctx,void **out);
 int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);
+// Native stylesheet consumer: retains bytes, MIME headers and final URL for
+// parsing while preserving the response type and enforcing hop/CORS checks.
+// Its product must not enter script-response delivery.
+int64_t yonder_fetch_style_run(void *job, bool (*cancelled)(void *), void *ctx, void **out);
 // Frees the job and the product (either may be NULL).
 void yonder_fetch_release(void *job, void *product);
 // Frees a product alone.

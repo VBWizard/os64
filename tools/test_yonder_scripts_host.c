@@ -314,9 +314,8 @@ static unsigned script_cancels;
 /* A compiled form's write (BYTECODE_CACHE.md), held until a case reaps it. */
 static struct { os64_work_id_t id; yonder_bytecode_job_t *job; } bytecode_jobs[8];
 static int nbytecode_jobs;
-/* A sheet's fetch job is held the same way, never run: a case that wants a
- * page waiting for its sheets gets one that waits until it is cancelled or
- * the window drops it. */
+/* Sheet jobs wait until a case runs the production worker, supplies a
+ * parsed result, or cancels them. */
 static struct { os64_work_id_t id; void *job; } sheet_jobs[32];
 static int nsheet_jobs;
 static unsigned sheet_submits;      /* every sheet job the window ever sent */
@@ -364,7 +363,7 @@ void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
         os64_free(script_jobs[i].job); script_jobs[i]=script_jobs[--nscript_jobs]; script_cancels++; return;
     }
     for(int i=0;i<nsheet_jobs;i++) if(sheet_jobs[i].id==id) {
-        os64_free(sheet_jobs[i].job); sheet_jobs[i]=sheet_jobs[--nsheet_jobs]; return;
+        yonder_sheet_release(sheet_jobs[i].job,NULL); sheet_jobs[i]=sheet_jobs[--nsheet_jobs]; return;
     }
     for(int i=0;i<nfont_jobs;i++) if(font_jobs[i].id==id) {
         os64_free(font_jobs[i].job); font_jobs[i]=font_jobs[--nfont_jobs]; font_cancels++; return;
@@ -522,16 +521,6 @@ int64_t yonder_webfont_run(void *job, bool (*cancelled)(void *), void *ctx, void
 void yonder_webfont_release(void *job, void *product) {
     yonder_webfont_t *got=product;
     if(got) { os64_free(got->sfnt); os64_free(got); }
-    os64_free(job);
-}
-int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
-    (void)job; (void)cancelled; (void)ctx; (void)out;
-    check(false,"unexpected worker execution"); return -1;
-}
-/* As sheet.c releases a sheet job and what it made. */
-void yonder_sheet_release(void *job, void *product) {
-    yonder_sheet_t *got=product;
-    if(got) { garb_free(&got->parsed); os64_free(got->kept); os64_free(got); }
     os64_free(job);
 }
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
@@ -3094,7 +3083,7 @@ static void stream_window_drop(void) {
     if(pool_work.job!=NULL) { yonder_trip_release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work)); }
     inputs_drop(); forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
     way_history_clear(&g.way);
-    while(nsheet_jobs>0) os64_free(sheet_jobs[--nsheet_jobs].job);
+    while(nsheet_jobs>0) yonder_sheet_release(sheet_jobs[--nsheet_jobs].job,NULL);
 }
 /* The real window layout participates in font adoption: a larger interface
  * face must grow its rows, without replacing the page controls' lent face
@@ -11661,6 +11650,327 @@ static void exit_when_loaded_cases(void) {
     check(exit_due()==YONDER_NEVER,"exit: without the switch, never");
 }
 
+static bool style_worker_land(const char *tail, bool preload)
+{
+    for (int i = 0; i < nsheet_jobs; i++) {
+        yonder_sheet_job_t *job = sheet_jobs[i].job;
+        size_t n = strlen(job->url), t = strlen(tail);
+        if (job->preload != preload || n < t || strcmp(job->url + n - t, tail)) continue;
+        os64_work_id_t id = sheet_jobs[i].id;
+        sheet_jobs[i] = sheet_jobs[--nsheet_jobs];
+        void *out = NULL;
+        yonder_sheet_run(job, NULL, NULL, &out);
+        reaped(id, job, out);
+        return true;
+    }
+    return false;
+}
+
+static void style_preload_cases(void)
+{
+    const char *css = "#box { width: 160px; height: 90px }";
+    for (int keep_handler = 0; keep_handler < 2; keep_handler++) {
+        fake_fetch_reset();
+        fake_answer(NULL, "http://fixture.test/s.css", 200,
+                    "Content-Type: text/css\r\nCache-Control: no-store\r\n", css);
+        char html[1800];
+        snprintf(html, sizeof(html),
+            "<link id=pre rel=preload as=style href=s.css onload=\""
+            "document.getElementById('out').textContent += 'L';%s"
+            "if(this.rel!=='stylesheet')this.rel='stylesheet'\">"
+            "<img id=box width=1920 height=1080><p id=out></p>"
+            "<script>document.getElementById('out').textContent='ready';"
+            "window.addEventListener('load',function(){document.getElementById('out').textContent+='W'})</script>",
+            keep_handler ? "" : "this.onload=null;");
+        loop_page(html);
+        check(loop_settle() && g.page.tree && g.page.preloads && g.page.nsheets == 0 && nsheet_jobs == 1,
+              "style preload: document finishes with a preload in flight and no applied sheet");
+        const flow_box_t *box = g.page.tree ? flow_box_for(g.page.tree, probe_id("box")) : NULL;
+        check(box && box->rect.w == 1920 && probe_text_is("out", "readyW"),
+              "style preload: neither geometry nor window load waits for its response");
+        check(style_worker_land("/s.css", true), "style preload: real fetch completes");
+        check(g.page.nsheets == 0 && g.page.preloads->bytes == strlen(css),
+              "style preload: retained no-store response has not applied CSS");
+        script_turn();
+        check(g.page.nsheets == 1 && g.page.sheets[0].waiting && nsheet_jobs == 1 && nfake_requests == 1,
+              "style preload: onload activation queues parsing without another fetch");
+        check(style_worker_land("/s.css", false), "style preload: activation worker consumes retained bytes");
+        script_turn();
+        box = g.page.tree ? flow_box_for(g.page.tree, probe_id("box")) : NULL;
+        check(box && box->rect.w == 160 && g.page.preloads->bytes == 0 && nfake_requests == 1,
+              "style preload: image fits after activation and retained response storage is released");
+        check(probe_text_is("out", keep_handler ? "readyWLL" : "readyWL"),
+              "style preload: preload and stylesheet have separate load events");
+        loop_drop();
+    }
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/pending.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=pending.css><img id=box width=1920 height=1080><script>0</script>");
+    check(loop_settle() && g.page.preloads && nsheet_jobs == 1, "style preload: pending request exists");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "rel", "stylesheet", 10) == OS64_HTML_OK &&
+          script_rebuild() && g.page.nsheets == 1 && g.page.sheets[0].waiting && nsheet_jobs == 1,
+          "style preload: a consumer joins an in-flight request across a stylesheet rebuild");
+    check(style_worker_land("/pending.css", true) && nsheet_jobs == 1,
+          "style preload: pending handoff queues its parse");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("box"), "title", "changed", 7) == OS64_HTML_OK &&
+          script_rebuild() && nsheet_jobs == 1 && style_worker_land("/pending.css", false) && nfake_requests == 1,
+          "style preload: canceling a staged parse retains the response for its replacement without refetching");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/old.css", 200, "Content-Type: text/css\r\n", css);
+    fake_answer(NULL, "http://fixture.test/new.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=old.css onload=\"document.getElementById('out').textContent+='L'\">"
+              "<p id=out></p><script>0</script>");
+    check(loop_settle(), "style preload: replacement page settles");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "href", "new.css", 7) == OS64_HTML_OK && script_rebuild(),
+          "style preload: replacing href creates a new request generation");
+    check(style_worker_land("/old.css", true), "style preload: obsolete completion arrives");
+    script_turn();
+    check(os64_streq(probe_text_of("out"), ""), "style preload: old href cannot fire the new request's handler");
+    check(style_worker_land("/new.css", true), "style preload: replacement completes");
+    script_turn();
+    check(probe_text_is("out", "L"), "style preload: current href gets its completion event");
+    loop_drop();
+    for (int failure = 0; failure < 3; failure++) {
+        fake_fetch_reset();
+        if (failure != 2)
+            fake_answer(NULL, "http://fixture.test/fail.css", failure == 0 ? 404 : 200,
+                        failure == 0 ? "Content-Type: text/css\r\n" : "Content-Type: text/plain\r\n", css);
+        loop_page("<link id=pre rel=preload as=style href=fail.css "
+                  "onload=\"document.getElementById('out').textContent+='L';if(this.rel!=='stylesheet')this.rel='stylesheet'\" "
+                  "onerror=\"document.getElementById('out').textContent+='E';if(this.rel!=='stylesheet')this.rel='stylesheet'\">"
+                  "<p id=out></p><script>0</script>");
+        check(loop_settle() && style_worker_land("/fail.css", true), "style preload: failure response arrives");
+        script_turn();
+        int requests = nfake_requests;
+        check(style_worker_land("/fail.css", false), "style preload: failure is handed to the activated consumer");
+        script_turn();
+        check(probe_text_is("out", failure == 2 ? "EE" : "LE") && nfake_requests == requests &&
+              g.page.nsheets == 1 && !g.page.sheets[0].ready,
+              "style preload: fetch load and CSS failure differ; failure handoff never refetches");
+        check(os64_html_set_attr(g.page.way.doc, probe_id("out"), "title", "changed", 7) == OS64_HTML_OK &&
+              script_rebuild() && nsheet_jobs == 0 && nfake_requests == requests,
+              "style preload: an unrelated rebuild does not retry a consumed failure");
+        loop_drop();
+    }
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/dynamic.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<p id=out></p><script>var l=document.createElement('link');l.id='pre';"
+              "var ok=l.crossOrigin===null;l.crossOrigin='bogus';ok=ok&&l.crossOrigin==='anonymous';"
+              "l.crossOrigin=null;l.referrerPolicy='no-referrer';l.integrity='';"
+              "l.as='STYLE';l.rel='preload';l.href='dynamic.css';"
+              "ok=ok&&l.as==='style'&&l.referrerPolicy==='no-referrer'&&l.relList.supports('preload');"
+              "l.onload=function(){document.getElementById('out').textContent+='L'};"
+              "document.head.appendChild(l);document.getElementById('out').textContent=ok?'ok':'bad';</script>");
+    check(loop_settle() && g.page.preloads && nsheet_jobs == 1 && probe_text_is("out", "ok"),
+          "style preload: dynamic insertion and request-property reflections");
+    check(style_worker_land("/dynamic.css", true), "style preload: dynamically inserted request completes");
+    script_turn();
+    check(probe_text_is("out", "okL"), "style preload: dynamic link gets its event");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "https://other.test/cors.css", 200, "Content-Type: text/css\r\nAccess-Control-Allow-Origin: *\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=https://other.test/cors.css><script>0</script>");
+    check(loop_settle() && style_worker_land("/cors.css", true), "style preload: no-cors response is retained");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "crossorigin", "anonymous", 9) == OS64_HTML_OK &&
+          os64_html_set_attr(g.page.way.doc, probe_id("pre"), "rel", "stylesheet", 10) == OS64_HTML_OK &&
+          script_rebuild(), "style preload: consumer changes request mode");
+    check(nsheet_jobs == 1 && !((yonder_sheet_job_t *)sheet_jobs[0].job)->input_present &&
+          ((yonder_sheet_job_t *)sheet_jobs[0].job)->request.mode == WAY_MODE_CORS,
+          "style preload: incompatible CORS identity cannot consume retained bytes");
+    check(style_worker_land("/cors.css", false) && nfake_requests == 2,
+          "style preload: incompatible identity performs its own checked fetch");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/queued.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=queued.css onload=\"document.getElementById('out').textContent='bad'\">"
+              "<p id=out>quiet</p><script>0</script>");
+    check(loop_settle() && style_worker_land("/queued.css", true), "style preload: completion event is queued");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "href", "later.css", 9) == OS64_HTML_OK,
+          "style preload: href changes after completion but before event dispatch");
+    script_turn();
+    check(probe_text_is("out", "quiet"), "style preload: task-time guard suppresses an obsolete queued event");
+    loop_drop();
+
+    fake_fetch_reset();
+    fake_answer(NULL, "http://fixture.test/activated.css", 200, "Content-Type: text/css\r\n", css);
+    loop_page("<link id=pre rel=preload as=style href=activated.css "
+              "onload=\"document.getElementById('out').textContent+='L';if(this.rel!=='stylesheet')this.rel='stylesheet'\">"
+              "<p id=out></p><script>0</script>");
+    check(loop_settle() && style_worker_land("/activated.css", true), "style preload: consumer event guard fixture loads");
+    script_turn();
+    check(style_worker_land("/activated.css", false) && probe_text_is("out", "L"),
+          "style preload: stylesheet completion is queued after the preload event");
+    check(os64_html_set_attr(g.page.way.doc, probe_id("pre"), "href", "next.css", 8) == OS64_HTML_OK,
+          "style preload: consumer href changes before its completion task");
+    script_turn();
+    check(probe_text_is("out", "L"), "style preload: stale stylesheet completion cannot fire the newer request's handler");
+    loop_drop();
+
+    fake_fetch_reset();
+    loop_page("<base href='http://fixture.test/css/'><link rel=preload as=style href=base.css><script>0</script>");
+    check(loop_settle() && nsheet_jobs == 1 &&
+          os64_streq(((yonder_sheet_job_t *)sheet_jobs[0].job)->url, "http://fixture.test/css/base.css"),
+          "style preload: streaming request uses the document base");
+    loop_drop();
+    check(nsheet_jobs == 0, "style preload: navigation cancels unconsumed fetches");
+
+    loop_page("<link rel=preload as=style href=a.css media=print>"
+              "<link rel=preload as=style href=b.css type=text/plain>"
+              "<link rel=preload as=image href=c.png><svg><link rel=preload as=style href=foreign.css></link></svg>"
+              "<script>0</script>");
+    check(loop_settle() && nsheet_jobs == 0 && g.page.preloads == NULL,
+          "style preload: media, MIME, destination and HTML namespace gate requests");
+    loop_drop();
+    fake_fetch_reset();
+}
+
+static void style_preload_limits(void)
+{
+    char html[8000];
+    size_t used = 0;
+    for (int i = 0; i < STYLE_PRELOAD_MAX + 1; i++)
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+                                "<link rel=preload as=style href=limit-%d.css>", i);
+    snprintf(html + used, sizeof(html) - used, "<script>0</script>");
+    loop_page(html);
+    check(loop_settle() && g.page.preloads && g.page.preloads->count == STYLE_PRELOAD_MAX && g.page.preloads->refused,
+          "style preload: document entry limit refuses excess requests");
+    loop_drop();
+    check(nsheet_jobs == 0, "style preload: capped document releases its outstanding jobs");
+
+    loop_page("<link rel=preload as=style href=first.css><link rel=preload as=style href=second.css><script>0</script>");
+    check(loop_settle() && g.page.preloads && nsheet_jobs == 2, "style preload: retained-body limit fixture");
+    for (int i = 0; i < 2 && nsheet_jobs > 0; i++) {
+        yonder_sheet_job_t *job = sheet_jobs[0].job;
+        os64_work_id_t id = sheet_jobs[0].id;
+        sheet_jobs[0] = sheet_jobs[--nsheet_jobs];
+        yonder_sheet_t *got = os64_calloc(1, sizeof(*got));
+        if (!got) { yonder_sheet_release(job, NULL); continue; }
+        got->fetched = got->usable = got->ok = true;
+        got->kept_len = 9 * 1024 * 1024;
+        got->kept = os64_malloc(got->kept_len);
+        check(got->kept != NULL, "style preload: body allocation");
+        if (!got->kept) { yonder_sheet_release(job, got); continue; }
+        reaped(id, job, got);
+    }
+    check(g.page.preloads && g.page.preloads->bytes == 9 * 1024 * 1024 &&
+          g.page.preloads->entries[0].response != NULL && g.page.preloads->entries[1].response == NULL &&
+          g.page.preloads->entries[1].settled,
+          "style preload: aggregate retained bodies stay below 16 MiB and excess completion fails");
+    loop_drop();
+}
+
+static void style_preload_pages(void)
+{
+    size_t length;
+    char *css = memory_fixture_read("image-memory-preload.css", &length);
+    char *png = memory_fixture_read("image-memory.png", &length);
+    char *base64 = png != NULL ? data_b64(png, length) : NULL;
+    free(png);
+    if (css == NULL || base64 == NULL) { free(css); os64_free(base64); return; }
+    const char *modes[] = {"active", "inactive", "ordinary"};
+    for (int i = 0; i < 3; i++) {
+        char name[100];
+        snprintf(name, sizeof(name), "image-memory-preload-%s.html", modes[i]);
+        char *source = memory_fixture_read(name, &length);
+        if (source == NULL) continue;
+        char *at = strstr(source, "image-memory.png");
+        check(at != NULL, "style fixture: source names the real PNG");
+        if (at == NULL) { free(source); continue; }
+        size_t cap = length + strlen(base64) + 64;
+        char *html = malloc(cap);
+        if (html == NULL) { free(source); continue; }
+        snprintf(html, cap, "%.*sdata:image/png;base64,%s%s", (int)(at - source), source,
+                 base64, at + strlen("image-memory.png"));
+        fake_fetch_reset();
+        fake_answer(NULL, "http://fixture.test/image-memory-preload.css", 200,
+                    "Content-Type: text/css\r\nCache-Control: no-store\r\n", css);
+        loop_page(html);
+        free(source); free(html);
+        // loop_page has posted the complete response. Retire its producer
+        // before allowing image jobs to use the fixture pool's fallback slot.
+        if (pool_work.job != NULL) pool_work.release(pool_work.job, NULL);
+        memset(&pool_work, 0, sizeof(pool_work));
+        check(loop_settle() && style_worker_land("/image-memory-preload.css", i != 2),
+              "style fixture: delivered page fetches its shared stylesheet");
+        check(loop_settle(), "style fixture: page finishes parsing");
+        for (int turn = 0; turn < 8; turn++) {
+            script_turn();
+            while (sizes_run()) {}
+        }
+        if (i == 0) {
+            check(style_worker_land("/image-memory-preload.css", false), "style fixture: inline handler activates the preload");
+            for (int turn = 0; turn < 8; turn++) {
+                script_turn();
+                while (sizes_run()) {}
+            }
+        }
+        check(strncmp(probe_text_of("result"), "PASS:", 5) == 0 && nfake_requests == 1,
+              "style fixture: delivered active, inactive and ordinary pages report their expected widths");
+        loop_drop();
+    }
+    free(css);
+    os64_free(base64);
+    fake_fetch_reset();
+}
+
+static void sheet_worker_cases(void)
+{
+    const char *css = "p { color: blue }";
+    for (int scenario = 0; scenario < 11; scenario++) {
+        fake_fetch_reset();
+        bool preload = scenario == 1 || scenario == 2;
+        fake_answer(NULL, "https://a.test/start.css", 302, "Location: https://b.test/style.css\r\n", NULL);
+        fake_answer(NULL, "https://b.test/style.css", scenario == 2 ? 404 : scenario == 10 ? 204 : 200,
+                    scenario == 3 || scenario == 4 ? "Content-Type: text/plain\r\n"
+                    : "Content-Type: text/css; charset=utf-8\r\n", css);
+        fake_answer(NULL, "https://a.test/same.css", 200, "Content-Type: text/plain\r\n", css);
+        yonder_sheet_job_t *j = os64_calloc(1, sizeof(*j));
+        check(j != NULL, "sheet worker: job allocation");
+        if (!j) continue;
+        os64_strcopy(j->url, sizeof(j->url), scenario == 5 ? "https://a.test/same.css"
+                      : (scenario == 6 || scenario == 9) ? "file:///test.css" : "https://a.test/start.css");
+        way_origin_of("https://a.test/page", 1, &j->request.origin);
+        j->request.mode = scenario == 7 ? WAY_MODE_CORS : WAY_MODE_NO_CORS;
+        j->request.credentials = WAY_CREDENTIALS_INCLUDE;
+        os64_strcopy(j->request.method, sizeof(j->request.method), "GET");
+        os64_strcopy(j->hooks.referrer, sizeof(j->hooks.referrer),
+                     scenario == 6 ? "file:///page.html" : "https://a.test/page");
+        j->quirks = scenario == 4 || scenario == 5;
+        j->preload = preload;
+        j->keep = true;
+        slurp_path = "/test.css";
+        slurp_bytes = css;
+        if (scenario == 8) {
+            j->input_present = j->input_fetched = j->input_usable = true;
+            j->input = (uint8_t *)copy_text(css);
+            j->input_len = strlen(css);
+        }
+        void *out = NULL;
+        yonder_sheet_run(j, NULL, NULL, &out);
+        yonder_sheet_t *got = out;
+        bool expected = scenario != 3 && scenario != 4 && scenario != 7 && scenario != 9;
+        check(got && got->ok == expected, "sheet worker: status, MIME, CORS and final-origin quirks judgment");
+        if (preload) {
+            check(got && got->fetched && got->kept_len == strlen(css) &&
+                  !memcmp(got->kept, css, strlen(css)) && got->usable == (scenario != 2),
+                  "sheet worker: preload retains even an HTTP failure for later consumption");
+            check(got && got->parsed.items == NULL && got->parsed.nitems == 0, "sheet worker: preloading does not parse CSS");
+        }
+        if (scenario == 8)
+            check(nfake_requests == 0 && got && got->ok, "sheet worker: activation parses retained bytes without a request");
+        if (scenario < 4 && got && got->fetched)
+            check(os64_streq(got->url, "https://b.test/style.css"), "sheet worker: retained final URL is the import base");
+        yonder_sheet_release(j, got);
+        slurp_path = slurp_bytes = NULL;
+    }
+    fake_fetch_reset();
+}
+
 #include "test_yonder_pointer.inc"
 
 /* A unit that includes this file for the window and its fakes alone (the
@@ -11674,6 +11984,17 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    sheet_worker_cases();
+    style_preload_cases();
+    style_preload_pages();
+    style_preload_limits();
+    if(getenv("YONDER_STYLES_ONLY")) {
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"styles: text released");
+        check(live==0,"styles: heap empty");
+        printf("yonder styles: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_LOCAL_LINKS_ONLY")) {
         local_link_cases();
         os64_text_font_release(probe_font);

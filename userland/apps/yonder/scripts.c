@@ -73,6 +73,8 @@ typedef struct {
 typedef struct {
     const os64_html_node_t *node;
     bool failed;
+    bool (*valid)(void *);
+    void *ctx;
 } Owed;
 
 struct yonder_scripts {
@@ -2344,6 +2346,12 @@ bool yonder_scripts_image_fire(yonder_scripts_t *s,os64_js_outcome_t *out)
 
 bool yonder_scripts_owe(yonder_scripts_t *s, const os64_html_node_t *node, bool failed)
 {
+    return yonder_scripts_owe_guarded(s, node, failed, NULL, NULL);
+}
+
+bool yonder_scripts_owe_guarded(yonder_scripts_t *s, const os64_html_node_t *node, bool failed,
+                                bool (*valid)(void *), void *ctx)
+{
     if (s == NULL || s->dead || node == NULL)
         return false;
     if (s->owed_count == s->owed_cap && s->owed_next > 0) {
@@ -2362,7 +2370,7 @@ bool yonder_scripts_owe(yonder_scripts_t *s, const os64_html_node_t *node, bool 
         s->owed_cap = cap;
     }
     os64_html_hold(s->doc, node);
-    s->owed[s->owed_count++] = (Owed){node, failed};
+    s->owed[s->owed_count++] = (Owed){node, failed, valid, ctx};
     return true;
 }
 
@@ -2384,6 +2392,12 @@ bool yonder_scripts_owed_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_memset(out, 0, sizeof(*out));
     while (s != NULL && !s->dead && s->owed_next < s->owed_count) {
         Owed one = s->owed[s->owed_next++];
+        if (one.valid != NULL && !one.valid(one.ctx)) {
+            os64_html_release(s->doc, one.node);
+            if (s->owed_next == s->owed_count)
+                s->owed_next = s->owed_count = 0;
+            continue;
+        }
         s->task_address = NULL;
         s->task_us = -1;
         s->written = 0;

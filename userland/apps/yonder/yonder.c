@@ -639,6 +639,36 @@ typedef struct {
     size_t inline_len;
 } SheetParse;
 
+typedef struct {
+    way_mode_t mode;
+    way_credentials_t credentials;
+    way_policy_t policy;
+    char *integrity;                // compatibility only; link SRI remains unenforced
+} StyleRequest;
+
+typedef struct Preloads Preloads;
+#define STYLE_PRELOAD_MAX 64
+#define STYLE_PRELOAD_BYTES ((size_t)16 * 1024 * 1024)
+typedef struct {
+    Preloads *owner;
+    const os64_html_node_t *node, *consumer; // held until the document retires
+    char *url;
+    StyleRequest request;
+    uint64_t version, consumer_version;
+    os64_work_id_t id;
+    bool active, consumer_active, settled, told, consumed;
+    yonder_sheet_t *response;
+} StylePreload;
+struct Preloads {
+    const os64_html_document_t *doc;
+    uint64_t document;
+    os64_html_reader_t *reader;
+    int32_t count;
+    size_t bytes;
+    bool refused;
+    StylePreload entries[STYLE_PRELOAD_MAX];
+};
+
 typedef struct Sheet {
     SheetParse *source; // shared by displayed, measured and staged tables
     bool ready;                     // parsed: it is in the cascade
@@ -660,12 +690,14 @@ typedef struct Sheet {
     // (`settled`, `failed`), and whether its scripts have taken the `load`
     // or `error` that says so (`told`). A sheet that settles before its
     // page has scripts is told when they are made (sheets_tell). A table
-    // that replaces another copies `told` by element and the address asked
-    // for (`asked`, before redirects; NULL for a `style`, whose text is
+    // that replaces another copies `told` by element, request policy and
+    // address (`asked`, before redirects; NULL for a `style`, whose text is
     // compared instead), so a reparse or a refetch tells the element
     // nothing twice (LOAD_EVENTS.md § 3.3).
     bool settled, failed, told;
     char *asked;
+    StyleRequest request;
+    int32_t preload;               // document entry plus one, zero for an ordinary request
     garb_import_t *imports;         // once ready: its @imports, and each one's entry or -1
     int32_t *child;
     int32_t nimports;
@@ -736,6 +768,7 @@ typedef struct Page {
     // tree points into both. `serial` names the page to a sheet's job.
     // `sheets_waiting` counts the sheets out that the first paint waits for
     // (Sheet.holds), not every sheet out.
+    Preloads *preloads;             // document-owned; staged tables borrow it
     Sheet *sheets;
     int32_t nsheets, sheets_waiting, sheets_ready;
     bool sheets_changed;
@@ -910,6 +943,7 @@ static void sheet_table_free(const os64_html_document_t *doc, Sheet *sheets, int
         }
         os64_free(sheets[i].url);
         os64_free(sheets[i].asked);
+        os64_free(sheets[i].request.integrity);
         os64_free(sheets[i].imports);
         os64_free(sheets[i].child);
     }
@@ -1016,6 +1050,8 @@ static void layout_font_dependencies(const Page *p)
 }
 static void webfonts_layout_copied(Page *p, const flow_tree_t *tree);
 
+static void preloads_free(Page *p);
+
 static void page_clear(Page *p)
 {
     if (p->npics) layout_revision(&s_layout_resources.pictures);
@@ -1026,6 +1062,7 @@ static void page_clear(Page *p)
     // it, while the tree and the cascade it looks at are still here.
     yonder_scripts_free(p->scripts);
     p->scripts = NULL;
+    preloads_free(p);
     diag_leave(p);
     yonder_svg_cache_free(p->svg_cache);
     p->svg_cache = NULL;
@@ -3176,6 +3213,16 @@ static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
         if (!seen) sheets += os64_arena_stats(source->parsed.arena).reserved_bytes;
     }
     yonder_census_owner(sheet, "sheets", sheets, (uint64_t)p->nsheets, "sheets");
+    if (p->preloads != NULL) {
+        size_t bytes = sizeof(*p->preloads) + p->preloads->bytes;
+        for (int32_t i = 0; i < p->preloads->count; i++) {
+            const StylePreload *entry = &p->preloads->entries[i];
+            bytes += os64_strlen(entry->url) + 1;
+            if (entry->request.integrity != NULL) bytes += os64_strlen(entry->request.integrity) + 1;
+            if (entry->response != NULL) bytes += sizeof(*entry->response);
+        }
+        yonder_census_owner(sheet, "style preloads", bytes, (uint64_t)p->preloads->count, "responses");
+    }
     yonder_census_owner(sheet, "cascade", garb_cascade_bytes(p->cascade), 0, NULL);
     if (p->tree != NULL) {
         flow_tree_stats_t t = flow_tree_stats(p->tree);
@@ -4492,6 +4539,7 @@ static void stream_drop(void)
     page_session_free(&g.stream.page);
     measured_forget(doc);
     yonder_scripts_free(g.stream.scripts);
+    preloads_free(&g.stream.page);
     // A load that never became a page writes its record here, with what it
     // got as far as; one that did took its record with it (stream_finish).
     // The host borrows the record (its storage's last commit writes
@@ -5149,15 +5197,7 @@ static int32_t picture_for(Page *p,const char *url) { return picture_for_mode(p,
 
 // ── The page's sheets ───────────────────────────────────────────────────
 
-// Whether two addresses share an origin (libway's origin.h; an address
-// with no tuple origin shares none).
-static bool same_origin(const char *a, const char *b)
-{
-    way_origin_t oa, ob;
-    way_origin_of(a, 0, &oa);
-    way_origin_of(b, 0, &ob);
-    return way_origin_same(&oa, &ob);
-}
+#include "style_preload.inc"
 
 // Whether the first paint waits for a sheet: its media holds on this glass
 // as it is now, at its size and zoom — an import's own media list as well
@@ -5191,6 +5231,16 @@ static Sheet *sheet_new(Page *p, const os64_html_node_t *node, const char *media
     if (node != NULL)
         os64_html_hold(page_doc(p), node);
     sh->node = node;
+    if (!style_request_read(node, &sh->request)) {
+        if (node != NULL) os64_html_release(page_doc(p), node);
+        --p->nsheets;
+        return NULL;
+    }
+    if (importer >= 0) {
+        sh->request.mode = p->sheets[importer].request.mode;
+        sh->request.credentials = p->sheets[importer].request.credentials;
+        sh->request.policy = p->sheets[importer].request.policy;
+    }
     sh->media = media;
     sh->importer = importer;
     sh->import_index = import_index;
@@ -5244,7 +5294,11 @@ static void sheet_owe(Page *p, Sheet *sh, bool failed)
     sh->settled = true;
     sh->failed = failed;
     yonder_scripts_t *host = page_scripts(p);
-    sh->told = yonder_scripts_owe(host != NULL ? host : scripts_for(p->serial), sh->node, failed);
+    if (host == NULL) host = scripts_for(p->serial);
+    sh->told = sh->preload > 0 && p->preloads != NULL
+        ? yonder_scripts_owe_guarded(host, sh->node, failed, preload_consumer_valid,
+                                     &p->preloads->entries[sh->preload - 1])
+        : yonder_scripts_owe(host, sh->node, failed);
 }
 
 // The page's scripts were just made: each sheet that settled before them is
@@ -5254,6 +5308,7 @@ static void sheet_owe(Page *p, Sheet *sh, bool failed)
 // browsers a sheet settled before a script fired before it ran.
 static void sheets_tell(Page *p)
 {
+    preloads_tell(p);
     for (int32_t e = 0; e < p->nsheets; e++)
         if (p->sheets[e].settled && !p->sheets[e].told)
             sheet_owe(p, &p->sheets[e], p->sheets[e].failed);
@@ -5271,15 +5326,23 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
         Page *old = p->reuse_sheets;
         for (int32_t i = 0; i < old->nsheets; i++) {
             Sheet *source = &old->sheets[i];
-            if (!source->ready || source->url == NULL || !os64_streq(source->url, url))
+            const char *asked = source->asked != NULL ? source->asked : source->url;
+            if (!source->ready || asked == NULL || !os64_streq(asked, url) ||
+                !style_request_same(&source->request, &sh->request))
                 continue;
             if (source->source->refs == UINT32_MAX) continue;
+            char *final = source->url != NULL ? copy_text(source->url) : NULL;
+            if (final == NULL) continue;
+            os64_free(sh->url);
+            sh->url = final;
             sh->source = source->source;
             ++sh->source->refs;
             sheet_ready(p, (int32_t)(sh - p->sheets));
             return;
         }
     }
+    if (!p->measuring && sh->url != NULL && preload_join(p, sh, url))
+        return;
     bool fetchable = !p->measuring && sh->url != NULL &&
                      ((os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
@@ -5289,22 +5352,9 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
         sheet_owe(p, sh, true);
         return;
     }
-    const os64_html_document_t *doc = page_doc(p);
-    job->kind = YONDER_JOB_SHEET;
+    style_job_request(p, &sh->request, url, job);
     job->page = p->serial;
     job->index = (int32_t)(sh - p->sheets);
-    job->agent = g.way.agent;
-    os64_strcopy(job->url, sizeof(job->url), url);
-    if (doc->charset != NULL)
-        os64_strcopy(job->environment, sizeof(job->environment), doc->charset);
-    // Judged on the address asked for; HTML reads the response's, so a
-    // same-origin sheet that redirects elsewhere is read whatever its type.
-    job->any_type = doc->quirks == OS64_HTML_QUIRKS && same_origin(url, p->way.url);
-    job->hooks.jar = g.way.jar;
-    job->hooks.cache = g.cache;
-    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
-    hooks_ask(&job->hooks, p->way.url, WAY_DEST_STYLE);
-    job->keep = s_diag.keep;
     os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
     sh->id = os64_work_submit(g.pool, &work);
     if (sh->id == 0) {
@@ -5450,9 +5500,20 @@ static bool sheet_add(void *page, const os64_page_sheet_t *one)
     if (was >= 0) {
         const Sheet *old = &p->reuse_sheets->sheets[was];
         sh->told = old->told && (one->linked ? old->asked != NULL && sh->asked != NULL &&
-                                                   os64_streq(old->asked, sh->asked)
+                                                   os64_streq(old->asked, sh->asked) &&
+                                                   style_request_same(&old->request, &sh->request)
                                              : old->asked == NULL && (old->source == NULL ||
                                                    sheet_inline_matches(old->source, one->node)));
+        // A consumed preload failure stays settled across layout rebuilds;
+        // retrying it would discard the failure that the preload handed off.
+        if (one->linked && old->preload > 0 && p->preloads != NULL &&
+            p->preloads->entries[old->preload - 1].consumer_active && old->settled && old->failed && old->asked != NULL && sh->asked != NULL &&
+            os64_streq(old->asked, sh->asked) && style_request_same(&old->request, &sh->request)) {
+            sh->preload = old->preload;
+            sh->settled = sh->failed = true;
+            if (!sh->told) sheet_owe(p, sh, true);
+            return true;
+        }
     }
     if (one->linked) {
         sheet_fetch(p, sh, one->href.url);
@@ -5547,6 +5608,7 @@ static void sheets_adopted(Page *p)
 // The rest of the page's sheets: its model's, then its trees' adopted ones.
 static void sheets_start(Page *p)
 {
+    preloads_start(p);
     const os64_page_t *model = page_model(p);
     for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++)
         if (!sheet_add(p, os64_page_sheet(model, i)))
@@ -5558,7 +5620,7 @@ static void sheets_start(Page *p)
 static void sheets_leave(Page *p)
 {
     for (int32_t e = 0; e < p->nsheets; e++)
-        if (p->sheets[e].waiting && g.pool != NULL)
+        if (p->sheets[e].waiting && p->sheets[e].id != 0 && g.pool != NULL)
             os64_work_cancel(g.pool, p->sheets[e].id);
 }
 
@@ -5593,6 +5655,10 @@ static void coming_drop(void)
 // the next turn looks at again; any other page's is let go.
 static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
 {
+    if (job->preload) {
+        preload_arrived(job, got);
+        return;
+    }
     Page *p = g.coming.active && g.coming.page.serial == job->page ? &g.coming.page
             : g.page.serial == job->page ? &g.page
             : g.stream.active && g.stream.serial == job->page ? &g.stream.page : NULL;
@@ -5602,6 +5668,9 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     Sheet *sh = &p->sheets[job->index];
     if (!sh->waiting)
         return;
+    if (sh->preload > 0 && p->preloads != NULL &&
+        !preload_consumer_valid(&p->preloads->entries[sh->preload - 1])) got = NULL;
+    preload_consumed(p, sh);
     // Kept as the page received it, a sheet that failed as a failure,
     // beside the record of the page it is for: the stream's page has none
     // of its own, its record is the stream's.
@@ -13264,6 +13333,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // Its place in the session moves with it: its document's name, the
     // current entry's state, the entries its scripts made, the events it
     // owes, a scroll it asked for.
+    fresh.preloads = found->preloads;
+    found->preloads = NULL;
     fresh.document = found->document;
     fresh.entry = found->entry;
     fresh.asked = found->asked;
@@ -13560,6 +13631,7 @@ static void stream_sheets(void)
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
         return;
     Page *p = stream_page();
+    preloads_start(p);
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
     int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, stream_sheet_add, p);

@@ -4,6 +4,9 @@ Quinn, 2026-11-08. Reviewed implementation plan; round 2 decisions incorporated.
 Source baseline: `c21b57b370f1068f79d8867a5588ef24b999e064` (`origin/userland`).
 Branch: `codex/yonder-image-memory-design`.
 
+Implementation evidence: [M0 baseline](IMAGE_MEMORY_BASELINE.md) and
+[I0 stylesheet preload](IMAGE_MEMORY_I0.md). Hardware comparison remains pending.
+
 ## 1. Decision and scope
 
 Keep the existing reduction of display pictures. Support stylesheet preloading
