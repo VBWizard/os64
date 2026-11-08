@@ -35,7 +35,11 @@ DOMParser-parseFromString-xml-scripting-support-disabled.html	parseFromString as
 DOMParser-parseFromString-xml-scripting-support-disabled.html	parseFromString as HTML, svg script, appendChild
 XMLSerializer-serializeToString.html	Attribute nodes are serialized as the empty string
 XMLSerializer-serializeToString.html	Check children were included for void elements
+XMLSerializer-serializeToString.html	Check if attribute serialization takes into account of following xmlns:* attributes
 XMLSerializer-serializeToString.html	Check if document fragment serializes.
+XMLSerializer-serializeToString.html	Check if no special handling for XLink namespace unlike HTML serializer.
+XMLSerializer-serializeToString.html	Check if start tag serialization applied the original prefix even if it is declared in an ancestor element.
+XMLSerializer-serializeToString.html	Check if start tag serialization takes into account of its xmlns:* attributes
 createContextualFragment.html	<html> and <body> must work the same, 1
 createContextualFragment.html	<html> and <body> must work the same, 2
 createContextualFragment.html	<html> in a different namespace shouldn't be special
