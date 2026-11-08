@@ -20,6 +20,7 @@
 #include <dom/pointer.h>
 
 #include "diag.h"
+#include "census.h"
 #include "script_job.h"
 #include "storage.h"
 
@@ -334,6 +335,12 @@ size_t yonder_scripts_memory_bytes(const yonder_scripts_t *scripts);
 // The most that heap has held, in bytes: the live runtime's, or the one
 // retired's as it went; 0 before any script ran.
 size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
+// The script side of a memory census (MEMORY_CENSUS.md § 3): its owners —
+// the binding's records (`dom`), canvas bitmaps, the bodies kept outside
+// the heap, and the heap itself (`script`) — added to `sheet`; with
+// `detail`, the binding's kinds and the heap's own census too, its walk
+// timed into `sheet->cost_us`. Nothing for NULL or before a runtime.
+void yonder_scripts_census(yonder_scripts_t *scripts, yonder_census_sheet_t *sheet, bool detail);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // The whole address of the `src` script the last task ran, which a task's

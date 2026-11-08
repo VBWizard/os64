@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "settings.h"
+#include "census.h"
 #include "download.h"
 #include "agent.h"
 #include "os64/conf.h"
@@ -27,6 +28,7 @@
 #define CONF_APPEARANCE "appearance"
 #define CONF_SCRIPT_SECONDS "script_seconds"
 #define CONF_SCRIPT_MEMORY_MB "script_memory_mb"
+#define CONF_CENSUS "census"
 #define CONF_ANIMATIONS "animations"
 #define CONF_MOTION "motion"
 #define CONF_MODERN "modern"
@@ -218,6 +220,27 @@ uint32_t yonder_settings_saved_script_memory_mb(void)
         return YONDER_SCRIPT_MEMORY_MB_DEFAULT;
     }
     return (uint32_t)mb;
+}
+
+typedef struct {
+    const char *host;
+    bool censused;
+} CensusAsk;
+
+static bool census_line(const char *key, const char *value, void *user)
+{
+    CensusAsk *ask = user;
+    if (key != NULL && os64_streq_nocase(key, CONF_CENSUS) && yonder_census_matches(value, ask->host))
+        ask->censused = true;
+    return true;
+}
+
+bool yonder_settings_censused(const char *host)
+{
+    CensusAsk ask = {host, false};
+    if (host == NULL) return false;
+    os64_conf_find_read(CONF_NAME, census_line, &ask, NULL, 0);
+    return ask.censused;
 }
 
 bool yonder_settings_saved_agent(char *out, size_t cap)

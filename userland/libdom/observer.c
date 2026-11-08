@@ -150,7 +150,7 @@ static DMutation *mutation_new(os64_dom_t *dom, const os64_html_change_t *c, int
     size_t size = sizeof(DMutation) + nodes * sizeof(const os64_html_node_t *) +
         text_size(name, name != NULL ? os64_strlen(name) : 0) + text_size(ns, ns != NULL ? os64_strlen(ns) : 0) +
         text_size(old, old_len);
-    DMutation *m = d_alloc(dom, size);
+    DMutation *m = d_alloc_kind(dom, size, OS64_DOM_MEM_MUTATION);
     if (m == NULL) return NULL;
     os64_memset(m, 0, sizeof(*m));
     m->type = (uint8_t)type;
@@ -237,7 +237,7 @@ static bool add_transients(os64_dom_t *dom, const os64_html_change_t *c)
             if (r->node != at || !(r->options & O_SUBTREE)) continue;
             const os64_html_node_t *n = c->removed;
             for (size_t i = 0; i < c->nremoved && n != NULL; i++, n = n->next) {
-                DRegistration *t = d_alloc(dom, sizeof(*t));
+                DRegistration *t = d_alloc_kind(dom, sizeof(*t), OS64_DOM_MEM_MUTATION);
                 if (t == NULL) {
                     s->lost++;
                     continue;
@@ -488,7 +488,7 @@ static void slot_signal(void *opaque, const os64_html_node_t *slot)
     DSlotSignals *signals = opaque;
     if (signals->n == signals->cap) {
         size_t cap = signals->cap != 0 ? signals->cap * 2 : 8;
-        const os64_html_node_t **grown = d_alloc(signals->dom, cap * sizeof(*grown));
+        const os64_html_node_t **grown = d_alloc_kind(signals->dom, cap * sizeof(*grown), OS64_DOM_MEM_MUTATION);
         if (grown == NULL) {
             signals->lost = true;
             return;
@@ -633,7 +633,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
     uint32_t script = d_callback_script(dom, ctx, argv[0]);
-    DObserver *o = script != D_SCRIPT_FAILED ? d_alloc(dom, sizeof(*o)) : NULL;
+    DObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_MUTATION) : NULL;
     JSValue object = o != NULL ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class) : JS_EXCEPTION;
     JS_FreeValue(ctx, prototype);
     if (JS_IsException(object)) {
@@ -732,7 +732,7 @@ static JSValue observe(os64_dom_t *dom, JSContext *ctx, DObserver *o, int argc, 
             r->nfilter = nfilter;
             return JS_UNDEFINED;
         }
-    DRegistration *r = d_alloc(dom, sizeof(*r));
+    DRegistration *r = d_alloc_kind(dom, sizeof(*r), OS64_DOM_MEM_MUTATION);
     if (r == NULL) {
         d_strings_free(dom, filter, nfilter);
         return d_error(ctx, "QuotaExceededError", "MutationObserver quota exceeded");
@@ -793,7 +793,7 @@ int d_observers_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
                                             .gc_mark = observer_mark};
     static const JSClassDef record_def = {.class_name = "MutationRecord", .finalizer = record_finalizer,
                                           .gc_mark = record_mark};
-    struct DObservers *s = d_alloc(dom, sizeof(*s));
+    struct DObservers *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_MUTATION);
     if (s == NULL) {
         d_error(ctx, "QuotaExceededError", "MutationObserver quota exceeded");
         return -1;

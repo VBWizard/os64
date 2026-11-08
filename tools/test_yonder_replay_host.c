@@ -2180,7 +2180,10 @@ static way_head_t rp_head(int status, const char *reason, const char *type, cons
  * `paint stages` line, whose times are the processor's counter
  * (YONDER_DIAGNOSTICS.md § What paints cost), which no clock of the
  * harness moves, and a `script heap` line, whose peak is the engine's
- * allocations in whatever order the run made them; and wherever they are,
+ * allocations in whatever order the run made them, and the memory census's
+ * lines (`memory`, `memory dom`, `memory script`, `memory timeline`,
+ * `census`; MEMORY_CENSUS.md), whose figures are the run's own; and
+ * wherever they are,
  * the `kept:`, `kept lines:` and `claim:` facts, which say how the record
  * was made and not what the page did; the `animated` lines, whole, whose
  * due times — and so which are named and how many — are counted from when
@@ -2205,7 +2208,9 @@ static bool rp_same(const char *name, const char *a, const char *b) {
         if(*y && rp_let_be(y,yl,true)) { y+=yl+(ye?1:0); continue; }
         bool stages=xl>14 && yl>14 && !strncmp(x,"paint stages: ",14) && !strncmp(y,"paint stages: ",14);
         bool heap=xl>13 && yl>13 && !strncmp(x,"script heap: ",13) && !strncmp(y,"script heap: ",13);
-        if(!stages && !heap && (xl!=yl || memcmp(x,y,xl))) {
+        bool census=(xl>6 && yl>6 && !strncmp(x,"memory",6) && !strncmp(y,"memory",6)) ||
+                    (xl>8 && yl>8 && !strncmp(x,"census: ",8) && !strncmp(y,"census: ",8));
+        if(!stages && !heap && !census && (xl!=yl || memcmp(x,y,xl))) {
             if(same) printf("  %s: the replay's record differs from the page's own\n",name);
             printf("    kept:   %.*s\n    replay: %.*s\n",(int)xl,x,(int)yl,y);
             same=false;

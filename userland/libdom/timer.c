@@ -105,7 +105,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         d_free(dom, source.data);
         return d_error(ctx, "QuotaExceededError", "Too many timers");
     }
-    DTimer *timer = d_alloc(dom, sizeof(*timer));
+    DTimer *timer = d_alloc_kind(dom, sizeof(*timer), OS64_DOM_MEM_TIMER);
     if (timer == NULL) {
         d_free(dom, source.data);
         return d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
@@ -114,7 +114,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
     if (function) {
         int extra = argc > 2 ? argc - 2 : 0;
         if (extra != 0) {
-            timer->argv = d_alloc(dom, (size_t)extra * sizeof(*timer->argv));
+            timer->argv = d_alloc_kind(dom, (size_t)extra * sizeof(*timer->argv), OS64_DOM_MEM_TIMER);
             if (timer->argv == NULL) {
                 d_free(dom, timer);
                 return d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
@@ -146,7 +146,7 @@ uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t
         d_error(ctx, "QuotaExceededError", "Too many timers");
         return 0;
     }
-    DTimer *timer = d_alloc(dom, sizeof(*timer));
+    DTimer *timer = d_alloc_kind(dom, sizeof(*timer), OS64_DOM_MEM_TIMER);
     if (timer == NULL) {
         JS_FreeValue(ctx, callback);
         d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
@@ -222,13 +222,13 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         if (!JS_IsUndefined(timer->callback)) {
             held = JS_DupValueRT(dom->engine, timer->callback);
             if (argc != 0) {
-                args = d_alloc(dom, (size_t)argc * sizeof(*args));
+                args = d_alloc_kind(dom, (size_t)argc * sizeof(*args), OS64_DOM_MEM_TIMER);
                 refused = args == NULL;
                 if (refused) argc = 0;
                 for (int i = 0; i < argc; i++) args[i] = JS_DupValueRT(dom->engine, timer->argv[i]);
             }
         } else if (timer->source != NULL) {
-            source = d_alloc(dom, source_length + 1);
+            source = d_alloc_kind(dom, source_length + 1, OS64_DOM_MEM_TIMER);
             refused = source == NULL;
             if (source != NULL) os64_memcpy(source, timer->source, source_length + 1);
         }

@@ -2,8 +2,28 @@
 // into the styles, each dump worked from the standard by hand, the same
 // way test_libflow_style.inc's are. The viewport is WIDTH x 600.
 
+/* MEMORY_CENSUS.md § 3: a cascade says what it holds, more for more rules
+ * and style attributes, and NULL holds nothing. */
+static void cascade_bytes_cases(void)
+{
+    Sheeted small, big;
+    sheeted_open(&small, "<!doctype html><style>p { color: red }</style><p>a", 800, 600);
+    char html[8192];
+    size_t at = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>");
+    for (int i = 0; i < 100 && at < sizeof(html) - 128; i++)
+        at += (size_t)snprintf(html + at, sizeof(html) - at, ".c%d { margin: %dpx }", i, i);
+    snprintf(html + at, sizeof(html) - at, "</style><p style='color: blue'>a<p style='color: red'>b");
+    sheeted_open(&big, html, 800, 600);
+    size_t a = garb_cascade_bytes(small.cascade), b = garb_cascade_bytes(big.cascade);
+    expect("cascade bytes: a cascade holds something, and more for more rules", a > 0 && b > a, NULL);
+    expect("cascade bytes: NULL holds nothing", garb_cascade_bytes(NULL) == 0, NULL);
+    sheeted_close(&small);
+    sheeted_close(&big);
+}
+
 static void cascade_cases(void)
 {
+    cascade_bytes_cases();
     // Author rules outrank the chapter and the hints (`text=`); a style
     // attribute outranks every rule; a class outranks a type.
     cascade_case("the author over the chapter and the hints", 800,

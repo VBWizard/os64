@@ -162,7 +162,7 @@ static bool refresh(DQuery *query, JSContext *ctx)
     for (const os64_html_node_t *at = query_step(query, NULL); at != NULL; at = query_step(query, at))
         if (matches(query, at)) count++;
     if (count > SIZE_MAX / sizeof(*query->nodes)) goto quota;
-    const os64_html_node_t **nodes = count != 0 ? d_alloc(query->dom, count * sizeof(*nodes)) : NULL;
+    const os64_html_node_t **nodes = count != 0 ? d_alloc_kind(query->dom, count * sizeof(*nodes), OS64_DOM_MEM_COLLECTION) : NULL;
     if (count != 0 && nodes == NULL) goto quota;
     size_t index = 0;
     /* A table's rows are three groups, each in tree order: a walk each. */
@@ -204,7 +204,7 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
                      bool descendants, bool elements, const char *name)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
-    DQuery *query = d_alloc(dom, sizeof(*query));
+    DQuery *query = d_alloc_kind(dom, sizeof(*query), OS64_DOM_MEM_COLLECTION);
     if (query == NULL) return d_error(ctx, "QuotaExceededError", "DOM query quota exceeded");
     query->dom = dom;
     query->root = root;
@@ -214,8 +214,8 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
     query->html_document = d_document_type(dom, d_node_document(dom, root)) == D_DOCUMENT_HTML;
     if (name != NULL) {
         size_t size = os64_strlen(name) + 1;
-        query->name = d_alloc(dom, size);
-        query->folded = d_alloc(dom, size);
+        query->name = d_alloc_kind(dom, size, OS64_DOM_MEM_COLLECTION);
+        query->folded = d_alloc_kind(dom, size, OS64_DOM_MEM_COLLECTION);
         if (query->name == NULL || query->folded == NULL) {
             d_query_free(dom, query);
             return d_error(ctx, "QuotaExceededError", "DOM query-name quota exceeded");
@@ -615,7 +615,7 @@ static garb_selectors_t *selectors_of(os64_dom_t *dom, JSContext *ctx, JSValueCo
         bool short_of_memory = status != GARB_OK || parsed->incomplete;
         /* The message names the selector, so a page's record does. */
         size_t size = string.length + 32;
-        char *message = short_of_memory ? NULL : d_alloc(dom, size);
+        char *message = short_of_memory ? NULL : d_alloc_kind(dom, size, OS64_DOM_MEM_COLLECTION);
         if (message != NULL)
             os64_snprintf(message, size, "'%s' is not a valid selector", string.data);
         if (message != NULL) d_error(ctx, "SyntaxError", message);
@@ -701,7 +701,7 @@ JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     char *copy = NULL;
     if (named != NULL) {
         size_t len = os64_strlen(named) + 1;
-        copy = d_alloc(dom, len);
+        copy = d_alloc_kind(dom, len, OS64_DOM_MEM_COLLECTION);
         if (copy == NULL) return d_error(ctx,"QuotaExceededError","DOM named collection quota exceeded");
         os64_memcpy(copy, named, len);
     }
