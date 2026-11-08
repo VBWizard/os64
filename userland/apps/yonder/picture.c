@@ -6,6 +6,7 @@
 #include "scale.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
+#include "os64/proc.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
 
@@ -147,6 +148,21 @@ static os64_image_status_t decode(const uint8_t *bytes, size_t len, const char *
     return st;
 }
 
+static os64_image_status_t decode_observed(const uint8_t *bytes, size_t len, const char *type,
+    const yonder_picture_job_t *job, bool (*cancelled)(void *), void *ctx, yonder_picture_t *p)
+{
+    int64_t began = os64_micros();
+    os64_image_status_t status = decode(bytes, len, type, job, cancelled, ctx, p);
+    int64_t ended = os64_micros();
+    p->decoded = true;
+    p->body_bytes = len;
+    p->decode_timed = began >= 0 && ended >= began;
+    if (p->decode_timed) p->decode_us = (uint64_t)(ended - began);
+    p->reduced = status == OS64_IMAGE_OK && p->kind == YONDER_PICTURE_RASTER &&
+                 (p->image.width < p->width || p->image.height < p->height);
+    return status;
+}
+
 int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
     yonder_picture_job_t *j = job;
@@ -172,7 +188,7 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
             p->status = OS64_IMAGE_NO_FILE;
             os64_strcopy(p->why, sizeof(p->why), "its data: address is empty");
         } else {
-            p->status = decode(bytes, len, type, j, cancelled, ctx, p);
+            p->status = decode_observed(bytes, len, type, j, cancelled, ctx, p);
             p->origin_clean = true;
         }
         os64_free(bytes);
@@ -184,7 +200,7 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         uint8_t *bytes = NULL;
         p->status = OS64_IMAGE_IO_ERROR;
         if (os64_slurp(j->url + 7, OS64_IMAGE_CAP_DEFAULT, &bytes, &len) == OS64_SLURP_OK) {
-            p->status = decode(bytes, len, NULL, j, cancelled, ctx, p);
+            p->status = decode_observed(bytes, len, NULL, j, cancelled, ctx, p);
             /* Local pages may sample local fixtures; a network page may not
              * acquire file pixels through this worker's Canvas request. */
             p->origin_clean=(os64_strlen(j->hooks.referrer)>=7&&!os64_memcmp(j->hooks.referrer,"file://",7));
@@ -206,9 +222,14 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         os64_strcopy(request.referrer,sizeof(request.referrer),j->hooks.referrer);
         yonder_fetched_t *got=NULL;
         yonder_fetch_image_run(&request,cancelled,ctx,(void **)&got);
+        if (got && got->ok) {
+            p->fetched = true;
+            p->served = got->served;
+            p->body_bytes = got->body_len;
+        }
         p->status=OS64_IMAGE_IO_ERROR;
         if(got&&got->ok&&got->status>=200&&got->status<300&&got->has_body) {
-            p->status=decode(got->body,got->body_len,NULL,j,cancelled,ctx,p);
+            p->status=decode_observed(got->body,got->body_len,NULL,j,cancelled,ctx,p);
             p->origin_clean=got->type!=WAY_TYPE_OPAQUE;
         } else os64_strcopy(p->why,sizeof(p->why),got&&got->why[0]?got->why:"image fetch failed");
         yonder_fetched_free(got);return p->status==OS64_IMAGE_OK?1:0;
@@ -224,6 +245,9 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         os64_snprintf(p->why, sizeof(p->why), "did not fetch (%s)", os64_fetch_status_name(body.fetch));
         return 0;
     }
+    p->fetched = true;
+    p->served = body.served;
+    p->body_bytes = body.len;
     // An error's body is the server's page about the error, not the picture.
     if (cancelled && cancelled(ctx)) {
         os64_strcopy(p->why, sizeof(p->why), "cancelled");
@@ -239,7 +263,7 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         else
             os64_strcopy(p->why, sizeof(p->why), "an empty reply");
     } else {
-        p->status = decode(body.bytes, body.len, body.content_type, j, cancelled, ctx, p);
+        p->status = decode_observed(body.bytes, body.len, body.content_type, j, cancelled, ctx, p);
     }
     os64_free(body.bytes);
     return p->status == OS64_IMAGE_OK ? 1 : 0;

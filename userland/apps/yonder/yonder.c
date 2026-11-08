@@ -146,8 +146,8 @@ static yonder_cookies_mode_t s_cookies_asked;
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
 // one's whole sequence, or an SVG's document/styles; past it a picture draws as its frame.
-// A picture is kept at its own size, not the size it is drawn (DEBTS.md),
-// so a page of 4K wallpapers costs 33 MiB a picture.
+// Display rasters can be reduced to cover their drawn size; native Canvas
+// sources keep full-resolution pixels. Worker scratch has separate admission.
 #define PICTURES_KEPT_MAX ((size_t)1u << 30)
 
 // A page's pictures in the pool at once: half its workers. The pool admits
@@ -583,6 +583,7 @@ typedef struct {
     PictureState state;
     yonder_picture_kind_t kind;
     unsigned canvas_request;
+    bool metadata_seen, pixels_seen; // provider uses, independent of display painting
     bool origin_clean;
     yonder_svg_document_t *svg;
     // Its own size in CSS pixels, any kind, once it has arrived (kept when
@@ -776,6 +777,12 @@ typedef struct Page {
     // pictures_settle).
     bool record_owed;
     size_t kept_bytes, picture_url_bytes;
+    size_t picture_kept_peak;       // retained products only; excludes worker scratch
+    uint64_t image_metadata_reads, image_pixel_reads;
+    uint64_t picture_jobs, picture_resamples, picture_decodes, picture_reductions;
+    uint64_t picture_decode_us, picture_decode_max_us, picture_decode_untimed;
+    uint64_t picture_network, picture_fresh, picture_validated, picture_stale, picture_network_bytes;
+    uint64_t picture_decode_nomem, picture_decode_limit, picture_budget_refusals, picture_submit_refusals;
     // Synchronous SVG jobs, destinations and retained raster variants share
     // this subdivision. Document/cascade memory is accounted separately.
     size_t svg_bytes, svg_peak;
@@ -3075,6 +3082,70 @@ static void diag_motion(Page *p);
 
 // ── The memory census (MEMORY_CENSUS.md) ──────────────────────────────
 
+// These are subdivisions of the census's pictures owner, not additional
+// owners. Sequence cost includes encoded input and GIF working canvases;
+// raster cost is the retained grid. Codec scratch is outside this account.
+typedef struct {
+    uint64_t display, native, sequence, svg, metadata_only;
+    uint32_t display_entries, native_entries, native_with_display_url;
+} PictureMemory;
+
+static PictureMemory picture_memory(const Page *p)
+{
+    PictureMemory m = {0};
+    for (int32_t i = 0; i < p->npics; i++) {
+        const Picture *pic = &p->pics[i];
+        if (pic->canvas_request) {
+            m.native_entries++;
+            m.native_with_display_url += picture_find(p, pic->url) >= 0;
+        } else m.display_entries++;
+        if (pic->state != PIC_SHOWN) continue;
+        if (pic->kind == YONDER_PICTURE_SEQUENCE) m.sequence += pic->cost;
+        else if (pic->kind == YONDER_PICTURE_SVG) m.svg += pic->cost;
+        else if (pic->canvas_request) {
+            m.native += pic->cost;
+            if (pic->metadata_seen && !pic->pixels_seen) m.metadata_only += pic->cost;
+        } else m.display += pic->cost;
+    }
+    return m;
+}
+
+static void diag_picture_memory(Page *p)
+{
+    PictureMemory m = picture_memory(p);
+    char line[256];
+    os64_snprintf(line, sizeof(line),
+        "display %lu B; native %lu B; sequence %lu B; SVG %lu B; retained peak %lu B",
+        (unsigned long)m.display, (unsigned long)m.native, (unsigned long)m.sequence,
+        (unsigned long)m.svg, (unsigned long)p->picture_kept_peak);
+    yonder_diag_fact(p->diag, "picture memory", line);
+    os64_snprintf(line, sizeof(line),
+        "%u display entries; %u native entries (%u share a display URL); "
+        "%lu metadata acquisitions; %lu pixel acquisitions; "
+        "%lu B native rasters used only for metadata",
+        m.display_entries, m.native_entries, m.native_with_display_url, (unsigned long)p->image_metadata_reads,
+        (unsigned long)p->image_pixel_reads, (unsigned long)m.metadata_only);
+    yonder_diag_fact(p->diag, "image acquisition", line);
+    os64_snprintf(line, sizeof(line),
+        "%lu jobs; %lu resamples; %lu decode calls; %lu reductions; %lu us decode/reduce total; "
+        "%lu us maximum; %lu untimed",
+        (unsigned long)p->picture_jobs, (unsigned long)p->picture_resamples,
+        (unsigned long)p->picture_decodes, (unsigned long)p->picture_reductions,
+        (unsigned long)p->picture_decode_us, (unsigned long)p->picture_decode_max_us,
+        (unsigned long)p->picture_decode_untimed);
+    yonder_diag_fact(p->diag, "picture work", line);
+    os64_snprintf(line, sizeof(line),
+        "%lu network replies; %lu entity bytes from network; %lu fresh cache; %lu validated; %lu stale",
+        (unsigned long)p->picture_network, (unsigned long)p->picture_network_bytes,
+        (unsigned long)p->picture_fresh, (unsigned long)p->picture_validated, (unsigned long)p->picture_stale);
+    yonder_diag_fact(p->diag, "picture fetch", line);
+    os64_snprintf(line, sizeof(line),
+        "%lu retained budget; %lu submission; %lu decode allocation; %lu decode limit",
+        (unsigned long)p->picture_budget_refusals, (unsigned long)p->picture_submit_refusals,
+        (unsigned long)p->picture_decode_nomem, (unsigned long)p->picture_decode_limit);
+    yonder_diag_fact(p->diag, "picture refusals", line);
+}
+
 // One moment's census of `p`: every owner's total and the process heap
 // around them; with `detail`, libdom's kinds and the script heap's own
 // census too.
@@ -3252,6 +3323,7 @@ static void diag_observe(Page *p, const char *when)
                   (int)p->npics, (int)shown, (int)failed, (int)p->not_kept, (int)coming,
                   (int)p->unasked);
     yonder_diag_fact(d, "pictures", v);
+    diag_picture_memory(p);
     // Kept at the size they are drawn (PICTURE_SIZES.md), and what that
     // spared against keeping them whole: a line once there are some, and
     // from then on, saying none when a zoom has grown them all back whole.
@@ -4872,6 +4944,7 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
     yonder_picture_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
     if (job == NULL) {
         *why = g.pool == NULL ? "no worker to fetch it" : "no memory to ask for it";
+        p->picture_submit_refusals++;
         return 0;
     }
     job->kind = YONDER_JOB_PICTURE;
@@ -4892,6 +4965,7 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
         if (job->data_url == NULL) {
             yonder_picture_release(job, NULL);
             *why = "no memory for its address";
+            p->picture_submit_refusals++;
             return 0;
         }
     } else {
@@ -4906,6 +4980,7 @@ static os64_work_id_t picture_submit(Page *p, int32_t index, uint32_t cover_w, u
     if (id == 0) {
         yonder_picture_release(job, NULL);
         *why = "the workers would not take it";
+        p->picture_submit_refusals++;
     }
     return id;
 }
@@ -6115,6 +6190,7 @@ static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *produ
         pic->refused_w = job->cover_w;
         pic->refused_h = job->cover_h;
     } else if (product->cost > PICTURES_KEPT_MAX - (g.page.kept_bytes - old)) {
+        g.page.picture_budget_refusals++;
         if (shown)
             picture_fact(pic, "past the memory kept at the size it is drawn; kept at the size it was");
         pic->refused_w = job->cover_w;
@@ -6130,6 +6206,8 @@ static void picture_resampled(yonder_picture_job_t *job, yonder_picture_t *produ
         pic->image = product->image;
         os64_memset(&product->image, 0, sizeof(product->image));
         g.page.kept_bytes = g.page.kept_bytes - old + product->cost;
+        if (g.page.kept_bytes > g.page.picture_kept_peak)
+            g.page.picture_kept_peak = g.page.kept_bytes;
         pic->cost = product->cost;
         if (!shown) {
             pic->state = PIC_SHOWN;
@@ -6145,14 +6223,34 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
 {
     if (job->generation != g.page_serial || job->index < 0 || job->index >= g.page.npics)
         return;                     // a page no longer on screen
+    Picture *pic = &g.page.pics[job->index];
+    if (job->resample ? !pic->resampling : pic->state != PIC_WAITING)
+        return;
+    g.page.picture_jobs++;
+    g.page.picture_resamples += job->resample;
+    if (product != NULL) {
+        g.page.picture_decodes += product->decoded;
+        g.page.picture_reductions += product->reduced;
+        g.page.picture_decode_us += product->decode_us;
+        if (product->decode_us > g.page.picture_decode_max_us)
+            g.page.picture_decode_max_us = product->decode_us;
+        g.page.picture_decode_untimed += product->decoded && !product->decode_timed;
+        g.page.picture_decode_nomem += product->decoded && product->status == OS64_IMAGE_NO_MEMORY;
+        g.page.picture_decode_limit += product->decoded && product->status == OS64_IMAGE_LIMIT;
+        if (product->fetched) {
+            g.page.picture_network += product->served == WAY_SERVED_NETWORK;
+            if (product->served == WAY_SERVED_NETWORK)
+                g.page.picture_network_bytes += product->body_bytes;
+            g.page.picture_fresh += product->served == WAY_SERVED_KEPT;
+            g.page.picture_validated += product->served == WAY_SERVED_CONFIRMED;
+            g.page.picture_stale += product->served == WAY_SERVED_STALE;
+        }
+    }
     diag_cookies_short(g.page.diag, &job->hooks.cookies_short);
     if (job->resample) {
         picture_resampled(job, product);
         return;
     }
-    Picture *pic = &g.page.pics[job->index];
-    if (pic->state != PIC_WAITING)
-        return;
     g.page.waiting--;
     g.page.in_flight--;
     if (product == NULL || product->status != OS64_IMAGE_OK) {
@@ -6167,6 +6265,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     pic->height = product->height;
     size_t bytes = product->cost;
     if (bytes > PICTURES_KEPT_MAX - g.page.kept_bytes) {
+        g.page.picture_budget_refusals++;
         // Not a failure: what the page's pictures may cost is spent. Named
         // all the same, so every picture not shown is on the record. Its
         // size is kept: its frame is laid out at it, and a still raster is
@@ -6189,6 +6288,8 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     pic->state = PIC_SHOWN;
     pic->cost = bytes;
     g.page.kept_bytes += bytes;
+    if (g.page.kept_bytes > g.page.picture_kept_peak)
+        g.page.picture_kept_peak = g.page.kept_bytes;
     if (pic->moving != NULL) {
         pic->playing = true;
         pic->due = yonder_now_ms() + frame_delay(pic);
@@ -13995,6 +14096,8 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
     /* The picture catalog and worker generation belong to the shown page.
      * Streaming/coming pages acquire images once they become that owner. */
     if(p!=&g.page)return OS64_DOM_IMAGE_PENDING;
+    if (pixels) p->image_pixel_reads++;
+    else p->image_metadata_reads++;
     const os64_html_attr_t *src=os64_html_attr(node,"src");
     if(!src||!src->value[0])return OS64_DOM_IMAGE_PENDING;
     char resolved[OS64_FETCH_URL_MAX];const char *url=src->value;
@@ -14011,6 +14114,8 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
     if(index<0)return OS64_DOM_IMAGE_REFUSED;
     if(p==&g.page)pictures_feed(p);
     Picture *pic=&p->pics[index];
+    if (pixels) pic->pixels_seen = true;
+    else pic->metadata_seen = true;
     if(pic->state==PIC_QUEUED||pic->state==PIC_WAITING)return OS64_DOM_IMAGE_PENDING;
     if(pic->state!=PIC_SHOWN)return OS64_DOM_IMAGE_BROKEN;
     uint32_t w,h;const uint32_t *plane=picture_pixels(pic,&w,&h);

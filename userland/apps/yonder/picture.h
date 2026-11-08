@@ -70,6 +70,12 @@ typedef struct {
     os64_image_t image;             // when kind is YONDER_PICTURE_RASTER: the pixels kept
     os64_image_sequence_t *sequence;
     size_t cost;
+    // Observations of this worker, not retained allocation charges. Body
+    // bytes are the fetched entity length, not compressed wire traffic.
+    size_t body_bytes;
+    bool fetched, decoded, reduced, decode_timed;
+    way_served_t served;
+    uint64_t decode_us;             // includes reduction and codec/parser work
     // UNKNOWN_FORMAT: what the bytes are (yonder_diag_image_format), for
     // the page's record. NULL otherwise.
     const char *format;

@@ -122,6 +122,9 @@ static void sizes_worker_cases(void)
           p->cost == 100u * 50u * 4u, "sizes: the worker keeps the covering size, and says the natural one");
     check(p && (p->image.pixels[0] >> 24) == 0xff && (p->image.pixels[0] & 0xff) == 0x40,
           "sizes: the kept pixels are the picture's");
+    check(p && p->fetched && p->served == WAY_SERVED_NETWORK && p->body_bytes == 13 &&
+          p->decoded && p->reduced,
+          "sizes: worker observations separate fetched entity bytes from retained pixels");
     yonder_picture_release(job, out);
     job = sizes_job(0, 0); out = NULL;
     (void)yonder_picture_run(job, NULL, NULL, &out); p = out;
@@ -497,6 +500,113 @@ static void sizes_page_cases(void)
     yonder_diag_render(g.page.diag, text, sizeof(text));
     check(strstr(text, "picture sizes: 0 kept at the size they are drawn, 0 KiB less than whole") != NULL &&
           strstr(text, "picture sizes: 1 kept") == NULL, "sizes: the record says none are kept smaller now");
+    sizes_close();
+}
+
+static char *memory_fixture_read(const char *name, size_t *length)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "tools/pages/%s", name);
+    FILE *f = fopen(path, "rb");
+    check(f != NULL, "image fixture: source opens");
+    if (!f) return NULL;
+    char *bytes = malloc(128 * 1024 + 1);
+    if (!bytes) { fclose(f); return NULL; }
+    *length = fread(bytes, 1, 128 * 1024, f);
+    check(feof(f) && !ferror(f), "image fixture: source fits and reads whole");
+    fclose(f);
+    bytes[*length] = '\0';
+    return bytes;
+}
+
+static void picture_memory_pages(void)
+{
+    size_t length;
+    char *png = memory_fixture_read("image-memory.png", &length);
+    if (!png) return;
+    char *base64 = data_b64(png, length);
+    free(png);
+    check(base64 != NULL, "image fixture: data transport allocated");
+    if (!base64) return;
+    const char *modes[] = {"untouched", "metadata", "canvas"};
+    for (unsigned m = 0; m < 3; m++) {
+        char name[128];
+        snprintf(name, sizeof(name), "image-memory-%s.html", modes[m]);
+        char *source = memory_fixture_read(name, &length);
+        if (!source) continue;
+        char *at = strstr(source, "image-memory.png");
+        check(at != NULL, "image fixture: source names the PNG");
+        if (!at) { free(source); continue; }
+        size_t cap = length + strlen(base64) + 64;
+        char *html = malloc(cap);
+        if (!html) { free(source); continue; }
+        /* The same bytes over a data URL avoid the harness's text-only
+         * HTTP transport. Production libpng still decodes the actual PNG. */
+        snprintf(html, cap, "%.*sdata:image/png;base64,%s%s", (int)(at - source), source,
+                 base64, at + strlen("image-memory.png"));
+        probe_page(html, true);
+        free(source); free(html);
+        pool_open = true; g.pool = (os64_work_pool_t *)&pool_fake;
+        memset(&pool_work, 0, sizeof(pool_work));
+        pictures_start(&g.page);
+        for (unsigned turn = 0; turn < 8; turn++) {
+            script_turn();
+            while (sizes_run()) {}
+        }
+        check(m == 0 ? probe_text_is("result", "The image is displayed; no script accesses it.") :
+              m == 1 ? probe_text_is("result", "PASS: natural size 1920 x 1080") :
+                       probe_text_is("result", "PASS: one draw in onload, immediate blue readback."),
+              "image fixture: delivered page completes its real script and one-shot readback");
+        PictureMemory memory = picture_memory(&g.page);
+        check(memory.display == 57600 && memory.native == (m ? 8294400u : 0u) &&
+              memory.metadata_only == (m == 1 ? 8294400u : 0u),
+              "image fixture: real PNG and script reproduce baseline ownership");
+        printf("image fixture %s: display=%lu native=%lu metadata_only=%lu bytes\n", modes[m],
+               (unsigned long)memory.display, (unsigned long)memory.native,
+               (unsigned long)memory.metadata_only);
+        sizes_close();
+    }
+    os64_free(base64);
+}
+
+static void picture_memory_baseline(void)
+{
+    sizes_open("<!doctype html><img id=pic src='data:image/png,SIZED%20400x200' width=100 height=50>",
+               "SIZED 400x200");
+    g.page.modern = true;
+    pictures_start(&g.page);
+    check(sizes_run(), "image baseline: display arrives");
+    PictureMemory before = picture_memory(&g.page);
+    check(before.display == 20000 && before.native == 0,
+          "image baseline: untouched thumbnail has only its reduced raster");
+    os64_dom_image_view_t view;
+    const os64_html_node_t *node = probe_id("pic");
+    check(canvas_source(g.page.way.doc, node, false, &view) == OS64_DOM_IMAGE_PENDING,
+          "image baseline: metadata starts a separate request");
+    check(sizes_run(), "image baseline: metadata request arrives");
+    check(canvas_source(g.page.way.doc, node, false, &view) == OS64_DOM_IMAGE_READY &&
+          view.surface.width == 400 && view.surface.height == 200,
+          "image baseline: metadata reports natural dimensions");
+    canvas_source_release(g.page.way.doc, &view);
+    PictureMemory after = picture_memory(&g.page);
+    check(after.display == 20000 && after.native == 320000 && after.metadata_only == 320000 &&
+          after.native_with_display_url == 1 &&
+          after.display + after.native + after.sequence + after.svg == g.page.kept_bytes &&
+          g.page.picture_kept_peak == g.page.kept_bytes,
+          "image baseline: metadata alone retains the duplicate full raster, reconciled to owner");
+    check(g.page.picture_jobs == 2 && g.page.picture_decodes == 2 && g.page.picture_reductions == 1 &&
+          g.page.picture_network == 0 && g.page.picture_network_bytes == 0,
+          "image baseline: two data decodes, one reduction, no network attributed to data URLs");
+    printf("image baseline: display=%lu native=%lu metadata_only=%lu retained=%lu peak=%lu bytes\n",
+           (unsigned long)after.display, (unsigned long)after.native, (unsigned long)after.metadata_only,
+           (unsigned long)g.page.kept_bytes, (unsigned long)g.page.picture_kept_peak);
+    check(canvas_source(g.page.way.doc, node, true, &view) == OS64_DOM_IMAGE_READY,
+          "image baseline: pixel acquisition lends the same native raster");
+    canvas_source_release(g.page.way.doc, &view);
+    after = picture_memory(&g.page);
+    check(after.metadata_only == 0 && after.native == 320000 &&
+          g.page.image_metadata_reads == 2 && g.page.image_pixel_reads == 1,
+          "image baseline: pixel use changes attribution without changing retained memory");
     sizes_close();
 }
 

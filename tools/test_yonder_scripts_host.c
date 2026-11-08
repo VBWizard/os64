@@ -11642,6 +11642,14 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if(getenv("YONDER_IMAGES_ONLY")) {
+        picture_sizes_cases(); data_picture_cases(); picture_memory_baseline(); picture_memory_pages();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"images: text released");
+        check(live==0,"images: heap empty");
+        printf("yonder images: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_POINTER_ONLY")) {
         pointer_window_cases(); input_links(); input_hover(); input_ui_events(); hover_batch_cases();
         os64_text_font_release(probe_font);
@@ -11730,6 +11738,8 @@ int main(void)
     picture_svg_window_cases();
     data_picture_cases();
     picture_sizes_cases();
+    picture_memory_baseline();
+    picture_memory_pages();
     covered_link_cases();
     clipped_control_cases();
     classic_downloaded_cases();
