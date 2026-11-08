@@ -26,6 +26,13 @@ WPT's tier-2 pages, thousands of calls each, ran into the script
 deadline. The work is still done on the call; the promise now
 settles from a task (§ 5). The input-in-place dividend is unchanged.*
 
+*Tier 3c, RSA-OAEP and RSASSA-PKCS1-v1_5, was booked after 3b (Chris,
+2026-11-08): the corpus's RSA callers are telemetry, session replay,
+consent, a news-site verifier and two sign-in libraries, and no P5
+triage has met RSA as a page's wall, so it waits in DEBTS for a page
+that fails on it. When it is built it is both algorithms whole, as § 2
+cuts them, not the part the corpus happens to call.*
+
 ## 1. Why now, and what pages ask
 
 Two pages on the P5 die on the missing member today:
@@ -365,8 +372,9 @@ does not know.
   RSA key generation's below. The tier-3 page times 100,000 to a million
   iterations on the P5.
 - **RSA key generation blocks the page** for as long as it takes (a 2048-bit
-  key is the slow case; to be measured on the P5 in tier 3). One host in
-  the corpus generates RSA keys at all. If the P5 says it is too slow,
+  key is the slow case; to be measured on the P5 in tier 3c). Three hosts
+  in the corpus generate RSA keys: two through one session-replay
+  recorder, and one sign-in library. If the P5 says it is too slow,
   that operation alone moves to yonder's worker pool, then; it is the one
   operation where "in parallel" would be felt.
 - **A CryptoKey cannot be cloned** (`postMessage`, structured clone):
