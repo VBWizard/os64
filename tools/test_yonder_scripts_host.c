@@ -6966,6 +6966,9 @@ static void memory_census_cases(void) {
     check(g.page.census.n==0,"census: an observation alone takes no sample");
     census_turn();
     check(g.page.census.n==1,"census: the first sample is due at once");
+    check(has(diag_file("/tmp/diag",name),"\nmemory timeline: +0s heap ") &&
+          has(diag_file("/tmp/diag",name),"\ncensus: on; 1 sample every 10s;"),
+          "census: a timer sample is in the page's file at once, not only when the page is left");
     census_turn();
     check(g.page.census.n==1,"census: and the next not before its interval");
     loop_drop();

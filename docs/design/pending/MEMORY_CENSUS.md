@@ -56,7 +56,7 @@ What each owner has today, and what this design adds:
 | **canvas** (libdom's bitmaps) | `dom->canvas_bytes`, no getter | a getter |
 | **bodies** (XHR and Blob bytes outside the engine) | `os64_dom_body_stats` | — |
 | **script** (the engine's heap) | peak only (`os64_js_heap_peak`) | the LIVE charge (`os64_js_heap_bytes`), and in the census tier the engine's own breakdown (§ 5) |
-| **html** (the document) | `doc->arena_bytes`, `node_count`, `os64_html_retired_bytes`, `os64_html_changes_bytes` | — (read as they are) |
+| **html** (the document) | `doc->arena_bytes` (which already holds the retired blocks pins keep and the change records), `node_count` | — (read as they are) |
 | **page** (libpage's state) | `os64_page_state_bytes` | — |
 | **sheets** (parsed stylesheets) | `os64_arena_stats` on each sheet's arena | a sum over the page's sheets |
 | **cascade** | none | `garb_cascade_bytes` over its private arenas |
@@ -119,7 +119,10 @@ while its scripts still exist. Only a sample adds to the timeline, writes
 the detail lines and walks the script heap; any other time the record is
 observed (pictures in, a record asked for) refreshes the summary alone, so
 how often a record is looked at changes neither the timeline's spacing nor
-how often the heap is walked. A detail line with nothing to say at a sample
+how often the heap is walked. A timer sample also rewrites the page's file,
+so what the census gathered survives yonder being stopped or killed
+mid-investigation; the file's `written` line still names the record's last
+observation, and the timeline says when each sample was taken. A detail line with nothing to say at a sample
 is removed, never left standing from an earlier one. A sample keeps the
 process heap and the totals of the owners that move with a page's growth:
 script, dom, html, layout, pictures and cascade.

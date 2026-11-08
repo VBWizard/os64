@@ -3082,10 +3082,10 @@ static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
     sheet->heap_mapped = heap.bytes_mapped;
     sheet->heap_live = heap.bytes_live;
     const os64_html_document_t *doc = page_doc(p);
+    // The arena's charge already holds the blocks pins keep (retired) and
+    // the change records (os64_html_changes_bytes): both come from it.
     if (doc != NULL)
-        yonder_census_owner(sheet, "html",
-                            doc->arena_bytes + os64_html_retired_bytes(doc) + os64_html_changes_bytes(doc),
-                            doc->node_count, "nodes");
+        yonder_census_owner(sheet, "html", doc->arena_bytes, doc->node_count, "nodes");
     if (p->state != NULL)
         yonder_census_owner(sheet, "page", os64_page_state_bytes(p->state), 0, NULL);
     // Entries may share a parse (SheetParse.refs): each is counted once.
@@ -3182,13 +3182,19 @@ static uint64_t census_due(void)
     return tl->n == 0 ? yonder_now_ms() : p->census_began + tl->samples[tl->n - 1].ms + tl->interval_ms;
 }
 
-// THE CENSUS'S TURN: the shown page's timeline sample, when one is due.
+// THE CENSUS'S TURN: the shown page's timeline sample, when one is due,
+// and the page's file rewritten with it, so what the census has gathered
+// survives yonder being stopped or killed. The file's `written` line still
+// names the record's last observation; the timeline says when each sample
+// was taken.
 static void census_turn(void)
 {
     Page *p = &g.page;
     if (!p->censused || p->diag == NULL) return;
-    if (yonder_census_timeline_due(&p->census, yonder_now_ms() - p->census_began))
+    if (yonder_census_timeline_due(&p->census, yonder_now_ms() - p->census_began)) {
         diag_census(p, true);
+        diag_write(p->diag);
+    }
 }
 
 static void diag_observe(Page *p, const char *when)
