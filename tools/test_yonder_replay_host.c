@@ -1194,9 +1194,13 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx, RpIndex *
     stream_window();
     pool_submit_hook=rp_submit; pool_cancel_hook=rp_cancel;
     g.scripts_on=load->scripts; g.script_ms=(uint64_t)load->script_seconds*1000;
-    /* The heap yonder runs a page with by default: a record does not say
-     * which a page had (DEBTS.md). */
+    /* The heap and the document ceilings yonder runs a page with by
+     * default: a record does not say which a page had (DEBTS.md). */
     g.script_memory=(size_t)YONDER_SCRIPT_MEMORY_MB_DEFAULT<<20;
+    page_memory_set(yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_DEFAULT));
+    check(s_page_memory.tree==yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_DEFAULT).tree &&
+          s_env.max_arena_bytes==yonder_page_memory_split(YONDER_PAGE_MEMORY_MB_DEFAULT).layout,
+          "replay: a page runs under yonder's default document ceilings");
     g.modern=load->modern; g.zoom=load->zoom; s_dark=load->dark; s_reduce_motion=load->reduce;
     s_animations=!load->still;
     rp_apply_inputs(load);
