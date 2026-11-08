@@ -1272,6 +1272,16 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
                                     flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
 /* NULL supplies zero statistics. The answer is copied, not borrowed. */
 flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
+/* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas
+ * has reserved — the computed styles, the boxes, the lines and fragments,
+ * and the public boxes — and how many boxes it built, anonymous ones
+ * included. Arena bytes only: the tree's side tables (its maps and paint
+ * lists) are not counted here. NULL answers zeros. Cheap: no walk. */
+typedef struct {
+    size_t styles_bytes, boxes_bytes, lines_bytes, public_bytes;
+    uint64_t boxes;
+} flow_tree_stats_t;
+flow_tree_stats_t flow_tree_stats(const flow_tree_t *tree);
 uint64_t flow_styles_reused(const flow_tree_t *tree);
 void flow_free(flow_tree_t *tree);
 // Borrowed snapshot whose indices the boxes carry; NULL if built without one.

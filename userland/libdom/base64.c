@@ -53,7 +53,7 @@ static JSValue encode(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
         return d_error(ctx, "InvalidCharacterError", "btoa takes a string whose every character is below U+0100");
     }
     size_t groups = text.length / 3 + (text.length % 3 != 0);
-    char *out = groups <= (SIZE_MAX - 1) / 4 ? d_alloc(dom, groups * 4 + 1) : NULL;
+    char *out = groups <= (SIZE_MAX - 1) / 4 ? d_alloc_kind(dom, groups * 4 + 1, OS64_DOM_MEM_TEXT) : NULL;
     if (out == NULL) {
         d_string_free(dom, &text);
         return d_error(ctx, "QuotaExceededError", "btoa quota exceeded");
@@ -99,7 +99,7 @@ static JSValue decode(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
     }
     /* Three bytes per four digits, each byte at most two bytes of UTF-8. */
     size_t bytes = kept / 4 * 3 + (kept % 4 != 0 ? kept % 4 - 1 : 0);
-    char *out = bytes <= SIZE_MAX / 2 - 1 ? d_alloc(dom, bytes * 2 + 1) : NULL;
+    char *out = bytes <= SIZE_MAX / 2 - 1 ? d_alloc_kind(dom, bytes * 2 + 1, OS64_DOM_MEM_TEXT) : NULL;
     if (out == NULL) {
         d_string_free(dom, &text);
         return d_error(ctx, "QuotaExceededError", "atob quota exceeded");

@@ -2099,6 +2099,20 @@ flow_tree_t *flow_layout_restyled(const os64_html_document_t *doc, const os64_pa
 {
     return flow_layout_incremental(doc, model, width, env, previous, NULL, profile, clock, clock_ctx);
 }
+flow_tree_stats_t flow_tree_stats(const flow_tree_t *tree)
+{
+    flow_tree_stats_t out = {0};
+    if (tree == NULL) return out;
+    if (tree->styles != NULL) out.styles_bytes = tree->styles->arena.reserved;
+    if (tree->boxes != NULL) {
+        out.boxes_bytes = tree->boxes->arena.reserved;
+        out.boxes = tree->boxes->count;
+    }
+    if (tree->layout != NULL) out.lines_bytes = tree->layout->arena.reserved;
+    out.public_bytes = tree->arena.reserved;
+    return out;
+}
+
 flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree)
 {
     return tree ? tree->reuse_stats : (flow_reuse_stats_t){0};

@@ -137,7 +137,7 @@ void d_ranges_sweep(os64_dom_t *dom)
 
 static DRange *record_new(os64_dom_t *dom, JSContext *ctx, uint8_t kind)
 {
-    DRange *r = d_alloc(dom, sizeof(*r));
+    DRange *r = d_alloc_kind(dom, sizeof(*r), OS64_DOM_MEM_RANGE);
     if (r == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         return NULL;
@@ -361,7 +361,7 @@ static JSValue contents(os64_dom_t *dom, JSContext *ctx, DRange *r, const Bounds
     const os64_html_node_t *last = inclusive_ancestor(b->end, b->start) ? NULL : child_toward(common, b->end);
     size_t children = 0;
     for (const os64_html_node_t *c = common->first_child; c != NULL; c = c->next) children++;
-    Holds h = {.dom = dom, .held = d_alloc(dom, (children + 6) * sizeof(*h.held))};
+    Holds h = {.dom = dom, .held = d_alloc_kind(dom, (children + 6) * sizeof(*h.held), OS64_DOM_MEM_RANGE)};
     if (h.held == NULL) {
         JS_FreeValue(ctx, fragment);
         return d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
@@ -480,7 +480,7 @@ static int delete_contents(os64_dom_t *dom, JSContext *ctx, DRange *r)
     if (b.start == b.end && b.start_offset == b.end_offset) return 0;
     if (b.start == b.end && is_data(b.start))
         return replace_data(dom, ctx, b.start, b.start_offset, b.end_offset - b.start_offset);
-    Holds h = {.dom = dom, .held = d_alloc(dom, (top_contained(&b, NULL) + 3) * sizeof(*h.held))};
+    Holds h = {.dom = dom, .held = d_alloc_kind(dom, (top_contained(&b, NULL) + 3) * sizeof(*h.held), OS64_DOM_MEM_RANGE)};
     if (h.held == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         return -1;
@@ -656,7 +656,7 @@ static JSValue stringify(os64_dom_t *dom, JSContext *ctx, const DRange *r)
         }
         if (pass == 0) {
             total = at;
-            out = d_alloc(dom, total + 1);
+            out = d_alloc_kind(dom, total + 1, OS64_DOM_MEM_RANGE);
             if (out == NULL) return d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         }
     }
@@ -739,7 +739,7 @@ static int rects_room(Rects *r, size_t more)
     if (r->count + more <= r->cap) return 0;
     size_t cap = r->cap ? r->cap * 2 : 16;
     while (cap < r->count + more) cap *= 2;
-    double *v = d_alloc(r->dom, cap * 4 * sizeof(double));
+    double *v = d_alloc_kind(r->dom, cap * 4 * sizeof(double), OS64_DOM_MEM_RANGE);
     if (v == NULL) return -1;
     if (r->v != NULL) {
         os64_memcpy(v, r->v, r->count * 4 * sizeof(double));
@@ -766,7 +766,7 @@ static int text_rects(JSContext *ctx, Rects *r, const os64_html_node_t *n, size_
     const double *source = few;
     double *more = NULL;
     if (count > 8) {
-        more = d_alloc(dom, count * 4 * sizeof(double));
+        more = d_alloc_kind(dom, count * 4 * sizeof(double), OS64_DOM_MEM_RANGE);
         if (more == NULL) {
             d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
             return -1;
@@ -1522,7 +1522,7 @@ int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (!dom->options.ranges || !dom->options.modern) return 0;
     static const JSClassDef range_def = {.class_name = "Range", .finalizer = range_finalizer};
     static const JSClassDef static_def = {.class_name = "StaticRange", .finalizer = static_finalizer};
-    struct DRanges *s = d_alloc(dom, sizeof(*s));
+    struct DRanges *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_RANGE);
     if (s == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");
         return -1;

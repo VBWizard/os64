@@ -177,9 +177,29 @@ static DomFixture fixture_new(const os64_dom_options_t *options)
     return fixture_new_capped(options, 0);
 }
 
+/* MEMORY_CENSUS.md § 4: the kinds are a partition of os64_dom_bytes, live
+ * blocks never exceed blocks made, and an unknown kind answers zero. */
+static void memory_balanced(const os64_dom_t *dom, const char *when)
+{
+    size_t bytes = 0;
+    bool sane = true;
+    for (int k = 0; k < OS64_DOM_MEM_KINDS; k++) {
+        os64_dom_mem_t m = os64_dom_memory(dom, (os64_dom_mem_kind_t)k);
+        bytes += m.bytes;
+        if (m.blocks > m.made || (m.blocks == 0) != (m.bytes == 0)) sane = false;
+    }
+    os64_dom_mem_t past = os64_dom_memory(dom, OS64_DOM_MEM_KINDS);
+    if (bytes != os64_dom_bytes(dom))
+        fprintf(stderr, "memory census %s: kinds %zu, bytes %zu\n", when, bytes, os64_dom_bytes(dom));
+    check(bytes == os64_dom_bytes(dom) && sane && past.bytes == 0 && past.made == 0,
+          "memory census: the kinds sum to the binding's bytes");
+}
+
 static void fixture_free(DomFixture *fixture)
 {
+    memory_balanced(fixture->binding, "before drain");
     os64_dom_drain(fixture->binding);
+    memory_balanced(fixture->binding, "after drain");
     check(os64_dom_registry_count(fixture->binding) == 0, "drain releases retained engine values");
     os64_dom_drain(fixture->binding);
     os64_js_destroy(fixture->runtime);

@@ -23,7 +23,7 @@ bool d_string(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString *out)
         JS_FreeCString(ctx, source);
         goto quota;
     }
-    char *copy = d_alloc(dom, length + extra + 1);
+    char *copy = d_alloc_kind(dom, length + extra + 1, OS64_DOM_MEM_TEXT);
     if (copy == NULL) { JS_FreeCString(ctx, source); goto quota; }
     size_t n = 0;
     for (size_t i = 0; i < length;) {
@@ -111,7 +111,7 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
         if (node->kind != OS64_HTML_ELEMENT && !root) return JS_ThrowTypeError(ctx, "HTML requires an element");
         bool scripting = d_scripting(dom, node);
         size_t length = os64_html_serialize(node, property == D_INNER_HTML, scripting, NULL, 0);
-        char *buffer = length == SIZE_MAX ? NULL : d_alloc(dom, length + 1);
+        char *buffer = length == SIZE_MAX ? NULL : d_alloc_kind(dom, length + 1, OS64_DOM_MEM_TEXT);
         if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM serialization quota exceeded");
         os64_html_serialize(node, property == D_INNER_HTML, scripting, buffer, length + 1);
         JSValue result = JS_NewStringLen(ctx, buffer, length);
@@ -129,7 +129,7 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
             if (at->text_len > SIZE_MAX - length) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
             length += at->text_len;
         }
-    char *buffer = length == SIZE_MAX ? NULL : d_alloc(dom, length + 1);
+    char *buffer = length == SIZE_MAX ? NULL : d_alloc_kind(dom, length + 1, OS64_DOM_MEM_TEXT);
     if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
     size_t offset = 0;
     for (const os64_html_node_t *at = node->first_child; at != NULL; at = text_next(node, at))

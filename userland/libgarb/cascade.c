@@ -3339,6 +3339,19 @@ bool garb_cascade_matches_scoped(const garb_cascade_t *c, const garb_sheet_in_t 
     return true;
 }
 
+size_t garb_cascade_bytes(const garb_cascade_t *c)
+{
+    if (c == NULL) return 0;
+    // The rule, entry, keyframe and attribute tables and the selector
+    // indexes all come from `self`'s arena (grow, alloc); only the slot
+    // table and the dirty list are the heap's.
+    size_t bytes = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes +
+                   os64_arena_stats(c->reads.arena).reserved_bytes;
+    for (int32_t i = 0; i < c->nattrs; i++) bytes += os64_arena_stats(c->attrs[i].arena).reserved_bytes;
+    bytes += (size_t)c->slotcap * sizeof(*c->slots) + c->dirtycap * sizeof(*c->dirty_nodes);
+    return bytes;
+}
+
 void garb_cascade_free(garb_cascade_t *c)
 {
     if (c == NULL)

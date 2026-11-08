@@ -143,7 +143,7 @@ static bool address_text(os64_dom_t *dom, JSContext *ctx, DString *text, bool tr
     }
     for (size_t at = first; at < end; at++) nuls += text->data[at] == '\0';
     if (first == 0 && end == text->length && nuls == 0) return true;
-    char *out = d_alloc(dom, end - first + 2 * nuls + 1);
+    char *out = d_alloc_kind(dom, end - first + 2 * nuls + 1, OS64_DOM_MEM_URL);
     if (out == NULL) {
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
         return false;
@@ -166,7 +166,7 @@ static bool address_text(os64_dom_t *dom, JSContext *ctx, DString *text, bool tr
 static int url_parse(os64_dom_t *dom, JSContext *ctx, const DString *input, const DString *base, char *out)
 {
     if (base == NULL) return resolve(input->data, NULL, out, OS64_DOM_URL_MAX) ? 1 : 0;
-    char *whole = d_alloc(dom, OS64_DOM_URL_MAX);
+    char *whole = d_alloc_kind(dom, OS64_DOM_URL_MAX, OS64_DOM_MEM_URL);
     if (whole == NULL) {
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
         return -1;
@@ -529,7 +529,7 @@ static int url_arguments(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst
     int parsed = -1;
     if ((!has_base || d_string_text(dom, ctx, argv[1], &base, true)) && address_text(dom, ctx, &input, true) &&
         (!has_base || address_text(dom, ctx, &base, true))) {
-        *out = d_alloc(dom, OS64_DOM_URL_MAX);
+        *out = d_alloc_kind(dom, OS64_DOM_URL_MAX, OS64_DOM_MEM_URL);
         if (*out == NULL) d_error(ctx, "QuotaExceededError", "URL quota exceeded");
         else parsed = url_parse(dom, ctx, &input, has_base ? &base : NULL, *out);
     }
@@ -617,7 +617,7 @@ static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSV
         d_string_free(dom, &text);
         return -1;
     }
-    char *candidate = d_alloc(dom, OS64_DOM_URL_MAX * 3);
+    char *candidate = d_alloc_kind(dom, OS64_DOM_URL_MAX * 3, OS64_DOM_MEM_URL);
     if (candidate == NULL) {
         d_string_free(dom, &text);
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
@@ -1444,7 +1444,7 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
         d_string_free(dom, &text);
         return -1;
     }
-    *out = d_alloc(dom, OS64_DOM_URL_MAX);
+    *out = d_alloc_kind(dom, OS64_DOM_URL_MAX, OS64_DOM_MEM_URL);
     if (*out == NULL) {
         d_string_free(dom, &text);
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
@@ -1455,7 +1455,7 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
      * encoding, which only its links' queries are written in. */
     bool parsed = os64_dom_resolve(dom->document, dom->url != NULL ? dom->url : "about:blank", "", *out,
                                    OS64_DOM_URL_MAX);
-    char *base = parsed ? d_alloc(dom, OS64_DOM_URL_MAX) : NULL;
+    char *base = parsed ? d_alloc_kind(dom, OS64_DOM_URL_MAX, OS64_DOM_MEM_URL) : NULL;
     if (parsed && base == NULL) {
         d_free(dom, *out);
         *out = NULL;

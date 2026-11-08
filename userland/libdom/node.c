@@ -87,7 +87,7 @@ int d_node_kind(const os64_html_node_t *node)
 static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
                                 const os64_html_node_t *node, JSValueConst prototype)
 {
-    DValue *entry = d_alloc(dom, sizeof(*entry));
+    DValue *entry = d_alloc_kind(dom, sizeof(*entry), OS64_DOM_MEM_WRAPPER);
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
     JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
         d_node_prototype(dom, node), dom->node_class);

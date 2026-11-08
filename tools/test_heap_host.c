@@ -207,6 +207,18 @@ static void t_basics(void)
           (unsigned long)gReport->blocks_live);
     CHECK(os64_heap_verify() == 0, "heap does not verify after three mallocs");
 
+    // The in-process copy (MEMORY_CENSUS.md): the same figures the kernel
+    // renders, never torn, and keeping the report's own identity.
+    os64_heap_report_t copy;
+    os64_heap_report_copy(&copy);
+    CHECK(copy.magic == OS64_HEAP_REPORT_MAGIC && (copy.generation & 1) == 0,
+          "the copy is a report, at an even generation");
+    CHECK(copy.blocks_live == 3 && copy.bytes_live == gReport->bytes_live,
+          "the copy's live figures are the report's (%lu blocks)", (unsigned long)copy.blocks_live);
+    CHECK(copy.bytes_mapped == copy.bytes_live + copy.bytes_free + copy.bytes_overhead + copy.bytes_virgin,
+          "the copy keeps the audit identity");
+    os64_heap_report_copy(NULL);
+
     os64_free(a); os64_free(b); os64_free(c);
     CHECK(gReport->blocks_live == 0, "blocks_live = %lu after freeing all",
           (unsigned long)gReport->blocks_live);

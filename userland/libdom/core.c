@@ -1,28 +1,68 @@
 #include "internal.h"
 
-typedef struct { size_t size; } DBlock;
+/* A block's header is one word: its charged size in the low 56 bits and its
+ * kind in the top byte, so the census costs a block nothing. */
+typedef struct { size_t word; } DBlock;
+#define D_BLOCK_KIND_SHIFT 56
+#define D_BLOCK_SIZE_MASK (((size_t)1 << D_BLOCK_KIND_SHIFT) - 1)
+_Static_assert(OS64_DOM_MEM_KINDS <= 256, "a block's kind is its header's top byte");
 static JSClassID anchor_slot, node_slot, collection_slot, style_slot, token_slot, map_slot;
 
-void *d_alloc(os64_dom_t *dom, size_t size)
+static const char *const kMemKindNames[OS64_DOM_MEM_KINDS] = {
+    [OS64_DOM_MEM_OTHER] = "other", [OS64_DOM_MEM_WRAPPER] = "wrapper", [OS64_DOM_MEM_RETAINED] = "retained",
+    [OS64_DOM_MEM_LISTENER] = "listener", [OS64_DOM_MEM_ATTR] = "attr", [OS64_DOM_MEM_COLLECTION] = "collection",
+    [OS64_DOM_MEM_MUTATION] = "mutation", [OS64_DOM_MEM_INTERSECTION] = "intersection",
+    [OS64_DOM_MEM_RESIZE] = "resize", [OS64_DOM_MEM_CUSTOM] = "custom", [OS64_DOM_MEM_RANGE] = "range",
+    [OS64_DOM_MEM_TIMER] = "timer", [OS64_DOM_MEM_URL] = "url", [OS64_DOM_MEM_TEXT] = "text",
+};
+
+void *d_alloc_kind(os64_dom_t *dom, size_t size, os64_dom_mem_kind_t kind)
 {
-    if (size > SIZE_MAX - sizeof(DBlock)) return NULL;
+    if ((unsigned)kind >= OS64_DOM_MEM_KINDS) kind = OS64_DOM_MEM_OTHER;
+    if (size > D_BLOCK_SIZE_MASK - sizeof(DBlock)) return NULL;
     size_t total = sizeof(DBlock) + size;
     if (total > dom->options.max_bytes - dom->bytes) return NULL;
     DBlock *block = os64_malloc(total);
     if (block == NULL) return NULL;
-    block->size = total;
+    block->word = total | (size_t)kind << D_BLOCK_KIND_SHIFT;
     dom->bytes += total;
+    os64_dom_mem_t *m = &dom->memory[kind];
+    m->bytes += total;
+    m->blocks++;
+    m->made++;
     os64_memset(block + 1, 0, size);
     return block + 1;
+}
+
+void *d_alloc(os64_dom_t *dom, size_t size)
+{
+    return d_alloc_kind(dom, size, OS64_DOM_MEM_OTHER);
 }
 
 void d_free(os64_dom_t *dom, void *ptr)
 {
     if (ptr == NULL) return;
     DBlock *block = (DBlock *)ptr - 1;
-    dom->bytes -= block->size;
+    size_t total = block->word & D_BLOCK_SIZE_MASK;
+    os64_dom_mem_t *m = &dom->memory[block->word >> D_BLOCK_KIND_SHIFT];
+    dom->bytes -= total;
+    m->bytes -= total;
+    m->blocks--;
     os64_free(block);
 }
+
+const char *os64_dom_mem_kind_name(os64_dom_mem_kind_t kind)
+{
+    return (unsigned)kind < OS64_DOM_MEM_KINDS ? kMemKindNames[kind] : "?";
+}
+
+os64_dom_mem_t os64_dom_memory(const os64_dom_t *dom, os64_dom_mem_kind_t kind)
+{
+    os64_dom_mem_t none = {0};
+    return dom != NULL && (unsigned)kind < OS64_DOM_MEM_KINDS ? dom->memory[kind] : none;
+}
+
+size_t os64_dom_canvas_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->canvas_bytes : 0; }
 
 int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at)
 {
@@ -138,7 +178,7 @@ os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi)
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value)
 {
     if (JS_IsException(value)) return NULL;
-    DValue *entry = d_alloc(dom, sizeof(*entry));
+    DValue *entry = d_alloc_kind(dom, sizeof(*entry), OS64_DOM_MEM_RETAINED);
     if (entry == NULL) {
         JS_FreeValue(ctx, value);
         d_error(ctx, "QuotaExceededError", "DOM registry quota exceeded");
@@ -353,6 +393,7 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     dom->state = state;
     dom->options = selected;
     dom->bytes = sizeof(*dom);
+    dom->memory[OS64_DOM_MEM_OTHER] = (os64_dom_mem_t){sizeof(*dom), 1, 1};
     dom->anchor_class = os64_js_class_id(&anchor_slot);
     dom->node_class = os64_js_class_id(&node_slot);
     dom->collection_class = os64_js_class_id(&collection_slot);

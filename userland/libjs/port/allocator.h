@@ -12,9 +12,10 @@ typedef struct {
     unsigned failures;
     JSPortBlock *blocks;
     size_t live_blocks, live_bytes;
-    /* The most the engine's charge (JSMallocState.malloc_size, what the
-     * ceiling is held against) has stood at since the runtime was made. */
-    size_t peak_bytes;
+    /* The engine's charge (JSMallocState.malloc_size, what the ceiling is
+     * held against) now, and the most it has stood at since the runtime
+     * was made. */
+    size_t charged_bytes, peak_bytes;
     bool tracked;
 } JSPortAllocator;
 /* Fatal-profile allocations have no additional header. The tracked profile

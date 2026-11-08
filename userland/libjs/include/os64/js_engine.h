@@ -68,6 +68,28 @@ os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, uint64_t m
  * engine's charge, which its memory limit is held against. Readable from
  * a runtime that has failed. 0 for NULL. No engine entry. */
 size_t os64_js_heap_peak(const os64_js_runtime_t *runtime);
+/* What the heap holds now, in the same bytes. Readable from a runtime that
+ * has failed. 0 for NULL. No engine entry. */
+size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime);
+/* THE HEAP BY KIND OF THING (MEMORY_CENSUS.md § 5): the engine's own count
+ * of what it holds. It walks every object, string, shape and function the
+ * heap has, so it costs time in proportion to the heap: for a census, not
+ * for every turn. Bytes are the engine's estimates of each kind's own
+ * storage; `charged_bytes` is os64_js_heap_bytes, which also pays for what
+ * no kind claims (the allocator's headers, the engine's tables). */
+typedef struct {
+    uint64_t objects, object_bytes, properties, property_bytes;
+    uint64_t strings, string_bytes, atoms, atom_bytes;
+    uint64_t shapes, shape_bytes;
+    uint64_t functions, function_bytes, function_code_bytes;
+    uint64_t arrays, fast_array_elements;
+    uint64_t binary_objects, binary_bytes;
+    uint64_t blocks;
+    size_t charged_bytes;
+} os64_js_heap_census_t;
+/* Owner thread, outside a call. False, and `out` zeroed, for NULL, a
+ * runtime that has failed, or one inside a call. Runs no script. */
+bool os64_js_heap_census(os64_js_runtime_t *runtime, os64_js_heap_census_t *out);
 /* A SCRIPT HOST: a host that reports a script's failures itself, as a
  * browser fires `error` and `unhandledrejection` (CONTRACT.md § A script
  * host). Each hook is called inside the wrapper's guard and must run no

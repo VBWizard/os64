@@ -345,6 +345,8 @@ struct os64_dom {
     os64_page_state_t *state;
     os64_dom_options_t options;
     size_t bytes, retained;
+    /* `bytes` by kind; the kinds sum to it. */
+    os64_dom_mem_t memory[OS64_DOM_MEM_KINDS];
     bool closed;
     DPointer pointer;
     DMutationConsumer *mutation_consumers, canvas_mutations;
@@ -713,6 +715,10 @@ typedef struct { char *data; size_t length; } DString;
  * Native state is carried by private function data, never opaque host slots. */
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi);
 bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
+/* A block of the binding's own, charged to max_bytes and counted under
+ * `kind` (MEMORY_CENSUS.md § 4); d_alloc is d_alloc_kind's OTHER. Zeroed.
+ * d_free reads the kind back from the block, so nothing else is passed. */
+void *d_alloc_kind(os64_dom_t *dom, size_t size, os64_dom_mem_kind_t kind);
 void *d_alloc(os64_dom_t *dom, size_t size);
 void d_free(os64_dom_t *dom, void *ptr);
 JSValue d_error(JSContext *ctx, const char *name, const char *message);

@@ -106,6 +106,12 @@ uint32_t yonder_settings_saved_script_seconds(void);
 // The saved script heap (`script_memory_mb = 512`), whole MiB from
 // YONDER_SCRIPT_MEMORY_MB_MIN to _MAX; the default when absent or not one.
 uint32_t yonder_settings_saved_script_memory_mb(void);
+// Whether pages on `host` are censused (MEMORY_CENSUS.md § 7): a
+// `census = <host>` line names that host or a parent of it, or says `*`,
+// which alone names "" (a page with no host).
+// The key repeats; every line counts. Read from the file each time it is
+// asked, which is once a page.
+bool yonder_settings_censused(const char *host);
 
 // The directory yonder.conf names for page files (`diagnostics =
 // /home/yonder/pages`, YONDER_DIAGNOSTICS.md), into `out`, without a

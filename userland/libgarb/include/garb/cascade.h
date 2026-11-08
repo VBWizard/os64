@@ -244,6 +244,14 @@ typedef struct {
 int32_t garb_keyframes(const garb_cascade_t *c, const os64_html_node_t *element,
                        const char *name, size_t len, const garb_keyframe_t **out);
 void garb_cascade_free(garb_cascade_t *c);
+/* What a cascade holds (MEMORY_CENSUS.md § 3), in bytes reserved: its own
+ * arena (its rules, entries, keyframes, attribute table and selector
+ * indexes), the arena of what it read from the sheets, each `style`
+ * attribute's parse, and the slot table and dirty list it keeps on the
+ * heap, at their capacity. Scratch a call frees before it returns is not
+ * held, and not counted. NULL answers 0. Cheap: a pass over the style
+ * attributes, no walk of the rules. */
+size_t garb_cascade_bytes(const garb_cascade_t *c);
 
 // One `@font-face` rule (Fonts 4 § 4), read whole: the family it names; its
 // sources in order — a url() as written, resolved by whoever fetches it
