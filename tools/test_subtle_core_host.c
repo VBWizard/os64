@@ -187,6 +187,124 @@ static void base64url_cases(void)
           "padding, the standard alphabet, a lone character, stray bits and spaces are refused");
 }
 
+/* RFC 3394 § 4.1-4.6: every KEK size wrapping every key size; then what the
+ * scheme refuses. */
+static void aes_kw_cases(void)
+{
+    static const struct { const char *kek, *data, *wrapped, *what; } kVectors[] = {
+        {"000102030405060708090A0B0C0D0E0F", "00112233445566778899AABBCCDDEEFF",
+         "1FA68B0A8112B447AEF34BD8FB5A7B829D3E862371D2CFE5", "RFC 3394 4.1, 128 bits under a 128-bit KEK"},
+        {"000102030405060708090A0B0C0D0E0F1011121314151617", "00112233445566778899AABBCCDDEEFF",
+         "96778B25AE6CA435F92B5B97C050AED2468AB8A17AD84E5D", "RFC 3394 4.2, 128 bits under a 192-bit KEK"},
+        {"000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F", "00112233445566778899AABBCCDDEEFF",
+         "64E8C3F9CE0F5BA263E9777905818A2A93C8191E7D6E8AE7", "RFC 3394 4.3, 128 bits under a 256-bit KEK"},
+        {"000102030405060708090A0B0C0D0E0F1011121314151617", "00112233445566778899AABBCCDDEEFF0001020304050607",
+         "031D33264E15D33268F24EC260743EDCE1C6C7DDEE725A936BA814915C6762D2", "RFC 3394 4.4, 192 bits under a 192-bit KEK"},
+        {"000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+         "00112233445566778899AABBCCDDEEFF0001020304050607",
+         "A8F9BC1612C68B3FF6E6F4FBE30E71E4769C8B80A32CB8958CD5D17D6B254DA1", "RFC 3394 4.5, 192 bits under a 256-bit KEK"},
+        {"000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+         "00112233445566778899AABBCCDDEEFF000102030405060708090A0B0C0D0E0F",
+         "28C9F404C4B810F4CBCCB35CFB87F8263F5786E2D80ED326CBC7F0E71A99F43BFB988B9B7A02DD21",
+         "RFC 3394 4.6, 256 bits under a 256-bit KEK"},
+    };
+    for (size_t v = 0; v < sizeof(kVectors) / sizeof(kVectors[0]); v++) {
+        uint8_t kek[32], data[32], out[40], back[40], want[40];
+        size_t kek_length = unhex(kVectors[v].kek, kek), length = unhex(kVectors[v].data, data), n = 0;
+        unhex(kVectors[v].wrapped, want);
+        size_t wrapped = subtle_aes_kw_wrap(kek, kek_length, data, length, out);
+        check(wrapped == length + 8, kVectors[v].what);
+        char hexed[96], expected[96];
+        hex(out, wrapped, hexed);
+        hex(want, length + 8, expected);
+        check(strcmp(hexed, expected) == 0, kVectors[v].what);
+        check(subtle_aes_kw_unwrap(kek, kek_length, out, wrapped, back, &n) && n == length && memcmp(back, data, n) == 0,
+              "and unwraps to the key data");
+        out[wrapped - 1] ^= 1;
+        check(!subtle_aes_kw_unwrap(kek, kek_length, out, wrapped, back, &n), "an altered last byte fails the check");
+    }
+    /* 512 bytes, so the step counter t = n*j + i reaches past one byte (it
+     * does from n = 43): wrap and unwrap share kw_xor_step, so a slip in its
+     * high bytes would round-trip through itself and pass every vector
+     * above. node's WebCrypto wrapped the same bytes; its SHA-256 is here. */
+    uint8_t big_kek[16], big[512], big_out[520], big_back[520], sum[32];
+    unhex("000102030405060708090a0b0c0d0e0f", big_kek);
+    for (size_t i = 0; i < sizeof(big); i++) big[i] = (uint8_t)i;
+    size_t big_n = 0;
+    check(subtle_aes_kw_wrap(big_kek, 16, big, sizeof(big), big_out) == sizeof(big_out), "AES-KW wraps 512 bytes");
+    check(subtle_digest(SUBTLE_ALG_SHA_256, big_out, sizeof(big_out), sum), "and its SHA-256");
+    same_hex(sum, 32, "fcfa100fa59ec6859a9f6fcfe314c286c84417d87d112bd3497cfd6318ad2988",
+             "AES-KW past a one-byte step counter, as node wraps it");
+    check(subtle_aes_kw_unwrap(big_kek, 16, big_out, sizeof(big_out), big_back, &big_n) && big_n == sizeof(big) &&
+              memcmp(big_back, big, sizeof(big)) == 0,
+          "and unwraps back");
+    uint8_t kek[16] = {0}, data[24] = {0}, out[40], back[40];
+    size_t n = 0;
+    check(subtle_aes_kw_wrap(kek, 16, data, 8, out) == 0 && subtle_aes_kw_wrap(kek, 16, data, 0, out) == 0 &&
+              subtle_aes_kw_wrap(kek, 16, data, 20, out) == 0,
+          "wrap refuses one block, none, and a ragged length (RFC 3394's floor of two blocks)");
+    check(!subtle_aes_kw_unwrap(kek, 16, data, 16, back, &n) && !subtle_aes_kw_unwrap(kek, 16, data, 23, back, &n) &&
+              !subtle_aes_kw_unwrap(kek, 16, data, 0, back, &n),
+          "unwrap refuses two blocks, a ragged length, and none");
+}
+
+/* RFC 5869 A.1-A.3 (HKDF-SHA-256), RFC 6070's PBKDF2-HMAC-SHA1 cases with
+ * at most 4096 iterations, and each derivation's limits. */
+static void kdf_cases(void)
+{
+    uint8_t ikm[80], salt[80], info[80], out[130];
+    size_t ikm_length = unhex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", ikm);
+    size_t salt_length = unhex("000102030405060708090a0b0c", salt);
+    size_t info_length = unhex("f0f1f2f3f4f5f6f7f8f9", info);
+    check(subtle_hkdf(SUBTLE_ALG_SHA_256, ikm, ikm_length, salt, salt_length, info, info_length, out, 42), "HKDF runs");
+    same_hex(out, 42, "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+             "HKDF, RFC 5869 A.1");
+    ikm_length = unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+                       "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+                       "404142434445464748494a4b4c4d4e4f", ikm);
+    salt_length = unhex("606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+                        "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
+                        "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", salt);
+    info_length = unhex("b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecf"
+                        "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef"
+                        "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff", info);
+    check(subtle_hkdf(SUBTLE_ALG_SHA_256, ikm, ikm_length, salt, salt_length, info, info_length, out, 82), "HKDF runs");
+    same_hex(out, 82,
+             "b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09"
+             "da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87",
+             "HKDF, RFC 5869 A.2 (longer inputs and output)");
+    ikm_length = unhex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", ikm);
+    check(subtle_hkdf(SUBTLE_ALG_SHA_256, ikm, ikm_length, NULL, 0, NULL, 0, out, 42), "HKDF runs");
+    same_hex(out, 42, "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8",
+             "HKDF, RFC 5869 A.3 (no salt, no info)");
+    uint8_t *big = malloc(255 * 64 + 1);
+    check(big != NULL && subtle_hkdf(SUBTLE_ALG_SHA_512, ikm, ikm_length, NULL, 0, NULL, 0, big, 255 * 64) &&
+              !subtle_hkdf(SUBTLE_ALG_SHA_512, ikm, ikm_length, NULL, 0, NULL, 0, big, 255 * 64 + 1),
+          "HKDF makes 255 hashes' worth and no more");
+    free(big);
+    check(!subtle_hkdf(SUBTLE_ALG_HMAC, ikm, 1, NULL, 0, NULL, 0, out, 1), "what is no hash makes no HKDF");
+
+    static const struct { const char *password; size_t password_length; const char *salt; size_t salt_length;
+                          uint32_t c; size_t length; const char *dk, *what; } kPbkdf2[] = {
+        {"password", 8, "salt", 4, 1, 20, "0c60c80f961f0e71f3a9b524af6012062fe037a6", "PBKDF2, RFC 6070 c=1"},
+        {"password", 8, "salt", 4, 2, 20, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957", "PBKDF2, RFC 6070 c=2"},
+        {"password", 8, "salt", 4, 4096, 20, "4b007901b765489abead49d926f721d065a429c1", "PBKDF2, RFC 6070 c=4096"},
+        {"passwordPASSWORDpassword", 24, "saltSALTsaltSALTsaltSALTsaltSALTsalt", 36, 4096, 25,
+         "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038", "PBKDF2, RFC 6070 two output blocks"},
+        {"pass\0word", 9, "sa\0lt", 5, 4096, 16, "56fa6aa75548099dcc37d7f03425e0c3", "PBKDF2, RFC 6070 NULs"},
+    };
+    for (size_t v = 0; v < sizeof(kPbkdf2) / sizeof(kPbkdf2[0]); v++) {
+        check(subtle_pbkdf2(SUBTLE_ALG_SHA_1, (const uint8_t *)kPbkdf2[v].password, kPbkdf2[v].password_length,
+                            (const uint8_t *)kPbkdf2[v].salt, kPbkdf2[v].salt_length, kPbkdf2[v].c, out,
+                            kPbkdf2[v].length),
+              kPbkdf2[v].what);
+        same_hex(out, kPbkdf2[v].length, kPbkdf2[v].dk, kPbkdf2[v].what);
+    }
+    check(!subtle_pbkdf2(SUBTLE_ALG_SHA_1, (const uint8_t *)"p", 1, NULL, 0, 0, out, 20) &&
+              !subtle_pbkdf2(SUBTLE_ALG_COUNT, (const uint8_t *)"p", 1, NULL, 0, 1, out, 20),
+          "PBKDF2 refuses no iterations, and what is no hash");
+}
+
 int main(void)
 {
     static const struct {
@@ -264,6 +382,24 @@ int main(void)
               subtle_registered(SUBTLE_OP_DIGEST, "HMAC", 4, &dict) < 0 &&
               subtle_registered(SUBTLE_OP_DERIVE_BITS, "AES-GCM", 7, &dict) < 0,
           "an algorithm is no operation's but its own (wrapKey falls back to encrypt in the binding)");
+    check(subtle_registered(SUBTLE_OP_WRAP_KEY, "aes-kw", 6, &dict) == SUBTLE_ALG_AES_KW && dict == SUBTLE_DICT_ALGORITHM &&
+              subtle_registered(SUBTLE_OP_UNWRAP_KEY, "AES-KW", 6, &dict) == SUBTLE_ALG_AES_KW &&
+              subtle_registered(SUBTLE_OP_ENCRYPT, "AES-KW", 6, &dict) < 0 &&
+              subtle_registered(SUBTLE_OP_DIGEST, "AES-KW", 6, &dict) < 0,
+          "AES-KW wraps and unwraps, and neither encrypts nor digests");
+    check(subtle_registered(SUBTLE_OP_DERIVE_BITS, "hkdf", 4, &dict) == SUBTLE_ALG_HKDF && dict == SUBTLE_DICT_HKDF &&
+              subtle_registered(SUBTLE_OP_DERIVE_BITS, "PBKDF2", 6, &dict) == SUBTLE_ALG_PBKDF2 && dict == SUBTLE_DICT_PBKDF2 &&
+              subtle_registered(SUBTLE_OP_GENERATE_KEY, "HKDF", 4, &dict) < 0 &&
+              subtle_registered(SUBTLE_OP_DIGEST, "PBKDF2", 6, &dict) < 0,
+          "the derivations derive bits, with their dictionaries, and generate nothing");
+    check(subtle_registered(SUBTLE_OP_GET_KEY_LENGTH, "AES-GCM", 7, &dict) == SUBTLE_ALG_AES_GCM &&
+              dict == SUBTLE_DICT_AES_DERIVED &&
+              subtle_registered(SUBTLE_OP_GET_KEY_LENGTH, "HMAC", 4, &dict) == SUBTLE_ALG_HMAC &&
+              dict == SUBTLE_DICT_HMAC_IMPORT &&
+              subtle_registered(SUBTLE_OP_GET_KEY_LENGTH, "HKDF", 4, &dict) == SUBTLE_ALG_HKDF &&
+              dict == SUBTLE_DICT_ALGORITHM &&
+              subtle_registered(SUBTLE_OP_GET_KEY_LENGTH, "SHA-256", 7, &dict) < 0,
+          "get key length, for each key type that can be derived and nothing else");
     check(subtle_digest_size(SUBTLE_ALG_COUNT) == 0 && !subtle_digest(SUBTLE_ALG_COUNT, NULL, 0, NULL),
           "what is no hash digests nothing");
     check(strcmp(subtle_alg_name(SUBTLE_ALG_SHA_384), "SHA-384") == 0, "the registered spelling");
@@ -271,6 +407,8 @@ int main(void)
     aes_cases();
     hmac_cases();
     base64url_cases();
+    aes_kw_cases();
+    kdf_cases();
 
     printf("subtle core: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;

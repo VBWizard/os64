@@ -4,6 +4,7 @@
 #include "bearssl_block.h"
 #include "bearssl_hash.h"
 #include "bearssl_hmac.h"
+#include "bearssl_kdf.h"
 
 /* What a NULL buffer of no bytes is handed to BearSSL as: its code copies
  * with memcpy, which C forbids a null pointer even for a length of zero
@@ -33,6 +34,9 @@ static const char *const kNames[SUBTLE_ALG_COUNT] = {
     [SUBTLE_ALG_AES_CBC] = "AES-CBC",
     [SUBTLE_ALG_AES_GCM] = "AES-GCM",
     [SUBTLE_ALG_HMAC] = "HMAC",
+    [SUBTLE_ALG_AES_KW] = "AES-KW",
+    [SUBTLE_ALG_HKDF] = "HKDF",
+    [SUBTLE_ALG_PBKDF2] = "PBKDF2",
 };
 
 static const SubtleRegistration kRegistry[] = {
@@ -60,6 +64,29 @@ static const SubtleRegistration kRegistry[] = {
     {SUBTLE_OP_VERIFY, SUBTLE_ALG_HMAC, SUBTLE_DICT_ALGORITHM},
     {SUBTLE_OP_GENERATE_KEY, SUBTLE_ALG_HMAC, SUBTLE_DICT_HMAC_KEY_GEN},
     {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_HMAC, SUBTLE_DICT_HMAC_IMPORT},
+    /* "Get key length" is no method: deriveKey asks it of the key type it
+     * derives (§ 14.3.7 step 6), and an algorithm without the row is
+     * NotSupportedError there. */
+    {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_CTR, SUBTLE_DICT_AES_DERIVED},
+    {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_CBC, SUBTLE_DICT_AES_DERIVED},
+    {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_GCM, SUBTLE_DICT_AES_DERIVED},
+    {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_HMAC, SUBTLE_DICT_HMAC_IMPORT},
+    /* AES-KW (§ 30): wrapKey and unwrapKey are its own; it has no encrypt
+     * or decrypt. */
+    {SUBTLE_OP_WRAP_KEY, SUBTLE_ALG_AES_KW, SUBTLE_DICT_ALGORITHM},
+    {SUBTLE_OP_UNWRAP_KEY, SUBTLE_ALG_AES_KW, SUBTLE_DICT_ALGORITHM},
+    {SUBTLE_OP_GENERATE_KEY, SUBTLE_ALG_AES_KW, SUBTLE_DICT_AES_KEY_GEN},
+    {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_AES_KW, SUBTLE_DICT_ALGORITHM},
+    {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_KW, SUBTLE_DICT_AES_DERIVED},
+    /* HKDF and PBKDF2 (§ 33, § 34): keys only imported, raw, never
+     * extractable. Their key length is null, which their own derive bits
+     * refuses, so deriving one is OperationError, not NotSupportedError. */
+    {SUBTLE_OP_DERIVE_BITS, SUBTLE_ALG_HKDF, SUBTLE_DICT_HKDF},
+    {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_HKDF, SUBTLE_DICT_ALGORITHM},
+    {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_HKDF, SUBTLE_DICT_ALGORITHM},
+    {SUBTLE_OP_DERIVE_BITS, SUBTLE_ALG_PBKDF2, SUBTLE_DICT_PBKDF2},
+    {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_PBKDF2, SUBTLE_DICT_ALGORITHM},
+    {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_PBKDF2, SUBTLE_DICT_ALGORITHM},
 };
 
 /* ASCII case-insensitive: only A-Z fold, so a name spelled with a
@@ -234,6 +261,85 @@ bool subtle_aes_ctr(const uint8_t *key, size_t key_length, const uint8_t counter
     return true;
 }
 
+/* One block deciphered: CBC decryption of a single block from a zero IV,
+ * which is the block decipher itself, as aes_block is the encipher. */
+static void aes_unblock(const br_aes_ct64_cbcdec_keys *k, uint8_t block[SUBTLE_AES_BLOCK])
+{
+    uint8_t zero[SUBTLE_AES_BLOCK] = {0};
+    br_aes_ct64_cbcdec_run(k, zero, block, SUBTLE_AES_BLOCK);
+    /* CBC leaves the input block in the IV, and mid-unwrap that block is
+     * the scheme's secret state. */
+    wipe(zero, sizeof(zero));
+}
+
+/* RFC 3394's step counter t = n*j + i, XORed into A's low bytes. */
+static void kw_xor_step(uint8_t a[8], uint64_t t)
+{
+    for (int i = 7; i >= 0 && t != 0; i--, t >>= 8) a[i] ^= (uint8_t)t;
+}
+
+static const uint8_t kKwIv[8] = {0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6};
+
+size_t subtle_aes_kw_wrap(const uint8_t *key, size_t key_length, const uint8_t *in, size_t length, uint8_t *out)
+{
+    if (length < 16 || length % 8 != 0) return 0;
+    size_t n = length / 8;
+    uint8_t *a = out, *r = out + 8, b[SUBTLE_AES_BLOCK];
+    for (int i = 0; i < 8; i++) a[i] = kKwIv[i];
+    for (size_t i = 0; i < length; i++) r[i] = in[i];
+    br_aes_ct64_cbcenc_keys k;
+    br_aes_ct64_cbcenc_init(&k, key, key_length);
+    for (uint64_t j = 0; j < 6; j++) {
+        for (size_t i = 0; i < n; i++) {
+            for (int x = 0; x < 8; x++) {
+                b[x] = a[x];
+                b[8 + x] = r[8 * i + x];
+            }
+            aes_block(&k, b, b);
+            for (int x = 0; x < 8; x++) {
+                a[x] = b[x];
+                r[8 * i + x] = b[8 + x];
+            }
+            kw_xor_step(a, n * j + i + 1);
+        }
+    }
+    wipe(&k, sizeof(k));
+    wipe(b, sizeof(b));
+    return length + 8;
+}
+
+bool subtle_aes_kw_unwrap(const uint8_t *key, size_t key_length, const uint8_t *in, size_t length, uint8_t *out,
+                          size_t *out_length)
+{
+    if (length < 24 || length % 8 != 0) return false;
+    size_t n = length / 8 - 1;
+    uint8_t a[8], b[SUBTLE_AES_BLOCK];
+    for (int i = 0; i < 8; i++) a[i] = in[i];
+    for (size_t i = 0; i < 8 * n; i++) out[i] = in[8 + i];
+    br_aes_ct64_cbcdec_keys k;
+    br_aes_ct64_cbcdec_init(&k, key, key_length);
+    for (uint64_t j = 6; j-- > 0;) {
+        for (size_t i = n; i-- > 0;) {
+            kw_xor_step(a, n * j + i + 1);
+            for (int x = 0; x < 8; x++) {
+                b[x] = a[x];
+                b[8 + x] = out[8 * i + x];
+            }
+            aes_unblock(&k, b);
+            for (int x = 0; x < 8; x++) {
+                a[x] = b[x];
+                out[8 * i + x] = b[8 + x];
+            }
+        }
+    }
+    wipe(&k, sizeof(k));
+    wipe(b, sizeof(b));
+    bool good = subtle_same_bytes(a, kKwIv, 8);
+    if (!good) wipe(out, 8 * n);
+    else *out_length = 8 * n;
+    return good;
+}
+
 static void gcm_start(br_gcm_context *g, br_aes_ct64_ctr_keys *k, const uint8_t *key, size_t key_length,
                       const uint8_t *iv, size_t iv_length, const uint8_t *aad, size_t aad_length)
 {
@@ -316,6 +422,54 @@ bool subtle_hmac(subtle_alg_t hash, const uint8_t *key, size_t key_length, const
     wipe(&kc, sizeof(kc));
     wipe(&c, sizeof(c));
     return true;
+}
+
+bool subtle_pbkdf2(subtle_alg_t hash, const uint8_t *password, size_t password_length, const uint8_t *salt,
+                   size_t salt_length, uint32_t iterations, uint8_t *out, size_t length)
+{
+    const br_hash_class *h = hash_class(hash);
+    if (h == NULL || iterations == 0) return false;
+    size_t size = subtle_digest_size(hash);
+    br_hmac_key_context kc;
+    br_hmac_context c;
+    uint8_t u[SUBTLE_DIGEST_MAX], t[SUBTLE_DIGEST_MAX];
+    br_hmac_key_init(&kc, h, SOME(password), password_length);
+    for (uint32_t block = 1; length > 0; block++) {
+        uint8_t index[4] = {(uint8_t)(block >> 24), (uint8_t)(block >> 16), (uint8_t)(block >> 8), (uint8_t)block};
+        br_hmac_init(&c, &kc, 0);
+        br_hmac_update(&c, SOME(salt), salt_length);
+        br_hmac_update(&c, index, sizeof(index));
+        br_hmac_out(&c, u);
+        for (size_t i = 0; i < size; i++) t[i] = u[i];
+        for (uint32_t round = 1; round < iterations; round++) {
+            br_hmac_init(&c, &kc, 0);
+            br_hmac_update(&c, u, size);
+            br_hmac_out(&c, u);
+            for (size_t i = 0; i < size; i++) t[i] ^= u[i];
+        }
+        size_t take = length < size ? length : size;
+        for (size_t i = 0; i < take; i++) *out++ = t[i];
+        length -= take;
+    }
+    wipe(&kc, sizeof(kc));
+    wipe(&c, sizeof(c));
+    wipe(u, sizeof(u));
+    wipe(t, sizeof(t));
+    return true;
+}
+
+bool subtle_hkdf(subtle_alg_t hash, const uint8_t *key, size_t key_length, const uint8_t *salt, size_t salt_length,
+                 const uint8_t *info, size_t info_length, uint8_t *out, size_t length)
+{
+    const br_hash_class *h = hash_class(hash);
+    if (h == NULL || length > 255 * subtle_digest_size(hash)) return false;
+    br_hkdf_context c;
+    br_hkdf_init(&c, h, SOME(salt), salt_length);
+    br_hkdf_inject(&c, SOME(key), key_length);
+    br_hkdf_flip(&c);
+    size_t made = br_hkdf_produce(&c, SOME(info), info_length, out, length);
+    wipe(&c, sizeof(c));
+    return made == length;
 }
 
 bool subtle_same_bytes(const uint8_t *a, const uint8_t *b, size_t length)

@@ -297,11 +297,11 @@ page's script can see them.
   task of their own (a page whose own timers hold its whole timer quota
   has its promise settled on the call instead). What a page can
   tell: the call holds it for as long as the work takes, which is long
-  only for an input the size of its heap. Its consequence, which no page
-  can tell: a BufferSource argument is read where it lies rather than
-  copied, read after the algorithm is normalized as the spec copies it,
-  since no page code runs between the read and the answer (`subtle.c`;
-  WEB_CRYPTO.md § 5).
+  only for an input the size of its heap or a PBKDF2 iteration count in
+  the millions. Its consequence, which no page can tell: a BufferSource
+  argument is read where it lies rather than copied, read after the last
+  algorithm is normalized as the spec copies it, since no page code runs
+  between the read and the answer (`subtle.c`; WEB_CRYPTO.md § 5).
 - **An offset inside a character above U+FFFF means the character's
   start.** CharacterData offsets count UTF-16 code units and such a
   character is two of them; the tree holds UTF-8, which cannot hold half of

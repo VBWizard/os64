@@ -26,6 +26,7 @@ SUBTLE_BEARSSL_SOURCES=(
     userland/libtls/upstream/src/aead/gcm.c
     userland/libtls/upstream/src/hash/ghash_ctmul64.c
     userland/libtls/upstream/src/mac/hmac.c
+    userland/libtls/upstream/src/kdf/hkdf.c
 )
 SUBTLE_BEARSSL_FLAGS=(-D_DEFAULT_SOURCE -include userland/libtls/port/config.h
     -Iuserland/libtls/upstream/inc -Iuserland/libtls/upstream/src)
