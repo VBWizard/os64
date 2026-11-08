@@ -1374,8 +1374,8 @@ bytes); and HKDF and PBKDF2, whose keys are imported raw and never
 exported, for `deriveBits` and `deriveKey` (the derived key type
 normalized for importKey and for get key length, then the derivation's
 bits imported raw). A dictionary's own buffers (an `iv`, a `salt`) are
-copied when it is converted, as § 18.4.4 copies them; a later
-normalization's getters cannot reach them. A CryptoKey's material is
+copied as § 18.4.4 step 10 copies them, after its hash is normalized; a
+later normalization's getters cannot reach them. A CryptoKey's material is
 engine heap, zeroed by its finalizer; its `algorithm` and `usages` are
 made once, at the key's birth, so every read is the same object. DEBTS.md
 books the rest, by WEB_CRYPTO.md § 2's tiers. Each method converts its arguments as WebIDL

@@ -120,6 +120,10 @@ enum {
 };
 /* The longest HMAC key generateKey makes: getRandomValues' 65,536 bytes. */
 #define SUBTLE_HMAC_GENERATE_MAX_BITS (65536u * 8)
+/* The most PBKDF2 derives: the same 65,536 bytes. The spec bounds it only
+ * by `length`, 2^32 - 1 bits, past the script heap; each output block
+ * costs the whole iteration count again. */
+#define SUBTLE_PBKDF2_MAX_BYTES 65536u
 
 /* A CryptoKey's slots (§ 13). The key material is the engine's memory,
  * overwritten before it is given back when the key is collected; the
@@ -516,11 +520,11 @@ static int convert(os64_dom_t *dom, JSContext *ctx, int method, int argc, JSValu
 /* ── Normalization (§ 18.4.4) ────────────────────────────────────────── */
 
 /* A normalized algorithm: the registry's algorithm and the members of its
- * parameter dictionary. A BufferSource member is a private copy of the
- * bytes it held once the whole dictionary was converted (§ 18.4.4 step
- * 10), so a getter that runs later (deriveKey and unwrapKey normalize a
- * second algorithm after this one) cannot change what the operation
- * reads. */
+ * parameter dictionary. A BufferSource member is a private copy of its
+ * bytes, made in § 18.4.4 step 10 after the hash member is normalized (so
+ * a getter of the hash's runs first, as the spec orders it), so a getter
+ * that runs later (deriveKey and unwrapKey normalize a second algorithm
+ * after this one) cannot change what the operation reads. */
 typedef struct {
     subtle_alg_t alg;
     subtle_dict_t dict;
@@ -1145,7 +1149,7 @@ static char *jwk_json(JSContext *ctx, const DKey *k, bool pad, size_t *length)
 
 /* The algorithm's encrypt or decrypt (§ 27-29) of `in`: a js_malloc'd
  * result in *out (*out_length bytes), or -1 with the failure pending. The
- * parameters' bytes are read here, after normalization. */
+ * parameters' bytes are normalization's private copies. */
 static int cipher(os64_dom_t *dom, JSContext *ctx, const SubtleParams *p, const DKey *k, bool encrypt,
                   const uint8_t *in, size_t length, uint8_t **out, size_t *out_length)
 {
@@ -1412,8 +1416,8 @@ out:
  * (`has_bits` false for a null length): a js_malloc'd result in *out
  * (*out_length bytes), or -1 with the failure pending. Neither derivation
  * takes a null length or one within a byte; HKDF makes at most 255 hashes'
- * worth, and PBKDF2 refuses no iterations before it answers a length of
- * none. */
+ * worth, PBKDF2 at most SUBTLE_PBKDF2_MAX_BYTES, and PBKDF2 refuses no
+ * iterations before it answers a length of none. */
 static int derive(JSContext *ctx, os64_dom_t *dom, const SubtleParams *p, const DKey *k, bool has_bits, uint32_t bits,
                   uint8_t **out, size_t *out_length)
 {
@@ -1429,6 +1433,8 @@ static int derive(JSContext *ctx, os64_dom_t *dom, const SubtleParams *p, const 
         if (bytes_of(dom, ctx, p->info, &info, &info_length) < 0) return -1;
     } else if (p->iterations == 0) {
         return fail(ctx, "OperationError", "PBKDF2 needs at least one iteration");
+    } else if (length > SUBTLE_PBKDF2_MAX_BYTES) {
+        return fail(ctx, "OperationError", "PBKDF2 derives at most 65,536 bytes here");
     }
     *out = js_malloc(ctx, length ? length : 1);
     if (*out == NULL) return -1;
@@ -1455,9 +1461,10 @@ static JSValue derive_bits(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, Subtl
 }
 
 /* The get key length operation (§ 27-34) of a normalized derived key type:
- * 0 with the length in *bits, *has_bits false for null (a derivation's,
- * which leaves the length to the derivation), or -1 with the failure
- * pending. */
+ * 0 with the length in *bits, *has_bits false for null, or -1 with the
+ * failure pending. Null is HKDF's and PBKDF2's answer, and both refuse a
+ * null length to derive, so a derivation key is never deriveKey's result:
+ * OperationError, as the spec's steps imply. */
 static int key_length(JSContext *ctx, const SubtleParams *p, bool *has_bits, uint32_t *bits)
 {
     *has_bits = true;

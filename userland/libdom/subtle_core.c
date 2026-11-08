@@ -65,8 +65,8 @@ static const SubtleRegistration kRegistry[] = {
     {SUBTLE_OP_GENERATE_KEY, SUBTLE_ALG_HMAC, SUBTLE_DICT_HMAC_KEY_GEN},
     {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_HMAC, SUBTLE_DICT_HMAC_IMPORT},
     /* "Get key length" is no method: deriveKey asks it of the key type it
-     * derives (§ 14.3.7 step 6), and an algorithm without the row cannot
-     * be derived. */
+     * derives (§ 14.3.7 step 6), and an algorithm without the row is
+     * NotSupportedError there. */
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_CTR, SUBTLE_DICT_AES_DERIVED},
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_CBC, SUBTLE_DICT_AES_DERIVED},
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_GCM, SUBTLE_DICT_AES_DERIVED},
@@ -79,7 +79,8 @@ static const SubtleRegistration kRegistry[] = {
     {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_AES_KW, SUBTLE_DICT_ALGORITHM},
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_KW, SUBTLE_DICT_AES_DERIVED},
     /* HKDF and PBKDF2 (§ 33, § 34): keys only imported, raw, never
-     * extractable; their key length is null, the KDF's own choice. */
+     * extractable. Their key length is null, which their own derive bits
+     * refuses, so deriving one is OperationError, not NotSupportedError. */
     {SUBTLE_OP_DERIVE_BITS, SUBTLE_ALG_HKDF, SUBTLE_DICT_HKDF},
     {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_HKDF, SUBTLE_DICT_ALGORITHM},
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_HKDF, SUBTLE_DICT_ALGORITHM},

@@ -595,12 +595,15 @@ static void dom_window_subtle_tier2_cases(void)
  * derivation's first bits) and each of its refusals in the spec's order,
  * AES-KW against RFC 3394 4.1 through wrapKey and back, a JWK padded to
  * AES-KW's 8 bytes, and the dictionary members copied when they are
- * converted (a salt, an iv), which a later getter must not reach. Every
- * expectation is node's WebCrypto's but three, where node departs from
- * the spec: a derivation key's format is checked before its usages, an
- * HMAC length of 0 is get key length's TypeError, and a key's usages read
- * back in the recognized order (the spec's normalized value), where node
- * keeps the caller's. */
+ * converted (a salt, an iv), which a later getter must not reach, though
+ * the hash's getter runs before the copy, as step 10 orders it; and 512
+ * bytes wrapped under AES-KW, past a one-byte step counter. Every
+ * expectation is node's WebCrypto's but four: three where node departs
+ * from the spec (a derivation key's format is checked before its usages,
+ * an HMAC length of 0 is get key length's TypeError, and a key's usages
+ * read back in the recognized order, the spec's normalized value, where
+ * node keeps the caller's), and PBKDF2's 65,536-byte cap, which is
+ * yonder's (WEB_CRYPTO.md § 3). */
 static void dom_window_subtle_tier3a_cases(void)
 {
     os64_dom_options_t options = window_options(WINDOW_URL);
@@ -677,6 +680,12 @@ static void dom_window_subtle_tier3a_cases(void)
         "const gwrapped=await s.wrapKey('raw',data,gw,{name:'AES-GCM',iv});"
         "const un=await s.unwrapKey('raw',gwrapped,gw,{name:'AES-GCM',iv},{get name(){iv[0]=1;return 'AES-CBC'}},true,['encrypt']);"
         "log.push('iv copied:'+hex(await s.exportKey('raw',un)).slice(0,8));"
+        "const big=await s.importKey('raw',new Uint8Array(512).map((_,i)=>i&255),{name:'HMAC',hash:'SHA-256'},true,['sign']);"
+        "log.push('kw big:'+hex(await s.digest('SHA-256',await s.wrapKey('raw',big,kek,'AES-KW'))).slice(0,16));"
+        "const hsalt=unhex('000102030405060708090a0b0c');"
+        "const hb=await s.deriveBits({name:'HKDF',hash:{get name(){hsalt.fill(0);return 'SHA-256'}},salt:hsalt,info:hp.info},hk,256);"
+        "log.push('hash before copy:'+hex(hb).slice(0,16));"
+        "await refused(s.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:enc('s'),iterations:1},pk,65537*8),'OperationError','past the PBKDF2 cap');"
         "})().catch(e=>log.push('threw: '+e.name+' '+e.message));",
         "subtle tier 3a: the calls");
     subtle_settle(&f);
@@ -695,7 +704,7 @@ static void dom_window_subtle_tier3a_cases(void)
         "'an altered wrapped key: ok','one block to unwrap: ok','one block to wrap: ok',"
         "'kw jwk padded:0,00112233445566778899aabbccddeeff','AES-KW encrypting: ok',"
         "'wrapping a derivation key: ok','kw jwk:A128KW,wrapKey/unwrapKey','kw generated:192,24',"
-        "'an AES-KW key that encrypts: ok','iv copied:00112233'"
+        "'an AES-KW key that encrypts: ok','iv copied:00112233','kw big:fcfa100fa59ec685','hash before copy:abbafb13f5c1bc48','past the PBKDF2 cap: ok'"
         "];"
         "for(let i=0;i<Math.max(log.length,want.length);i++)"
         "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",

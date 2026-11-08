@@ -223,6 +223,21 @@ static void aes_kw_cases(void)
         out[wrapped - 1] ^= 1;
         check(!subtle_aes_kw_unwrap(kek, kek_length, out, wrapped, back, &n), "an altered last byte fails the check");
     }
+    /* 512 bytes, so the step counter t = n*j + i reaches past one byte (it
+     * does from n = 43): wrap and unwrap share kw_xor_step, so a slip in its
+     * high bytes would round-trip through itself and pass every vector
+     * above. node's WebCrypto wrapped the same bytes; its SHA-256 is here. */
+    uint8_t big_kek[16], big[512], big_out[520], big_back[520], sum[32];
+    unhex("000102030405060708090a0b0c0d0e0f", big_kek);
+    for (size_t i = 0; i < sizeof(big); i++) big[i] = (uint8_t)i;
+    size_t big_n = 0;
+    check(subtle_aes_kw_wrap(big_kek, 16, big, sizeof(big), big_out) == sizeof(big_out), "AES-KW wraps 512 bytes");
+    check(subtle_digest(SUBTLE_ALG_SHA_256, big_out, sizeof(big_out), sum), "and its SHA-256");
+    same_hex(sum, 32, "fcfa100fa59ec6859a9f6fcfe314c286c84417d87d112bd3497cfd6318ad2988",
+             "AES-KW past a one-byte step counter, as node wraps it");
+    check(subtle_aes_kw_unwrap(big_kek, 16, big_out, sizeof(big_out), big_back, &big_n) && big_n == sizeof(big) &&
+              memcmp(big_back, big, sizeof(big)) == 0,
+          "and unwraps back");
     uint8_t kek[16] = {0}, data[24] = {0}, out[40], back[40];
     size_t n = 0;
     check(subtle_aes_kw_wrap(kek, 16, data, 8, out) == 0 && subtle_aes_kw_wrap(kek, 16, data, 0, out) == 0 &&

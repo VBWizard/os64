@@ -162,24 +162,28 @@ does not know.
   AES-KW is padded with spaces to a multiple of 8 bytes, as the spec's
   Note allows and node's WebCrypto does, rather than refused; a missing
   HKDF `salt` or `info` is a TypeError (both are required; WPT takes
-  either answer); and where node's WebCrypto departs from the spec's
+  either answer); PBKDF2 derives at most 65,536 bytes (what
+  `getRandomValues` fills), OperationError past that, because the spec's
+  only bound is `length`'s 2^32 - 1 bits, past the script heap, and each
+  output block costs the whole iteration count again; and where node's
+  WebCrypto departs from the spec's
   order, the spec is followed: an HKDF or PBKDF2 key in a format other
   than raw is NotSupportedError before its usages are checked, and
   deriveKey into HMAC with `length: 0` is get key length's TypeError,
   not importKey's DataError.
 - **Promises settle "in parallel"**: the spec computes off the event loop
   and queues a task to settle. See § 5.
-- **Inputs** are `BufferSource`: an ArrayBuffer or any view, its bytes
-  copied once the algorithm is normalized (the spec's "get a copy of the
-  bytes held by", which WPT's `digest/` holds after normalization: a name
-  getter that refills or detaches the buffer is seen), so a page that
-  changes the buffer after the call cannot change the result. A
-  BufferSource inside an algorithm dictionary (an `iv`, a `salt`) is
-  copied at the end of that dictionary's conversion (§ 18.4.4 step 10),
-  which matters where a method normalizes a second algorithm after the
-  first: deriveKey's derived key type and unwrapKey's unwrapped key
-  algorithm can run getters that would otherwise reach the first one's
-  buffers.
+- **Inputs** are `BufferSource`: an ArrayBuffer or any view. The spec
+  copies an argument's bytes once the algorithm is normalized ("get a
+  copy of the bytes held by", which WPT's `digest/` holds: a name getter
+  that refills or detaches the buffer is seen); here an argument is read
+  in place after the last normalization, which a page cannot tell from
+  the copy (§ 5). A BufferSource inside an algorithm dictionary (an `iv`,
+  a `salt`) is copied as § 18.4.4 step 10 copies it, after the hash
+  member is normalized, which matters where a method normalizes a second
+  algorithm after the first: deriveKey's derived key type and
+  unwrapKey's unwrapped key algorithm can run getters that would
+  otherwise reach the first one's buffers.
 
 ## 4. Where it lives
 
@@ -328,7 +332,9 @@ does not know.
   MiB), and reports the numbers. **PBKDF2 is the exception the bound does
   not cover**: its iteration count is the page's, up to 2^32 - 1, and
   each iteration is two hash compressions, so a hostile count holds the
-  page as long as it likes. Other browsers accept any count, and a cap
+  page as long as it likes, and the output length multiplies it (each
+  block of it is the whole count again; the length is capped at 65,536
+  bytes, § 3). Other browsers accept any count, and a cap
   would fail some page's sign-in, so the count is taken as given and the
   freeze is booked (DEBTS); the cure, if one is needed, is the same as
   RSA key generation's below. The tier-3 page times 100,000 to a million
@@ -437,9 +443,11 @@ does not know.
   in node's WebCrypto, which spells InvalidAccessError
   `InvalidAccessException` in two of them; the spec's name is the page's.
 **Tier 3a, as proved (2026-11-08):**
-- `tools/test_subtle_core_host.sh`: 159 checks, adding RFC 3394 § 4.1-4.6
+- `tools/test_subtle_core_host.sh`: 163 checks, adding RFC 3394 § 4.1-4.6
   (every KEK size wrapping every key size, each unwrapped back and
-  refused when altered), RFC 5869 A.1-A.3, RFC 6070's PBKDF2 cases with
+  refused when altered) and 512 bytes wrapped as node wraps them (the
+  step counter past one byte, which the RFC's vectors never reach and a
+  hand mutant proved only this vector catches), RFC 5869 A.1-A.3, RFC 6070's PBKDF2 cases with
   up to 4096 iterations, each derivation's limits, and the registry's
   new rows.
 - WPT WebCryptoAPI: 16,159 of 18,877 pass, 10,181 of them new, all
@@ -453,11 +461,13 @@ does not know.
   through deriveBits, a derivation key's import and export refusals,
   deriveBits' lengths, deriveKey into AES and HMAC and each of its
   refusals in order, RFC 3394 4.1 through wrapKey and back, a JWK padded
-  under AES-KW, and a salt and an iv that a later getter rewrites, which
-  must not change the answer. Every expectation is node's WebCrypto's
-  except three where node departs from the spec: the two orders of § 3,
-  and a key's usages, which read back in the recognized order (the
-  spec's normalized value) where node keeps the caller's.
+  under AES-KW, 512 bytes wrapped, PBKDF2's length cap, a salt and an iv
+  that a later getter rewrites, which must not change the answer, and a
+  hash getter that rewrites the salt before the copy, which must. Every
+  expectation is node's WebCrypto's except four: the cap, which is
+  yonder's, and three where node departs from the spec (the two orders
+  of § 3, and a key's usages, which read back in the recognized order,
+  the spec's normalized value, where node keeps the caller's).
 - `tools/pages/webcrypto-tier3.html`, the 3a section: 40 checks, every
   one PASS in node's WebCrypto and in yonder's window; its timing section
   measures PBKDF2 on the P5.
