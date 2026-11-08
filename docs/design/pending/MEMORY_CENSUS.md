@@ -59,8 +59,8 @@ What each owner has today, and what this design adds:
 | **html** (the document) | `doc->arena_bytes` (which already holds the retired blocks pins keep and the change records), `node_count` | — (read as they are) |
 | **page** (libpage's state) | `os64_page_state_bytes` | — |
 | **sheets** (parsed stylesheets) | `os64_arena_stats` on each sheet's arena | a sum over the page's sheets |
-| **cascade** | none | `garb_cascade_bytes` over its private arenas |
-| **layout** (libflow's tree and styles) | none public | `flow_tree_stats`: arena bytes, box count, computed-style bytes |
+| **cascade** | none | `garb_cascade_bytes` over its private arenas, and in the census tier by part (`garb_cascade_parts`: its state, its reading of the sheets, its style attributes, its tables), since its state, its reading and each attribute's parse are held to different ceilings |
+| **layout** (libflow's tree and styles) | none public | `flow_tree_stats`: arena bytes, box count, computed-style bytes; in the census tier by part (styles, boxes, lines, public) |
 | **pictures** | `Page.kept_bytes`, not printed | printed; with the SVG cache's numbers already recorded |
 | **heap** (the whole process) | `/proc/<pid>/heap`, text only | `os64_heap_report_copy` in libos64: the report struct, copied under the heap's own lock |
 
@@ -166,6 +166,8 @@ Census tier, in addition:
 ```
 memory dom: wrapper 36.7M 100242; retained 7.40M 20231; listener 1.32M 19343; collection 739K 5569; other ...
 memory script: objects 92.0M 818799; properties ...; strings 3.84M 50462; atoms ...; shapes ...; functions ... (code ...); arrays ...; binary ...; blocks ...; charged 190M
+memory layout: styles 50.1M; boxes 6.00M; lines 4.00M; public 1.40M
+memory cascade: reads 45.0M; state 20.0M; tables 1.40M; attributes 280K
 memory timeline: +0s heap 210M script 25.0M dom 2.30M html 9.00M layout 30.0M pictures 40.0M cascade 9.00M | +10s ... | +5m ...
 census: on; 32 samples every 20s; a census walk cost 41 ms at most
 ```

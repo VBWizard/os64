@@ -117,22 +117,50 @@ size_t yonder_census_summary(const yonder_census_sheet_t *sheet, char *out, size
     return at;
 }
 
-size_t yonder_census_dom_line(const yonder_census_sheet_t *sheet, char *out, size_t cap)
+// Parts biggest first, empty ones left out, `name value[ count]` separated
+// by "; ", whole parts only.
+static size_t parts_line(const yonder_census_entry_t *parts, int32_t n, bool counts, char *out, size_t cap)
 {
     if (out == NULL || cap == 0) return 0;
     out[0] = '\0';
-    if (sheet == NULL) return 0;
     int32_t order[YONDER_CENSUS_PARTS];
-    by_size(sheet->dom, sheet->ndom, order);
+    if (n > YONDER_CENSUS_PARTS) n = YONDER_CENSUS_PARTS;
+    by_size(parts, n, order);
     size_t at = 0;
     char part[96];
-    for (int32_t i = 0; i < sheet->ndom; i++) {
-        const yonder_census_entry_t *e = &sheet->dom[order[i]];
+    for (int32_t i = 0; i < n; i++) {
+        const yonder_census_entry_t *e = &parts[order[i]];
         if (e->bytes == 0) continue;
-        entry_text(e, true, part, sizeof(part));
+        entry_text(e, counts, part, sizeof(part));
         if (!((at == 0 || put(out, cap, &at, "; ")) && put(out, cap, &at, part))) break;
     }
     return at;
+}
+
+size_t yonder_census_dom_line(const yonder_census_sheet_t *sheet, char *out, size_t cap)
+{
+    if (sheet == NULL) {
+        if (out != NULL && cap > 0) out[0] = '\0';
+        return 0;
+    }
+    return parts_line(sheet->dom, sheet->ndom, true, out, cap);
+}
+
+void yonder_census_part(yonder_census_sheet_t *sheet, yonder_census_of_t of, const char *name, uint64_t bytes)
+{
+    if (sheet == NULL || name == NULL || of < 0 || of >= YONDER_CENSUS_OF_N ||
+        sheet->nparts[of] >= YONDER_CENSUS_FEW)
+        return;
+    sheet->parts[of][sheet->nparts[of]++] = (yonder_census_entry_t){name, bytes, 0, NULL};
+}
+
+size_t yonder_census_parts_line(const yonder_census_sheet_t *sheet, yonder_census_of_t of, char *out, size_t cap)
+{
+    if (sheet == NULL || of < 0 || of >= YONDER_CENSUS_OF_N) {
+        if (out != NULL && cap > 0) out[0] = '\0';
+        return 0;
+    }
+    return parts_line(sheet->parts[of], sheet->nparts[of], false, out, cap);
 }
 
 size_t yonder_census_script_line(const yonder_census_sheet_t *sheet, char *out, size_t cap)

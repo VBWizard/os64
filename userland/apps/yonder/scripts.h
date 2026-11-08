@@ -48,7 +48,7 @@ typedef struct {
     const char *url;                // the page's address: names, location, a src's base
     uint64_t execution_ms;          // each task's budget (Settings' script time limit)
     size_t memory_bytes;            // the page's script heap (yonder.conf's script_memory_mb); 0: libjs's own
-    size_t dom_bytes;               // the page's DOM budget (yonder.conf's dom_memory_mb); 0: libdom's own
+    size_t dom_bytes;               // libdom's share of the page's document side (page_memory_mb); 0: libdom's own
     uint64_t serial;                // names the page to a script's fetch job
     void (*alert)(void *opaque, const char *utf8, size_t length);
     // A `src` script's fetch: the host submits it and answers its job id, 0

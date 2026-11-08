@@ -508,6 +508,28 @@ static const char *faces_open(void)
     return faces_fallback() ? NULL : "no faces for the page, not even the built-in one";
 }
 
+// The ceilings of each page's document stores (yonder.conf's
+// page_memory_mb, cut by yonder_page_memory_split), read once as yonder
+// starts. A ceiling of 0 is its library's own.
+static yonder_page_memory_t s_page_memory;
+// Takes the ceilings: the layout's is the budget every page's layout is
+// made with (s_env), the others are read where their store is made.
+static void page_memory_set(yonder_page_memory_t ceilings)
+{
+    s_page_memory = ceilings;
+    s_env.max_arena_bytes = ceilings.layout;
+}
+
+// The options a page's document is parsed with: libhtml's, its arena held
+// to the tree's share of page_memory_mb. What a script inserts later is
+// charged to the same arena (a fragment parses into what is left of it).
+static os64_html_options_t page_html_options(void)
+{
+    os64_html_options_t opt = os64_html_options_default();
+    if (s_page_memory.tree != 0) opt.max_arena_bytes = s_page_memory.tree;
+    return opt;
+}
+
 // A file arrives with no Content-Type to name its encoding, and a page
 // that declares none in a <meta> is read as windows-1252 by the standard's
 // default. Bytes that are valid UTF-8 and not plain ASCII are almost never
@@ -526,7 +548,7 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len, bool s
         wide |= took > 1;
         i += took;
     }
-    os64_html_options_t opt = os64_html_options_default();
+    os64_html_options_t opt = page_html_options();
     opt.charset = wide && valid ? "utf-8" : NULL;
     opt.scripting = scripting;
     os64_html_parser_t *p = os64_html_parser_new(&opt);
@@ -1552,7 +1574,12 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
                    garb_cascade_update(cascade);
     if (!updated) {
         measured_fallback(p);
-        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view, NULL) : NULL;
+        // The cascade's own state is held to its share of page_memory_mb;
+        // what it reads of the sheets, and each style attribute's parse,
+        // keep libgarb's ceilings (yonder_page_memory_split says why).
+        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
+        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view,
+                                               s_page_memory.cascade != 0 ? &limits : NULL) : NULL;
     }
     page_scopes_free(&ps);
     if (s_layout_profile && layout_profile_diag(p)) {
@@ -1883,9 +1910,9 @@ static struct {
     // Each script task's budget (Settings' script time limit, yonder.conf's
     // script_seconds), in milliseconds.
     uint64_t script_ms;
-    // Each page's script heap (yonder.conf's script_memory_mb) and DOM
-    // budget (dom_memory_mb), in bytes, read once as yonder starts.
-    size_t script_memory, dom_memory;
+    // Each page's script heap (yonder.conf's script_memory_mb), in bytes,
+    // read once as yonder starts.
+    size_t script_memory;
     // A resize or a zoom is laid out once the events that arrived with it
     // are drained: a drag sends a stream of them, a person zooming presses
     // several times, and a big page takes long enough to lay out that
@@ -3076,8 +3103,9 @@ static void diag_motion(Page *p);
 // ── The memory census (MEMORY_CENSUS.md) ──────────────────────────────
 
 // One moment's census of `p`: every owner's total and the process heap
-// around them; with `detail`, libdom's kinds and the script heap's own
-// census too.
+// around them; with `detail`, libdom's kinds, the layout's and the
+// cascade's parts (whose ceilings differ, yonder_page_memory_split) and
+// the script heap's own census too.
 static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
 {
     os64_memset(sheet, 0, sizeof(*sheet));
@@ -3106,10 +3134,23 @@ static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
     }
     yonder_census_owner(sheet, "sheets", sheets, (uint64_t)p->nsheets, "sheets");
     yonder_census_owner(sheet, "cascade", garb_cascade_bytes(p->cascade), 0, NULL);
+    if (detail && p->cascade != NULL) {
+        garb_cascade_parts_t c = garb_cascade_parts(p->cascade);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "state", c.state);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "reads", c.reads);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "attributes", c.attributes);
+        yonder_census_part(sheet, YONDER_CENSUS_OF_CASCADE, "tables", c.tables);
+    }
     if (p->tree != NULL) {
         flow_tree_stats_t t = flow_tree_stats(p->tree);
         yonder_census_owner(sheet, "layout", t.styles_bytes + t.boxes_bytes + t.lines_bytes + t.public_bytes,
                             t.boxes, "boxes");
+        if (detail) {
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "styles", t.styles_bytes);
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "boxes", t.boxes_bytes);
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "lines", t.lines_bytes);
+            yonder_census_part(sheet, YONDER_CENSUS_OF_LAYOUT, "public", t.public_bytes);
+        }
     }
     yonder_census_owner(sheet, "pictures", p->kept_bytes, (uint64_t)p->npics, "pictures");
     yonder_scripts_census(p->scripts, sheet, detail);
@@ -3176,6 +3217,10 @@ static void diag_census(Page *p, bool sample)
     // earlier sample never stands beside this one's figures.
     census_fact(d, "memory dom", yonder_census_dom_line(&sheet, s_census_line, left), &left);
     census_fact(d, "memory script", yonder_census_script_line(&sheet, s_census_line, left), &left);
+    census_fact(d, "memory layout", yonder_census_parts_line(&sheet, YONDER_CENSUS_OF_LAYOUT, s_census_line, left),
+                &left);
+    census_fact(d, "memory cascade", yonder_census_parts_line(&sheet, YONDER_CENSUS_OF_CASCADE, s_census_line, left),
+                &left);
     census_fact(d, "census", yonder_census_state_line(&p->census, s_census_line, left), &left);
     census_fact(d, "memory timeline", yonder_census_timeline_line(&p->census, s_census_line, left), &left);
 }
@@ -9885,7 +9930,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     int64_t modified;
     stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
-        .url = url, .execution_ms = g.script_ms, .memory_bytes = g.script_memory, .dom_bytes = g.dom_memory,
+        .url = url, .execution_ms = g.script_ms, .memory_bytes = g.script_memory, .dom_bytes = s_page_memory.dom,
         .serial = serial,
         .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
@@ -13019,7 +13064,7 @@ static void image_page(os64_html_parser_t *parser, const char *url)
 static bool stream_parser(const void *first, size_t n)
 {
     page_departs();
-    os64_html_options_t opt = os64_html_options_default();
+    os64_html_options_t opt = page_html_options();
     opt.scripting = g.stream.scripting;
     if (g.stream.head.body == WAY_BODY_HTML) {
         opt.charset = g.stream.head.charset[0] ? g.stream.head.charset : NULL;
@@ -17173,7 +17218,7 @@ int main(int argc, char **argv)
     s_ranges = yonder_settings_saved_ranges();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
-    g.dom_memory = (size_t)yonder_settings_saved_dom_memory_mb() << 20;
+    page_memory_set(yonder_page_memory_split(yonder_settings_saved_page_memory_mb()));
     const char *modern_refused;
     g.modern = yonder_settings_saved_modern(&modern_refused);
     const char *diag_refused = diag_dir_open();

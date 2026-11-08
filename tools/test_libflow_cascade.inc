@@ -17,6 +17,14 @@ static void cascade_bytes_cases(void)
     size_t a = garb_cascade_bytes(small.cascade), b = garb_cascade_bytes(big.cascade);
     expect("cascade bytes: a cascade holds something, and more for more rules", a > 0 && b > a, NULL);
     expect("cascade bytes: NULL holds nothing", garb_cascade_bytes(NULL) == 0, NULL);
+    garb_cascade_parts_t pb = garb_cascade_parts(big.cascade), ps = garb_cascade_parts(small.cascade),
+                         none = garb_cascade_parts(NULL);
+    expect("cascade parts: they sum to the whole",
+           pb.state + pb.reads + pb.attributes + pb.tables == b, NULL);
+    expect("cascade parts: more rules are more read, style attributes are counted as attributes",
+           pb.reads > ps.reads && pb.attributes > 0 && pb.state > 0, NULL);
+    expect("cascade parts: NULL holds nothing",
+           none.state == 0 && none.reads == 0 && none.attributes == 0 && none.tables == 0, NULL);
     sheeted_close(&small);
     sheeted_close(&big);
 }
