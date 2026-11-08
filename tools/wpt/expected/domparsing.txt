@@ -1,0 +1,204 @@
+# WPT's domparsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh domparsing --update
+# rewrites [passing].
+[required]
+# XMLSerializer (libhtml serialize_xml.c, libdom implementation.c). The rest of
+# XMLSerializer-serializeToString.html builds its trees with DOMParser's
+# text/xml or setAttributeNS, neither of which yonder has (DEBTS.md).
+XMLSerializer-serializeToString.html	Attribute nodes are serialized as the empty string
+XMLSerializer-serializeToString.html	Check children were included for void elements
+XMLSerializer-serializeToString.html	Check if document fragment serializes.
+[excluded]
+[passing]
+Comment-serialization-double-hyphen.html	Serializing a comment containing '--' via innerHTML
+Comment-serialization-double-hyphen.html	Serializing a comment containing '-->' via innerHTML
+Comment-serialization-double-hyphen.html	Serializing a comment containing only '--' via innerHTML
+DOMParser-parseFromString-encoding.html	HTML: empty
+DOMParser-parseFromString-encoding.html	HTML: meta charset
+DOMParser-parseFromString-html.html	DOMParser parses HTML tag soup with no problems
+DOMParser-parseFromString-html.html	DOMParser should handle the content of <noembed> as raw text
+DOMParser-parseFromString-html.html	DOMParser throws on an invalid enum value
+DOMParser-parseFromString-html.html	Location value
+DOMParser-parseFromString-html.html	Parsing of id attribute
+DOMParser-parseFromString-html.html	compatMode for a proper DOCTYPE
+DOMParser-parseFromString-html.html	contentType
+DOMParser-parseFromString-html.html	must be parsed with scripting disabled, so noscript works
+DOMParser-parseFromString-html.html	script is found synchronously even when there is a css import
+DOMParser-parseFromString-stylesheets.html	DOMParser-created document should expose multiple style elements in styleSheets
+DOMParser-parseFromString-stylesheets.html	DOMParser-created document should have accessible styleSheets collection with one style element
+DOMParser-parseFromString-stylesheets.html	DOMParser-created document styleSheets should contain CSSStyleSheet objects
+DOMParser-parseFromString-stylesheets.html	DOMParser-created document without style elements should have empty styleSheets collection
+DOMParser-parseFromString-xml-scripting-support-disabled.html	parseFromString as HTML, append importNode result
+DOMParser-parseFromString-xml-scripting-support-disabled.html	parseFromString as HTML, appendChild
+DOMParser-parseFromString-xml-scripting-support-disabled.html	parseFromString as HTML, svg script, append importNode result
+DOMParser-parseFromString-xml-scripting-support-disabled.html	parseFromString as HTML, svg script, appendChild
+XMLSerializer-serializeToString.html	Attribute nodes are serialized as the empty string
+XMLSerializer-serializeToString.html	Check children were included for void elements
+XMLSerializer-serializeToString.html	Check if document fragment serializes.
+createContextualFragment.html	<html> and <body> must work the same, 1
+createContextualFragment.html	<html> and <body> must work the same, 2
+createContextualFragment.html	<html> in a different namespace shouldn't be special
+createContextualFragment.html	Don't auto-create <body> when applied to <html>
+createContextualFragment.html	Implicit <body> creation
+createContextualFragment.html	Must not throw INVALID_STATE_ERR for a detached node.
+createContextualFragment.html	Must throw TypeError when calling without arguments
+createContextualFragment.html	Namespace generally shouldn't matter
+createContextualFragment.html	Non-Element parent should not be special
+createContextualFragment.html	SVG namespace shouldn't be special
+createContextualFragment.html	Simple test with paragraphs
+createContextualFragment.html	Text nodes shouldn't be special
+createContextualFragment.html	createContextualFragment should work even when the context is <area>
+createContextualFragment.html	createContextualFragment should work even when the context is <base>
+createContextualFragment.html	createContextualFragment should work even when the context is <basefont>
+createContextualFragment.html	createContextualFragment should work even when the context is <bgsound>
+createContextualFragment.html	createContextualFragment should work even when the context is <br>
+createContextualFragment.html	createContextualFragment should work even when the context is <col>
+createContextualFragment.html	createContextualFragment should work even when the context is <embed>
+createContextualFragment.html	createContextualFragment should work even when the context is <frame>
+createContextualFragment.html	createContextualFragment should work even when the context is <hr>
+createContextualFragment.html	createContextualFragment should work even when the context is <image>
+createContextualFragment.html	createContextualFragment should work even when the context is <img>
+createContextualFragment.html	createContextualFragment should work even when the context is <input>
+createContextualFragment.html	createContextualFragment should work even when the context is <keygen>
+createContextualFragment.html	createContextualFragment should work even when the context is <link>
+createContextualFragment.html	createContextualFragment should work even when the context is <menuitem>
+createContextualFragment.html	createContextualFragment should work even when the context is <meta>
+createContextualFragment.html	createContextualFragment should work even when the context is <param>
+createContextualFragment.html	createContextualFragment should work even when the context is <source>
+createContextualFragment.html	createContextualFragment should work even when the context is <track>
+createContextualFragment.html	createContextualFragment should work even when the context is <wbr>
+createContextualFragment.html	null should be stringified
+createContextualFragment.html	undefined should be stringified
+domparser-spurious-attributes.html	Using ">" and "\\r" in an attribute creates no unexpected attributes.
+domparser-spurious-attributes.html	Using ">" and HTML entities in an attribute creates no unexpected attributes.
+innerhtml-04.html	innerHTML should leave the removed children alone.
+innerhtml-06.html	innerHTML defined on math.
+innerhtml-07.html	innerHTML and string conversion: null.
+innerhtml-07.html	innerHTML and string conversion: number.
+innerhtml-07.html	innerHTML and string conversion: toString.
+innerhtml-07.html	innerHTML and string conversion: undefined.
+innerhtml-07.html	innerHTML and string conversion: valueOf.
+innerhtml-08.html	innerHTML on html element with trailing comment
+innerhtml-08.html	innerHTML on html element with trailing comment (no explicit head)
+innerhtml-empty-document-element.html	Setting innerHTML to empty string
+innerhtml-li-autoclosing.html	Adjacent empty li elements in ol produce siblings.
+innerhtml-li-autoclosing.html	Adjacent empty li elements in ul produce siblings.
+innerhtml-li-autoclosing.html	Adjacent li elements produce siblings when ul is nested in div.
+innerhtml-li-autoclosing.html	Adjacent li elements with attributes produce siblings.
+innerhtml-li-autoclosing.html	Adjacent li elements with text content produce siblings.
+innerhtml-li-autoclosing.html	Legitimate li nesting through intervening ul is preserved.
+innerhtml-li-autoclosing.html	Three adjacent li elements produce siblings.
+innerhtml-mxss.sub.html	innerHTML after setter: 1680
+innerhtml-mxss.sub.html	innerHTML after setter: 2000
+innerhtml-mxss.sub.html	innerHTML after setter: 2001
+innerhtml-mxss.sub.html	innerHTML after setter: 2002
+innerhtml-mxss.sub.html	innerHTML after setter: 2003
+innerhtml-mxss.sub.html	innerHTML after setter: 2004
+innerhtml-mxss.sub.html	innerHTML after setter: 2005
+innerhtml-mxss.sub.html	innerHTML after setter: 2006
+innerhtml-mxss.sub.html	innerHTML after setter: 2007
+innerhtml-mxss.sub.html	innerHTML after setter: 2008
+innerhtml-mxss.sub.html	innerHTML after setter: 2009
+innerhtml-mxss.sub.html	innerHTML after setter: 200a
+innerhtml-mxss.sub.html	innerHTML after setter: 2028
+innerhtml-mxss.sub.html	innerHTML after setter: 205f
+innerhtml-mxss.sub.html	innerHTML after setter: 3000
+innerhtml-mxss.sub.html	innerHTML before setter: 1680
+innerhtml-mxss.sub.html	innerHTML before setter: 2000
+innerhtml-mxss.sub.html	innerHTML before setter: 2001
+innerhtml-mxss.sub.html	innerHTML before setter: 2002
+innerhtml-mxss.sub.html	innerHTML before setter: 2003
+innerhtml-mxss.sub.html	innerHTML before setter: 2004
+innerhtml-mxss.sub.html	innerHTML before setter: 2005
+innerhtml-mxss.sub.html	innerHTML before setter: 2006
+innerhtml-mxss.sub.html	innerHTML before setter: 2007
+innerhtml-mxss.sub.html	innerHTML before setter: 2008
+innerhtml-mxss.sub.html	innerHTML before setter: 2009
+innerhtml-mxss.sub.html	innerHTML before setter: 200a
+innerhtml-mxss.sub.html	innerHTML before setter: 2028
+innerhtml-mxss.sub.html	innerHTML before setter: 205f
+innerhtml-mxss.sub.html	innerHTML before setter: 3000
+insert-adjacent-parent-errors.html	Does not throw when inserting using "afterbegin" and "beforeend" into an element whose parent is a document
+insert-adjacent-parent-errors.html	Does not throw when inserting using "afterbegin" and "beforeend" into an element whose parent is null
+insert-adjacent-parent-errors.html	Throws when given an invalid position
+insert-adjacent-parent-errors.html	Throws when inserting using "afterend" into an element whose parent is a document
+insert-adjacent-parent-errors.html	Throws when inserting using "afterend" into an element whose parent is null
+insert-adjacent-parent-errors.html	Throws when inserting using "beforebegin" into an element whose parent is a document
+insert-adjacent-parent-errors.html	Throws when inserting using "beforebegin" into an element whose parent is null
+insert-adjacent.html	insertAdjacentHTML(afterbegin, <h3>afterbegin</h3> )
+insert-adjacent.html	insertAdjacentHTML(afterend, <h3>afterend</h3> )
+insert-adjacent.html	insertAdjacentHTML(beforebegin, <h3>beforebegin</h3> )
+insert-adjacent.html	insertAdjacentHTML(beforeend, <h3>beforeend</h3> )
+insert_adjacent_html.html	A text node inserted via insertAdjacentHTML should not be merged with a sibling text node.
+insert_adjacent_html.html	Afterbegin child node not in tree but has parent
+insert_adjacent_html.html	Afterbegin content again, with next sibling
+insert_adjacent_html.html	Afterbegin content without next sibling
+insert_adjacent_html.html	Afterbegin content2 test again, now that there's a next sibling
+insert_adjacent_html.html	Afterbegin content2 without next sibling
+insert_adjacent_html.html	BeforeEnd child node not in tree but has parent
+insert_adjacent_html.html	BeforeEnd content again, with next sibling
+insert_adjacent_html.html	BeforeEnd content without next sibling
+insert_adjacent_html.html	BeforeEnd content2 test again, now that there's a next sibling
+insert_adjacent_html.html	BeforeEnd content2 without next sibling
+insert_adjacent_html.html	Inserting after being and before end should order things correctly
+insert_adjacent_html.html	Inserting kids of the <html> element should not do weird things with implied <body>/<head> tags
+insert_adjacent_html.html	Should not run script when appending things which have descendant <script> inserted via insertAdjacentHTML
+insert_adjacent_html.html	Should throw when inserting with invalid position string
+insert_adjacent_html.html	When the parent node is a document, insertAdjacentHTML should throw for beforebegin and afterend (comments)
+insert_adjacent_html.html	When the parent node is a document, insertAdjacentHTML should throw for beforebegin and afterend (elements)
+insert_adjacent_html.html	When the parent node is a document, insertAdjacentHTML should throw for beforebegin and afterend (text)
+insert_adjacent_html.html	When the parent node is null, insertAdjacentHTML should throw for beforebegin and afterend (comments)
+insert_adjacent_html.html	When the parent node is null, insertAdjacentHTML should throw for beforebegin and afterend (elements)
+insert_adjacent_html.html	When the parent node is null, insertAdjacentHTML should throw for beforebegin and afterend (text)
+insert_adjacent_html.html	afterend child node not in tree but has parent
+insert_adjacent_html.html	afterend content again, with next sibling
+insert_adjacent_html.html	afterend content without next sibling
+insert_adjacent_html.html	afterend content2 test again, now that there's a next sibling
+insert_adjacent_html.html	afterend content2 without next sibling
+insert_adjacent_html.html	beforeBegin child node not in tree but has parent
+insert_adjacent_html.html	beforeBegin content again, with next sibling
+insert_adjacent_html.html	beforeBegin content without next sibling
+insert_adjacent_html.html	beforeBegin content2 test again, now that there's a next sibling
+insert_adjacent_html.html	beforeBegin content2 without next sibling
+parsed-document-origin.window.html	DOMParser's parseFromString() with text/html
+parsed-document-origin.window.html	This document has a tuple origin (prerequisite for the tests below)
+parsed-document-origin.window.html	createDocument()
+parsed-document-origin.window.html	createHTMLDocument()
+positional-methods.html	afterHTML is not available on DocumentType nodes
+positional-methods.html	afterHTMLUnsafe is not available on DocumentType nodes
+positional-methods.html	beforeHTML is not available on DocumentType nodes
+positional-methods.html	beforeHTMLUnsafe is not available on DocumentType nodes
+positional-methods.html	replaceWithHTML is not available on DocumentType nodes
+positional-methods.html	replaceWithHTMLUnsafe is not available on DocumentType nodes
+svg-template.html	document
+svg-template.html	fragment
+tentative/all-stream-methods-with-trusted-types-no-policy.html	streamAfterHTMLUnsafe with trusted types and no default policy throws.
+tentative/all-stream-methods-with-trusted-types-no-policy.html	streamAppendHTMLUnsafe with trusted types and no default policy throws.
+tentative/all-stream-methods-with-trusted-types-no-policy.html	streamBeforeHTMLUnsafe with trusted types and no default policy throws.
+tentative/all-stream-methods-with-trusted-types-no-policy.html	streamHTMLUnsafe with trusted types and no default policy throws.
+tentative/all-stream-methods-with-trusted-types-no-policy.html	streamPrependHTMLUnsafe with trusted types and no default policy throws.
+tentative/all-stream-methods-with-trusted-types-no-policy.html	streamReplaceWithHTMLUnsafe with trusted types and no default policy throws.
+tentative/stream-html-sanitizer.html	element.streamAfterHTML: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamAfterHTMLUnsafe: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamAppendHTML: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamAppendHTMLUnsafe: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamBeforeHTML: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamBeforeHTMLUnsafe: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamHTML: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamHTMLUnsafe: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamPrependHTML: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamPrependHTMLUnsafe: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamReplaceWithHTML: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-sanitizer.html	element.streamReplaceWithHTMLUnsafe: passing an invalid sanitizer config should not create the stream or mutate the DOM
+tentative/stream-html-with-trusted-types-no-policy.html	Streaming with trusted types and no default policy throws for streamAfterHTMLUnsafe.
+tentative/stream-html-with-trusted-types-no-policy.html	Streaming with trusted types and no default policy throws for streamAppendHTMLUnsafe.
+tentative/stream-html-with-trusted-types-no-policy.html	Streaming with trusted types and no default policy throws for streamBeforeHTMLUnsafe.
+tentative/stream-html-with-trusted-types-no-policy.html	Streaming with trusted types and no default policy throws for streamHTMLUnsafe.
+tentative/stream-html-with-trusted-types-no-policy.html	Streaming with trusted types and no default policy throws for streamPrependHTMLUnsafe.
+tentative/stream-positional.html	streamAfterHTML is not exposed on DocumentType
+tentative/stream-positional.html	streamAfterHTMLUnsafe is not exposed on DocumentType
+tentative/stream-positional.html	streamBeforeHTML is not exposed on DocumentType
+tentative/stream-positional.html	streamBeforeHTMLUnsafe is not exposed on DocumentType
+tentative/stream-positional.html	streamReplaceWithHTML is not exposed on DocumentType
+tentative/stream-positional.html	streamReplaceWithHTMLUnsafe is not exposed on DocumentType

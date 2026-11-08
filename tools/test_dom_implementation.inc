@@ -523,6 +523,8 @@ static void implementation_allocation_cases(void)
         "var d=document.implementation.createHTMLDocument('');var p=d.createElement('p');d.body.appendChild(p);"
         "p.setAttribute('a','b');document.adoptNode(p.getAttributeNode('a'));document.adoptNode(p)",
         "document.doctype.name",
+        "var d=document.createElement('div');d.innerHTML='<svg><use xlink:href=\"#a\"></use></svg><p>x</p>';"
+        "new XMLSerializer().serializeToString(d)",
     };
     binding_sweep("implementation", kOperations, sizeof(kOperations) / sizeof(kOperations[0]), NULL);
     engine_sweep("implementation", kOperations, sizeof(kOperations) / sizeof(kOperations[0]), NULL);
@@ -595,6 +597,94 @@ static void implementation_data_cases(void)
     fixture_free(&f);
 }
 
+/* XMLSerializer (DOM Parsing § 3.1): the XML serialization of what the
+ * page holds, namespaces declared where they change. The expectations are
+ * WPT's XMLSerializer-serializeToString.html where it covers a case, and
+ * the standard's algorithm where it does not. */
+static void implementation_serializer_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, IMPL_ASSERT
+        "function eq(a,b,m){assert(a===b,(m||'')+': '+a+' !== '+b)}"
+        "var s=new XMLSerializer(),X='http://www.w3.org/1999/xhtml';"
+        "assert(s instanceof XMLSerializer&&typeof s.serializeToString==='function','the interface');"
+        "throws('TypeError',()=>s.serializeToString({}));throws('TypeError',()=>XMLSerializer.prototype.serializeToString.call({},document.body));"
+        "var d=document.createElement('div');d.innerHTML='<p class=\"a&quot;b\">x &amp; y<br>z\\u00a0</p><img>';"
+        "eq(s.serializeToString(d),'<div xmlns=\"'+X+'\"><p class=\"a&quot;b\">x &amp; y<br />z\\u00a0</p><img /></div>','an HTML subtree');"
+        "eq(s.serializeToString(document.createElement('span')),'<span xmlns=\"'+X+'\"></span>','an empty element that is not void');"
+        "var f=new DocumentFragment;f.append(document.createElement('div'),document.createElement('span'));"
+        "eq(s.serializeToString(f),'<div xmlns=\"'+X+'\"></div><span xmlns=\"'+X+'\"></span>','a fragment (WPT)');"
+        "var img=document.createElement('img');img.append(document.createElement('style'),document.createElement('style'));"
+        "eq(s.serializeToString(img),'<img xmlns=\"'+X+'\"><style></style><style></style></img>','a void element with children (WPT)');"
+        "var v=document.createElement('div');v.innerHTML='<svg><circle r=\"1\"></circle><use xlink:href=\"#a\"></use></svg>';"
+        "eq(s.serializeToString(v),'<div xmlns=\"'+X+'\"><svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"1\"/>"
+        "<use xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"#a\"/></svg></div>','SVG inside HTML, and a namespaced attribute keeps its own unbound prefix');"
+        "var w=document.createElement('div');w.innerHTML='<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"><use xlink:href=\"#a\"></use>"
+        "<g><use xlink:href=\"#b\" xml:lang=\"en\"></use></g></svg>';"
+        "eq(s.serializeToString(w),'<div xmlns=\"'+X+'\"><svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
+        "<use xlink:href=\"#a\"/><g><use xlink:href=\"#b\" xml:lang=\"en\"/></g></svg></div>',"
+        "'a declared prefix serves the subtree, and xml: needs no declaration');"
+        "eq(s.serializeToString(w.firstChild.firstChild),'<use xmlns=\"http://www.w3.org/2000/svg\" "
+        "xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"#a\"/>','out of its scope, the prefix is declared again');"
+        "var w2=document.createElement('div');w2.innerHTML='<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"><use xlink:href=\"#a\"></use></svg>"
+        "<svg><use xlink:href=\"#b\"></use></svg>';"
+        "eq(s.serializeToString(w2),'<div xmlns=\"'+X+'\"><svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
+        "<use xlink:href=\"#a\"/></svg><svg xmlns=\"http://www.w3.org/2000/svg\"><use xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+        "xlink:href=\"#b\"/></svg></div>','a declaration ends with the element that made it');"
+        "var w3=document.createElement('div');w3.innerHTML='<svg xmlns:xlink=\"urn:other\"><use xlink:href=\"#c\"></use></svg>';"
+        "eq(s.serializeToString(w3.firstChild),'<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"urn:other\">"
+        "<use xmlns:ns1=\"http://www.w3.org/1999/xlink\" ns1:href=\"#c\"/></svg>','a prefix bound elsewhere is generated');"
+        "var w4=document.createElement('div');w4.innerHTML='<svg xmlns:xlink=\"urn:other\"><use xlink:href=\"#d\"></use></svg>';"
+        "var q=document.createElementNS('urn:q','ns1:x');q.appendChild(w4.firstChild);"
+        "eq(s.serializeToString(q),'<ns1:x xmlns:ns1=\"urn:q\"><svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"urn:other\">"
+        "<use xmlns:ns2=\"http://www.w3.org/1999/xlink\" ns2:href=\"#d\"/></svg></ns1:x>','a generated prefix skips a spelling in force');"
+        "var y=new Document(),r1=y.createElementNS('urn:a','p:root');"
+        "r1.appendChild(y.createElementNS('urn:b','p:child')).appendChild(y.createElementNS('urn:a','p:grandchild'));"
+        "eq(s.serializeToString(r1),'<p:root xmlns:p=\"urn:a\"><p:child xmlns:p=\"urn:b\"><p:grandchild xmlns:p=\"urn:a\"/>"
+        "</p:child></p:root>','a prefix a descendant rebound is declared again, not trusted');"
+        "var w5=document.createElement('div');w5.innerHTML='<svg xmlns:xlink=\"urn:a\"><g xmlns:xlink=\"urn:b\"><g xmlns:xlink=\"urn:a\"></g></g></svg>';"
+        "eq(s.serializeToString(w5.firstChild),'<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"urn:a\"><g xmlns:xlink=\"urn:b\">"
+        "<g xmlns:xlink=\"urn:a\"/></g></svg>','a declaration restoring a shadowed binding is kept');"
+        "var n=document.createElement('div');n.appendChild(document.createElementNS('urn:foo','p:x'));"
+        "n.appendChild(document.createElementNS(null,'plain'));"
+        "n.appendChild(document.createElementNS('http://www.w3.org/XML/1998/namespace','foo')).appendChild("
+        "document.createElementNS('http://www.w3.org/XML/1998/namespace','bar'));"
+        "eq(s.serializeToString(n),'<div xmlns=\"'+X+'\"><p:x xmlns:p=\"urn:foo\"/>"
+        "<plain xmlns=\"\"/><xml:foo><xml:bar/></xml:foo></div>','a prefix kept, the default reset, and the XML namespace (WPT)');"
+        "var t=document.createElement('template');t.innerHTML='<b>x</b>';"
+        "eq(s.serializeToString(t),'<template xmlns=\"'+X+'\"><b>x</b></template>','a template is its contents');"
+        "var a=document.createElement('i');a.setAttribute('t','a\\tb\\nc\\rd<>&');a.appendChild(document.createComment('c'));"
+        "a.appendChild(document.createTextNode('<&>'));"
+        "eq(s.serializeToString(a),'<i xmlns=\"'+X+'\" t=\"a&#9;b&#10;c&#13;d&lt;&gt;&amp;\"><!--c-->&lt;&amp;&gt;</i>','escapes');"
+        "eq(s.serializeToString(document.createAttribute('x')),'','an Attr is the empty string (WPT)');"
+        "eq(s.serializeToString(document.createTextNode('a<b')),'a&lt;b','a text node alone');"
+        "var x=new Document(),r3=x.createElementNS('uri2','p:root');r3.appendChild(x.createElementNS('uri1','p:child'));"
+        "eq(s.serializeToString(r3),'<p:root xmlns:p=\"uri2\"><p:child xmlns:p=\"uri1\"/></p:root>','an ancestor\\'s prefix rebound');"
+        "var r4=x.createElementNS('uri1','root');r4.setAttribute('xmlns','uri1');var c4=r4.appendChild(x.createElementNS('uri1','c'));"
+        "c4.setAttribute('xmlns','uri1');r4.appendChild(x.createElement('m')).setAttribute('xmlns','uri1');"
+        "eq(s.serializeToString(r4),'<root xmlns=\"uri1\"><c/><m xmlns=\"\"/></root>','a redundant or inconsistent xmlns is dropped');"
+        "var cd=x.createElement('k');cd.appendChild(x.createCDATASection('a<b'));cd.appendChild(x.createProcessingInstruction('t','d'));"
+        "eq(s.serializeToString(cd),'<k><![CDATA[a<b]]><?t d?></k>','CDATA and a processing instruction');"
+        "eq(s.serializeToString(x),'','an empty document');",
+        "xml-serializer");
+    /* The feed's use: a fragment serialized, its XHTML namespace taken out,
+     * and the markup put back with insertAdjacentHTML reads as it did. */
+    dom_script(&f, IMPL_ASSERT
+        "var src='<faceplate-batch><article data-x=\"1\"><a href=\"/r?a=1&amp;b=2\">t</a><br><img alt=\"\">"
+        "<svg><use xlink:href=\"#icon\"></use></svg></article></faceplate-batch>';"
+        "var t=document.createElement('template');t.innerHTML=src;"
+        "var m=new XMLSerializer().serializeToString(t.content).replace(/xmlns=\"[^\"]*html[^\"]*\"/g,'');"
+        "var host=document.body.appendChild(document.createElement('div'));host.insertAdjacentHTML('beforeend',m);"
+        "var want=src.replace('<svg>','<svg xmlns=\"http://www.w3.org/2000/svg\">')"
+        ".replace('<use ','<use xmlns:xlink=\"http://www.w3.org/1999/xlink\" ');"
+        "assert(host.innerHTML===want,'round trip (the SVG keeps the declarations the strip leaves): '+host.innerHTML);"
+        "var at=host.querySelector('use').attributes.getNamedItem('xlink:href');"
+        "assert(at&&at.namespaceURI==='http://www.w3.org/1999/xlink'&&at.value==='#icon','the icon\\'s href comes back in XLink');",
+        "xml-serializer-feed");
+    fixture_free(&f);
+}
+
 static void dom_implementation_cases(void)
 {
     implementation_shape_cases();
@@ -609,5 +699,6 @@ static void dom_implementation_cases(void)
     implementation_control_type_cases();
     implementation_arena_cases();
     implementation_jquery_cases();
+    implementation_serializer_cases();
 }
 #undef IMPL_ASSERT
