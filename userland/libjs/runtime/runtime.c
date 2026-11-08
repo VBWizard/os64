@@ -45,6 +45,11 @@ struct os64_js_runtime {
     /* A host task holds one turn open across several calls and checkpoints;
      * rejections are judged only at a checkpoint while it is open. */
     bool active, turn, task, checkpointing, source_truncated;
+    /* The call ran a job, which is when a watched module can fail
+     * (module_owed_fold reports it at the call's exit). */
+    bool ran_jobs;
+    /* Late module failures so far, which numbers each one's place. */
+    uint64_t owed_count;
     bool evaluated, output_installed, args_installed, intl_installed;
     int32_t output_handle;
     /* console.group's nesting: each console line is indented by it. */
@@ -54,16 +59,25 @@ struct os64_js_runtime {
      * for a module it cannot find among the ones compiled. */
     struct os64_js_module *modules;
     os64_js_module_loader_t loader;
+    /* Promise.prototype.then as the engine made it, read at construction
+     * before any script ran: how a module's evaluation is watched
+     * (module_watch), since a page may replace the one it can reach. A
+     * runtime that cannot read it is not made. */
+    JSValue promise_then;
 };
 
 /* A module the host compiled: a reference of its own to the engine's
  * module, and once run, its evaluation's promise; a rejection of that
  * promise is the module's failure, kept here as its outcome rather than
- * judged as an unhandled rejection (HTML reports it as an error). */
+ * judged as an unhandled rejection (HTML reports it as an error). A failure
+ * after its run returned is `owed` (its place among the owed, from 1; 0
+ * when nothing is owed): no call of its own carries it, so the call whose
+ * jobs surfaced it does (module_owed_fold). */
 struct os64_js_module {
     struct os64_js_module *next, *prev;
     JSValue module, promise;
     bool run, rejected;
+    uint64_t owed;
     os64_js_outcome_t failure;
 };
 
@@ -199,6 +213,7 @@ static char *module_normalize(JSContext *context, const char *base, const char *
 static JSModuleDef *module_load(JSContext *context, const char *name, void *opaque);
 static void module_free(os64_js_runtime_t *runtime, struct os64_js_module *module);
 static void caught(os64_js_runtime_t *runtime, JSContext *context, JSValueConst error);
+static void discard_exception(JSContext *context);
 static void rejection_diagnostic(os64_js_runtime_t *runtime, JSValueConst value,
                                  os64_js_outcome_t *out);
 
@@ -213,36 +228,134 @@ static struct os64_js_module *module_of(os64_js_runtime_t *runtime, JSValueConst
 }
 
 /* A module's evaluation rejected: its failure, kept for os64_js_module_state
- * and reported as an exception (the script host's `exception`), which is
- * what HTML does with a module script's error. Runs no script. */
+ * under the module's name and reported as an exception (the script host's
+ * `exception`), which is what HTML does with a module script's error; one
+ * that comes after the run returned is `owed` to a later call's outcome.
+ * Runs no script. */
 static void module_failed(os64_js_runtime_t *runtime, JSContext *context,
-                          struct os64_js_module *module, JSValueConst reason)
+                          struct os64_js_module *module, JSValueConst reason, bool owed)
 {
     if (module->rejected) return;
     module->rejected = true;
+    module->owed = owed ? ++runtime->owed_count : 0;
     os64_memset(&module->failure, 0, sizeof(module->failure));
     module->failure.status = OS64_JS_EXCEPTION;
     rejection_diagnostic(runtime, reason, &module->failure);
+    JSAtom name = JS_GetModuleName(context, JS_VALUE_GET_PTR(module->module));
+    const char *text = name != JS_ATOM_NULL ? JS_AtomToCString(context, name) : NULL;
+    if (text != NULL) {
+        module->failure.diagnostic_truncated |=
+            copy_text(module->failure.source_name, sizeof(module->failure.source_name), text);
+        JS_FreeCString(context, text);
+    } else if (name != JS_ATOM_NULL) discard_exception(context);
+    JS_FreeAtom(context, name);
     // Its fallback names an unhandled rejection, which this is not.
     if (os64_strcmp(module->failure.message, "unhandled Promise rejection") == 0)
         copy_text(module->failure.message, sizeof(module->failure.message), "module evaluation failed");
     caught(runtime, context, reason);
 }
 
+/* Promise.prototype.then from a context no script has run in yet; undefined
+ * when it cannot be read (no memory). */
+static JSValue intrinsic_then(JSContext *context)
+{
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue constructor = JS_GetPropertyStr(context, global, "Promise");
+    JSValue prototype = JS_IsException(constructor) ? JS_EXCEPTION
+                                                    : JS_GetPropertyStr(context, constructor, "prototype");
+    JSValue then = JS_IsException(prototype) ? JS_EXCEPTION : JS_GetPropertyStr(context, prototype, "then");
+    JS_FreeValue(context, prototype);
+    JS_FreeValue(context, constructor);
+    JS_FreeValue(context, global);
+    if (JS_IsException(then)) {
+        discard_exception(context);
+        return JS_UNDEFINED;
+    }
+    if (!JS_IsFunction(context, then)) {
+        JS_FreeValue(context, then);
+        return JS_UNDEFINED;
+    }
+    return then;
+}
+
+/* A watched evaluation rejected (module_watch); its promise is the
+ * function's data, and a handle released since finds none. */
+static JSValue module_rejected(JSContext *context, JSValueConst self, int argc, JSValueConst *argv,
+                               int magic, JSValue *data)
+{
+    (void)self; (void)magic;
+    os64_js_runtime_t *runtime = JS_GetContextOpaque(context);
+    struct os64_js_module *module = module_of(runtime, data[0]);
+    if (module != NULL) module_failed(runtime, context, module, argc > 0 ? argv[0] : JS_UNDEFINED, true);
+    return JS_UNDEFINED;
+}
+
+/* A module still evaluating when its run returns is watched with a
+ * rejection handler of libjs's own, through the engine's own `then`, so its
+ * failure is heard whatever else handles the promise: an import() of the
+ * module puts a handler on it too, and then the tracker never hears it.
+ * `then` reads the promise's `constructor` and that constructor's species,
+ * which a page can replace, and so could run the page's code here, or
+ * throw and leave the module unwatched. The evaluation's promise is the
+ * engine's own and no script ever holds it (an import() is answered with a
+ * promise of its own), so it is given an own `constructor` of undefined
+ * first, which makes `then` take the realm's Promise and ask the page
+ * nothing. (A refused allocation here ends the runtime, as one anywhere
+ * does.) */
+static void module_watch(os64_js_runtime_t *runtime, JSValueConst promise)
+{
+    JSContext *context = runtime->context;
+    if (JS_DefinePropertyValueStr(context, promise, "constructor", JS_UNDEFINED, JS_PROP_CONFIGURABLE) < 0) {
+        discard_exception(context);
+        return;
+    }
+    JSValue heard = JS_NewCFunctionData(context, module_rejected, 1, 0, 1, &promise);
+    if (JS_IsException(heard)) {
+        discard_exception(context);
+        return;
+    }
+    JSValueConst args[2] = {JS_UNDEFINED, heard};
+    JSValue derived = JS_Call(context, runtime->promise_then, promise, 2, args);
+    if (JS_IsException(derived)) discard_exception(context);
+    JS_FreeValue(context, derived);
+    JS_FreeValue(context, heard);
+}
+
+/* An owed failure (module_failed) is the outcome of the call whose jobs
+ * surfaced it, the first of them while that outcome is still OK; another
+ * waits for the next call that runs jobs or checkpoints (never a task's
+ * begin, whose outcome decides whether the task runs at all), so each is
+ * reported once, under its module's name. The host's exception hook heard
+ * it when it failed (a page's window error event comes from there); this
+ * is the report a host keeps. */
+static void module_owed_fold(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
+{
+    if (out->status != OS64_JS_OK) return;
+    struct os64_js_module *first = NULL;
+    for (struct os64_js_module *m = runtime->modules; m != NULL; m = m->next)
+        if (m->owed != 0 && (first == NULL || m->owed < first->owed)) first = m;
+    if (first == NULL) return;
+    first->owed = 0;
+    out->status = OS64_JS_EXCEPTION;
+    out->line = first->failure.line;
+    out->column = first->failure.column;
+    out->diagnostic_truncated |= first->failure.diagnostic_truncated;
+    copy_text(out->message, sizeof(out->message), first->failure.message);
+    copy_text(out->stack_trace, sizeof(out->stack_trace), first->failure.stack_trace);
+    copy_text(out->source_name, sizeof(out->source_name), first->failure.source_name);
+}
+
 /* The engine's tracker: a promise rejected with no handler, or a handler
  * added to one. A handler for a promise this table no longer holds, which a
  * host took (os64_js_take_rejection), is the host's to hear of. A module's
- * evaluation is its handle's (module_failed), never an unhandled rejection. */
+ * evaluation never comes here as one: one that fails at once is taken back
+ * by os64_js_module_run as the module's failure, and one still pending is
+ * watched (module_watch), so it has a handler. */
 static void rejection(JSContext *context, JSValueConst promise,
                       JSValueConst reason, JS_BOOL handled, void *opaque)
 {
     os64_js_runtime_t *runtime = opaque;
     if (observe(runtime)) return;
-    struct os64_js_module *module = handled ? NULL : module_of(runtime, promise);
-    if (module != NULL) {
-        module_failed(runtime, context, module, reason);
-        return;
-    }
     Rejection **place = rejection_place(runtime, JS_VALUE_GET_PTR(promise));
     if (place != NULL) {
         if (handled) {
@@ -422,6 +535,8 @@ static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out
     out->jobs_executed = runtime->jobs;
     out->diagnostic_truncated |= runtime->source_truncated |
         copy_text(out->source_name, sizeof(out->source_name), runtime->source_name);
+    if (runtime->ran_jobs || runtime->checkpointing) module_owed_fold(runtime, out);
+    runtime->ran_jobs = false;
     if ((!pending && !runtime->task) || runtime->failure != OS64_JS_OK) runtime->turn = false;
     runtime->active_outcome = NULL;
     runtime->active = false;
@@ -490,11 +605,18 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
             ready = JS_DeleteProperty(runtime->context, global, name, JS_PROP_THROW) == 1;
         JS_FreeAtom(runtime->context, name);
         JS_FreeValue(runtime->context, global);
+        if (ready) {
+            runtime->promise_then = intrinsic_then(runtime->context);
+            ready = JS_IsFunction(runtime->context, runtime->promise_then);
+        }
     }
     if (!ready || runtime->allocator.failures != 0) {
         bool limited = storage >= limits->memory_bytes ||
             (runtime->allocator.failures & JSPORT_ALLOC_LIMIT);
-        if (runtime->context != NULL) JS_FreeContext(runtime->context);
+        if (runtime->context != NULL) {
+            JS_FreeValue(runtime->context, runtime->promise_then);
+            JS_FreeContext(runtime->context);
+        }
         if (runtime->engine != NULL) JS_FreeRuntime(runtime->engine);
         /* Construction owns no caller handles; leftovers here are an invariant
          * failure, not the binding-leak exception selected for normal destroy. */
@@ -874,6 +996,7 @@ JS_PUBLIC os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
         }
         runtime->jobs++;
         count++;
+        runtime->ran_jobs = true;
         JSContext *context = NULL;
         if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
             if (context == NULL) context = runtime->context;
@@ -1085,6 +1208,7 @@ static void checkpoint(os64_js_runtime_t *runtime, os64_js_outcome_t *outcome)
     while (JS_IsJobPending(runtime->engine) && !observe(runtime)) {
         if (runtime->jobs == runtime->limits.jobs_per_turn) break;
         runtime->jobs++;
+        runtime->ran_jobs = true;
         JSContext *context = NULL;
         if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
             if (context == NULL) context = runtime->context;
@@ -2079,10 +2203,12 @@ JS_PUBLIC os64_js_status_t os64_js_module_run(os64_js_runtime_t *runtime, const 
             js_free_rt(runtime->engine, item);
         }
         JSValue reason = JS_PromiseResult(runtime->context, promise);
-        module_failed(runtime, runtime->context, module, reason);
+        module_failed(runtime, runtime->context, module, reason, false);
         JS_FreeValue(runtime->context, reason);
         *outcome = module->failure;
         outcome->status = OS64_JS_EXCEPTION;
+    } else if (JS_PromiseState(runtime->context, promise) == JS_PROMISE_PENDING) {
+        module_watch(runtime, promise);
     }
     return leave(runtime, outcome);
 }
@@ -2140,6 +2266,7 @@ JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
     // The host's module handles go before the context they belong to.
     while (runtime->modules != NULL)
         module_free(runtime, runtime->modules);
+    JS_FreeValue(runtime->context, runtime->promise_then);
     JS_FreeContext(runtime->context);
     if (runtime->allocator.tracked) {
         bool leaked = jsport_free_runtime_report(runtime->engine) != 0;

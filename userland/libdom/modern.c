@@ -79,7 +79,7 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"TextEncoder", "TextDecoder", NULL}, d_encoding_install},
     {(const char *const[]){"screen", "devicePixelRatio", "Screen", "ScreenOrientation", NULL}, d_screen_install},
     {(const char *const[]){"btoa", "atob", NULL}, d_base64_install},
-    {(const char *const[]){"DOMImplementation", "DOMParser", NULL}, d_implementation_install},
+    {(const char *const[]){"DOMImplementation", "DOMParser", "XMLSerializer", NULL}, d_implementation_install},
     {(const char *const[]){"DOMException", NULL}, d_exception_install},
     {(const char *const[]){"AbortController", "AbortSignal", NULL}, d_abort_install},
     {(const char *const[]){"Blob", "File", "FormData", NULL}, d_blob_install},

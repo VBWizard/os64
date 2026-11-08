@@ -76,6 +76,7 @@ WPT_DIRS=(
     webmessaging/without-ports
     webmessaging/message-channels
     selection
+    domparsing
     html/semantics/document-metadata/the-link-element
     html/semantics/document-metadata/the-style-element
     preload

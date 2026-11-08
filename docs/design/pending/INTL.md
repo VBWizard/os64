@@ -139,12 +139,12 @@ it); a present one that misbehaves is rule 1's worse case.
 | `Intl.ListFormat` — the three types and three styles | 21 hosts |
 | `Intl.Collator` and `String.prototype.localeCompare` through it — `usage`, `sensitivity`, `ignorePunctuation`, `numeric`, `caseFirst`, over the collation § 4.1 names | 72 hosts call `localeCompare` with arguments; GitHub's checks module constructs one at module scope |
 | `Intl.Locale` — parsing and canonicalizing a BCP 47 tag, its parts; `maximize`/`minimize` by CLDR's likely subtags for the English tags and every `und` row, and the identity for any other tag the data lacks (the algorithm's own answer when no row matches: `new Intl.Locale("de-DE").maximize()` is `de-DE`) | 15 hosts; every constructor's locale argument is parsed the same way; primer-react's RelativeTime constructs one in render |
+| `Intl.Segmenter` — every granularity (grapheme, word, sentence), `segment`, `containing`, the iterator, `isWordLike`; UAX #29's rules at the engine's Unicode version, in C (SEGMENTER.md, 2026-11-07) | 6 hosts that test for it and ask for word or sentence, and one that constructs it at module scope untested; booked here until a page broke on its absence |
 | `Intl.getCanonicalLocales`, `Intl.supportedValuesOf` | small, and the second answers truly what the data holds |
 | The redefined built-ins: `Date.prototype.toLocaleString`/`DateString`/`TimeString`, `Number.prototype.toLocaleString`, `BigInt.prototype.toLocaleString`, `Array.prototype.toLocaleString` (unchanged in shape, its elements' now honoured) | 32 hosts; as § 1 says, wrong silently today |
 
 | Booked, absent (a feature test answers `undefined`) | Why it waits |
 |---|---|
-| `Intl.Segmenter` (6 hosts) | grapheme and word breaking is Unicode's segmentation data, a different and larger table; a page that tests for it falls back |
 | `Intl.DisplayNames` (9 hosts) | names of languages, regions, currencies and scripts: data, not formatting; booked with a second locale |
 | `Intl.DurationFormat` (1 host) | the newest constructor, one host; built on NumberFormat, so cheap when a page asks |
 
@@ -329,7 +329,7 @@ The hard part, because pages pass zone names and read them back:
   file and a census, not code; booked.
 - Calendars other than Gregorian, numbering systems other than Latin
   digits; `supportedValuesOf` says exactly which.
-- Segmenter, DisplayNames, DurationFormat (§ 4).
+- DisplayNames, DurationFormat (§ 4). (Segmenter shipped later: SEGMENTER.md.)
 - Historical time-zone rules (§ 5).
 - An IANA name in the system's `TZ` (§ 5; libos64's, booked).
 - Collation beyond Latin and its marks (§ 4.1; full DUCET, booked).

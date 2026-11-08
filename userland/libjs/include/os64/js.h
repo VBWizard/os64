@@ -152,7 +152,9 @@ os64_js_status_t os64_js_run_bytecode(os64_js_runtime_t *runtime,
                                       os64_js_bytecode_t *bytecode,
                                       os64_js_outcome_t *outcome);
 /* A slice yields MORE_JOBS without resetting the turn's deadline or job cap.
- * An empty runnable queue is OK; unresolved promises are not external work. */
+ * An empty runnable queue is OK; unresolved promises are not external work.
+ * With no job exception, the outcome may be a module's late failure that
+ * the slice's jobs surfaced (CONTRACT.md § Modules). */
 os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
                                     uint64_t slice_jobs,
                                     os64_js_outcome_t *outcome);

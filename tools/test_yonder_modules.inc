@@ -130,6 +130,35 @@ static void module_failure_case(void) {
     request_drop();
 }
 
+static int count_in(const char *text, const char *needle);
+
+/* MODULE_FAILURES.md: a module whose evaluation rejects after a top-level
+ * await is reported as a script's failure, once, on the record (and the
+ * window's error event hears it once), however it was loaded. A module
+ * that throws at once is reported as before, and only once. */
+static void module_late_failure_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/late.js",200,MODULE_JS,"await 0; throw Error('late src')");
+    module_page("<script>addEventListener('error',e=>note(e.message))</script>"
+        "<script type=module src=/m/late.js></script>"
+        "<script type=module>await 0; throw Error('late inline')</script>"
+        "<script>var s=document.createElement('script');s.type='module';"
+        "s.textContent=\"await 0; throw Error('late inserted')\";document.head.appendChild(s)</script>"
+        "<script type=module>throw Error('at once')</script>");
+    check(loop_settle() && request_land("/m/late.js") && loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+          loop_settle(),"modules: a page of late-failing modules arrives");
+    const char *out=element_text("out");
+    check(count_in(out,"Uncaught Error: late src")==1 && count_in(out,"Uncaught Error: late inline")==1 &&
+          count_in(out,"Uncaught Error: late inserted")==1 && count_in(out,"Uncaught Error: at once")==1,
+          "modules: the window's error event hears each failure once, late or at once");
+    const char *record=request_record_text();
+    check(count_in(record,"FAILED script http://fixture.test/m/late.js: late src")==1 &&
+          count_in(record,": late inline")==1 && count_in(record,": late inserted")==1 &&
+          count_in(record,": at once")==1,
+          "modules: each is a FAILED line on the record, once, a late one as surely as one at once");
+    request_drop();
+}
+
 /* How often `needle` is in `text`. */
 static int count_in(const char *text, const char *needle) {
     int n=0;
@@ -434,6 +463,7 @@ static void module_cases(void) {
     module_dynamic_case();
     module_classic_import_case();
     module_failure_case();
+    module_late_failure_case();
     module_preload_case();
     module_takeover_case();
     module_no_content_case();
