@@ -712,6 +712,183 @@ static void dom_window_subtle_tier3a_cases(void)
     fixture_free(&f);
 }
 
+/* Tier 3b: ECDSA and ECDH on the three curves. RFC 6979's P-256 key and
+ * its SHA-256 signature of "sample", RFC 5903's P-384 exchange, WPT's
+ * shapes of key pair, export and failure. Every expectation is node's
+ * WebCrypto's but these, where yonder follows the spec or WebIDL: the
+ * signature equals RFC 6979's (BearSSL's nonce is deterministic, node's
+ * random); a JWK's and a CryptoKeyPair's members come in WebIDL's
+ * lexicographic order (node's do not); exporting the wrong half of a pair
+ * in a format is InvalidAccessError (§ 23.7.5; node says
+ * NotSupportedError); and a compressed point is refused (DataError, which
+ * the spec allows; node takes it). */
+static void dom_window_subtle_tier3b_cases(void)
+{
+    os64_dom_options_t options = window_options(WINDOW_URL);
+    os64_js_config_t config = fixture_config();
+    config.limits.jobs_per_turn = (uint64_t)1 << 20;
+    DomFixture f = fixture_configured(0, 0, &config);
+    if (f.runtime && f.state) {
+        os64_js_outcome_t outcome;
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
+    }
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT SUBTLE_JS
+        "globalThis.log=[];"
+        "function unhex(t){return new Uint8Array(t.match(/../g).map(x=>parseInt(x,16)))}"
+        "(async()=>{const s=crypto.subtle,enc=t=>new TextEncoder().encode(t);"
+        "const refused=async(p,n,t)=>{try{await p;log.push(t+': resolved')}catch(e){log.push(t+': '+(e.name===n?'ok':e.name))}};"
+        "const E256={name:'ECDSA',namedCurve:'P-256'},D384={name:'ECDH',namedCurve:'P-384'};"
+        "const rj={kty:'EC',crv:'P-256',x:'YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Y',y:'eQP-EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk',d:'ya-p2EW6dRZrXCFXZ7HWk05Qw9s26JsSe4piKxIPZyE'};"
+        "const rpriv=await s.importKey('jwk',rj,E256,true,['sign']);"
+        "const rpub=await s.importKey('jwk',{kty:'EC',crv:'P-256',x:rj.x,y:rj.y},E256,true,['verify']);"
+        "const rsig=unhex('EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8');"
+        "log.push('rfc6979 verifies:'+await s.verify({name:'ECDSA',hash:'SHA-256'},rpub,rsig,enc('sample')));"
+        "const mine=await s.sign({name:'ECDSA',hash:'SHA-256'},rpriv,enc('sample'));"
+        "log.push('deterministic:'+(hex(mine)===hex(rsig)));"
+        "log.push('short:'+await s.verify({name:'ECDSA',hash:'SHA-256'},rpub,rsig.slice(1),enc('sample')));"
+        "log.push('other hash:'+await s.verify({name:'ECDSA',hash:'SHA-384'},rpub,rsig,enc('sample')));"
+        "await refused(s.sign({name:'ECDSA',hash:'SHA-256'},rpub,enc('x')),'InvalidAccessError','signing with a public key');"
+        "await refused(s.sign({name:'ECDSA'},rpriv,enc('x')),'TypeError','ECDSA with no hash');"
+        "log.push('pub jwk:'+Object.keys(await s.exportKey('jwk',rpub)).join());"
+        "log.push('priv jwk:'+Object.keys(await s.exportKey('jwk',rpriv)).join());"
+        "log.push('raw:'+hex(await s.exportKey('raw',rpub)).slice(0,18));"
+        "log.push('spki:'+hex(await s.exportKey('spki',rpub)).slice(0,60));"
+        "log.push('pkcs8:'+hex(await s.exportKey('pkcs8',rpriv)).slice(0,80));"
+        "await refused(s.exportKey('pkcs8',rpub),'InvalidAccessError','pkcs8 of a public key');"
+        "await refused(s.exportKey('spki',rpriv),'InvalidAccessError','spki of a private key');"
+        "await refused(s.exportKey('raw',rpriv),'InvalidAccessError','raw of a private key');"
+        "const p8=await s.exportKey('pkcs8',rpriv);"
+        "const again=await s.importKey('pkcs8',p8,E256,true,['sign']);"
+        "log.push('pkcs8 round trip:'+(hex(await s.exportKey('pkcs8',again))===hex(p8))+','+again.type);"
+        "const sp=await s.importKey('spki',await s.exportKey('spki',rpub),{name:'ECDSA',namedCurve:'P-256'},false,['verify']);"
+        "log.push('spki round trip:'+sp.type+','+sp.algorithm.namedCurve+','+sp.usages.join('/'));"
+        "const raw=new Uint8Array(await s.exportKey('raw',rpub));"
+        "const comp=raw.slice(0,33);comp[0]=2+(raw[64]&1);"
+        "await refused(s.importKey('raw',comp,E256,true,['verify']),'DataError','a compressed point');"
+        "const off=raw.slice();off[64]^=1;"
+        "await refused(s.importKey('raw',off,E256,true,['verify']),'DataError','a point off the curve');"
+        "await refused(s.importKey('raw',raw,{name:'ECDSA',namedCurve:'P-512'},true,['verify']),'NotSupportedError','a curve not here');"
+        "await refused(s.importKey('raw',raw,{name:'ECDSA',namedCurve:'p-256'},true,['verify']),'NotSupportedError','a curve misspelled');"
+        "await refused(s.importKey('raw',raw,{name:'ECDSA'},true,['verify']),'TypeError','no namedCurve');"
+        "await refused(s.importKey('raw',raw,E256,true,['sign']),'SyntaxError','a public key that signs');"
+        "await refused(s.importKey('raw',raw,{name:'ECDSA',namedCurve:'P-384'},true,['verify']),'DataError','another curve\\'s point');"
+        "await refused(s.importKey('jwk',{...rj,crv:'P-384'},E256,true,['sign']),'DataError','a JWK of another crv');"
+        "await refused(s.importKey('jwk',{...rj,alg:'ES384'},E256,true,['sign']),'DataError','a JWK alg of another curve');"
+        "log.push('jwk ES256:'+(await s.importKey('jwk',{...rj,alg:'ES256'},E256,true,['sign'])).type);"
+        "await refused(s.importKey('jwk',rj,E256,true,[]),'SyntaxError','a private key with no usages');"
+        "log.push('public no usages:'+(await s.importKey('raw',raw,E256,true,[])).usages.length);"
+        "await refused(s.importKey('jwk',{...rj,x:rj.x.slice(1)},E256,true,['sign']),'DataError','a JWK x a byte short');"
+        "const g=await s.generateKey({name:'ECDSA',namedCurve:'P-521'},false,['sign','verify']);"
+        "log.push('pair:'+Object.keys(g).join()+','+g.publicKey.type+','+g.publicKey.extractable+','+g.publicKey.usages.join('/')+','+g.privateKey.type+','+g.privateKey.extractable+','+g.privateKey.usages.join('/')+','+g.privateKey.algorithm.namedCurve);"
+        "const gs=await s.sign({name:'ECDSA',hash:'SHA-512'},g.privateKey,enc('hello'));"
+        "log.push('p521 sig:'+gs.byteLength+','+await s.verify({name:'ECDSA',hash:'SHA-512'},g.publicKey,gs,enc('hello')));"
+        "log.push('mismatch:'+await (async()=>{const o=await s.generateKey(E256,true,['sign']);const j=await s.exportKey('jwk',o.privateKey);try{await s.importKey('jwk',{...j,x:rj.x,y:rj.y},E256,true,['sign']);return 'resolved'}catch(e){return e.name}})());"
+        "await refused(s.generateKey(E256,true,['verify']),'SyntaxError','a pair whose private key has no usage');"
+        "await refused(s.generateKey({name:'ECDSA',namedCurve:'P-512'},true,['sign']),'NotSupportedError','generating on a curve not here');"
+        "await refused(s.generateKey(E256,true,['encrypt']),'SyntaxError','an ECDSA usage it lacks');"
+        "const ij={kty:'EC',crv:'P-384',x:'ZnhC19GArCzeb3TzdVH1V1XHZFwg73PjFjT-crTFXubeOsgIrLS9tMiHMq7pX0Gq',y:'lILtH8Duucr8SYRiXM_CP2UDIUng4UStoCQYFTWg847rn8_zwslH2uabTGNFc6gc',d:'CZ88cDTUosaZiE1zo3Wmf3Yk73xrPA8WBke2dBTc5lXjW1OAQeZJ7j-u-JZ4OrGU'};"
+        "const ipriv=await s.importKey('jwk',ij,D384,false,['deriveBits','deriveKey']);"
+        "const rpubk=await s.importKey('raw',unhex('04E558DBEF53EECDE3D3FCCFC1AEA08A89A987475D12FD950D83CFA41732BC509D0D1AC43A0336DEF96FDA41D0774A3571DCFBEC7AACF3196472169E838430367F66EEBE3C6E70C416DD5F0C68759DD1FFF83FA40142209DFF5EAAD96DB9E6386C'),D384,true,[]);"
+        "log.push('rfc5903:'+hex(await s.deriveBits({name:'ECDH',public:rpubk},ipriv,null)).slice(0,24));"
+        "log.push('whole:'+(await s.deriveBits({name:'ECDH',public:rpubk},ipriv)).byteLength);"
+        "log.push('230:'+hex(await s.deriveBits({name:'ECDH',public:rpubk},ipriv,230)).slice(-4));"
+        "log.push('zero:'+(await s.deriveBits({name:'ECDH',public:rpubk},ipriv,0)).byteLength);"
+        "await refused(s.deriveBits({name:'ECDH',public:rpubk},ipriv,392),'OperationError','longer than the secret');"
+        "await refused(s.deriveBits({name:'ECDH',public:ipriv},ipriv,8),'InvalidAccessError','a private key as public');"
+        "await refused(s.deriveBits({name:'ECDH',public:rpub},ipriv,8),'InvalidAccessError','an ECDSA key as public');"
+        "const h256=await s.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits']);"
+        "await refused(s.deriveBits({name:'ECDH',public:h256.publicKey},ipriv,8),'InvalidAccessError','another curve\\'s public key');"
+        "await refused(s.deriveBits({name:'ECDH',public:{}},ipriv,8),'TypeError','a public that is no key');"
+        "await refused(s.deriveBits({name:'ECDH'},ipriv,8),'TypeError','no public');"
+        "await refused(s.deriveBits({name:'ECDH',public:rpubk},rpubk,8),'InvalidAccessError','deriving from a public key');"
+        "log.push('ecdh pair:'+h256.publicKey.usages.length+','+h256.privateKey.usages.join('/'));"
+        "await refused(s.generateKey({name:'ECDH',namedCurve:'P-256'},true,[]),'SyntaxError','an ECDH pair with no usage');"
+        "await refused(s.importKey('raw',unhex('04E558DBEF53EECDE3D3FCCFC1AEA08A89A987475D12FD950D83CFA41732BC509D0D1AC43A0336DEF96FDA41D0774A3571DCFBEC7AACF3196472169E838430367F66EEBE3C6E70C416DD5F0C68759DD1FFF83FA40142209DFF5EAAD96DB9E6386C'),D384,true,['deriveBits']),'SyntaxError','an ECDH public key that derives');"
+        "log.push('ecdh jwk alg:'+(await s.importKey('jwk',{...ij,alg:'whatever'},D384,false,['deriveBits'])).type);"
+        "const dk=await s.deriveKey({name:'ECDH',public:rpubk},ipriv,{name:'AES-GCM',length:256},true,['encrypt']);"
+        "log.push('derived:'+(hex(await s.exportKey('raw',dk))===hex(await s.deriveBits({name:'ECDH',public:rpubk},ipriv,256))));"
+        "await refused(s.deriveKey({name:'ECDH',public:rpubk},ipriv,{name:'HMAC',hash:'SHA-512'},true,['sign']),'OperationError','an HMAC key longer than the secret');"
+        "const kek=await s.importKey('raw',new Uint8Array(16).fill(7),'AES-KW',false,['wrapKey','unwrapKey']);"
+        "const wj=await s.wrapKey('jwk',rpriv,kek,'AES-KW');"
+        "const uj=await s.unwrapKey('jwk',wj,kek,'AES-KW',E256,true,['sign']);"
+        "log.push('wrapped jwk:'+(hex(await s.exportKey('pkcs8',uj))===hex(p8)));"
+        "const gk=await s.importKey('raw',new Uint8Array(16).fill(9),'AES-GCM',false,['wrapKey','unwrapKey']);"
+        "const iv=new Uint8Array(12);"
+        "const wp=await s.wrapKey('pkcs8',rpriv,gk,{name:'AES-GCM',iv});"
+        "const up=await s.unwrapKey('pkcs8',wp,gk,{name:'AES-GCM',iv},E256,true,['sign']);"
+        "log.push('wrapped pkcs8:'+(hex(await s.exportKey('pkcs8',up))===hex(p8)));"
+        "const ws=await s.wrapKey('spki',rpub,gk,{name:'AES-GCM',iv});"
+        "log.push('wrapped spki:'+(await s.unwrapKey('spki',ws,gk,{name:'AES-GCM',iv},E256,true,['verify'])).type);"
+        "await refused(s.wrapKey('raw',rpriv,gk,{name:'AES-GCM',iv}),'InvalidAccessError','wrapping a private key raw');"
+        "})().catch(e=>log.push('threw: '+e.name+' '+e.message));",
+        "subtle tier 3b: the calls");
+    subtle_settle(&f);
+    dom_script(&f, STORAGE_ASSERT
+        "{const want=["
+        "'rfc6979 verifies:true',"
+        "'deterministic:true',"
+        "'short:false',"
+        "'other hash:false',"
+        "'signing with a public key: ok',"
+        "'ECDSA with no hash: ok',"
+        "'pub jwk:crv,ext,key_ops,kty,x,y',"
+        "'priv jwk:crv,d,ext,key_ops,kty,x,y',"
+        "'raw:0460fed4ba255a9d31',"
+        "'spki:3059301306072a8648ce3d020106082a8648ce3d0301070342000460fed4',"
+        "'pkcs8:308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420c9afa9d8',"
+        "'pkcs8 of a public key: ok',"
+        "'spki of a private key: ok',"
+        "'raw of a private key: ok',"
+        "'pkcs8 round trip:true,private',"
+        "'spki round trip:public,P-256,verify',"
+        "'a compressed point: ok',"
+        "'a point off the curve: ok',"
+        "'a curve not here: ok',"
+        "'a curve misspelled: ok',"
+        "'no namedCurve: ok',"
+        "'a public key that signs: ok',"
+        "'another curve\\'s point: ok',"
+        "'a JWK of another crv: ok',"
+        "'a JWK alg of another curve: ok',"
+        "'jwk ES256:private',"
+        "'a private key with no usages: ok',"
+        "'public no usages:0',"
+        "'a JWK x a byte short: ok',"
+        "'pair:privateKey,publicKey,public,true,verify,private,false,sign,P-521',"
+        "'p521 sig:132,true',"
+        "'mismatch:DataError',"
+        "'a pair whose private key has no usage: ok',"
+        "'generating on a curve not here: ok',"
+        "'an ECDSA usage it lacks: ok',"
+        "'rfc5903:11187331c279962d93d60424',"
+        "'whole:48',"
+        "'230:7e70',"
+        "'zero:0',"
+        "'longer than the secret: ok',"
+        "'a private key as public: ok',"
+        "'an ECDSA key as public: ok',"
+        "'another curve\\'s public key: ok',"
+        "'a public that is no key: ok',"
+        "'no public: ok',"
+        "'deriving from a public key: ok',"
+        "'ecdh pair:0,deriveBits',"
+        "'an ECDH pair with no usage: ok',"
+        "'an ECDH public key that derives: ok',"
+        "'ecdh jwk alg:private',"
+        "'derived:true',"
+        "'an HMAC key longer than the secret: ok',"
+        "'wrapped jwk:true',"
+        "'wrapped pkcs8:true',"
+        "'wrapped spki:public',"
+        "'wrapping a private key raw: ok'"
+        "];"
+        "for(let i=0;i<Math.max(log.length,want.length);i++)"
+        "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",
+        "subtle tier 3b: answered");
+    fixture_free(&f);
+}
+
 static void dom_window_cases(void)
 {
     dom_window_member_cases();
@@ -720,6 +897,7 @@ static void dom_window_cases(void)
     dom_window_subtle_cases();
     dom_window_subtle_tier2_cases();
     dom_window_subtle_tier3a_cases();
+    dom_window_subtle_tier3b_cases();
     dom_window_microtask_cases();
     dom_window_sweep_cases();
 }

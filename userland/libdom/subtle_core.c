@@ -2,9 +2,11 @@
 
 #include "bearssl_aead.h"
 #include "bearssl_block.h"
+#include "bearssl_ec.h"
 #include "bearssl_hash.h"
 #include "bearssl_hmac.h"
 #include "bearssl_kdf.h"
+#include "bearssl_rand.h"
 
 /* What a NULL buffer of no bytes is handed to BearSSL as: its code copies
  * with memcpy, which C forbids a null pointer even for a length of zero
@@ -37,6 +39,8 @@ static const char *const kNames[SUBTLE_ALG_COUNT] = {
     [SUBTLE_ALG_AES_KW] = "AES-KW",
     [SUBTLE_ALG_HKDF] = "HKDF",
     [SUBTLE_ALG_PBKDF2] = "PBKDF2",
+    [SUBTLE_ALG_ECDSA] = "ECDSA",
+    [SUBTLE_ALG_ECDH] = "ECDH",
 };
 
 static const SubtleRegistration kRegistry[] = {
@@ -79,14 +83,25 @@ static const SubtleRegistration kRegistry[] = {
     {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_AES_KW, SUBTLE_DICT_ALGORITHM},
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_AES_KW, SUBTLE_DICT_AES_DERIVED},
     /* HKDF and PBKDF2 (§ 33, § 34): keys only imported, raw, never
-     * extractable. Their key length is null, which their own derive bits
-     * refuses, so deriving one is OperationError, not NotSupportedError. */
+     * extractable. Their key length is null: ECDH's derive bits takes it
+     * as the whole secret, and theirs refuse it (OperationError), so one
+     * is derived from an ECDH key and never from another derivation's. */
     {SUBTLE_OP_DERIVE_BITS, SUBTLE_ALG_HKDF, SUBTLE_DICT_HKDF},
     {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_HKDF, SUBTLE_DICT_ALGORITHM},
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_HKDF, SUBTLE_DICT_ALGORITHM},
     {SUBTLE_OP_DERIVE_BITS, SUBTLE_ALG_PBKDF2, SUBTLE_DICT_PBKDF2},
     {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_PBKDF2, SUBTLE_DICT_ALGORITHM},
     {SUBTLE_OP_GET_KEY_LENGTH, SUBTLE_ALG_PBKDF2, SUBTLE_DICT_ALGORITHM},
+    /* ECDSA and ECDH (§ 23, § 24): key pairs on a named curve. ECDH's
+     * operation is derive bits; no key is derived as one of its own, so
+     * it has no key length. */
+    {SUBTLE_OP_SIGN, SUBTLE_ALG_ECDSA, SUBTLE_DICT_ECDSA},
+    {SUBTLE_OP_VERIFY, SUBTLE_ALG_ECDSA, SUBTLE_DICT_ECDSA},
+    {SUBTLE_OP_GENERATE_KEY, SUBTLE_ALG_ECDSA, SUBTLE_DICT_EC_KEY_GEN},
+    {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_ECDSA, SUBTLE_DICT_EC_KEY_IMPORT},
+    {SUBTLE_OP_DERIVE_BITS, SUBTLE_ALG_ECDH, SUBTLE_DICT_ECDH_DERIVE},
+    {SUBTLE_OP_GENERATE_KEY, SUBTLE_ALG_ECDH, SUBTLE_DICT_EC_KEY_GEN},
+    {SUBTLE_OP_IMPORT_KEY, SUBTLE_ALG_ECDH, SUBTLE_DICT_EC_KEY_IMPORT},
 };
 
 /* ASCII case-insensitive: only A-Z fold, so a name spelled with a
@@ -539,4 +554,332 @@ bool subtle_base64url_decode(const char *text, size_t length, uint8_t *out, size
     if (bits != 0) return false;
     *out_length = n;
     return true;
+}
+
+/* ── The elliptic curves ─────────────────────────────────────────────── */
+
+/* Each curve's BearSSL identifier, its name, its size, and the DER of its
+ * named-curve object identifier (RFC 5480 § 2.1.1.1). */
+static const struct {
+    int id;
+    const char *name;
+    size_t size;
+    uint8_t oid[8];
+    size_t oid_length;
+} kCurves[SUBTLE_CURVE_COUNT] = {
+    [SUBTLE_CURVE_P256] = {BR_EC_secp256r1, "P-256", 32, {0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}, 8},
+    [SUBTLE_CURVE_P384] = {BR_EC_secp384r1, "P-384", 48, {0x2b, 0x81, 0x04, 0x00, 0x22}, 5},
+    [SUBTLE_CURVE_P521] = {BR_EC_secp521r1, "P-521", 66, {0x2b, 0x81, 0x04, 0x00, 0x23}, 5},
+};
+
+/* id-ecPublicKey (RFC 5480 § 2.1.1). */
+static const uint8_t kEcPublicKey[] = {0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01};
+
+/* P-256 has BearSSL's dedicated code; the other two its generic prime
+ * curves, the pair libtls uses too. */
+static const br_ec_impl *ec_impl(subtle_curve_t curve)
+{
+    return curve == SUBTLE_CURVE_P256 ? &br_ec_p256_m31 : &br_ec_prime_i31;
+}
+
+int subtle_curve_named(const char *name, size_t length)
+{
+    for (int c = 0; c < SUBTLE_CURVE_COUNT; c++) {
+        size_t n = 0;
+        while (kCurves[c].name[n] != '\0') n++;
+        bool same = n == length;
+        for (size_t i = 0; same && i < n; i++) same = name[i] == kCurves[c].name[i];
+        if (same) return c;
+    }
+    return -1;
+}
+
+const char *subtle_curve_name(subtle_curve_t curve)
+{
+    return (unsigned)curve < SUBTLE_CURVE_COUNT ? kCurves[curve].name : "";
+}
+
+size_t subtle_ec_size(subtle_curve_t curve)
+{
+    return (unsigned)curve < SUBTLE_CURVE_COUNT ? kCurves[curve].size : 0;
+}
+
+bool subtle_ec_point_ok(subtle_curve_t curve, const uint8_t *point, size_t length)
+{
+    size_t size = kCurves[curve].size;
+    if (length != 1 + 2 * size || point[0] != 0x04) return false;
+    /* The point times one: BearSSL's multiply decodes its point and checks
+     * it against the curve's equation first, and answers 0 for one off it. */
+    uint8_t copy[SUBTLE_EC_POINT_MAX];
+    for (size_t i = 0; i < length; i++) copy[i] = point[i];
+    static const uint8_t kOne[1] = {1};
+    return ec_impl(curve)->mul(copy, length, kOne, 1, kCurves[curve].id) == 1;
+}
+
+bool subtle_ec_scalar_ok(subtle_curve_t curve, const uint8_t *d)
+{
+    size_t size = kCurves[curve].size, order_length;
+    const uint8_t *order = ec_impl(curve)->order(kCurves[curve].id, &order_length);
+    if (order_length != size) return false;
+    /* d < order, and d is not zero, as br_ec_keygen asks of its own draws,
+     * in time that does not depend on d. */
+    unsigned borrow = 0, any = 0;
+    for (size_t i = size; i-- > 0;) {
+        borrow = ((unsigned)(d[i] - order[i] - borrow) >> 8) & 1;
+        any |= d[i];
+    }
+    return borrow != 0 && any != 0;
+}
+
+void subtle_ec_public(subtle_curve_t curve, const uint8_t *d, uint8_t *point)
+{
+    ec_impl(curve)->mulgen(point, d, kCurves[curve].size, kCurves[curve].id);
+}
+
+bool subtle_ec_generate(subtle_curve_t curve, const uint8_t *seed, size_t seed_length, uint8_t *d)
+{
+    br_hmac_drbg_context rng;
+    br_hmac_drbg_init(&rng, &br_sha256_vtable, seed, seed_length);
+    size_t made = br_ec_keygen(&rng.vtable, ec_impl(curve), NULL, d, kCurves[curve].id);
+    wipe(&rng, sizeof(rng));
+    return made == kCurves[curve].size;
+}
+
+size_t subtle_ecdsa_sign(subtle_curve_t curve, subtle_alg_t hash, const uint8_t *d, const uint8_t *data,
+                         size_t length, uint8_t *out)
+{
+    uint8_t digest[SUBTLE_DIGEST_MAX];
+    const br_hash_class *hc = hash_class(hash);
+    if (hc == NULL || !subtle_digest(hash, data, length, digest)) return 0;
+    br_ec_private_key sk = {kCurves[curve].id, (unsigned char *)d, kCurves[curve].size};
+    size_t made = br_ecdsa_i31_sign_raw(ec_impl(curve), hc, digest, &sk, out);
+    wipe(digest, sizeof(digest));
+    return made == 2 * kCurves[curve].size ? made : 0;
+}
+
+bool subtle_ecdsa_verify(subtle_curve_t curve, subtle_alg_t hash, const uint8_t *point, const uint8_t *data,
+                         size_t length, const uint8_t *signature, size_t signature_length)
+{
+    size_t size = kCurves[curve].size;
+    uint8_t digest[SUBTLE_DIGEST_MAX];
+    /* BearSSL reads a shorter signature as one whose halves lost leading
+     * zeros; Web Cryptography's is exactly two halves of the curve's size. */
+    if (signature_length != 2 * size || !subtle_digest(hash, data, length, digest)) return false;
+    br_ec_public_key pk = {kCurves[curve].id, (unsigned char *)point, 1 + 2 * size};
+    return br_ecdsa_i31_vrfy_raw(ec_impl(curve), digest, subtle_digest_size(hash), &pk, signature,
+                                 signature_length) == 1;
+}
+
+bool subtle_ecdh(subtle_curve_t curve, const uint8_t *d, const uint8_t *point, uint8_t *out)
+{
+    size_t size = kCurves[curve].size, length = 1 + 2 * size;
+    uint8_t product[SUBTLE_EC_POINT_MAX];
+    for (size_t i = 0; i < length; i++) product[i] = point[i];
+    bool made = ec_impl(curve)->mul(product, length, d, size, kCurves[curve].id) == 1;
+    for (size_t i = 0; made && i < size; i++) out[i] = product[1 + i];
+    wipe(product, sizeof(product));
+    return made;
+}
+
+/* ── DER, as much of it as a key's two containers need ──────────────────
+ * Strict: definite lengths in their shortest form, and nothing after the
+ * outermost value, so one key has one encoding. */
+typedef struct {
+    const uint8_t *p;
+    size_t n;
+} Der;
+
+/* The next value of `in`, which must have tag `tag`: its contents in *out,
+ * `in` moved past it. */
+static bool der_take(Der *in, uint8_t tag, Der *out)
+{
+    if (in->n < 2 || in->p[0] != tag) return false;
+    size_t at = 2, length = in->p[1];
+    if (length & 0x80) {
+        size_t bytes = length & 0x7f;
+        /* No indefinite length, nothing past four bytes of one, no leading
+         * zero, and no long form for what fits the short one. */
+        if (bytes == 0 || bytes > 4 || in->n < 2 + bytes || in->p[2] == 0) return false;
+        length = 0;
+        for (size_t i = 0; i < bytes; i++) length = length << 8 | in->p[2 + i];
+        if (length < 0x80) return false;
+        at += bytes;
+    }
+    if (length > in->n - at) return false;
+    out->p = in->p + at;
+    out->n = length;
+    in->p += at + length;
+    in->n -= at + length;
+    return true;
+}
+
+static bool der_is(Der d, const uint8_t *bytes, size_t length)
+{
+    if (d.n != length) return false;
+    for (size_t i = 0; i < length; i++)
+        if (d.p[i] != bytes[i]) return false;
+    return true;
+}
+
+/* An AlgorithmIdentifier that is id-ecPublicKey with a named curve here. */
+static bool der_ec_algorithm(Der *in, subtle_curve_t *curve)
+{
+    Der alg, oid, named;
+    if (!der_take(in, 0x30, &alg) || !der_take(&alg, 0x06, &oid) ||
+        !der_is(oid, kEcPublicKey, sizeof(kEcPublicKey)) || !der_take(&alg, 0x06, &named) || alg.n != 0)
+        return false;
+    for (int c = 0; c < SUBTLE_CURVE_COUNT; c++) {
+        if (der_is(named, kCurves[c].oid, kCurves[c].oid_length)) {
+            *curve = (subtle_curve_t)c;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A BIT STRING of whole bytes: its bytes after the unused-bits count. */
+static bool der_bytes_of_bits(Der *in, uint8_t tag, Der *out)
+{
+    if (!der_take(in, tag, out) || out->n < 1 || out->p[0] != 0) return false;
+    out->p++;
+    out->n--;
+    return true;
+}
+
+/* A value's header (tag and length) into `out`; its length. */
+static size_t der_header(uint8_t *out, uint8_t tag, size_t length)
+{
+    out[0] = tag;
+    if (length < 0x80) {
+        out[1] = (uint8_t)length;
+        return 2;
+    }
+    out[1] = 0x81;
+    out[2] = (uint8_t)length;
+    return 3;
+}
+
+static size_t der_header_size(size_t length)
+{
+    return length < 0x80 ? 2 : 3;
+}
+
+static size_t der_put(uint8_t *out, const uint8_t *bytes, size_t length)
+{
+    for (size_t i = 0; i < length; i++) out[i] = bytes[i];
+    return length;
+}
+
+/* The AlgorithmIdentifier of `curve`'s keys into `out`; its length. */
+static size_t der_put_algorithm(uint8_t *out, subtle_curve_t curve)
+{
+    size_t body = 2 + sizeof(kEcPublicKey) + 2 + kCurves[curve].oid_length, at = der_header(out, 0x30, body);
+    at += der_header(out + at, 0x06, sizeof(kEcPublicKey));
+    at += der_put(out + at, kEcPublicKey, sizeof(kEcPublicKey));
+    at += der_header(out + at, 0x06, kCurves[curve].oid_length);
+    at += der_put(out + at, kCurves[curve].oid, kCurves[curve].oid_length);
+    return at;
+}
+
+size_t subtle_ec_spki_encode(subtle_curve_t curve, const uint8_t *point, uint8_t *out)
+{
+    size_t point_length = 1 + 2 * kCurves[curve].size, algorithm = 2 + 2 + sizeof(kEcPublicKey) + 2 +
+                                                                    kCurves[curve].oid_length,
+           bits = 1 + point_length, body = algorithm + der_header_size(bits) + bits;
+    size_t at = der_header(out, 0x30, body);
+    at += der_put_algorithm(out + at, curve);
+    at += der_header(out + at, 0x03, bits);
+    out[at++] = 0;
+    at += der_put(out + at, point, point_length);
+    return at;
+}
+
+bool subtle_ec_spki_decode(const uint8_t *der, size_t length, subtle_curve_t *curve, const uint8_t **point,
+                           size_t *point_length)
+{
+    Der in = {der, length}, spki, key;
+    if (!der_take(&in, 0x30, &spki) || in.n != 0 || !der_ec_algorithm(&spki, curve) ||
+        !der_bytes_of_bits(&spki, 0x03, &key) || spki.n != 0)
+        return false;
+    *point = key.p;
+    *point_length = key.n;
+    return true;
+}
+
+size_t subtle_ec_pkcs8_encode(subtle_curve_t curve, const uint8_t *d, const uint8_t *point, uint8_t *out)
+{
+    size_t size = kCurves[curve].size, point_length = 1 + 2 * size;
+    size_t bits = 1 + point_length, tagged = der_header_size(bits) + bits;
+    size_t ec_body = 3 + 2 + size + der_header_size(tagged) + tagged;
+    size_t ec = der_header_size(ec_body) + ec_body;
+    size_t algorithm = 2 + 2 + sizeof(kEcPublicKey) + 2 + kCurves[curve].oid_length;
+    size_t body = 3 + algorithm + der_header_size(ec) + ec;
+    size_t at = der_header(out, 0x30, body);
+    static const uint8_t kVersion0[] = {0x02, 0x01, 0x00}, kVersion1[] = {0x02, 0x01, 0x01};
+    at += der_put(out + at, kVersion0, sizeof(kVersion0));
+    at += der_put_algorithm(out + at, curve);
+    at += der_header(out + at, 0x04, ec);
+    at += der_header(out + at, 0x30, ec_body);
+    at += der_put(out + at, kVersion1, sizeof(kVersion1));
+    at += der_header(out + at, 0x04, size);
+    at += der_put(out + at, d, size);
+    at += der_header(out + at, 0xa1, tagged);
+    at += der_header(out + at, 0x03, bits);
+    out[at++] = 0;
+    at += der_put(out + at, point, point_length);
+    return at;
+}
+
+/* An INTEGER whose value is `value` (0 to 127), in its one DER spelling. */
+static bool der_small_integer(Der *in, uint8_t value)
+{
+    Der v;
+    return der_take(in, 0x02, &v) && v.n == 1 && v.p[0] == value;
+}
+
+bool subtle_ec_pkcs8_decode(const uint8_t *der, size_t length, subtle_curve_t *curve, uint8_t *d,
+                            const uint8_t **point, size_t *point_length)
+{
+    Der in = {der, length}, info, wrapped, ec, scalar, holder;
+    if (!der_take(&in, 0x30, &info) || in.n != 0) return false;
+    /* RFC 5208's PrivateKeyInfo, the spec's structure: version 0 (RFC
+     * 5958's version 1, with its own public key field, is another one), and
+     * after the key its optional [0] attributes, which say nothing of it. */
+    Der skipped;
+    if (!der_small_integer(&info, 0) || !der_ec_algorithm(&info, curve) || !der_take(&info, 0x04, &wrapped))
+        return false;
+    if (info.n != 0 && info.p[0] == 0xa0 && !der_take(&info, 0xa0, &skipped)) return false;
+    if (info.n != 0) return false;
+    /* The ECPrivateKey (RFC 5915 § 3), the whole of the octet string. */
+    if (!der_take(&wrapped, 0x30, &ec) || wrapped.n != 0 || !der_small_integer(&ec, 1) ||
+        !der_take(&ec, 0x04, &scalar))
+        return false;
+    size_t size = kCurves[*curve].size;
+    /* RFC 5915 fixes d's length at the curve's size; an encoder that wrote
+     * more leading zeros wrote the same number, and BoringSSL reads it so. */
+    while (scalar.n > size && scalar.p[0] == 0) {
+        scalar.p++;
+        scalar.n--;
+    }
+    if (scalar.n == 0 || scalar.n > size) return false;
+    for (size_t i = 0; i < size - scalar.n; i++) d[i] = 0;
+    for (size_t i = 0; i < scalar.n; i++) d[size - scalar.n + i] = scalar.p[i];
+    *point = NULL;
+    *point_length = 0;
+    if (ec.n != 0 && ec.p[0] == 0xa0) {
+        Der named;
+        if (!der_take(&ec, 0xa0, &holder) || !der_take(&holder, 0x06, &named) || holder.n != 0 ||
+            !der_is(named, kCurves[*curve].oid, kCurves[*curve].oid_length))
+            goto refuse;
+    }
+    if (ec.n != 0 && ec.p[0] == 0xa1) {
+        Der key;
+        if (!der_take(&ec, 0xa1, &holder) || !der_bytes_of_bits(&holder, 0x03, &key) || holder.n != 0) goto refuse;
+        *point = key.p;
+        *point_length = key.n;
+    }
+    if (ec.n == 0) return true;
+refuse:
+    wipe(d, size);
+    return false;
 }
