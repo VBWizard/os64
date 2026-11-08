@@ -23,9 +23,7 @@ enum { C_GET_RANDOM_VALUES, C_RANDOM_UUID, W_CRYPTO };
  * QuotaExceededError). */
 #define CRYPTO_QUOTA 65536
 
-/* `length` bytes of the host's entropy into `out`; false with the exception
- * pending. */
-static bool entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length)
+bool d_crypto_entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length)
 {
     if (length == 0) return true;
     uint8_t *scratch = d_alloc(dom, length);
@@ -35,6 +33,9 @@ static bool entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length
     }
     bool got = dom->options.entropy != NULL && dom->options.entropy(dom->options.host_opaque, scratch, length);
     if (got) os64_memcpy(out, scratch, length);
+    /* Zeroed before it is freed: for a generated key, these bytes are the key. */
+    volatile uint8_t *v = scratch;
+    for (size_t i = 0; i < length; i++) v[i] = 0;
     d_free(dom, scratch);
     if (!got) d_error(ctx, "OperationError", "This browser could not read the system's randomness");
     return got;
@@ -111,7 +112,7 @@ static JSValue get_random_values(os64_dom_t *dom, JSContext *ctx, int argc, JSVa
     if (span > CRYPTO_QUOTA)
         return d_error(ctx, "QuotaExceededError", "getRandomValues fills at most 65,536 bytes");
     if (offset > whole || span > whole - offset) return JS_DupValue(ctx, array);
-    if (!entropy(dom, ctx, bytes + offset, span)) return JS_EXCEPTION;
+    if (!d_crypto_entropy(dom, ctx, bytes + offset, span)) return JS_EXCEPTION;
     return JS_DupValue(ctx, array);
 }
 
@@ -121,7 +122,7 @@ static JSValue get_random_values(os64_dom_t *dom, JSContext *ctx, int argc, JSVa
 static JSValue random_uuid(os64_dom_t *dom, JSContext *ctx)
 {
     uint8_t b[16];
-    if (!entropy(dom, ctx, b, sizeof(b))) return JS_EXCEPTION;
+    if (!d_crypto_entropy(dom, ctx, b, sizeof(b))) return JS_EXCEPTION;
     b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
     b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
     static const char kHex[] = "0123456789abcdef";

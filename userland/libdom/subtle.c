@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "os64/fmt.h"
 #include "subtle_core.h"
 
 /* `crypto.subtle` (Web Cryptography's SubtleCrypto and CryptoKey;
@@ -10,14 +11,24 @@
  * EVERY METHOD REJECTS; NONE THROWS. WebIDL makes an exception raised
  * while converting a promise-returning operation's arguments a rejected
  * promise, and the spec's own steps reject, so each method does its work
- * and settles once at the end (d_promise_settled), whatever failed.
+ * and settles once at the end (settle_later), whatever failed.
  *
- * THE WORK IS DONE ON THE CALL (WEB_CRYPTO.md § 5): the promise returned is
- * already settled, as Blob.text()'s is, where the spec works "in parallel"
- * and settles from a task. Its dividend is that a BufferSource is read in
- * place, never copied: no page code runs between the read and the answer.
- * The read comes after normalization, whose dictionary reads can run a
- * page's getters, and a getter may detach or refill the buffer. */
+ * THE WORK IS DONE ON THE CALL, THE PROMISE SETTLED FROM A TASK
+ * (WEB_CRYPTO.md § 5). The spec works "in parallel" and queues a task to
+ * settle; here the work is done before the method returns, and the
+ * answer waits for the task that settles it (THE SETTLE QUEUE, below), so
+ * a page's reactions to a result run in a task of their own, as in other
+ * browsers: a chain of thousands of calls is thousands of short tasks, not
+ * one long one the script deadline would end. Doing the work on the call
+ * is why a BufferSource is read in place, never copied: no page code runs
+ * between the read and the answer. Every read comes after normalization,
+ * whose dictionary reads can run a page's getters, and a getter may detach
+ * or refill the buffer.
+ *
+ * THE CHECKS RUN IN THE SPEC'S ORDER, because the error a page sees names
+ * the first one that failed (WPT holds each one): the arguments' WebIDL
+ * conversions, then normalization, then the operation's own steps, each
+ * method's below as § 14.3 writes them. */
 
 static JSClassID subtle_slot, key_slot;
 static int subtle_mark;
@@ -84,26 +95,110 @@ static const struct {
                       SUBTLE_OP_UNWRAP_KEY},
 };
 
-/* KeyFormat and KeyUsage as Web Cryptography Level 2 enumerates them,
- * which is what pages meet in other browsers. The draft's newer formats
- * (raw-secret and the rest) and its encapsulation usages belong to its
- * newer algorithms, which are not here (DEBTS), and a Level 2 browser
- * refuses them as it refuses any other string: a TypeError. */
-static const char *const kFormats[] = {"raw", "spki", "pkcs8", "jwk"};
+/* KeyFormat and KeyUsage as the IDL WPT holds this binding to enumerates
+ * them. Its newer formats (raw-secret and the rest) and its encapsulation
+ * usages belong to the draft's newer algorithms, which are not here
+ * (DEBTS): the IDL admits them, and each algorithm here refuses them where
+ * it refuses any format or usage it does not have (NotSupportedError,
+ * SyntaxError), which is what WPT's failure tests ask. */
+static const char *const kFormats[] = {"raw-public", "raw-private", "raw-seed", "raw-secret", "raw", "spki",
+                                       "pkcs8", "jwk"};
+enum { F_RAW = 4, F_SPKI, F_PKCS8, F_JWK };
 static const char *const kUsages[] = {"encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits",
-                                      "wrapKey", "unwrapKey"};
+                                      "wrapKey", "unwrapKey", "encapsulateKey", "encapsulateBits",
+                                      "decapsulateKey", "decapsulateBits"};
+#define USAGE_COUNT ((int)(sizeof(kUsages) / sizeof(kUsages[0])))
+/* A usage set is a bit per kUsages entry. Web Cryptography's "normalized
+ * value" of a usage list is its recognized usages in this order, without
+ * repeats, which the bits give for nothing. */
+enum {
+    U_ENCRYPT = 1u << 0,
+    U_DECRYPT = 1u << 1,
+    U_SIGN = 1u << 2,
+    U_VERIFY = 1u << 3,
+    U_WRAP = 1u << 6,
+    U_UNWRAP = 1u << 7,
+};
+#define AES_USAGES (U_ENCRYPT | U_DECRYPT | U_WRAP | U_UNWRAP)
+#define HMAC_USAGES (U_SIGN | U_VERIFY)
+/* The longest HMAC key generateKey makes: getRandomValues' 65,536 bytes. */
+#define SUBTLE_HMAC_GENERATE_MAX_BITS (65536u * 8)
 
-/* A CryptoKey's slots. A key is made by generateKey, importKey, deriveKey
- * or unwrapKey under an algorithm the registry holds for that operation,
- * and while it holds none (DEBTS.md, "crypto.subtle does only digest") no
- * object has these slots. The class is here so the interface is whole: a
- * page sees CryptoKey and its members, and an argument declared a
- * CryptoKey is told from anything else. */
+/* A CryptoKey's slots (§ 13). The key material is the engine's memory,
+ * overwritten before it is given back when the key is collected; the
+ * algorithm and usages objects are made with the key and answered on every
+ * read, as `[[algorithm_cached]]` and `[[usages_cached]]` are. */
 typedef struct {
-    const char *type;
+    const char *type;       /* "secret": a key pair's halves are tier 3's (WEB_CRYPTO.md § 2) */
+    subtle_alg_t alg, hash; /* hash: HMAC's */
+    uint32_t bits;          /* the key's length in bits */
+    uint8_t *material;      /* (bits + 7) / 8 bytes, the bits past `bits` zero */
+    size_t bytes;
     bool extractable;
-    DValue *algorithm, *usages;
+    uint32_t usages;
+    JSValue algorithm, usage_list;
 } DKey;
+
+static void wipe(uint8_t *p, size_t length)
+{
+    volatile uint8_t *v = p;
+    while (length-- > 0) *v++ = 0;
+}
+
+static void key_finalizer(JSRuntime *rt, JSValue value)
+{
+    DKey *k = JS_GetOpaque(value, os64_js_class_id(&key_slot));
+    if (k == NULL) return;
+    if (k->material != NULL) {
+        wipe(k->material, k->bytes);
+        js_free_rt(rt, k->material);
+    }
+    JS_FreeValueRT(rt, k->algorithm);
+    JS_FreeValueRT(rt, k->usage_list);
+    js_free_rt(rt, k);
+}
+
+static void key_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DKey *k = JS_GetOpaque(value, os64_js_class_id(&key_slot));
+    if (k == NULL) return;
+    JS_MarkValue(rt, k->algorithm, mark);
+    JS_MarkValue(rt, k->usage_list, mark);
+}
+
+/* A string a dictionary member held, as the engine gave it (freed with
+ * JS_FreeCString); text NULL for a member that was absent. */
+typedef struct {
+    const char *text;
+    size_t length;
+} DText;
+
+static bool text_is(DText t, const char *literal)
+{
+    return t.text != NULL && t.length == os64_strlen(literal) && os64_memcmp(t.text, literal, t.length) == 0;
+}
+
+/* A JsonWebKey dictionary converted (§ 17's JsonWebKey; WebIDL's dictionary
+ * conversion): each string member, `ext`, and `key_ops`. `oth` is
+ * converted and not kept, since no algorithm here reads it. */
+enum { J_ALG, J_CRV, J_D, J_DP, J_DQ, J_E, J_K, J_KTY, J_N, J_P, J_Q, J_QI, J_USE, J_X, J_Y, J_STRINGS };
+typedef struct {
+    bool present;
+    DText s[J_STRINGS];
+    bool has_ext, ext;
+    bool has_ops;
+    DText *ops;
+    size_t nops, cap;
+} DJwk;
+
+static void jwk_free(JSContext *ctx, DJwk *j)
+{
+    for (int i = 0; i < J_STRINGS; i++)
+        if (j->s[i].text != NULL) JS_FreeCString(ctx, j->s[i].text);
+    for (size_t i = 0; i < j->nops; i++) JS_FreeCString(ctx, j->ops[i].text);
+    js_free(ctx, j->ops);
+    os64_memset(j, 0, sizeof(*j));
+}
 
 /* An argument converted, which the method's steps read. */
 typedef struct {
@@ -118,11 +213,20 @@ typedef struct {
     int format;      /* an index of kFormats, -1 none */
     bool length_given;
     uint32_t length;
+    bool key_data_buffer; /* importKey: keyData was a BufferSource (the last of buffers) */
+    DJwk jwk;             /* importKey: keyData was the dictionary */
 } SubtleCall;
 
 static void call_free(JSContext *ctx, SubtleCall *c)
 {
     for (int i = 0; i < c->algorithms; i++) JS_FreeValue(ctx, c->algorithm[i]);
+    jwk_free(ctx, &c->jwk);
+}
+
+static int fail(JSContext *ctx, const char *name, const char *message)
+{
+    d_error(ctx, name, message);
+    return -1;
 }
 
 /* The position `index` (from 0) as an argument's ordinal in a message. */
@@ -146,14 +250,15 @@ static int enumeration(JSContext *ctx, JSValueConst value, const char *const *na
     return found;
 }
 
-/* WebIDL's [EnforceRange] unsigned long: NaN and the infinities refused,
- * the rest truncated and refused outside 0..2^32-1. */
-static int enforce_unsigned_long(JSContext *ctx, JSValueConst value, uint32_t *out)
+/* WebIDL's [EnforceRange] for an unsigned integer type whose largest value
+ * is `max`: NaN and the infinities refused, the rest truncated and refused
+ * outside 0..max. */
+static int enforce_range(JSContext *ctx, JSValueConst value, double max, uint32_t *out)
 {
     double x;
     if (JS_ToFloat64(ctx, &x, value) < 0) return -1;
-    if (!(x > -1.0 && x < 4294967296.0)) {
-        JS_ThrowTypeError(ctx, "A length must be a whole number from 0 to 4294967295");
+    if (!(x > -1.0 && x < max + 1.0)) {
+        JS_ThrowTypeError(ctx, "A number is outside its type's range, or not a number");
         return -1;
     }
     *out = x <= 0 ? 0 : (uint32_t)x;
@@ -165,7 +270,7 @@ static int enforce_unsigned_long(JSContext *ctx, JSValueConst value, uint32_t *o
  * no usage ends the iteration there. */
 static int usage_item(void *opaque, JSContext *ctx, JSValueConst item)
 {
-    int usage = enumeration(ctx, item, kUsages, sizeof(kUsages) / sizeof(kUsages[0]), "KeyUsage");
+    int usage = enumeration(ctx, item, kUsages, USAGE_COUNT, "KeyUsage");
     if (usage < 0) return -1;
     *(uint32_t *)opaque |= 1u << usage;
     return 0;
@@ -174,15 +279,84 @@ static int usage_item(void *opaque, JSContext *ctx, JSValueConst item)
 /* THE JSONWEBKEY DICTIONARY, converted as WebIDL converts a dictionary
  * argument: each member read and converted in lexicographic order, while
  * the arguments are, so its getters run before the algorithm is
- * normalized and a member of the wrong type is a TypeError there. No step
- * keeps what the members hold: the JWK format is the one that reads them,
- * and it is not built (DEBTS.md, "crypto.subtle does only digest"). */
-static int string_item(void *opaque, JSContext *ctx, JSValueConst item)
+ * normalized and a member of the wrong type is a TypeError there.
+ *
+ * OR A PARSED ONE (unwrapKey's "parse a JWK", § 9), which the spec parses
+ * and converts in a new global object, where no page has touched
+ * Object.prototype or Array.prototype. Here the JSON is parsed in the
+ * page's realm, so `parsed` converts it without consulting either: a
+ * member is an own property or absent, an array is walked by index, and
+ * nothing is converted that would call a page's toString. JSON makes only
+ * own data properties and arrays without holes, so for every JSON value
+ * this reads what the new global would, save one: a string member that
+ * is an object or an array (which the new global would stringify) is a
+ * DataError, a key no one makes. */
+typedef struct {
+    DJwk *jwk;
+    bool parsed;
+} DJwkRead;
+
+static int text_of(JSContext *ctx, JSValueConst value, DText *out, bool parsed)
 {
-    (void)opaque;
-    JSValue text = JS_ToString(ctx, item);
-    if (JS_IsException(text)) return -1;
-    JS_FreeValue(ctx, text);
+    if (parsed && JS_IsObject(value)) {
+        fail(ctx, "DataError", "The unwrapped JWK's members are strings");
+        return -1;
+    }
+    out->text = JS_ToCStringLen(ctx, &out->length, value);
+    return out->text != NULL ? 0 : -1;
+}
+
+/* A dictionary member: [[Get]], or for a parsed JWK the own property. */
+static JSValue jwk_member(JSContext *ctx, JSValueConst object, const char *name, bool parsed)
+{
+    if (!parsed) return JS_GetPropertyStr(ctx, object, name);
+    JSAtom atom = JS_NewAtom(ctx, name);
+    if (atom == JS_ATOM_NULL) return JS_EXCEPTION;
+    JSPropertyDescriptor desc;
+    int own = JS_GetOwnProperty(ctx, &desc, object, atom);
+    JS_FreeAtom(ctx, atom);
+    if (own <= 0) return own < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    JS_FreeValue(ctx, desc.getter);
+    JS_FreeValue(ctx, desc.setter);
+    return desc.value;
+}
+
+/* A sequence member: WebIDL's iteration, or for a parsed JWK the array's
+ * elements by index (anything else is what no new global iterates). */
+static int jwk_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, bool parsed,
+                        int (*item)(void *, JSContext *, JSValueConst), void *opaque)
+{
+    if (!parsed) return d_sequence_each(dom, ctx, value, JS_UNDEFINED, item, opaque);
+    int array = JS_IsArray(ctx, value);
+    if (array <= 0) {
+        if (array == 0) JS_ThrowTypeError(ctx, "A JsonWebKey's sequence is an array");
+        return -1;
+    }
+    uint32_t length;
+    JSValue held = JS_GetPropertyStr(ctx, value, "length");
+    int status = JS_ToUint32(ctx, &length, held);
+    JS_FreeValue(ctx, held);
+    for (uint32_t i = 0; status == 0 && i < length; i++) {
+        JSValue element = JS_GetPropertyUint32(ctx, value, i);
+        status = JS_IsException(element) ? -1 : item(opaque, ctx, element);
+        JS_FreeValue(ctx, element);
+    }
+    return status;
+}
+
+static int key_op_item(void *opaque, JSContext *ctx, JSValueConst item)
+{
+    DJwkRead *r = opaque;
+    DJwk *j = r->jwk;
+    if (j->nops == j->cap) {
+        size_t cap = j->cap ? j->cap * 2 : 8;
+        DText *grown = js_realloc(ctx, j->ops, cap * sizeof(*grown));
+        if (grown == NULL) return -1;
+        j->ops = grown;
+        j->cap = cap;
+    }
+    if (text_of(ctx, item, &j->ops[j->nops], r->parsed) < 0) return -1;
+    j->nops++;
     return 0;
 }
 
@@ -190,7 +364,7 @@ static int string_item(void *opaque, JSContext *ctx, JSValueConst item)
  * are strings. */
 static int other_prime_item(void *opaque, JSContext *ctx, JSValueConst item)
 {
-    (void)opaque;
+    bool parsed = ((DJwkRead *)opaque)->parsed;
     static const char *const kMembers[] = {"d", "r", "t"};
     if (JS_IsUndefined(item) || JS_IsNull(item)) return 0;
     if (!JS_IsObject(item)) {
@@ -198,36 +372,50 @@ static int other_prime_item(void *opaque, JSContext *ctx, JSValueConst item)
         return -1;
     }
     for (size_t i = 0; i < sizeof(kMembers) / sizeof(kMembers[0]); i++) {
-        JSValue member = JS_GetPropertyStr(ctx, item, kMembers[i]);
+        JSValue member = jwk_member(ctx, item, kMembers[i], parsed);
         if (JS_IsException(member)) return -1;
-        int status = JS_IsUndefined(member) ? 0 : string_item(NULL, ctx, member);
+        DText t = {0};
+        int status = JS_IsUndefined(member) ? 0 : text_of(ctx, member, &t, parsed);
+        if (t.text != NULL) JS_FreeCString(ctx, t.text);
         JS_FreeValue(ctx, member);
         if (status < 0) return -1;
     }
     return 0;
 }
 
-static int json_web_key(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+static int json_web_key(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DJwk *j, bool parsed)
 {
+    DJwkRead read = {j, parsed};
+    j->present = true;
     if (JS_IsUndefined(value) || JS_IsNull(value)) return 0;
+    if (!JS_IsObject(value)) {
+        JS_ThrowTypeError(ctx, "A JsonWebKey is a dictionary");
+        return -1;
+    }
     static const struct {
         const char *name;
-        char kind; /* 's' DOMString, 'b' boolean, 'l' sequence<DOMString>, 'o' sequence<RsaOtherPrimesInfo> */
+        int slot; /* a J_ index, or -1 ext, -2 key_ops, -3 oth */
     } kMembers[] = {
-        {"alg", 's'}, {"crv", 's'}, {"d", 's'}, {"dp", 's'}, {"dq", 's'}, {"e", 's'},
-        {"ext", 'b'}, {"k", 's'}, {"key_ops", 'l'}, {"kty", 's'}, {"n", 's'}, {"oth", 'o'},
-        {"p", 's'}, {"q", 's'}, {"qi", 's'}, {"use", 's'}, {"x", 's'}, {"y", 's'},
+        {"alg", J_ALG}, {"crv", J_CRV}, {"d", J_D}, {"dp", J_DP}, {"dq", J_DQ}, {"e", J_E},
+        {"ext", -1}, {"k", J_K}, {"key_ops", -2}, {"kty", J_KTY}, {"n", J_N}, {"oth", -3},
+        {"p", J_P}, {"q", J_Q}, {"qi", J_QI}, {"use", J_USE}, {"x", J_X}, {"y", J_Y},
     };
     for (size_t i = 0; i < sizeof(kMembers) / sizeof(kMembers[0]); i++) {
-        JSValue member = JS_GetPropertyStr(ctx, value, kMembers[i].name);
+        JSValue member = jwk_member(ctx, value, kMembers[i].name, parsed);
         if (JS_IsException(member)) return -1;
         int status = 0;
         if (!JS_IsUndefined(member)) {
-            switch (kMembers[i].kind) {
-            case 's': status = string_item(NULL, ctx, member); break;
-            case 'b': (void)JS_ToBool(ctx, member); break;
-            case 'l': status = d_sequence_each(dom, ctx, member, JS_UNDEFINED, string_item, NULL); break;
-            default: status = d_sequence_each(dom, ctx, member, JS_UNDEFINED, other_prime_item, NULL); break;
+            switch (kMembers[i].slot) {
+            case -1:
+                j->has_ext = true;
+                j->ext = JS_ToBool(ctx, member);
+                break;
+            case -2:
+                j->has_ops = true;
+                status = jwk_sequence(dom, ctx, member, parsed, key_op_item, &read);
+                break;
+            case -3: status = jwk_sequence(dom, ctx, member, parsed, other_prime_item, &read); break;
+            default: status = text_of(ctx, member, &j->s[kMembers[i].slot], parsed); break;
             }
         }
         JS_FreeValue(ctx, member);
@@ -236,21 +424,22 @@ static int json_web_key(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
     return 0;
 }
 
-static int buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value, int method, int index)
+/* Whether `value` is a BufferSource WebIDL takes here: -1 with a TypeError
+ * (or the failure) pending when it is none, or its buffer is resizable. */
+static int buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const char *what)
 {
     const uint8_t *bytes;
     size_t length;
     int kind = d_buffer_source(dom, ctx, value, &bytes, &length);
     if (kind < 0) return -1;
     if (kind == 0) {
-        arg_error(ctx, method, index, "BufferSource");
+        JS_ThrowTypeError(ctx, "%s is not a BufferSource", what);
         return -1;
     }
     int resizable = d_resizable_buffer_source(dom, ctx, value);
     if (resizable < 0) return -1;
     if (resizable) {
-        JS_ThrowTypeError(ctx, "SubtleCrypto.%s: argument %d's buffer is resizable", kMethods[method].name,
-                          index + 1);
+        JS_ThrowTypeError(ctx, "%s's buffer is resizable", what);
         return -1;
     }
     return 0;
@@ -284,7 +473,7 @@ static int convert(os64_dom_t *dom, JSContext *ctx, int method, int argc, JSValu
             break;
         }
         case A_BUFFER:
-            if (buffer_source(dom, ctx, v, method, i) < 0) return -1;
+            if (buffer_source(dom, ctx, v, "An argument") < 0) return -1;
             c->buffers[c->buffer_count++] = v;
             break;
         case A_BOOLEAN:
@@ -300,25 +489,26 @@ static int convert(os64_dom_t *dom, JSContext *ctx, int method, int argc, JSValu
         case A_KEY_DATA: {
             /* (BufferSource or JsonWebKey): a buffer source is one; any
              * other object, undefined or null is the dictionary, converted
-             * here (json_web_key); anything else neither. */
+             * here; anything else neither. */
             const uint8_t *bytes;
             size_t length;
             int kind = JS_IsObject(v) ? d_buffer_source(dom, ctx, v, &bytes, &length) : 0;
             if (kind < 0) return -1;
             if (kind == 1) {
-                if (buffer_source(dom, ctx, v, method, i) < 0) return -1;
+                if (buffer_source(dom, ctx, v, "The key data") < 0) return -1;
                 c->buffers[c->buffer_count++] = v;
+                c->key_data_buffer = true;
             } else if (!JS_IsObject(v) && !JS_IsUndefined(v) && !JS_IsNull(v)) {
                 arg_error(ctx, method, i, "BufferSource or JsonWebKey");
                 return -1;
-            } else if (json_web_key(dom, ctx, v) < 0) {
+            } else if (json_web_key(dom, ctx, v, &c->jwk, false) < 0) {
                 return -1;
             }
             break;
         }
         case A_LENGTH:
             if (JS_IsUndefined(v) || JS_IsNull(v)) break;
-            if (enforce_unsigned_long(ctx, v, &c->length) < 0) return -1;
+            if (enforce_range(ctx, v, 4294967295.0, &c->length) < 0) return -1;
             c->length_given = true;
             break;
         }
@@ -326,15 +516,43 @@ static int convert(os64_dom_t *dom, JSContext *ctx, int method, int argc, JSValu
     return 0;
 }
 
-/* NORMALIZE AN ALGORITHM (Web Cryptography § 18.4.4) for `op`: the
- * algorithm the registry holds under the name `algorithm` gives, or -1
- * with the failure pending. A string is the name itself. An object is the
- * Algorithm dictionary first, its required `name` read (a TypeError when it
- * is missing), the name matched ASCII case-insensitively (NotSupportedError
- * when nothing matches), and then the dictionary the algorithm's
- * parameters convert to, whose reads run in its members' order and so
- * read `name` again: § 18.4.4 converts the object twice, so a getter
- * there runs twice. */
+/* ── Normalization (§ 18.4.4) ────────────────────────────────────────── */
+
+/* A normalized algorithm: the registry's algorithm and the members of its
+ * parameter dictionary. A BufferSource member is held, and its bytes read
+ * when the operation runs, after every getter normalization calls. */
+typedef struct {
+    subtle_alg_t alg;
+    subtle_dict_t dict;
+    bool has_length, has_tag;
+    uint32_t length, tag_length;
+    subtle_alg_t hash;
+    JSValue iv, counter, additional;
+} SubtleParams;
+
+static void params_init(SubtleParams *p)
+{
+    os64_memset(p, 0, sizeof(*p));
+    p->hash = SUBTLE_ALG_COUNT;
+    p->iv = p->counter = p->additional = JS_UNDEFINED;
+}
+
+static void params_free(JSContext *ctx, SubtleParams *p)
+{
+    JS_FreeValue(ctx, p->iv);
+    JS_FreeValue(ctx, p->counter);
+    JS_FreeValue(ctx, p->additional);
+    p->iv = p->counter = p->additional = JS_UNDEFINED;
+}
+
+/* A dictionary's member, read with [[Get]] so an inherited one counts;
+ * JS_UNDEFINED when `object` is no object (an algorithm given as a string
+ * is a dictionary with only its name). */
+static JSValue member(JSContext *ctx, JSValueConst object, const char *name)
+{
+    return JS_IsObject(object) ? JS_GetPropertyStr(ctx, object, name) : JS_UNDEFINED;
+}
+
 static int name_of(JSContext *ctx, JSValueConst algorithm, char **text, size_t *length)
 {
     JSValue name = JS_GetPropertyStr(ctx, algorithm, "name");
@@ -348,7 +566,51 @@ static int name_of(JSContext *ctx, JSValueConst algorithm, char **text, size_t *
     return *text != NULL ? 0 : -1;
 }
 
-static int normalize(JSContext *ctx, JSValueConst algorithm, subtle_op_t op, subtle_alg_t *out)
+/* A required BufferSource member into `*out` (held). */
+static int buffer_member(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const char *name, bool required,
+                         JSValue *out)
+{
+    JSValue v = member(ctx, object, name);
+    if (JS_IsException(v)) return -1;
+    if (JS_IsUndefined(v)) {
+        if (required) JS_ThrowTypeError(ctx, "The algorithm needs %s", name);
+        return required ? -1 : 0;
+    }
+    if (buffer_source(dom, ctx, v, name) < 0) {
+        JS_FreeValue(ctx, v);
+        return -1;
+    }
+    *out = v;
+    return 0;
+}
+
+/* An [EnforceRange] integer member, its type's largest value `max`. */
+static int number_member(JSContext *ctx, JSValueConst object, const char *name, double max, bool required,
+                         bool *has, uint32_t *out)
+{
+    JSValue v = member(ctx, object, name);
+    if (JS_IsException(v)) return -1;
+    if (JS_IsUndefined(v)) {
+        if (required) JS_ThrowTypeError(ctx, "The algorithm needs %s", name);
+        return required ? -1 : 0;
+    }
+    int status = enforce_range(ctx, v, max, out);
+    JS_FreeValue(ctx, v);
+    if (status == 0 && has != NULL) *has = true;
+    return status;
+}
+
+static int normalize(os64_dom_t *dom, JSContext *ctx, JSValueConst algorithm, subtle_op_t op, SubtleParams *p);
+
+/* NORMALIZE AN ALGORITHM (§ 18.4.4) for `op` into `p` (params_init'd): -1
+ * with the failure pending. A string is the name itself. An object is the
+ * Algorithm dictionary first, its required `name` read (a TypeError when it
+ * is missing), the name matched ASCII case-insensitively (NotSupportedError
+ * when nothing matches), and then the dictionary the algorithm's
+ * parameters convert to, read in its members' order, `name` first: § 18.4.4
+ * converts the object twice, so a getter there runs twice. A hash member is
+ * normalized for digest after the whole dictionary is read (step 10). */
+static int normalize(os64_dom_t *dom, JSContext *ctx, JSValueConst algorithm, subtle_op_t op, SubtleParams *p)
 {
     char *name = NULL;
     size_t length = 0;
@@ -362,39 +624,753 @@ static int normalize(JSContext *ctx, JSValueConst algorithm, subtle_op_t op, sub
     subtle_dict_t dict;
     int alg = op < SUBTLE_OP_COUNT ? subtle_registered(op, name, length, &dict) : -1;
     JS_FreeCString(ctx, name);
-    if (alg < 0) {
-        d_error(ctx, "NotSupportedError", "This browser does not support that algorithm for this operation");
-        return -1;
+    if (alg < 0) return fail(ctx, "NotSupportedError", "This browser does not support that algorithm for this operation");
+    p->alg = (subtle_alg_t)alg;
+    p->dict = dict;
+    if (object) {
+        if (name_of(ctx, algorithm, &name, &length) < 0) return -1;
+        JS_FreeCString(ctx, name);
     }
-    /* The desired type's conversion, member by member in its order. */
+    JSValue hash = JS_UNDEFINED;
+    int status = 0;
     switch (dict) {
     case SUBTLE_DICT_ALGORITHM:
-        /* Its one member, the name, read again. */
-        if (object) {
-            if (name_of(ctx, algorithm, &name, &length) < 0) return -1;
-            JS_FreeCString(ctx, name);
+        break;
+    case SUBTLE_DICT_AES_KEY_GEN:
+        status = number_member(ctx, algorithm, "length", 65535.0, true, &p->has_length, &p->length);
+        break;
+    case SUBTLE_DICT_AES_CTR:
+        status = buffer_member(dom, ctx, algorithm, "counter", true, &p->counter);
+        if (status == 0) status = number_member(ctx, algorithm, "length", 255.0, true, &p->has_length, &p->length);
+        break;
+    case SUBTLE_DICT_AES_CBC:
+        status = buffer_member(dom, ctx, algorithm, "iv", true, &p->iv);
+        break;
+    case SUBTLE_DICT_AES_GCM:
+        status = buffer_member(dom, ctx, algorithm, "additionalData", false, &p->additional);
+        if (status == 0) status = buffer_member(dom, ctx, algorithm, "iv", true, &p->iv);
+        if (status == 0) status = number_member(ctx, algorithm, "tagLength", 255.0, false, &p->has_tag, &p->tag_length);
+        break;
+    case SUBTLE_DICT_HMAC_KEY_GEN:
+    case SUBTLE_DICT_HMAC_IMPORT:
+        /* hash: a HashAlgorithmIdentifier, (object or DOMString), kept as
+         * given and normalized below. */
+        hash = member(ctx, algorithm, "hash");
+        if (JS_IsException(hash)) return -1;
+        if (JS_IsUndefined(hash)) return fail(ctx, "TypeError", "HMAC needs a hash");
+        if (!JS_IsObject(hash)) {
+            JSValue text = JS_ToString(ctx, hash);
+            JS_FreeValue(ctx, hash);
+            if (JS_IsException(text)) return -1;
+            hash = text;
         }
+        status = number_member(ctx, algorithm, "length", 4294967295.0, false, &p->has_length, &p->length);
         break;
     }
-    *out = (subtle_alg_t)alg;
+    if (status == 0 && !JS_IsUndefined(hash)) {
+        SubtleParams h;
+        params_init(&h);
+        status = normalize(dom, ctx, hash, SUBTLE_OP_DIGEST, &h);
+        p->hash = h.alg;
+        params_free(ctx, &h);
+    }
+    JS_FreeValue(ctx, hash);
+    return status;
+}
+
+/* The bytes a held BufferSource holds now, borrowed; none for one absent. */
+static int bytes_of(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const uint8_t **bytes, size_t *length)
+{
+    *bytes = NULL;
+    *length = 0;
+    if (JS_IsUndefined(value)) return 0;
+    return d_buffer_source(dom, ctx, value, bytes, length) < 0 ? -1 : 0;
+}
+
+/* ── Keys ────────────────────────────────────────────────────────────── */
+
+static bool is_aes(subtle_alg_t alg)
+{
+    return alg == SUBTLE_ALG_AES_CTR || alg == SUBTLE_ALG_AES_CBC || alg == SUBTLE_ALG_AES_GCM;
+}
+
+static int define(JSContext *ctx, JSValueConst object, const char *name, JSValue value)
+{
+    if (JS_IsException(value)) return -1;
+    return JS_DefinePropertyValueStr(ctx, object, name, value, JS_PROP_C_W_E) < 0 ? -1 : 0;
+}
+
+/* The usage set's names as an array, in the recognized order. */
+static JSValue usage_array(JSContext *ctx, uint32_t usages)
+{
+    JSValue array = JS_NewArray(ctx);
+    uint32_t at = 0;
+    for (int i = 0; i < USAGE_COUNT && !JS_IsException(array); i++) {
+        if (!(usages & (1u << i))) continue;
+        if (JS_DefinePropertyValueUint32(ctx, array, at++, JS_NewString(ctx, kUsages[i]), JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, array);
+            array = JS_EXCEPTION;
+        }
+    }
+    return array;
+}
+
+/* A new secret CryptoKey holding `material` (taken, whatever happens):
+ * its algorithm object is the key algorithm dictionary as an object, its
+ * name the registry's spelling (AesKeyAlgorithm: name, length;
+ * HmacKeyAlgorithm: name, hash {name}, length). */
+static JSValue key_new(JSContext *ctx, subtle_alg_t alg, subtle_alg_t hash, uint32_t bits, uint8_t *material,
+                       size_t bytes, bool extractable, uint32_t usages)
+{
+    DKey *k = js_mallocz(ctx, sizeof(*k));
+    if (k == NULL) {
+        wipe(material, bytes);
+        js_free(ctx, material);
+        return JS_EXCEPTION;
+    }
+    *k = (DKey){.type = "secret", .alg = alg, .hash = hash, .bits = bits, .material = material, .bytes = bytes,
+                .extractable = extractable, .usages = usages, .algorithm = JS_UNDEFINED,
+                .usage_list = JS_UNDEFINED};
+    JSValue key = JS_NewObjectClass(ctx, (int)os64_js_class_id(&key_slot));
+    if (JS_IsException(key)) {
+        wipe(material, bytes);
+        js_free(ctx, material);
+        js_free(ctx, k);
+        return key;
+    }
+    JS_SetOpaque(key, k);
+    JSValue algorithm = JS_NewObject(ctx);
+    int status = JS_IsException(algorithm) ? -1 : define(ctx, algorithm, "name", JS_NewString(ctx, subtle_alg_name(alg)));
+    if (status == 0 && alg == SUBTLE_ALG_HMAC) {
+        JSValue h = JS_NewObject(ctx);
+        status = JS_IsException(h) ? -1 : define(ctx, h, "name", JS_NewString(ctx, subtle_alg_name(hash)));
+        status = status == 0 ? define(ctx, algorithm, "hash", h) : (JS_FreeValue(ctx, h), -1);
+    }
+    if (status == 0) status = define(ctx, algorithm, "length", JS_NewUint32(ctx, bits));
+    k->algorithm = algorithm;
+    if (status == 0) {
+        k->usage_list = usage_array(ctx, usages);
+        if (JS_IsException(k->usage_list)) {
+            k->usage_list = JS_UNDEFINED;
+            status = -1;
+        }
+    }
+    if (status < 0) {
+        JS_FreeValue(ctx, key);
+        return JS_EXCEPTION;
+    }
+    return key;
+}
+
+/* `bits` bits of `data` as a key's material: a copy of the bytes that
+ * hold them, the bits past the last zeroed. NULL with the failure pending. */
+static uint8_t *material_of(JSContext *ctx, const uint8_t *data, uint32_t bits, size_t *bytes)
+{
+    *bytes = ((size_t)bits + 7) / 8;
+    uint8_t *m = js_malloc(ctx, *bytes ? *bytes : 1);
+    if (m == NULL) return NULL;
+    if (*bytes) os64_memcpy(m, data, *bytes);
+    if (bits % 8) m[*bytes - 1] &= (uint8_t)(0xff << (8 - bits % 8));
+    return m;
+}
+
+/* JWK's alg for a key (§ 27-29's and § 31's exportKey): A<bits>CTR/CBC/GCM, HS<n>. */
+static const char *jwk_alg(const DKey *k, char *out, size_t cap)
+{
+    if (k->alg == SUBTLE_ALG_HMAC) {
+        switch (k->hash) {
+        case SUBTLE_ALG_SHA_1: return "HS1";
+        case SUBTLE_ALG_SHA_256: return "HS256";
+        case SUBTLE_ALG_SHA_384: return "HS384";
+        default: return "HS512";
+        }
+    }
+    const char *mode = k->alg == SUBTLE_ALG_AES_CTR ? "CTR" : k->alg == SUBTLE_ALG_AES_CBC ? "CBC" : "GCM";
+    os64_snprintf(out, cap, "A%u%s", (unsigned)k->bits, mode);
+    return out;
+}
+
+/* generateKey's operation (§ 27-29's "generate key", § 31 HMAC's): the
+ * usage check, the length, the random key, then the method's empty-usages
+ * check. */
+static JSValue generate_key(os64_dom_t *dom, JSContext *ctx, const SubtleParams *p, bool extractable, uint32_t usages)
+{
+    bool aes = is_aes(p->alg);
+    if (usages & ~(uint32_t)(aes ? AES_USAGES : HMAC_USAGES)) {
+        fail(ctx, "SyntaxError", "That usage is not this algorithm's");
+        return JS_EXCEPTION;
+    }
+    uint32_t bits;
+    if (aes) {
+        if (p->length != 128 && p->length != 192 && p->length != 256) {
+            fail(ctx, "OperationError", "An AES key is 128, 192 or 256 bits");
+            return JS_EXCEPTION;
+        }
+        bits = p->length;
+    } else if (p->has_length) {
+        if (p->length == 0) {
+            fail(ctx, "OperationError", "An HMAC key's length cannot be zero");
+            return JS_EXCEPTION;
+        }
+        /* Its random bytes come as getRandomValues' do, at most 65,536 of
+         * them; a longer key is "the key generation step fails". */
+        if (p->length > SUBTLE_HMAC_GENERATE_MAX_BITS) {
+            fail(ctx, "OperationError", "An HMAC key that long is more than this browser generates");
+            return JS_EXCEPTION;
+        }
+        bits = p->length;
+    } else {
+        bits = (uint32_t)subtle_hash_block_size(p->hash) * 8;
+    }
+    size_t bytes = ((size_t)bits + 7) / 8;
+    uint8_t *random = js_malloc(ctx, bytes);
+    if (random == NULL) return JS_EXCEPTION;
+    if (!d_crypto_entropy(dom, ctx, random, bytes)) {
+        js_free(ctx, random);
+        return JS_EXCEPTION;
+    }
+    size_t kept;
+    uint8_t *material = material_of(ctx, random, bits, &kept);
+    wipe(random, bytes);
+    js_free(ctx, random);
+    if (material == NULL) return JS_EXCEPTION;
+    if (usages == 0) {
+        wipe(material, kept);
+        js_free(ctx, material);
+        fail(ctx, "SyntaxError", "A secret key needs at least one usage");
+        return JS_EXCEPTION;
+    }
+    return key_new(ctx, p->alg, p->hash, bits, material, kept, extractable, usages);
+}
+
+/* Whether a JWK's key_ops (RFC 7517 § 4.3) admit `usages`: none repeats,
+ * and every requested usage is there. */
+static bool key_ops_admit(const DJwk *j, uint32_t usages)
+{
+    for (size_t a = 0; a < j->nops; a++)
+        for (size_t b = a + 1; b < j->nops; b++)
+            if (j->ops[a].length == j->ops[b].length &&
+                os64_memcmp(j->ops[a].text, j->ops[b].text, j->ops[a].length) == 0)
+                return false;
+    for (int i = 0; i < USAGE_COUNT; i++) {
+        if (!(usages & (1u << i))) continue;
+        bool found = false;
+        for (size_t a = 0; a < j->nops && !found; a++) found = text_is(j->ops[a], kUsages[i]);
+        if (!found) return false;
+    }
+    return true;
+}
+
+/* importKey's operation, the method's part after normalization included
+ * (§ 14.3.9 steps 8-12; § 27-29's and § 31's "import key"), for importKey and
+ * unwrapKey: `raw` (raw_length bytes) for a byte format, `j` for JWK. */
+static JSValue import_key(JSContext *ctx, const SubtleParams *p, int format, const uint8_t *raw, size_t raw_length,
+                          const DJwk *j, bool extractable, uint32_t usages)
+{
+    bool aes = is_aes(p->alg);
+    if (!aes && p->has_length && p->length == 0) {
+        fail(ctx, "DataError", "An HMAC key's length cannot be zero");
+        return JS_EXCEPTION;
+    }
+    if (usages & ~(uint32_t)(aes ? AES_USAGES : HMAC_USAGES)) {
+        fail(ctx, "SyntaxError", "That usage is not this algorithm's");
+        return JS_EXCEPTION;
+    }
+    const uint8_t *data = raw;
+    size_t length = raw_length;
+    uint8_t *decoded = NULL;
+    JSValue result = JS_EXCEPTION;
+    if (format == F_JWK) {
+        char want[16];
+        if (!text_is(j->s[J_KTY], "oct")) {
+            fail(ctx, "DataError", "A secret key's JWK has kty \"oct\"");
+            goto out;
+        }
+        if (j->s[J_K].text == NULL) {
+            fail(ctx, "DataError", "A secret key's JWK has its key in k");
+            goto out;
+        }
+        decoded = js_malloc(ctx, j->s[J_K].length * 3 / 4 + 1);
+        if (decoded == NULL) goto out;
+        if (!subtle_base64url_decode(j->s[J_K].text, j->s[J_K].length, decoded, &length)) {
+            fail(ctx, "DataError", "A JWK's k is unpadded base64url");
+            goto out;
+        }
+        data = decoded;
+        DKey shape = {.alg = p->alg, .hash = p->hash, .bits = (uint32_t)length * 8};
+        if (aes && !subtle_aes_key_length_ok(length)) {
+            fail(ctx, "DataError", "An AES key is 128, 192 or 256 bits");
+            goto out;
+        }
+        if (j->s[J_ALG].text != NULL && !text_is(j->s[J_ALG], jwk_alg(&shape, want, sizeof(want)))) {
+            fail(ctx, "DataError", "The JWK's alg is not this key's");
+            goto out;
+        }
+        if (usages != 0 && j->s[J_USE].text != NULL && !text_is(j->s[J_USE], aes ? "enc" : "sig")) {
+            fail(ctx, "DataError", "The JWK's use does not allow these usages");
+            goto out;
+        }
+        if (j->has_ops && !key_ops_admit(j, usages)) {
+            fail(ctx, "DataError", "The JWK's key_ops do not allow these usages");
+            goto out;
+        }
+        if (j->has_ext && !j->ext && extractable) {
+            fail(ctx, "DataError", "The JWK says the key is not extractable");
+            goto out;
+        }
+    } else if (format != F_RAW) {
+        fail(ctx, "NotSupportedError", "This algorithm's keys are not imported in that format");
+        goto out;
+    }
+    uint32_t bits;
+    if (aes) {
+        if (!subtle_aes_key_length_ok(length)) {
+            fail(ctx, "DataError", "An AES key is 128, 192 or 256 bits");
+            goto out;
+        }
+        bits = (uint32_t)length * 8;
+    } else {
+        uint64_t whole = (uint64_t)length * 8;
+        if (whole == 0) {
+            fail(ctx, "DataError", "An HMAC key cannot be empty");
+            goto out;
+        }
+        if (whole > 4294967295u) {
+            fail(ctx, "DataError", "That HMAC key is too long");
+            goto out;
+        }
+        bits = (uint32_t)whole;
+        if (p->has_length) {
+            if (p->length > bits || p->length + 8 <= bits) {
+                fail(ctx, "DataError", "An HMAC key's length is within its last byte");
+                goto out;
+            }
+            bits = p->length;
+        }
+    }
+    if (usages == 0) {
+        fail(ctx, "SyntaxError", "A secret key needs at least one usage");
+        goto out;
+    }
+    size_t kept;
+    uint8_t *material = material_of(ctx, data, bits, &kept);
+    if (material != NULL) result = key_new(ctx, p->alg, p->hash, bits, material, kept, extractable, usages);
+out:
+    if (decoded != NULL) {
+        wipe(decoded, j->s[J_K].length * 3 / 4 + 1);
+        js_free(ctx, decoded);
+    }
+    return result;
+}
+
+/* exportKey's checks and operation (§ 14.3.10 steps 6-7; § 27-29's and § 31's
+ * "export key"), for exportKey and wrapKey: an ArrayBuffer or the JWK
+ * object. Every algorithm here exports. */
+static JSValue export_key(JSContext *ctx, const DKey *k, int format)
+{
+    if (!k->extractable) {
+        fail(ctx, "InvalidAccessError", "This key is not extractable");
+        return JS_EXCEPTION;
+    }
+    if (format == F_RAW) return JS_NewArrayBufferCopy(ctx, k->material, k->bytes);
+    if (format != F_JWK) {
+        fail(ctx, "NotSupportedError", "This algorithm's keys are not exported in that format");
+        return JS_EXCEPTION;
+    }
+    /* The JsonWebKey dictionary as an object: its members in
+     * lexicographic order, as WebIDL makes one. */
+    char alg[16];
+    size_t size = subtle_base64url_size(k->bytes);
+    char *text = js_malloc(ctx, size + 1);
+    if (text == NULL) return JS_EXCEPTION;
+    subtle_base64url_encode(k->material, k->bytes, text);
+    JSValue jwk = JS_NewObject(ctx);
+    int status = JS_IsException(jwk) ? -1 : define(ctx, jwk, "alg", JS_NewString(ctx, jwk_alg(k, alg, sizeof(alg))));
+    if (status == 0) status = define(ctx, jwk, "ext", JS_NewBool(ctx, k->extractable));
+    if (status == 0) status = define(ctx, jwk, "k", JS_NewStringLen(ctx, text, size));
+    if (status == 0) status = define(ctx, jwk, "key_ops", usage_array(ctx, k->usages));
+    if (status == 0) status = define(ctx, jwk, "kty", JS_NewString(ctx, "oct"));
+    wipe((uint8_t *)text, size);
+    js_free(ctx, text);
+    if (status < 0) {
+        JS_FreeValue(ctx, jwk);
+        return JS_EXCEPTION;
+    }
+    return jwk;
+}
+
+/* A JWK as wrapKey's bytes: the UTF-8 of its JSON (§ 14.3.11 step 14),
+ * written here rather than by JSON.stringify, so no page's toJSON runs;
+ * every value is a string of letters, digits, - and _, or a boolean, so
+ * nothing needs escaping. js_malloc'd, *length bytes. */
+static char *jwk_json(JSContext *ctx, const DKey *k, size_t *length)
+{
+    char alg[16];
+    size_t key = subtle_base64url_size(k->bytes), cap = key + 160;
+    char *json = js_malloc(ctx, cap);
+    if (json == NULL) return NULL;
+    size_t at = (size_t)os64_snprintf(json, cap, "{\"alg\":\"%s\",\"ext\":%s,\"k\":\"", jwk_alg(k, alg, sizeof(alg)),
+                                      k->extractable ? "true" : "false");
+    subtle_base64url_encode(k->material, k->bytes, json + at);
+    at += key;
+    at += (size_t)os64_snprintf(json + at, cap - at, "\",\"key_ops\":[");
+    bool first = true;
+    for (int i = 0; i < USAGE_COUNT; i++) {
+        if (!(k->usages & (1u << i))) continue;
+        at += (size_t)os64_snprintf(json + at, cap - at, "%s\"%s\"", first ? "" : ",", kUsages[i]);
+        first = false;
+    }
+    at += (size_t)os64_snprintf(json + at, cap - at, "],\"kty\":\"oct\"}");
+    *length = at;
+    return json;
+}
+
+/* ── The operations ──────────────────────────────────────────────────── */
+
+/* The algorithm's encrypt or decrypt (§ 27-29) of `in`: a js_malloc'd
+ * result in *out (*out_length bytes), or -1 with the failure pending. The
+ * parameters' bytes are read here, after normalization. */
+static int cipher(os64_dom_t *dom, JSContext *ctx, const SubtleParams *p, const DKey *k, bool encrypt,
+                  const uint8_t *in, size_t length, uint8_t **out, size_t *out_length)
+{
+    const uint8_t *iv, *aad;
+    size_t iv_length, aad_length;
+    *out = NULL;
+    switch (p->alg) {
+    case SUBTLE_ALG_AES_CTR:
+        if (bytes_of(dom, ctx, p->counter, &iv, &iv_length) < 0) return -1;
+        if (iv_length != SUBTLE_AES_BLOCK) return fail(ctx, "OperationError", "AES-CTR's counter is 16 bytes");
+        if (p->length == 0 || p->length > 128) return fail(ctx, "OperationError", "AES-CTR's length is 1 to 128");
+        *out = js_malloc(ctx, length ? length : 1);
+        if (*out == NULL) return -1;
+        if (!subtle_aes_ctr(k->material, k->bytes, iv, p->length, in, length, *out))
+            return fail(ctx, "OperationError", "That much data would repeat the counter");
+        *out_length = length;
+        return 0;
+    case SUBTLE_ALG_AES_CBC:
+        if (bytes_of(dom, ctx, p->iv, &iv, &iv_length) < 0) return -1;
+        if (iv_length != SUBTLE_AES_BLOCK) return fail(ctx, "OperationError", "AES-CBC's iv is 16 bytes");
+        *out = js_malloc(ctx, length + SUBTLE_AES_BLOCK);
+        if (*out == NULL) return -1;
+        if (encrypt) {
+            *out_length = subtle_aes_cbc_encrypt(k->material, k->bytes, iv, in, length, *out);
+            return 0;
+        }
+        if (!subtle_aes_cbc_decrypt(k->material, k->bytes, iv, in, length, *out, out_length))
+            return fail(ctx, "OperationError", "The ciphertext or its padding is not AES-CBC's");
+        return 0;
+    case SUBTLE_ALG_AES_GCM: {
+        uint32_t tag = p->has_tag ? p->tag_length : 128;
+        bool tag_ok = tag == 32 || tag == 64 || tag == 96 || tag == 104 || tag == 112 || tag == 120 || tag == 128;
+        /* Decrypt asks the tag first, encrypt the iv first (§ 29). */
+        if (!encrypt && !tag_ok) return fail(ctx, "OperationError", "AES-GCM's tagLength is not one it has");
+        if (bytes_of(dom, ctx, p->iv, &iv, &iv_length) < 0) return -1;
+        /* SP 800-38D asks an IV of at least one bit; § 29 names no
+         * bound below, and an empty one is refused (WEB_CRYPTO.md § 3). */
+        if (iv_length == 0) return fail(ctx, "OperationError", "AES-GCM's iv cannot be empty");
+        if (bytes_of(dom, ctx, p->additional, &aad, &aad_length) < 0) return -1;
+        if (encrypt && !tag_ok) return fail(ctx, "OperationError", "AES-GCM's tagLength is not one it has");
+        size_t tag_bytes = tag / 8;
+        if (encrypt) {
+            *out = js_malloc(ctx, length + tag_bytes);
+            if (*out == NULL) return -1;
+            subtle_aes_gcm_encrypt(k->material, k->bytes, iv, iv_length, aad, aad_length, tag_bytes, in, length,
+                                   *out);
+            *out_length = length + tag_bytes;
+            return 0;
+        }
+        if (length < tag_bytes) return fail(ctx, "OperationError", "The ciphertext is shorter than its tag");
+        *out = js_malloc(ctx, length - tag_bytes + 1);
+        if (*out == NULL) return -1;
+        if (!subtle_aes_gcm_decrypt(k->material, k->bytes, iv, iv_length, aad, aad_length, tag_bytes, in, length,
+                                    *out, out_length))
+            return fail(ctx, "OperationError", "The ciphertext did not authenticate");
+        return 0;
+    }
+    default:
+        return fail(ctx, "NotSupportedError", "This algorithm does not encrypt");
+    }
+}
+
+/* The key's name and usage, as every keyed operation checks them first
+ * (§ 14.3.1 steps 9-10): InvalidAccessError for either. */
+static int key_fits(JSContext *ctx, const SubtleParams *p, const DKey *k, uint32_t usage)
+{
+    if (k->alg != p->alg) return fail(ctx, "InvalidAccessError", "The key is not this algorithm's");
+    if (!(k->usages & usage)) return fail(ctx, "InvalidAccessError", "The key's usages do not include this one");
     return 0;
+}
+
+/* A js_malloc'd result as an ArrayBuffer, the result freed (wiped). */
+static JSValue buffer_answer(JSContext *ctx, uint8_t *bytes, size_t length)
+{
+    JSValue buffer = JS_NewArrayBufferCopy(ctx, bytes, length);
+    wipe(bytes, length);
+    js_free(ctx, bytes);
+    return buffer;
 }
 
 /* digest(algorithm, data) (§ 14.3.5): the bytes `data` holds once the
  * algorithm is normalized, hashed. */
-static JSValue digest(os64_dom_t *dom, JSContext *ctx, SubtleCall *c)
+static JSValue digest(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParams *p)
 {
-    subtle_alg_t alg;
-    if (normalize(ctx, c->algorithm[0], SUBTLE_OP_DIGEST, &alg) < 0) return JS_EXCEPTION;
+    if (normalize(dom, ctx, c->algorithm[0], SUBTLE_OP_DIGEST, p) < 0) return JS_EXCEPTION;
     const uint8_t *bytes;
     size_t length;
-    if (d_buffer_source(dom, ctx, c->buffers[0], &bytes, &length) < 0) return JS_EXCEPTION;
+    if (bytes_of(dom, ctx, c->buffers[0], &bytes, &length) < 0) return JS_EXCEPTION;
     uint8_t out[SUBTLE_DIGEST_MAX];
-    if (!subtle_digest(alg, bytes, length, out)) {
-        d_error(ctx, "OperationError", "The digest could not be made");
+    if (!subtle_digest(p->alg, bytes, length, out)) {
+        fail(ctx, "OperationError", "The digest could not be made");
         return JS_EXCEPTION;
     }
-    return JS_NewArrayBufferCopy(ctx, out, subtle_digest_size(alg));
+    return JS_NewArrayBufferCopy(ctx, out, subtle_digest_size(p->alg));
+}
+
+/* encrypt and decrypt (§ 14.3.1-2). */
+static JSValue crypt(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParams *p, bool encrypt)
+{
+    if (normalize(dom, ctx, c->algorithm[0], encrypt ? SUBTLE_OP_ENCRYPT : SUBTLE_OP_DECRYPT, p) < 0)
+        return JS_EXCEPTION;
+    const uint8_t *in;
+    size_t length;
+    if (bytes_of(dom, ctx, c->buffers[0], &in, &length) < 0) return JS_EXCEPTION;
+    if (key_fits(ctx, p, c->keys[0], encrypt ? U_ENCRYPT : U_DECRYPT) < 0) return JS_EXCEPTION;
+    uint8_t *out;
+    size_t out_length;
+    if (cipher(dom, ctx, p, c->keys[0], encrypt, in, length, &out, &out_length) < 0) {
+        js_free(ctx, out);
+        return JS_EXCEPTION;
+    }
+    return buffer_answer(ctx, out, out_length);
+}
+
+/* sign and verify (§ 14.3.3-4): HMAC under the key's own hash; a
+ * signature that does not match is false, never an error. */
+static JSValue sign(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParams *p, bool signing)
+{
+    if (normalize(dom, ctx, c->algorithm[0], signing ? SUBTLE_OP_SIGN : SUBTLE_OP_VERIFY, p) < 0)
+        return JS_EXCEPTION;
+    const uint8_t *data, *signature = NULL;
+    size_t length, signature_length = 0;
+    if (!signing && bytes_of(dom, ctx, c->buffers[0], &signature, &signature_length) < 0) return JS_EXCEPTION;
+    if (bytes_of(dom, ctx, c->buffers[signing ? 0 : 1], &data, &length) < 0) return JS_EXCEPTION;
+    const DKey *k = c->keys[0];
+    if (key_fits(ctx, p, k, signing ? U_SIGN : U_VERIFY) < 0) return JS_EXCEPTION;
+    uint8_t mac[SUBTLE_DIGEST_MAX];
+    size_t size = subtle_digest_size(k->hash);
+    if (!subtle_hmac(k->hash, k->material, k->bytes, data, length, mac)) {
+        fail(ctx, "OperationError", "The MAC could not be made");
+        return JS_EXCEPTION;
+    }
+    JSValue answer = signing ? JS_NewArrayBufferCopy(ctx, mac, size)
+                             : JS_NewBool(ctx, signature_length == size && subtle_same_bytes(mac, signature, size));
+    wipe(mac, sizeof(mac));
+    return answer;
+}
+
+/* Normalization for wrapKey or unwrapKey: the operation's own, else the
+ * encrypt or decrypt its algorithm has (§ 14.3.11 steps 2-4). */
+static int normalize_wrapping(os64_dom_t *dom, JSContext *ctx, JSValueConst algorithm, bool wrap, SubtleParams *p)
+{
+    if (normalize(dom, ctx, algorithm, wrap ? SUBTLE_OP_WRAP_KEY : SUBTLE_OP_UNWRAP_KEY, p) == 0) return 0;
+    if (!d_exception_catchable(ctx)) return -1;
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    params_free(ctx, p);
+    params_init(p);
+    return normalize(dom, ctx, algorithm, wrap ? SUBTLE_OP_ENCRYPT : SUBTLE_OP_DECRYPT, p);
+}
+
+/* wrapKey(format, key, wrappingKey, wrapAlgorithm) (§ 14.3.11): the key
+ * exported, then encrypted under the wrapping key. */
+static JSValue wrap_key(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParams *p)
+{
+    if (normalize_wrapping(dom, ctx, c->algorithm[0], true, p) < 0) return JS_EXCEPTION;
+    const DKey *key = c->keys[0], *wrapping = c->keys[1];
+    if (key_fits(ctx, p, wrapping, U_WRAP) < 0) return JS_EXCEPTION;
+    if (!key->extractable) {
+        fail(ctx, "InvalidAccessError", "This key is not extractable");
+        return JS_EXCEPTION;
+    }
+    uint8_t *plain;
+    size_t plain_length;
+    if (c->format == F_RAW) {
+        plain = js_malloc(ctx, key->bytes ? key->bytes : 1);
+        if (plain == NULL) return JS_EXCEPTION;
+        if (key->bytes) os64_memcpy(plain, key->material, key->bytes);
+        plain_length = key->bytes;
+    } else if (c->format == F_JWK) {
+        plain = (uint8_t *)jwk_json(ctx, key, &plain_length);
+        if (plain == NULL) return JS_EXCEPTION;
+    } else {
+        fail(ctx, "NotSupportedError", "This algorithm's keys are not exported in that format");
+        return JS_EXCEPTION;
+    }
+    uint8_t *out;
+    size_t out_length;
+    int status = cipher(dom, ctx, p, wrapping, true, plain, plain_length, &out, &out_length);
+    wipe(plain, plain_length);
+    js_free(ctx, plain);
+    if (status < 0) {
+        js_free(ctx, out);
+        return JS_EXCEPTION;
+    }
+    return buffer_answer(ctx, out, out_length);
+}
+
+/* unwrapKey (§ 14.3.12): decrypted under the unwrapping key, the JWK's
+ * JSON parsed when the format is jwk, then imported. */
+static JSValue unwrap_key(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParams *p)
+{
+    SubtleParams imported;
+    params_init(&imported);
+    JSValue result = JS_EXCEPTION;
+    uint8_t *plain = NULL;
+    size_t plain_length = 0;
+    DJwk j = {0};
+    if (normalize_wrapping(dom, ctx, c->algorithm[0], false, p) < 0) goto out;
+    if (normalize(dom, ctx, c->algorithm[1], SUBTLE_OP_IMPORT_KEY, &imported) < 0) goto out;
+    const uint8_t *wrapped;
+    size_t length;
+    if (bytes_of(dom, ctx, c->buffers[0], &wrapped, &length) < 0) goto out;
+    if (key_fits(ctx, p, c->keys[0], U_UNWRAP) < 0) goto out;
+    if (cipher(dom, ctx, p, c->keys[0], false, wrapped, length, &plain, &plain_length) < 0) goto out;
+    if (c->format == F_JWK) {
+        /* § 9's "parse a JWK": the bytes as UTF-8 JSON, the value the
+         * JsonWebKey dictionary converted as a new global would (THE
+         * JSONWEBKEY DICTIONARY), which needs a kty. JSON.parse's own
+         * SyntaxError answers what is no JSON. */
+        uint8_t *text = js_malloc(ctx, plain_length + 1);
+        if (text == NULL) goto out;
+        os64_memcpy(text, plain, plain_length);
+        text[plain_length] = '\0';
+        JSValue parsed = JS_ParseJSON(ctx, (const char *)text, plain_length, "<unwrapped key>");
+        wipe(text, plain_length);
+        js_free(ctx, text);
+        if (JS_IsException(parsed)) goto out;
+        int status = json_web_key(dom, ctx, parsed, &j, true);
+        JS_FreeValue(ctx, parsed);
+        if (status < 0) goto out;
+        if (j.s[J_KTY].text == NULL) {
+            fail(ctx, "DataError", "The unwrapped JWK has no kty");
+            goto out;
+        }
+    }
+    result = import_key(ctx, &imported, c->format, plain, plain_length, &j, c->extractable, c->usages);
+out:
+    if (plain != NULL) {
+        wipe(plain, plain_length);
+        js_free(ctx, plain);
+    }
+    jwk_free(ctx, &j);
+    params_free(ctx, &imported);
+    return result;
+}
+
+/* THE SETTLE QUEUE. A method's answer is made on the call and its promise
+ * settled from a task, as the spec's "in parallel" steps settle from a
+ * queued task, so a page's reaction runs in a task of its own and a chain
+ * of thousands of calls is thousands of short tasks, not one run of
+ * microtasks the script deadline would end. The answers wait in one
+ * queue, in call order, and ONE binding timer of no delay is the task
+ * that settles every answer waiting when it runs: a page with a thousand
+ * calls in flight holds one of its timers, not a thousand, so its own
+ * setTimeout never meets a quota crypto spent, and the promises settle
+ * in the order they were made. An answer queued while the task runs (a
+ * `then` getter the settling ran) waits for the next task. */
+static JSValue settle_drain(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                            JSValue *data)
+{
+    (void)self;
+    (void)argc;
+    (void)argv;
+    (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    dom->subtle_drain_queued = false;
+    JSValueConst queue = dom->subtle_queue->value;
+    uint32_t end = dom->subtle_tail;
+    while (dom->subtle_head < end) {
+        JSValue entry = JS_GetPropertyUint32(ctx, queue, dom->subtle_head++);
+        JSValue settle = JS_GetPropertyUint32(ctx, entry, 0);
+        JSValue value = JS_GetPropertyUint32(ctx, entry, 1);
+        JS_FreeValue(ctx, entry);
+        /* A resolving function throws nothing a page can catch: a `then`
+         * getter's exception rejects the promise instead. What comes back
+         * is the runtime stopping, and the rest wait with it. */
+        JSValue done = JS_Call(ctx, settle, JS_UNDEFINED, 1, (JSValueConst *)&value);
+        JS_FreeValue(ctx, settle);
+        JS_FreeValue(ctx, value);
+        if (JS_IsException(done)) return done;
+        JS_FreeValue(ctx, done);
+    }
+    if (dom->subtle_head == dom->subtle_tail) {
+        /* Empty: every entry let go at once, and the indices start over. */
+        dom->subtle_head = dom->subtle_tail = 0;
+        if (JS_SetPropertyStr(ctx, queue, "length", JS_NewInt32(ctx, 0)) < 0) return JS_EXCEPTION;
+    }
+    return JS_UNDEFINED;
+}
+
+/* A promise for `result` (taken; JS_EXCEPTION for the failure pending),
+ * its answer queued for the settle queue's task, which is queued too when
+ * none is. When no task can be had (the page's own timers hold the whole
+ * quota, or memory), the promise is settled on the call instead: the
+ * answer all the same, only sooner. */
+static JSValue settle_later(os64_dom_t *dom, JSContext *ctx, JSValue result)
+{
+    bool rejected = JS_IsException(result);
+    if (rejected && !d_exception_catchable(ctx)) return JS_EXCEPTION;
+    JSValue value = rejected ? JS_GetException(ctx) : result;
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) {
+        JS_FreeValue(ctx, value);
+        return promise;
+    }
+    JSValue settle = resolving[rejected ? 1 : 0];
+    JS_FreeValue(ctx, resolving[rejected ? 0 : 1]);
+    if (!dom->subtle_drain_queued) {
+        JSValue fn_data[1] = {dom->anchor->value};
+        JSValue drain = JS_NewCFunctionData(ctx, settle_drain, 0, 0, 1, fn_data);
+        dom->subtle_drain_queued = !JS_IsException(drain) && d_timer_add(dom, ctx, drain, 0) != 0;
+    }
+    if (!dom->subtle_drain_queued) {
+        JSValue done = JS_EXCEPTION;
+        if (d_exception_catchable(ctx)) {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            done = JS_Call(ctx, settle, JS_UNDEFINED, 1, (JSValueConst *)&value);
+        }
+        JS_FreeValue(ctx, settle);
+        JS_FreeValue(ctx, value);
+        if (JS_IsException(done)) {
+            JS_FreeValue(ctx, promise);
+            return done;
+        }
+        JS_FreeValue(ctx, done);
+        return promise;
+    }
+    /* The entry, [settle, value], defined (never set), so no setter a page
+     * put on Array.prototype runs. A define takes its value either way. */
+    JSValue entry = JS_NewArray(ctx);
+    if (JS_IsException(entry)) {
+        JS_FreeValue(ctx, settle);
+        JS_FreeValue(ctx, value);
+    } else if (JS_DefinePropertyValueUint32(ctx, entry, 0, settle, JS_PROP_C_W_E) < 0) {
+        JS_FreeValue(ctx, value);
+        JS_FreeValue(ctx, entry);
+    } else if (JS_DefinePropertyValueUint32(ctx, entry, 1, value, JS_PROP_C_W_E) < 0) {
+        JS_FreeValue(ctx, entry);
+    } else if (dom->subtle_tail == UINT32_MAX - 1) {
+        /* An array's last index; four billion calls between two tasks. */
+        JS_FreeValue(ctx, entry);
+        JS_ThrowRangeError(ctx, "Too many crypto.subtle calls are waiting");
+    } else if (JS_DefinePropertyValueUint32(ctx, dom->subtle_queue->value, dom->subtle_tail, entry,
+                                            JS_PROP_C_W_E) >= 0) {
+        dom->subtle_tail++;
+        return promise;
+    }
+    JS_FreeValue(ctx, promise);
+    return JS_EXCEPTION;
 }
 
 static JSValue subtle_method(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
@@ -404,30 +1380,52 @@ static JSValue subtle_method(JSContext *ctx, JSValueConst self, int argc, JSValu
     if (dom == NULL) return JS_EXCEPTION;
     JSValue result = JS_EXCEPTION;
     SubtleCall c = {.format = -1};
+    SubtleParams p;
+    params_init(&p);
     if (JS_GetOpaque(self, os64_js_class_id(&subtle_slot)) == NULL) {
         JS_ThrowTypeError(ctx, "SubtleCrypto.%s called on something that is not a SubtleCrypto",
                           kMethods[magic].name);
     } else if (convert(dom, ctx, magic, argc, argv, &c) == 0) {
-        if (magic == S_DIGEST) {
-            result = digest(dom, ctx, &c);
-        } else if (magic == S_EXPORT_KEY) {
-            /* No key exists to reach here (DKey's comment); a key's
-             * algorithm that cannot export is NotSupportedError. */
-            d_error(ctx, "NotSupportedError", "This key cannot be exported");
-        } else {
-            /* The other operations: the algorithm normalized for the
-             * method's operation, which refuses any name the registry does
-             * not hold. The registry holds an algorithm only for an
-             * operation whose steps are here (subtle_core.c's rule), so
-             * this NotSupportedError answers only a registration that
-             * broke it. */
-            subtle_alg_t alg;
-            if (normalize(ctx, c.algorithm[0], kMethods[magic].op, &alg) == 0)
-                d_error(ctx, "NotSupportedError", "This browser cannot do that operation with that algorithm");
+        switch (magic) {
+        case S_DIGEST: result = digest(dom, ctx, &c, &p); break;
+        case S_ENCRYPT: result = crypt(dom, ctx, &c, &p, true); break;
+        case S_DECRYPT: result = crypt(dom, ctx, &c, &p, false); break;
+        case S_SIGN: result = sign(dom, ctx, &c, &p, true); break;
+        case S_VERIFY: result = sign(dom, ctx, &c, &p, false); break;
+        case S_GENERATE_KEY:
+            if (normalize(dom, ctx, c.algorithm[0], SUBTLE_OP_GENERATE_KEY, &p) == 0)
+                result = generate_key(dom, ctx, &p, c.extractable, c.usages);
+            break;
+        case S_IMPORT_KEY: {
+            if (normalize(dom, ctx, c.algorithm[0], SUBTLE_OP_IMPORT_KEY, &p) < 0) break;
+            /* § 14.3.9 step 8: the key data's type against the format. */
+            if ((c.format == F_JWK) == c.key_data_buffer) {
+                JS_ThrowTypeError(ctx, c.format == F_JWK ? "A jwk key is a JsonWebKey" : "That format's key is a BufferSource");
+                break;
+            }
+            const uint8_t *raw = NULL;
+            size_t raw_length = 0;
+            if (c.key_data_buffer && bytes_of(dom, ctx, c.buffers[c.buffer_count - 1], &raw, &raw_length) < 0) break;
+            result = import_key(ctx, &p, c.format, raw, raw_length, &c.jwk, c.extractable, c.usages);
+            break;
+        }
+        case S_EXPORT_KEY: result = export_key(ctx, c.keys[0], c.format); break;
+        case S_WRAP_KEY: result = wrap_key(dom, ctx, &c, &p); break;
+        case S_UNWRAP_KEY: result = unwrap_key(dom, ctx, &c, &p); break;
+        default:
+            /* deriveKey and deriveBits: their algorithm normalized, which
+             * refuses any name the registry does not hold. The registry
+             * holds an algorithm only for an operation whose steps are
+             * here (subtle_core.c's rule), so this NotSupportedError
+             * answers only a registration that broke it. */
+            if (normalize(dom, ctx, c.algorithm[0], kMethods[magic].op, &p) == 0)
+                fail(ctx, "NotSupportedError", "This browser cannot do that operation with that algorithm");
+            break;
         }
     }
+    params_free(ctx, &p);
     call_free(ctx, &c);
-    return d_promise_settled(ctx, result);
+    return settle_later(dom, ctx, result);
 }
 
 static JSValue key_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
@@ -446,15 +1444,15 @@ static JSValue key_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     switch (magic) {
     case K_TYPE: return JS_NewString(ctx, key->type);
     case K_EXTRACTABLE: return JS_NewBool(ctx, key->extractable);
-    case K_ALGORITHM: return JS_DupValue(ctx, key->algorithm->value);
-    default: return JS_DupValue(ctx, key->usages->value);
+    case K_ALGORITHM: return JS_DupValue(ctx, key->algorithm);
+    default: return JS_DupValue(ctx, key->usage_list);
     }
 }
 
 int d_subtle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSValueConst crypto_prototype)
 {
     static const JSClassDef subtle_class = {.class_name = "SubtleCrypto"};
-    static const JSClassDef key_class = {.class_name = "CryptoKey"};
+    static const JSClassDef key_class = {.class_name = "CryptoKey", .finalizer = key_finalizer, .gc_mark = key_mark};
     JSValue prototype;
     JSClassID id = os64_js_class_id(&subtle_slot);
     if (d_interface_class(dom, ctx, global, id, &subtle_class, &prototype) < 0) return -1;
@@ -472,6 +1470,10 @@ int d_subtle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSVal
     JSValue subtle = JS_NewObjectClass(ctx, (int)id);
     dom->subtle = d_retain(dom, ctx, subtle);
     if (dom->subtle == NULL) return -1;
+    JSValue queue = JS_NewArray(ctx);
+    if (JS_IsException(queue)) return -1;
+    dom->subtle_queue = d_retain(dom, ctx, queue);
+    if (dom->subtle_queue == NULL) return -1;
     JS_SetOpaque(subtle, &subtle_mark);
     /* crypto.c shapes Crypto's members, this one among them (d_idl_members). */
     return d_accessor(dom, ctx, crypto_prototype, "subtle", key_member, W_SUBTLE, false);

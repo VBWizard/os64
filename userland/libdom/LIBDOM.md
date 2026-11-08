@@ -1364,25 +1364,32 @@ that is not a secure context has neither interface nor `crypto.subtle`.
 All twelve methods are here; what they can do is `subtle_core.c`'s
 registry, and an algorithm it does not hold is NotSupportedError, a
 browser's answer for one it does not know. The registry holds `digest`'s
-SHA-1, SHA-256, SHA-384 and SHA-512; DEBTS.md books the rest, by
-WEB_CRYPTO.md § 2's tiers. Each method converts its arguments as WebIDL
+SHA-1, SHA-256, SHA-384 and SHA-512, and AES-CTR, AES-CBC, AES-GCM and
+HMAC: their keys generated, imported and exported raw and as JWK,
+`encrypt`, `decrypt`, `sign` and `verify`, and `wrapKey`/`unwrapKey`
+through the cipher's `encrypt` and `decrypt`, as § 14.3.11 allows an
+algorithm with no wrap operation of its own. A CryptoKey's material is
+engine heap, zeroed by its finalizer; its `algorithm` and `usages` are
+made once, at the key's birth, so every read is the same object. DEBTS.md
+books the rest, by WEB_CRYPTO.md § 2's tiers. Each method converts its arguments as WebIDL
 does (a CryptoKey argument is told by its class, a BufferSource by
 `d_buffer_source` and refused when resizable, a KeyFormat and each KeyUsage
-against Level 2's enumerations, a usage sequence item by item as it is
+against the editor's draft's enumerations whole, a usage sequence item by item as it is
 iterated, and a JsonWebKey every member in order), normalizes its
 algorithm (§ 18.4.4: a string is the name; an object's `name` is read as
 the Algorithm dictionary and again as the algorithm's own, so a getter
 there runs twice), and only then reads the bytes it was given. **Every failure is a
 rejection, never a throw**, as WebIDL makes one for a promise-returning
-operation: the work is done on the call and the promise returned already
-settled (`d_promise_settled`), which is DIVERGENCES.md's row, and why a
-buffer is read where it lies rather than copied. The BearSSL objects it
+operation: the work is done on the call and the answer queued, in call
+order, for one binding timer of no delay that settles every answer
+waiting (`settle_later`, `settle_drain`), which is DIVERGENCES.md's row,
+and why a buffer is read where it lies rather than copied. The BearSSL objects it
 calls are linked into libdom.so privately (`library.mk`'s `LIBDOM_BEARSSL`,
 the same files `tools/subtle_bearssl.sh` lists for the host harnesses), so
 libtls.so exports nothing new. Its interfaces' members, and Crypto's, have
 WebIDL's shape (`d_idl_members`: operations enumerable, accessors named
-"get x"). `tools/test_subtle_core_host.sh` holds the core to FIPS 180-2's
-vectors; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
+"get x"). `tools/test_subtle_core_host.sh` holds the core to FIPS 180-2's,
+NIST SP 800-38A's, the GCM paper's and RFC 4231's vectors; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
 
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),

@@ -553,6 +553,13 @@ struct os64_dom {
      * `resizable` getter, taken before any page ran (crypto.c). */
     DValue *crypto_getters[2];
     DValue *subtle; /* crypto.subtle's one SubtleCrypto (subtle.c) */
+    /* crypto.subtle's answers waiting for the task that settles them
+     * (subtle.c's THE SETTLE QUEUE): an array of [settle, value] entries,
+     * the waiting ones at [subtle_head, subtle_tail), and whether that task
+     * is queued. */
+    DValue *subtle_queue;
+    uint32_t subtle_head, subtle_tail;
+    bool subtle_drain_queued;
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;
@@ -1213,6 +1220,13 @@ int d_view_kind(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
  * refuses for an argument without [AllowResizable]: 1, 0, or -1 with an
  * exception pending. Read through the engine's own getters. */
 int d_resizable_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
+/* `length` bytes of the host's entropy into `out` (crypto.c; the hook is
+ * options.entropy), through a scratch zeroed before it is freed: false
+ * with an OperationError pending when the host refuses or has no hook (a
+ * QuotaExceededError when the scratch cannot be had), and `out` untouched.
+ * The one source getRandomValues, randomUUID and crypto.subtle's keys
+ * draw from. */
+bool d_crypto_entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length);
 /* WebIDL's shape for an interface's members, in place on its prototype
  * (window.c): each own operation enumerable, as d_method makes none, and
  * each attribute's functions named "get x" and "set x", as d_accessor makes

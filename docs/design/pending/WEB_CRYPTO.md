@@ -20,6 +20,12 @@ Fable disagreed with any of them, your leans are my leans"): `subtle`
 ships, in these tiers; ECDH stays in tier 3; RSA-PSS and X25519 stay out,
 booked as cheap; I build it, a PR per tier.*
 
+*Tier 2 revisited question 5 on evidence: promises returned already
+settled made a page's chain of calls one long run of microtasks, and
+WPT's tier-2 pages, thousands of calls each, ran into the script
+deadline. The work is still done on the call; the promise now
+settles from a task (§ 5). The input-in-place dividend is unchanged.*
+
 ## 1. Why now, and what pages ask
 
 Two pages on the P5 die on the missing member today:
@@ -129,7 +135,28 @@ does not know.
   `k`, `n`, `e`, `d` and the rest are base64url without padding, and
   refused otherwise. All of those are DataError. Raw AES keys are 128,
   192 or 256 bits and nothing else (DataError); an HMAC key with no
-  `length` is the hash's block size long, and `length` 0 is a TypeError.
+  `length` is the hash's block size long (generated) or the data's
+  (imported), and `length` 0 is refused: an OperationError from
+  `generateKey`, a DataError from `importKey`, which is also what a
+  `length` past the data, or short of its last byte, gets.
+- **Where the spec leaves the answer open**, tier 2 chose, as a web
+  semantics call (decided, and stated here so a reviewer can disagree
+  with one): an AES-CTR input longer than the counter's `length` bits can
+  count without repeating a block is an OperationError, since repeated
+  keystream gives away the plaintext; an empty AES-GCM `iv` is an
+  OperationError (SP 800-38D asks at least one bit; the spec names no
+  bound below); an HMAC `length` that is no multiple of 8 is taken, the
+  key's last byte holding that many bits and the rest zero; base64url is
+  read strictly, unpadded and in the URL alphabet only, with no stray
+  bits past the last byte (DataError otherwise); and a JWK `key_ops` that
+  names a usage twice is a DataError (RFC 7517 § 4.3 says it must not);
+  an HMAC key `generateKey` is asked to make longer than 65,536 bytes
+  (what `getRandomValues` fills at most) is an OperationError, the
+  spec's "the key generation step fails"; and an unwrapped JWK is read
+  as the spec's new global object would read it (own members only,
+  arrays by index, nothing a page put on `Object.prototype`), except that
+  a member that should be a string and is an object or array is a
+  DataError rather than that object's string.
 - **Promises settle "in parallel"**: the spec computes off the event loop
   and queues a task to settle. See § 5.
 - **Inputs** are `BufferSource`: an ArrayBuffer or any view, its bytes
@@ -151,8 +178,13 @@ does not know.
   dictionary on the spot, every member in order, as WebIDL converts a
   dictionary argument, so its getters run before the algorithm is
   normalized, and a usage sequence is converted item by item as it is
-  iterated. KeyFormat and KeyUsage are Level 2's enumerations; the draft's
-  newer formats and usages go with its newer algorithms. The interfaces' members, and
+  iterated. KeyFormat and KeyUsage are the editor's draft's enumerations
+  whole, its newer formats (`raw-public`, `raw-private`, `raw-seed`,
+  `raw-secret`) and usages (`encapsulateKey` and the three like it)
+  included, though no algorithm built here takes them: the enumeration
+  decides only whether a value converts, and WPT holds the draft's IDL,
+  so `encapsulateKey` on an AES key is a SyntaxError (a usage the
+  algorithm refuses), not a TypeError (no such usage). The interfaces' members, and
   Crypto's, are shaped as WebIDL makes them (operations enumerable,
   accessors named "get x") by `d_idl_members`, which `window.c` already
   did for Window's own members and now shares. It joins
@@ -228,18 +260,35 @@ does not know.
   blinding) comes through the hook `crypto.c` already uses,
   `options.entropy`, never a second source. A refused hook is an
   OperationError, as it is for `getRandomValues`.
-- **Key material** is held in `d_alloc`'d memory owned by the CryptoKey,
-  zeroed before it is freed, and never copied into a JavaScript value
-  unless `exportKey` is asked for an extractable key.
+- **Key material** is held in engine-heap memory (`js_malloc`, so a page's
+  keys count against its script heap) owned by the CryptoKey, zeroed
+  before it is freed (the key's finalizer), and never copied into a
+  JavaScript value unless `exportKey` or `wrapKey` is asked for an
+  extractable key. Every scratch copy a step makes (a generated key's
+  random bytes, a decoded JWK `k`, a key serialized for wrapping) is
+  zeroed before it is freed too.
 
 ## 5. Divergences, stated
 
-- **Promises settle as the call returns, not from a task** (question 5,
-  answered). The work is done on the call and the promise returned
-  already settled, as `Blob.text()` does (`d_promise_settled`). A page
-  sees the result one microtask later instead of one task later; nothing
-  in the corpus can tell, and WPT's tests await. DIVERGENCES.md row.
-- **Its dividend: input is read where it lies.** The spec copies a
+- **The work is done on the call; the promise settles from a task.** The
+  spec works in parallel and queues a task to settle. Here the answer is
+  computed before the method returns and waits in a queue, in call
+  order, for the task that settles it: one binding timer of no delay
+  settles every answer waiting when it runs (subtle.c's THE SETTLE
+  QUEUE), so a page's reaction runs in a task of its own, as it does in
+  other browsers. Question 5's first answer returned the promise already
+  settled, as `Blob.text()` does; tier 2 measured what that costs: a
+  page that chains thousands of calls (WPT's tier-2 pages, and any page
+  that encrypts in a loop) became one run of microtasks that the script
+  deadline ended. One timer for the whole queue, not one per call,
+  because the page's timers have a quota (4096 pending) and a page with
+  thousands of calls in flight must still be able to `setTimeout`, and
+  because the promises must settle in the order they were made. Only a
+  page whose own timers hold the whole quota finds no task to be had;
+  its promise is settled on the call, which is the old behaviour and
+  still the right answer, only sooner. DIVERGENCES.md row.
+- **The dividend of doing the work on the call: input is read where it
+  lies.** The spec copies a
   BufferSource's bytes because its work runs in parallel and the page
   could change them meanwhile. Here no page code runs between the read
   and the result, so `digest`, `encrypt`, `decrypt`, `sign`, `verify` and
@@ -332,6 +381,36 @@ does not know.
   (IFRAME.md keeps popups out; a design about windows).
 - `tools/pages/webcrypto-tier1.html`: 29 checks, every one PASS in yonder
   and in a Chrome-equivalent engine (node's WebCrypto).
+**Tier 2, as proved (2026-11-07):**
+- `tools/test_subtle_core_host.sh`: 111 checks. NIST SP 800-38A's CBC
+  (F.2.1, with its block of padding) and CTR (F.5.1); the GCM paper's
+  test case 4, with a 96-bit tag and with an 8-byte IV; AES-CTR counters
+  of 8, 4 and 16 bits wrapping within themselves and a 1-bit counter
+  refusing its third block (values node's WebCrypto computed; a mutant
+  that wrapped at the byte proved the 4- and 16-bit cases necessary);
+  CBC's bad pad and ragged input; RFC 4231's and RFC 2202's HMAC case 1
+  for all four hashes; RFC 4648's base64url; the registry's rows.
+- WPT WebCryptoAPI: the tier-2 pages (`encrypt_decrypt/` for AES,
+  `sign_verify/hmac`, the symmetric `import_export/` and `generateKey/`
+  files, `crypto_key_cached_slots`, `export-key-error-order`) pass but
+  for tests that need tier 3 (AES-KW, HKDF, PBKDF2, an ECDSA key); 5381
+  of them join `[required]`, and with the modern switch off 5950
+  required tests fail, as they should.
+- The DOM host's window subset, with tier 2's cases: a round trip in
+  each AES mode, RFC 4231's HMAC, `verify`'s three answers, a key's
+  properties, JWK export and back, `wrapKey`/`unwrapKey` as raw and as
+  JWK, the refusals, a result arriving after a microtask queued with
+  the call, wrapping under each mode, HMAC lengths within a byte and
+  past what is generated, an unwrapped JWK read past a polluted
+  `Object.prototype`, and 5000 calls in flight that settle in call order
+  while the page's own `setTimeout` still works. A cold reader's six
+  findings (a 32-bit length sum that wrapped, the timer quota, the
+  unwrapped JWK's realm, an error name, keystream and a MAC left on the
+  stack, the tests for each) are fixed in the same change.
+- `tools/pages/webcrypto-tier2.html`: 50 checks, every one PASS in
+  yonder's window (run through the WPT runner as a testharness page) and
+  in node's WebCrypto, which spells InvalidAccessError
+  `InvalidAccessException` in two of them; the spec's name is the page's.
 - **A validation page per tier, and a live page** (Chris, 2026-11-07:
   each tier shows it works on a page, ours or one on the Internet). Ours
   are `tools/pages/webcrypto-tier<n>.html`, which ship to `/tests/pages`:
@@ -377,5 +456,6 @@ does not know.
 4. **Private BearSSL objects in libdom.** *Answered (Fable): yes, the PIC
    objects, for the host harness's sake (§ 4).*
 5. **Settled promises.** *Answered (Fable): yes, with the DIVERGENCES row
-   and the consequences in § 3 and § 5.*
+   and the consequences in § 3 and § 5. Revisited in tier 2 on evidence
+   (§ 5): the promise settles from a task; the work stays on the call.*
 6. **Who builds it**: I do, tier by tier, each tier its own PR. *(Chris)*
