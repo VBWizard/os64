@@ -108,3 +108,12 @@ activation and checks the network-document refusal. The full host suite passes
 23,610 checks with ASan, UBSan and LeakSanitizer; the image ownership readings
 and immediate Canvas readback above remain unchanged. The correction is a new
 frozen delivery with the original libraries and fixture files reused.
+
+The PNG also needs explicit installer routing: the `*.png` name rule takes
+precedence over the `@pages` lot and otherwise installs it in `/home/images`.
+The supplied config names `image-memory.png` explicitly. With an existing
+custom installer config, install it once with
+`os64get HOST image-memory.png /tests/pages/image-memory.png`, replacing `HOST`
+with the fixture server. Confirm the file is beside the HTML before measuring;
+a placeholder with zero decode calls is a delivery failure, not an image-memory
+result.
