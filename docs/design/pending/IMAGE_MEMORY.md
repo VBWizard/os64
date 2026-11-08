@@ -1,6 +1,6 @@
 # Yonder image memory and responsive sources
 
-Quinn, 2026-11-08. Draft for Fable's review before implementation.
+Quinn, 2026-11-08. Reviewed implementation plan; round 2 decisions incorporated.
 Source baseline: `c21b57b370f1068f79d8867a5588ef24b999e064` (`origin/userland`).
 Branch: `codex/yonder-image-memory-design`.
 
@@ -21,8 +21,9 @@ fixed. In particular, connecting the cache does not free decoded pixels.
 This is a userland design spanning Yonder, libpage and libdom, with existing
 libway, libgarb/libflow and libimage facilities reused where their contracts
 fit. It proposes no kernel change or increase to the picture-memory limit.
-Implementation starts after design review. The review should settle the
-ownership and first-Canvas-draw questions in section 9 before code begins.
+The review decisions are recorded in section 9. The implementation branch also
+includes the page-memory census from `51e8d2f0`; use its owner accounts rather
+than introduce a second process-memory census.
 
 ## 2. What the evidence establishes
 
@@ -144,8 +145,14 @@ the existing task machinery. A subsequent change to `rel="stylesheet"` activates
 the normal stylesheet lifecycle, consuming a compatible preload response.
 
 Keep document-owned preload state separate from applied `Sheet` entries.
-Bound its entries and retained bytes; account for ownership transfer when the
-stylesheet consumes it. Reuse fetch/cache and owed-event facilities, without
+Bound the table to 64 entries and 16 MiB of retained response bodies per
+document, with the existing per-sheet body cap. Refuse excess preloads with a
+diagnostic; do not silently claim success. Account for ownership transfer when
+the stylesheet consumes a response. Retain the successful response until
+consumption even when the HTTP cache accepted it: a cache clear must not turn
+that handoff into a second download. Pending entries admit one compatible
+consumer; failed entries hand off their failure. Release unconsumed entries at
+document teardown. Reuse fetch/cache and owed-event facilities, without
 equating preload completion with stylesheet parsing or import completion.
 Preserve request identity, policy and failure information through handoff;
 reuse must respect URL, destination, mode, credentials and integrity compatibility.
@@ -153,9 +160,11 @@ Keep obsolete completions from activating a newer link request.
 
 The style-only scope includes request attributes, applicable media/type checks,
 link mutation reporting and the bindings necessary to support that lifecycle.
-Audit existing support before adding another observer or event queue. Review
-unsupported policy/integrity behavior explicitly rather than silently treating
-an unverified response as usable. Other preload destinations, HTTP early hints
+Audit existing support before adding another observer or event queue. Yonder does not verify SRI. Nonempty `fetch()` integrity already fails closed;
+link/script attributes are not enforced. Preserve that distinction in the
+existing SRI debt. Style preloads use the link profile, with no claim of a
+verified digest; do not weaken fetch or introduce a preload-only hash checker. Implement supported request policy and
+CORS checks before sharing a response. Other preload destinations, HTTP early hints
 and the existing modulepreload debts remain outside this slice.
 
 The decisive fixture uses a large image and a preloaded stylesheet that sets its
@@ -179,9 +188,10 @@ Do not accept a display-only cache entry as evidence of readable Canvas pixels.
 `cache_open` explicitly rejects entries without response headers. The first
 native request may therefore fetch again even after a display request has
 cached the URL. Subsequent eligible native requests should reuse their complete
-cache entries. Header-aware sharing with display fetches is a separate decision
-if measurement shows this first duplicate remains material; it is not silently
-promised by passing the pointer.
+cache entries. Migrate display fetches to the same header-aware native image fetch path
+before I3 lends their pixels. Preserve response taint across the redirect
+chain: the final URL cannot establish origin-clean. I1 alone does not promise
+that migration or shared ownership.
 
 Tests must distinguish a fresh cache hit, conditional validation, and a full
 transfer. Include cache disabled, missing/evicted entries, legacy headerless
@@ -219,7 +229,10 @@ the existing sources of those facts; do not multiply page zoom twice. Evaluate
 `sizes` with the existing media and CSS-length machinery. Document unsupported
 expressions and apply the standard fallback behavior. Treat `auto` with its
 eligibility rules; general native lazy loading remains section 7 work, so this
-slice must not pretend every image is eligible for automatic sizing.
+slice must not pretend every image is eligible for automatic sizing. An
+unusable `auto` is skipped: `sizes="auto, 400px"` falls through to `400px`;
+only exhaustion falls back to `100vw`. Lazy loading and auto-sizing remain
+unimplemented, without declaring author markup invalid.
 
 Keep the selected URL, source density and selection generation with the
 element's request state. Consumers must not return to the literal `src` after
@@ -246,58 +259,54 @@ the event/task paths already implemented.
 
 ### I3 Avoid retaining full rasters for metadata-only access
 
-Give native image acquisition two representations of a completed source:
+Read dimensions, completion and load/error state from the element's selected
+request. Do not create a native request to answer metadata queries. Match the
+current element selection and generation; a `pic_of` association from the last
+layout rebuild is insufficient after a mutation. Detached images use the same
+selection/request contract without requiring a displayed box.
 
-| Representation | Owned content | Response to metadata acquisition | Response to pixel acquisition |
-|---|---|---|---|
-| Metadata ready | Validated dimensions/status/security result plus bounded recoverable source content | Return metadata without allocating a full grid | Materialize a stable pixel view |
-| Pixels ready | Full default-frame pixels, or the existing SVG document/render machinery | Return the same metadata | Lend pixels until release |
+The pixel contract is synchronous for a completely available selected request:
 
-For raster sources, the initial bounded worker may still perform a full decode
-to establish successful decoding, then release its full grid for a metadata-only
-consumer. Header-only format probing is not required by this slice, and a
-plausible header must not convert an invalid image into a successful load.
+1. Lend an existing full-size display raster when compatible. No second decode
+   or pixel allocation is needed. The shared image fetch path supplies its
+   response taint; a no-CORS redirect through another origin stays tainted even
+   if the final URL returns to the page's origin.
+2. For a reduced or budget-refused raster, retain the exact encoded response
+   and decode from it synchronously on the first pixel acquisition. Charge
+   encoded backing beside the rasters in `PICTURES_KEPT_MAX`. Retain promoted
+   pixels for repeat draws; measure the first decode separately.
+3. Release redundant backing only when a retained representation can fulfill
+   the same contract. Do not evict an active request's sole reconstruction
+   source in this first slice. HTTP cache fallback after pressure eviction is
+   conditional follow-up work, not permission to return PENDING from a loaded
+   image's one-shot draw.
 
-Retain the exact encoded response for a metadata-ready raster, owned by the
-selected request and charged to the page's image account. Keep the response's
-origin/CORS verdict with it. Use the existing encoded-body limit and charge
-retained backing against `PICTURES_KEPT_MAX`; do not create an additional
-unbudgeted pool. This backing is active document state, distinct
-from the HTTP cache; it must remain reconstructible if the HTTP cache is
-cleared, evicted, stale or disabled. It is not permission to persist a forbidden
-HTTP cache entry or expose an opaque body to script. Data URLs already have
-retained source text: account for text and decoded bytes without hiding a second
-copy. A mutable file or network URL is not an immutable reconstruction source.
+Encoded retention is needed for the reduced/refused subset, not as a second
+compressed copy for every metadata accessor. Preserve bytes before freeing the
+worker's body: later script access cannot reliably recreate an old response
+from a mutable URL. Retaining only after script access is safe only when an
+existing immutable representation can supply it. Data URL text and decoded
+bytes must be counted honestly. GIF needs its default frame, not the currently
+animated frame; SVG keeps its secure-static document and rendering contract.
 
-The proposed first implementation promotes a raster on its first pixel
-acquisition by decoding its retained bytes synchronously, without network I/O
-or script reentry. It then keeps those pixels for later draws, as the native
-path does today. This is deliberately not a per-draw decode or an eviction
-cache. It bounds the architectural change while making first-use decode
-latency an explicit measurement. If that latency is unacceptable, revise the
-promotion design before broad rollout rather than return pending and omit a
-draw. Allocation/refusal follows the provider's explicit error contract and
-must leave metadata and source ownership intact.
+Reserve temporary synchronous decoding beside worker admission. An allocation
+or admission refusal must use the provider's explicit refusal contract and
+leave successful metadata and reconstruction ownership intact. Loans remain
+stable through release; navigation, replacement and obsolete completions must
+release each owner once without lending a stale selection.
 
-Admission must cover old retained bytes, temporary decoding and the new grid
-during promotion. Serialize and reserve synchronous work separately from worker
-admission so it cannot exceed the intended memory envelope unnoticed. After a
-successful promotion, a raster's encoded backing can be released if no other
-representation depends on it: this slice does not evict the full grid later.
-On failure, retain the prior valid state. Pins protect borrowed views until
-release; page teardown and source replacement release each owner once.
+The decisive fixture draws once in `onload`, reads back immediately, and never
+draws again. Include reduced, NOT_KEPT, HTTP-cache-cleared/disabled, changed
+server bytes and source-changed-during-fetch variants. Do not replay missed
+draws: the transform, clip, compositing and readback order belong to the call.
 
-Display reduction continues independently. Reuse an existing resource's
-metadata/content only when its request identity and security evidence are
-compatible; do not erase the current mode separation just to reduce a counter.
-Generic cross-mode content deduplication is not required here. If a native
-metadata request still obtains its own compressed copy, measure and account for
-that copy honestly.
-
-Keep GIF default-frame Canvas behavior distinct from display animation, and
-preserve SVG's secure-static document ownership. Neither a GIF sequence nor an
-SVG tree should be forced into a raster-only metadata abstraction. This slice
-does not add GIF sequence shrinking or broader SVG support.
+Canvas density mapping follows [HTML drawing images](https://html.spec.whatwg.org/multipage/canvas.html#drawing-images):
+source coordinates use the image's natural dimensions, accounting for source
+pixel density; default destination size treats a CSS image pixel as one Canvas
+unit. Keep the physical raster grid separate from that coordinate space. A 2x
+fixture must check both default draw size and an explicit source crop. Gate the
+DOM side with `current-pixel-density/basic.html` and add a focused Canvas
+readback fixture; those DOM tests alone do not prove Canvas cropping.
 
 ## 5. Measurement before and after the immediate changes
 
@@ -441,7 +450,7 @@ add precise cross-references instead of silently rewriting their evidence.
 | Images far from the viewport dominate loading and memory | Native `loading="lazy"` support | Scheduling, observation margins, load dependencies, auto-sizing and interaction with scripts |
 | Full-resolution JPEG decoding dominates peak bytes/time after source selection | Scaled JPEG decoding at supported reduction factors | Quality, dimensions, decoder limits, and display versus Canvas resolution requirements |
 | Animated GIF sequences dominate retained memory | Reduced animation sequences | Disposal/restore semantics, frame timing and zoom growth |
-| Separate native/display compressed bodies or fetches remain significant | Shared header-aware resource ownership | Request identity, credentials, origin/CORS proof, variation and cache compatibility |
+| Encoded backing remains significant after shared ownership | Reclaim inactive request owners | Immutable reconstruction, references, cache loss and synchronous drawing |
 | SVG preparation or storage dominates | Existing SVG retention/cache follow-ups | SVG document validity, render budgets and secure-static behavior |
 
 An HTTP cache is not an ownership guarantee for an already loaded image. It can
@@ -471,27 +480,26 @@ source on every frame are not proposed remedies.
   outstanding image interfaces, document-load behavior and export limitations.
   The rendered-image-dimension and image-button-dimension rows remain separate.
 
-## 9. Questions for Fable's review
+## 9. Review decisions
 
-1. Does the proposed split between selected request, encoded backing and pixel
-   representation fit the current page/provider ownership, or should a shared
-   resource owner be introduced before I2/I3? Identify the smallest necessary
-   interface change rather than assume complete image-lifecycle replacement.
-2. Is synchronous first-pixel promotion from bounded immutable bytes an acceptable
-   initial tradeoff? If not, specify how an already loaded image remains drawable
-   synchronously without retaining full pixels for every metadata-only consumer.
-3. Are I2's binding, density, environment and mutation boundaries sufficient to
-   prevent display/native disagreement? Which focused WPT cases should gate it?
-4. Does I1 correctly preserve header/CORS requirements while accepting that
-   legacy display-cache entries can miss? Is any additional shared fetch work a
-   prerequisite, rather than a measurable later improvement?
-5. Are the retained/working accounts and baseline measurements sufficient to
-   decide whether eviction is needed, without hiding compressed backing or
-   synchronous decoder scratch outside the totals?
-6. Is I0's separate preload state and stylesheet handoff the right bounded
-   addition to the existing link/event machinery? Confirm its policy checks,
-   completion events and memory ownership before implementation.
+The [round 1 response](IMAGE_MEMORY_REVIEW_RESPONSE.md) explains the traced
+first-draw failure and the request-identity, auto-sizes and measurement points.
+Round 2 accepted those corrections and shared metadata ownership. Shared
+header-aware display fetching is a prerequisite of I3, not a later optimization.
 
-The review outcome should approve or revise the immediate slices and their
-measurement gate. Section 7 is a set of conditional options, not an instruction
-to implement a larger cache system before those results exist.
+Use the existing WPT pin `a699fb16`; add
+`html/semantics/embedded-content/the-img-element/` to its sparse checkout.
+The focused set includes `srcset/` parsing and selection, resize reselection,
+`sizes/sizes-dynamic-001.html`, `sizes/parse-a-sizes-attribute-standards-mode.html`,
+auto-sizes fallback cases, `current-pixel-density/basic.html` and `error.html`,
+`update-the-image-data/`, `update-the-source-set.html`, `relevant-mutations.html`,
+`source-relevant-mutations.html`, `invalid-src.html`, `img-complete-invalid-url.html`,
+`already-loaded-image-sync-width.html`, `available-images.html` and
+`available-images-onload.html`. Record individual expectations and outcomes;
+blob and lazy-loading cases remain outside this slice.
+
+Two conservative ownership choices make the first implementation testable:
+retain a preload outcome until consumption regardless of HTTP cache acceptance,
+and retain an active image's sole reconstruction backing. Pressure eviction
+that can lose a successful one-shot draw is excluded. Measure their actual
+cost before proposing either eviction policy.
