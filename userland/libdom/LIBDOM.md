@@ -1321,11 +1321,14 @@ assignment of anything but null makes it window's own data property),
 their arguments, `captureEvents` and `releaseEvents` no-ops,
 `clientInformation` the navigator, `frameElement` null,
 `crossOriginIsolated` false, `originAgentCluster` true, `origin` the page's
-origin serialized (`d_origin`), and `isSecureContext` whether the page's
-address is potentially trustworthy as libway judges it
-(`way_url_trustworthy`, the browser's one copy of that judgement: about:blank
-and about:srcdoc are, as Secure Contexts says, so a binding with no address
-is; the name `localhost` is not). `ononline`,
+origin serialized (`d_origin`), and `isSecureContext` whether the page is a
+secure context (`d_secure_context`): its address potentially trustworthy as
+libway judges it (`way_url_trustworthy`, the browser's one copy of that
+judgement: about:blank and about:srcdoc are, as Secure Contexts says, so a
+binding with no address is; the name `localhost` is not), or a `file:` page,
+which Chrome and Firefox both count secure, though Secure Contexts would not
+(a file URL's origin is opaque). The mixed-content rules ask libway's
+judgement alone, so a file page's secure context changes nothing there. `ononline`,
 `onoffline` and `onlanguagechange` are window's handler slots, whose events
 nothing fires. `queueMicrotask(callback)` queues a job on the engine's one
 job queue, in order with promise reactions; the checkpoint that drains the
@@ -1343,8 +1346,8 @@ answers it (anything that is no view, or a view of a resizable buffer, is a
 TypeError, as WebIDL makes one without `[AllowResizable]`; then a float
 array or a DataView is TypeMismatchError, and more bytes
 QuotaExceededError), and
-`randomUUID`, [SecureContext], answers a version 4 UUID. `subtle` is absent
-(WINDOW_DOCUMENT.md, ruling 1). The bytes are the host's
+`randomUUID`, [SecureContext], answers a version 4 UUID. `subtle` is
+[SecureContext] too, and § crypto.subtle below. The bytes are the host's
 (`options.entropy`; yonder's is libtls's door, `os64_tls_entropy`, over
 `/dev/random`), written into the binding's scratch and copied into the
 array only when the host says every one is there: a host that refuses, or
@@ -1354,6 +1357,32 @@ the buffer's resizability are read through the engine's own getters, taken
 before any page ran (a resizable buffer's view keeps the length it was made
 with in the engine's books, so it could not be filled whole), so nothing
 here runs page code.
+
+**`crypto.subtle`** (`subtle.c`, over the pure `subtle_core.c`;
+WEB_CRYPTO.md): `SubtleCrypto` and `CryptoKey`, [SecureContext], so a page
+that is not a secure context has neither interface nor `crypto.subtle`.
+All twelve methods are here; what they can do is `subtle_core.c`'s
+registry, and an algorithm it does not hold is NotSupportedError, a
+browser's answer for one it does not know. The registry holds `digest`'s
+SHA-1, SHA-256, SHA-384 and SHA-512; DEBTS.md books the rest, by
+WEB_CRYPTO.md § 2's tiers. Each method converts its arguments as WebIDL
+does (a CryptoKey argument is told by its class, a BufferSource by
+`d_buffer_source` and refused when resizable, a KeyFormat and each KeyUsage
+against Level 2's enumerations, a usage sequence item by item as it is
+iterated, and a JsonWebKey every member in order), normalizes its
+algorithm (§ 18.4.4: a string is the name; an object's `name` is read as
+the Algorithm dictionary and again as the algorithm's own, so a getter
+there runs twice), and only then reads the bytes it was given. **Every failure is a
+rejection, never a throw**, as WebIDL makes one for a promise-returning
+operation: the work is done on the call and the promise returned already
+settled (`d_promise_settled`), which is DIVERGENCES.md's row, and why a
+buffer is read where it lies rather than copied. The BearSSL objects it
+calls are linked into libdom.so privately (`library.mk`'s `LIBDOM_BEARSSL`,
+the same files `tools/subtle_bearssl.sh` lists for the host harnesses), so
+libtls.so exports nothing new. Its interfaces' members, and Crypto's, have
+WebIDL's shape (`d_idl_members`: operations enumerable, accessors named
+"get x"). `tools/test_subtle_core_host.sh` holds the core to FIPS 180-2's
+vectors; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
 
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),

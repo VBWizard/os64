@@ -14,6 +14,13 @@ LIBDOM_SRCS += libdom/attr.c
 LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
 # P1-W: window as a browsing context, its BarProps and external; crypto.
 LIBDOM_SRCS += libdom/browsing.c libdom/crypto.c
+# crypto.subtle (WEB_CRYPTO.md): the binding and its pure core, over the
+# BearSSL objects it calls, linked privately (libtls.so exports none of them;
+# tools/subtle_bearssl.sh is the host harnesses' copy of this list, held equal
+# to it by tools/test_subtle_core_host.sh).
+LIBDOM_SRCS += libdom/subtle.c libdom/subtle_core.c
+LIBDOM_BEARSSL := $(patsubst %,$(OBJ)/pic/libtls/upstream/src/%.c.o,hash/sha1 hash/sha2small hash/sha2big \
+    codec/dec32be codec/enc32be codec/dec64be codec/enc64be)
 # The frames row (IFRAME.md): HTMLIFrameElement.
 LIBDOM_SRCS += libdom/frames.c
 # P2a: a script's failures, as the window's error and rejection events.
@@ -60,6 +67,7 @@ LIBDOM_SRCS += libdom/observer.c
 # The Streams standard: streams.js, carried in streams.c's object.
 LIBDOM_SRCS += libdom/streams.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
+$(OBJ)/pic/libdom/subtle_core.c.o: LIBDOM_CFLAGS += -I$(CURDIR)/libtls/upstream/inc
 # The compiler's dependency list does not see an .incbin.
 $(OBJ)/pic/libdom/streams.c.o: libdom/streams.js
 LIBDOM_SO := $(BIN)/libdom.so
@@ -68,11 +76,11 @@ LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libcanvas/
 
 # libway for one copy of the origin and CORS rules (way/origin.h), which a
 # script's Headers and Request ask as the fetch job does.
-$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO) \
+$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBDOM_BEARSSL) $(LIBJS_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO) \
     link/lib.ld GNUmakefile libdom/library.mk tools/app_bases.py
 	$(LD) --defsym LIB_BASE=$(LIBDOM_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libdom.so --no-undefined --no-as-needed \
-	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO)
+	    -o $@ $(LIBDOM_OBJS) $(LIBDOM_BEARSSL) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBXML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBCANVAS_SO) $(LIBSVG_SO) $(LIBPNG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBOS64_SO)
 
 $(OBJ)/pic/libdom/%.c.o: libdom/%.c $(LIBJS_GENERATED)/.prepared libdom/library.mk GNUmakefile
 	@mkdir -p "$(@D)"

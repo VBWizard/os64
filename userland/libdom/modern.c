@@ -96,8 +96,9 @@ static const DModernRow kModern[] = {
                            NULL},
      d_bars_install},
     {(const char *const[]){"external", "External", NULL}, d_external_install},
-    /* After the encoding row, whose DataView it tells a view by. */
-    {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
+    /* After the encoding row, whose DataView it tells a view by. The two
+     * interfaces are [SecureContext], installed on a secure page only. */
+    {(const char *const[]){"crypto", "Crypto", "SubtleCrypto", "CryptoKey", NULL}, d_crypto_install},
     {(const char *const[]){"DOMPointReadOnly", "DOMPoint", NULL}, d_point_install},
     {(const char *const[]){"DOMRectReadOnly", "DOMRect", "DOMRectList", NULL}, d_rect_install},
     {(const char *const[]){"SVGGraphicsElement", "SVGGeometryElement", NULL}, d_svg_geometry_install},
