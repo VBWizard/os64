@@ -6,8 +6,9 @@ Branch: `codex/yonder-image-memory-design`.
 
 ## 1. Decision and scope
 
-Keep the existing reduction of display pictures. Fix native image HTTP-cache
-integration, implement responsive image selection, and stop metadata-only
+Keep the existing reduction of display pictures. Support stylesheet preloading
+so image sizing rules actually arrive, fix native image HTTP-cache integration,
+implement responsive image selection, and stop metadata-only
 JavaScript access from retaining a separate full-resolution bitmap. Measure
 each change before deciding whether Yonder needs a broader decoded-image
 eviction policy, native lazy loading, or decoder work.
@@ -52,6 +53,32 @@ The saved Unsplash HTML has 92 `img` elements, all with `srcset`; 71 also say
 alongside smaller responsive candidates. This is concrete input for selection
 tests, not proof that all 653 runtime entries came from the initial markup.
 Scripts can add images and change their sources during a visit.
+
+### A layout prerequisite found on Microsoft Design
+
+Record `microsoft.design-1684`, for `/wallpapers/`, reports a 2522 by 1257 page
+viewport at 100% zoom. Its picture account reads `1021M`, with 76 entries,
+52 retained and 24 refused; only one raster is reduced, saving 29 KiB.
+This newer record supplies an aggregate picture-memory reading, but still no
+split between display and native representations.
+
+The saved markup loads `noncritical.min.css` using
+`rel="preload" as="style"` with an inline handler that clears `onload` and
+sets `rel='stylesheet'`. The stylesheet is absent from the saved resource
+index. The alternative stylesheet link is inside `noscript`, and scripting is
+enabled. Inspection of the referenced stylesheet finds the missing `w-full`,
+`h-full`, `object-cover`, `max-w-full` and `overflow-hidden` utility rules used
+by the gallery. Those rules are absent from the saved inline CSS.
+
+The missing stylesheet strongly explains original image dimensions driving
+layout and horizontal overflow. Confirm causality with a controlled stylesheet
+comparison before calling the layout fixed. Large full-width images can still
+be intentional: a 16:9 image at this viewport width is about 1419 pixels tall.
+Source selection cannot substitute for the missing sizing rules.
+
+This belongs in the immediate feature as I0: restoring layout is a prerequisite
+for interpreting this page's image-memory measurements. It is a generic
+stylesheet-preload slice, not a Microsoft-specific markup rewrite.
 
 ### Code paths at the baseline
 
@@ -105,6 +132,41 @@ size depends on its content and codec. Keeping recoverable encoded content can
 save memory, but needs its own account and a measured decode-latency tradeoff.
 
 ## 4. Immediate implementation
+
+### I0 Support stylesheet preload and its activation event
+
+Implement connected `link rel="preload" as="style"` requests, including links
+inserted or changed by script. Follow the
+[HTML preload contract](https://html.spec.whatwg.org/multipage/links.html#link-type-preload):
+preloading must not apply CSS or become a render-blocking stylesheet, and does
+not itself delay document load. Deliver the preload completion event through
+the existing task machinery. A subsequent change to `rel="stylesheet"` activates
+the normal stylesheet lifecycle, consuming a compatible preload response.
+
+Keep document-owned preload state separate from applied `Sheet` entries.
+Bound its entries and retained bytes; account for ownership transfer when the
+stylesheet consumes it. Reuse fetch/cache and owed-event facilities, without
+equating preload completion with stylesheet parsing or import completion.
+Preserve request identity, policy and failure information through handoff;
+reuse must respect URL, destination, mode, credentials and integrity compatibility.
+Keep obsolete completions from activating a newer link request.
+
+The style-only scope includes request attributes, applicable media/type checks,
+link mutation reporting and the bindings necessary to support that lifecycle.
+Audit existing support before adding another observer or event queue. Review
+unsupported policy/integrity behavior explicitly rather than silently treating
+an unverified response as usable. Other preload destinations, HTTP early hints
+and the existing modulepreload debts remain outside this slice.
+
+The decisive fixture uses a large image and a preloaded stylesheet that sets its
+display width. Assert that CSS has no effect before activation; the inline
+`onload` handler changes `rel`; then the image fits its container. Also exercise
+ordinary stylesheet links, errors, a retained handler across activation, dynamic
+insertion, replacement during fetch, navigation, incompatible request identities
+and cache-disabled operation. Compatible handoff must not depend solely on the
+HTTP cache or download the body again. Assert preload and stylesheet event
+lifecycles separately, rather than suppressing a legitimate second event or
+allowing an activation loop.
 
 ### I1 Connect native image requests to the HTTP cache
 
@@ -242,10 +304,14 @@ does not add GIF sequence shrinking or broader SVG support.
 ### M0 Establish the baseline before changing behavior
 
 Add observational counters first, then run the original behavior at the same
-source revision. Preserve that instrumented baseline. Run I1, I2 and I3 with
+source revision. Preserve that instrumented baseline. Run I0, I1, I2 and I3 with
 the same inputs so improvements can be attributed separately. Include a final
-combined run; do not compare only the start and finish of three simultaneous
+combined run; do not compare only the start and finish of four simultaneous
 changes.
+
+For Microsoft Design, record stylesheet activation and geometry before the
+memory comparison. Separate savings caused by restored CSS from savings caused
+by source selection or representation changes.
 
 Keep counters in the existing diagnostics. Record current values and peaks
 separately, and explain the boundary of each account:
@@ -287,6 +353,8 @@ counters. The core matrix is:
 6. Fresh cache, stale validation, cleared/disabled cache and non-cacheable replies;
    include changed server bytes at the same URL while an old loaded image lives.
 7. GIF, SVG, data and local-file sources; hidden and removed image elements.
+8. Stylesheet preload with event-driven activation, compared with an ordinary
+   stylesheet link supplying the same bytes and an intentionally inactive preload.
 
 Use fixed viewport, zoom, settings and scripted interactions. Record source
 commit, fixture hashes, browser binary identity and cache condition. Separate
@@ -296,8 +364,9 @@ from steady animation so a large first-draw stall cannot disappear in an average
 
 ### M2 Revisit a small hardware cohort
 
-Use Unsplash desktop wallpapers, Wallpapercat desktop and a Reddit image feed,
-plus the local metadata-only and Canvas fixtures. Agree the live actions and
+Use Microsoft Design wallpapers as the I0 layout gate, then Unsplash desktop
+wallpapers, Wallpapercat desktop and a Reddit image feed, plus the local
+metadata-only and Canvas fixtures. Agree the live actions and
 viewport once, and keep them fixed for the comparison. Live-site content drift
 makes these corroborating observations; fixture results supply causal evidence.
 
@@ -309,6 +378,10 @@ keep it stable across the hardware readings.
 
 ### Exit criteria for the immediate work
 
+- The stylesheet-preload fixture activates through its real event handler and
+  matches the ordinary-stylesheet control's image geometry. The Microsoft page
+  records its main stylesheet as applied; compare horizontal extent and image
+  boxes before attributing its remaining size or memory behavior to images.
 - Eligible warm native requests avoid a body download; a required validation
   is recorded separately. Security and cache-policy tests remain correct.
 - Responsive fixtures request the expected candidate and retain correct natural
@@ -332,7 +405,8 @@ larger mechanism needs evidence from the next section.
 
 ## 6. Validation and implementation order
 
-Order: M0 counters and baseline; I1 cache integration; I2 selection; I3 metadata
+Order: M0 counters and baseline; I0 stylesheet preload; I1 cache integration;
+I2 selection; I3 metadata
 representation; M1 comparisons after each; M2 combined hardware comparison;
 review the result. I2 and I3 share selected-request state, so design that
 interface before implementing either rather than merging two incompatible
@@ -360,7 +434,7 @@ add precise cross-references instead of silently rewriting their evidence.
 
 ## 7. Work considered only after measurement
 
-| Evidence after I1–I3 | Possible follow-up | Contract that needs a separate design |
+| Evidence after I0–I3 | Possible follow-up | Contract that needs a separate design |
 |---|---|---|
 | Large idle Canvas/native grids dominate retained memory | Bounded decoded-image cache with eviction and pinning | Immutable recoverable backing, synchronous draw, first-use latency, and encoded-byte budget |
 | Removed/replaced sources accumulate through a long visit | Release unreferenced resource owners or reclaim inactive entries | Element and pending-request references, Canvas loans, animations and document teardown |
@@ -390,7 +464,7 @@ source on every frame are not proposed remedies.
   not the destination Canvas bitmap model.
 - [SCRIPT_CACHE.md](SCRIPT_CACHE.md): fetch cache keys, stored headers,
   validation and live CORS checks. I1 must use these contracts.
-- [LOAD_EVENTS.md](LOAD_EVENTS.md): task delivery conventions to reuse, without
+- [LOAD_EVENTS.md](LOAD_EVENTS.md): task delivery conventions to reuse for I0, without
   treating stylesheet/script completion as a complete image lifecycle design.
 - [DEBTS.md](../../../DEBTS.md): the Canvas image-source lifecycle row is the
   closest existing entry. Close only the portions actually implemented; retain
@@ -414,6 +488,9 @@ source on every frame are not proposed remedies.
 5. Are the retained/working accounts and baseline measurements sufficient to
    decide whether eviction is needed, without hiding compressed backing or
    synchronous decoder scratch outside the totals?
+6. Is I0's separate preload state and stylesheet handoff the right bounded
+   addition to the existing link/event machinery? Confirm its policy checks,
+   completion events and memory ownership before implementation.
 
 The review outcome should approve or revise the immediate slices and their
 measurement gate. Section 7 is a set of conditional options, not an instruction
