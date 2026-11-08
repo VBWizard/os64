@@ -130,15 +130,22 @@ enum {
  * algorithm and usages objects are made with the key and answered on every
  * read, as `[[algorithm_cached]]` and `[[usages_cached]]` are. */
 typedef struct {
-    const char *type;       /* "secret": a key pair's halves are tier 3's (WEB_CRYPTO.md § 2) */
+    const char *type;       /* kSecret, kPublic or kPrivate */
     subtle_alg_t alg, hash; /* hash: HMAC's */
-    uint32_t bits;          /* the key's length in bits */
-    uint8_t *material;      /* (bits + 7) / 8 bytes, the bits past `bits` zero */
+    subtle_curve_t curve;   /* an elliptic curve key's */
+    uint32_t bits;          /* a secret key's length in bits */
+    /* A secret key: (bits + 7) / 8 bytes, the bits past `bits` zero. An
+     * elliptic curve key: its point, which a private key holds after its
+     * scalar d (subtle_core.h), so either half can be exported. */
+    uint8_t *material;
     size_t bytes;
     bool extractable;
     uint32_t usages;
     JSValue algorithm, usage_list;
 } DKey;
+
+/* CryptoKey.type's three values; a key's `type` is one of these pointers. */
+static const char kSecret[] = "secret", kPublic[] = "public", kPrivate[] = "private";
 
 static void wipe(uint8_t *p, size_t length)
 {
@@ -533,16 +540,21 @@ typedef struct {
     bool has_iterations;
     uint32_t iterations;
     subtle_alg_t hash;
+    int curve; /* namedCurve: a subtle_curve_t, or -1 for a name none is */
     /* BufferSource members: held while the dictionary converts, then
      * replaced by private copies of their bytes (normalize). */
     JSValue iv, counter, additional, salt, info;
+    /* ECDH's `public`: the CryptoKey, held for the call, and its slots. */
+    JSValue peer;
+    const DKey *peer_key;
 } SubtleParams;
 
 static void params_init(SubtleParams *p)
 {
     os64_memset(p, 0, sizeof(*p));
     p->hash = SUBTLE_ALG_COUNT;
-    p->iv = p->counter = p->additional = p->salt = p->info = JS_UNDEFINED;
+    p->curve = -1;
+    p->iv = p->counter = p->additional = p->salt = p->info = p->peer = JS_UNDEFINED;
 }
 
 static void params_free(JSContext *ctx, SubtleParams *p)
@@ -552,7 +564,9 @@ static void params_free(JSContext *ctx, SubtleParams *p)
     JS_FreeValue(ctx, p->additional);
     JS_FreeValue(ctx, p->salt);
     JS_FreeValue(ctx, p->info);
-    p->iv = p->counter = p->additional = p->salt = p->info = JS_UNDEFINED;
+    JS_FreeValue(ctx, p->peer);
+    p->iv = p->counter = p->additional = p->salt = p->info = p->peer = JS_UNDEFINED;
+    p->peer_key = NULL;
 }
 
 /* A dictionary's member, read with [[Get]] so an inherited one counts;
@@ -627,6 +641,40 @@ static int hash_member(JSContext *ctx, JSValueConst algorithm, JSValue *out)
         hash = text;
     }
     *out = hash;
+    return 0;
+}
+
+/* A required NamedCurve member (a DOMString): the curve it names, or -1
+ * for one that names none here, which each operation answers in its own
+ * place (generateKey after the usages, importKey first). */
+static int curve_member(JSContext *ctx, JSValueConst algorithm, int *curve)
+{
+    JSValue v = member(ctx, algorithm, "namedCurve");
+    if (JS_IsException(v)) return -1;
+    if (JS_IsUndefined(v)) return fail(ctx, "TypeError", "The algorithm needs a namedCurve");
+    size_t length;
+    const char *name = JS_ToCStringLen(ctx, &length, v);
+    JS_FreeValue(ctx, v);
+    if (name == NULL) return -1;
+    *curve = subtle_curve_named(name, length);
+    JS_FreeCString(ctx, name);
+    return 0;
+}
+
+/* ECDH's required `public` member, a CryptoKey (a TypeError for anything
+ * else, as WebIDL converts an interface type), held in `p`. */
+static int peer_member(JSContext *ctx, JSValueConst algorithm, SubtleParams *p)
+{
+    JSValue v = member(ctx, algorithm, "public");
+    if (JS_IsException(v)) return -1;
+    if (JS_IsUndefined(v)) return fail(ctx, "TypeError", "ECDH needs the other party's public key");
+    const DKey *k = JS_GetOpaque(v, os64_js_class_id(&key_slot));
+    if (k == NULL) {
+        JS_FreeValue(ctx, v);
+        return fail(ctx, "TypeError", "ECDH's public is a CryptoKey");
+    }
+    p->peer = v;
+    p->peer_key = k;
     return 0;
 }
 
@@ -712,6 +760,16 @@ static int normalize(os64_dom_t *dom, JSContext *ctx, JSValueConst algorithm, su
         status = number_member(ctx, algorithm, "iterations", 4294967295.0, true, &p->has_iterations, &p->iterations);
         if (status == 0) status = buffer_member(dom, ctx, algorithm, "salt", true, &p->salt);
         break;
+    case SUBTLE_DICT_EC_KEY_GEN:
+    case SUBTLE_DICT_EC_KEY_IMPORT:
+        status = curve_member(ctx, algorithm, &p->curve);
+        break;
+    case SUBTLE_DICT_ECDSA:
+        if (hash_member(ctx, algorithm, &hash) < 0) return -1;
+        break;
+    case SUBTLE_DICT_ECDH_DERIVE:
+        status = peer_member(ctx, algorithm, p);
+        break;
     }
     if (status == 0 && !JS_IsUndefined(hash)) {
         SubtleParams h;
@@ -755,17 +813,34 @@ static bool is_kdf(subtle_alg_t alg)
     return alg == SUBTLE_ALG_HKDF || alg == SUBTLE_ALG_PBKDF2;
 }
 
+/* The elliptic curve algorithms: a key pair on a named curve. */
+static bool is_ec(subtle_alg_t alg)
+{
+    return alg == SUBTLE_ALG_ECDSA || alg == SUBTLE_ALG_ECDH;
+}
+
 /* The usages each algorithm's keys may carry (its generate and import
- * steps refuse any other with SyntaxError). */
+ * steps refuse any other with SyntaxError); a key pair's, both halves'. */
 static uint32_t usages_allowed(subtle_alg_t alg)
 {
     switch (alg) {
     case SUBTLE_ALG_AES_KW: return U_WRAP | U_UNWRAP;
-    case SUBTLE_ALG_HMAC: return U_SIGN | U_VERIFY;
+    case SUBTLE_ALG_HMAC:
+    case SUBTLE_ALG_ECDSA: return U_SIGN | U_VERIFY;
     case SUBTLE_ALG_HKDF:
-    case SUBTLE_ALG_PBKDF2: return U_DERIVE_KEY | U_DERIVE_BITS;
+    case SUBTLE_ALG_PBKDF2:
+    case SUBTLE_ALG_ECDH: return U_DERIVE_KEY | U_DERIVE_BITS;
     default: return is_aes(alg) ? U_ENCRYPT | U_DECRYPT | U_WRAP | U_UNWRAP : 0;
     }
+}
+
+/* The usages one half of an elliptic curve pair may carry: ECDSA's public
+ * key verifies and its private key signs; ECDH's private key derives, and
+ * its public key carries none, being only the other party's input. */
+static uint32_t ec_usages(subtle_alg_t alg, bool private_key)
+{
+    if (alg == SUBTLE_ALG_ECDSA) return private_key ? U_SIGN : U_VERIFY;
+    return private_key ? U_DERIVE_KEY | U_DERIVE_BITS : 0;
 }
 
 static int define(JSContext *ctx, JSValueConst object, const char *name, JSValue value)
@@ -789,42 +864,45 @@ static JSValue usage_array(JSContext *ctx, uint32_t usages)
     return array;
 }
 
-/* A new secret CryptoKey holding `material` (taken, whatever happens):
- * its algorithm object is the key algorithm dictionary as an object, its
- * name the registry's spelling (AesKeyAlgorithm: name, length;
- * HmacKeyAlgorithm: name, hash {name}, length; a derivation's KeyAlgorithm:
- * name alone). */
-static JSValue key_new(JSContext *ctx, subtle_alg_t alg, subtle_alg_t hash, uint32_t bits, uint8_t *material,
-                       size_t bytes, bool extractable, uint32_t usages)
+/* A new CryptoKey shaped as `shape` says, holding its material (taken,
+ * whatever happens): its algorithm object is the key algorithm dictionary
+ * as an object, its name the registry's spelling (AesKeyAlgorithm: name,
+ * length; HmacKeyAlgorithm: name, hash {name}, length; EcKeyAlgorithm:
+ * name, namedCurve; a derivation's KeyAlgorithm: name alone). */
+static JSValue key_make(JSContext *ctx, const DKey *shape)
 {
     DKey *k = js_mallocz(ctx, sizeof(*k));
     if (k == NULL) {
-        wipe(material, bytes);
-        js_free(ctx, material);
+        wipe(shape->material, shape->bytes);
+        js_free(ctx, shape->material);
         return JS_EXCEPTION;
     }
-    *k = (DKey){.type = "secret", .alg = alg, .hash = hash, .bits = bits, .material = material, .bytes = bytes,
-                .extractable = extractable, .usages = usages, .algorithm = JS_UNDEFINED,
-                .usage_list = JS_UNDEFINED};
+    *k = *shape;
+    k->algorithm = k->usage_list = JS_UNDEFINED;
     JSValue key = JS_NewObjectClass(ctx, (int)os64_js_class_id(&key_slot));
     if (JS_IsException(key)) {
-        wipe(material, bytes);
-        js_free(ctx, material);
+        wipe(k->material, k->bytes);
+        js_free(ctx, k->material);
         js_free(ctx, k);
         return key;
     }
     JS_SetOpaque(key, k);
+    subtle_alg_t alg = k->alg;
     JSValue algorithm = JS_NewObject(ctx);
     int status = JS_IsException(algorithm) ? -1 : define(ctx, algorithm, "name", JS_NewString(ctx, subtle_alg_name(alg)));
     if (status == 0 && alg == SUBTLE_ALG_HMAC) {
         JSValue h = JS_NewObject(ctx);
-        status = JS_IsException(h) ? -1 : define(ctx, h, "name", JS_NewString(ctx, subtle_alg_name(hash)));
+        status = JS_IsException(h) ? -1 : define(ctx, h, "name", JS_NewString(ctx, subtle_alg_name(k->hash)));
         status = status == 0 ? define(ctx, algorithm, "hash", h) : (JS_FreeValue(ctx, h), -1);
     }
-    if (status == 0 && !is_kdf(alg)) status = define(ctx, algorithm, "length", JS_NewUint32(ctx, bits));
+    if (status == 0 && is_ec(alg)) {
+        status = define(ctx, algorithm, "namedCurve", JS_NewString(ctx, subtle_curve_name(k->curve)));
+    } else if (status == 0 && !is_kdf(alg)) {
+        status = define(ctx, algorithm, "length", JS_NewUint32(ctx, k->bits));
+    }
     k->algorithm = algorithm;
     if (status == 0) {
-        k->usage_list = usage_array(ctx, usages);
+        k->usage_list = usage_array(ctx, k->usages);
         if (JS_IsException(k->usage_list)) {
             k->usage_list = JS_UNDEFINED;
             status = -1;
@@ -835,6 +913,16 @@ static JSValue key_new(JSContext *ctx, subtle_alg_t alg, subtle_alg_t hash, uint
         return JS_EXCEPTION;
     }
     return key;
+}
+
+/* A new secret CryptoKey: key_make's, for the algorithms whose keys are
+ * bytes. */
+static JSValue key_new(JSContext *ctx, subtle_alg_t alg, subtle_alg_t hash, uint32_t bits, uint8_t *material,
+                       size_t bytes, bool extractable, uint32_t usages)
+{
+    DKey shape = {.type = kSecret, .alg = alg, .hash = hash, .bits = bits, .material = material, .bytes = bytes,
+                  .extractable = extractable, .usages = usages};
+    return key_make(ctx, &shape);
 }
 
 /* `bits` bits of `data` as a key's material: a copy of the bytes that
@@ -868,10 +956,82 @@ static const char *jwk_alg(const DKey *k, char *out, size_t cap)
     return out;
 }
 
-/* generateKey's operation (§ 27-31's "generate key"): the usage check, the
- * length, the random key, then the method's empty-usages check. */
+/* An elliptic curve key, public or private: its material made from the
+ * point and, for a private key, d before it (DKey). */
+static JSValue ec_key_new(JSContext *ctx, subtle_alg_t alg, subtle_curve_t curve, const uint8_t *d,
+                          const uint8_t *point, bool extractable, uint32_t usages)
+{
+    size_t size = subtle_ec_size(curve), scalar = d != NULL ? size : 0, bytes = scalar + 1 + 2 * size;
+    uint8_t *material = js_malloc(ctx, bytes);
+    if (material == NULL) return JS_EXCEPTION;
+    if (d != NULL) os64_memcpy(material, d, size);
+    os64_memcpy(material + scalar, point, 1 + 2 * size);
+    DKey shape = {.type = d != NULL ? kPrivate : kPublic, .alg = alg, .hash = SUBTLE_ALG_COUNT, .curve = curve,
+                  .material = material, .bytes = bytes, .extractable = extractable, .usages = usages};
+    return key_make(ctx, &shape);
+}
+
+/* The point of an elliptic curve key, public or private. */
+static const uint8_t *ec_point(const DKey *k)
+{
+    return k->material + (k->type == kPrivate ? subtle_ec_size(k->curve) : 0);
+}
+
+/* ECDSA's and ECDH's generate key (§ 23.7.3, § 24.4.1): the usage check,
+ * the curve, the pair, then the method's check that the private key has a
+ * usage (§ 14.3.6 step 9). The CryptoKeyPair dictionary is an object whose
+ * members are defined in WebIDL's order, privateKey first. The public key
+ * is always extractable. */
+static JSValue generate_pair(os64_dom_t *dom, JSContext *ctx, const SubtleParams *p, bool extractable,
+                             uint32_t usages)
+{
+    if (usages & ~usages_allowed(p->alg)) {
+        fail(ctx, "SyntaxError", "That usage is not this algorithm's");
+        return JS_EXCEPTION;
+    }
+    if (p->curve < 0) {
+        fail(ctx, "NotSupportedError", "This browser does not support that curve");
+        return JS_EXCEPTION;
+    }
+    subtle_curve_t curve = (subtle_curve_t)p->curve;
+    uint8_t seed[48], d[SUBTLE_EC_SIZE_MAX], point[SUBTLE_EC_POINT_MAX];
+    if (!d_crypto_entropy(dom, ctx, seed, sizeof(seed))) return JS_EXCEPTION;
+    bool made = subtle_ec_generate(curve, seed, sizeof(seed), d);
+    wipe(seed, sizeof(seed));
+    if (!made) {
+        fail(ctx, "OperationError", "The key pair could not be generated");
+        return JS_EXCEPTION;
+    }
+    subtle_ec_public(curve, d, point);
+    uint32_t private_usages = usages & ec_usages(p->alg, true);
+    JSValue result = JS_EXCEPTION;
+    if (private_usages == 0) {
+        fail(ctx, "SyntaxError", "A private key needs at least one usage");
+    } else {
+        JSValue private_key = ec_key_new(ctx, p->alg, curve, d, point, extractable, private_usages);
+        JSValue public_key = JS_IsException(private_key) ? JS_EXCEPTION
+                                                          : ec_key_new(ctx, p->alg, curve, NULL, point, true,
+                                                                       usages & ec_usages(p->alg, false));
+        JSValue pair = JS_IsException(public_key) ? JS_EXCEPTION : JS_NewObject(ctx);
+        if (!JS_IsException(pair) && define(ctx, pair, "privateKey", JS_DupValue(ctx, private_key)) == 0 &&
+            define(ctx, pair, "publicKey", JS_DupValue(ctx, public_key)) == 0) {
+            result = pair;
+        } else {
+            JS_FreeValue(ctx, pair);
+        }
+        JS_FreeValue(ctx, private_key);
+        JS_FreeValue(ctx, public_key);
+    }
+    wipe(d, sizeof(d));
+    return result;
+}
+
+/* generateKey's operation (§ 23-31's "generate key"): a key pair is
+ * generate_pair's; a secret key is the usage check, the length, the random
+ * key, then the method's empty-usages check. */
 static JSValue generate_key(os64_dom_t *dom, JSContext *ctx, const SubtleParams *p, bool extractable, uint32_t usages)
 {
+    if (is_ec(p->alg)) return generate_pair(dom, ctx, p, extractable, usages);
     bool aes = is_aes(p->alg);
     if (usages & ~usages_allowed(p->alg)) {
         fail(ctx, "SyntaxError", "That usage is not this algorithm's");
@@ -969,13 +1129,113 @@ static JSValue import_kdf_key(JSContext *ctx, const SubtleParams *p, int format,
     return key_new(ctx, p->alg, SUBTLE_ALG_COUNT, (uint32_t)raw_length * 8, material, kept, false, usages);
 }
 
+/* A JWK member that is base64url of exactly `length` bytes (JWA § 6.2's
+ * fixed-width coordinates and d) into `out`. */
+static bool jwk_fixed(DText t, uint8_t *out, size_t length)
+{
+    uint8_t decoded[SUBTLE_EC_SIZE_MAX + 2];
+    size_t got;
+    bool ok = t.text != NULL && t.length <= (sizeof(decoded) * 4 + 2) / 3 &&
+              subtle_base64url_decode(t.text, t.length, decoded, &got) && got == length;
+    if (ok) os64_memcpy(out, decoded, length);
+    wipe(decoded, sizeof(decoded));
+    return ok;
+}
+
+/* ECDSA's and ECDH's import key (§ 23.7.4, § 24.4.3), in their order: the
+ * curve, then per format the usages a public or private key may carry
+ * (SyntaxError), then the key data (DataError). A private key's public
+ * point, where the data carries one (a JWK's x and y, a pkcs8's public
+ * key), must be d's own: a pair that does not match is no key (DataError;
+ * the spec leaves the check to "a valid key", and other browsers make it).
+ * A compressed point is refused, which the spec allows. */
+static JSValue import_ec_key(JSContext *ctx, const SubtleParams *p, int format, const uint8_t *raw,
+                             size_t raw_length, const DJwk *j, bool extractable, uint32_t usages)
+{
+    if (p->curve < 0) {
+        fail(ctx, "NotSupportedError", "This browser does not support that curve");
+        return JS_EXCEPTION;
+    }
+    subtle_curve_t curve = (subtle_curve_t)p->curve, found = curve;
+    size_t size = subtle_ec_size(curve);
+    uint8_t d[SUBTLE_EC_SIZE_MAX], point[SUBTLE_EC_POINT_MAX], own[SUBTLE_EC_POINT_MAX];
+    const uint8_t *given = NULL;
+    size_t given_length = 0;
+    bool private_key = format == F_PKCS8 || (format == F_JWK && j->s[J_D].text != NULL);
+    JSValue result = JS_EXCEPTION;
+    if (format != F_SPKI && format != F_RAW && format != F_PKCS8 && format != F_JWK) {
+        fail(ctx, "NotSupportedError", "This algorithm's keys are not imported in that format");
+        return JS_EXCEPTION;
+    }
+    if (usages & ~ec_usages(p->alg, private_key)) {
+        fail(ctx, "SyntaxError", "That usage is not this key's");
+        return JS_EXCEPTION;
+    }
+    const char *bad = NULL;
+    if (format == F_SPKI) {
+        if (!subtle_ec_spki_decode(raw, raw_length, &found, &given, &given_length))
+            bad = "That is not an elliptic curve key's spki";
+    } else if (format == F_RAW) {
+        given = raw;
+        given_length = raw_length;
+    } else if (format == F_PKCS8) {
+        if (!subtle_ec_pkcs8_decode(raw, raw_length, &found, d, &given, &given_length))
+            bad = "That is not an elliptic curve key's pkcs8";
+    } else {
+        static const char *const kAlgs[SUBTLE_CURVE_COUNT] = {"ES256", "ES384", "ES512"};
+        if (!text_is(j->s[J_KTY], "EC")) {
+            bad = "An elliptic curve key's JWK has kty \"EC\"";
+        } else if (usages != 0 && j->s[J_USE].text != NULL &&
+                   !text_is(j->s[J_USE], p->alg == SUBTLE_ALG_ECDSA ? "sig" : "enc")) {
+            bad = "The JWK's use does not allow these usages";
+        } else if (j->has_ops && !key_ops_admit(j, usages)) {
+            bad = "The JWK's key_ops do not allow these usages";
+        } else if (j->has_ext && !j->ext && extractable) {
+            bad = "The JWK says the key is not extractable";
+        } else if (!text_is(j->s[J_CRV], subtle_curve_name(curve))) {
+            bad = "The JWK's crv is not the algorithm's namedCurve";
+        } else if (p->alg == SUBTLE_ALG_ECDSA && j->s[J_ALG].text != NULL && !text_is(j->s[J_ALG], kAlgs[curve])) {
+            bad = "The JWK's alg is not this curve's";
+        } else if (!jwk_fixed(j->s[J_X], point + 1, size) || !jwk_fixed(j->s[J_Y], point + 1 + size, size) ||
+                   (private_key && !jwk_fixed(j->s[J_D], d, size))) {
+            bad = "A JWK's x, y and d are the curve's size, unpadded base64url";
+        } else {
+            point[0] = 0x04;
+            given = point;
+            given_length = 1 + 2 * size;
+        }
+    }
+    if (bad == NULL && found != curve) bad = "The key is not on the algorithm's namedCurve";
+    if (bad == NULL && private_key && !subtle_ec_scalar_ok(curve, d)) bad = "That is not a private key on its curve";
+    if (bad == NULL && private_key) {
+        subtle_ec_public(curve, d, own);
+        if (given != NULL && (given_length != 1 + 2 * size || os64_memcmp(given, own, given_length) != 0))
+            bad = "The public key is not the private key's";
+        given = own;
+        given_length = 1 + 2 * size;
+    }
+    if (bad == NULL && !subtle_ec_point_ok(curve, given, given_length)) bad = "That is not a point on the curve";
+    if (bad != NULL) {
+        fail(ctx, "DataError", bad);
+    } else if (private_key && usages == 0) {
+        fail(ctx, "SyntaxError", "A private key needs at least one usage");
+    } else {
+        result = ec_key_new(ctx, p->alg, curve, private_key ? d : NULL, given, extractable, usages);
+    }
+    wipe(d, sizeof(d));
+    return result;
+}
+
 /* importKey's operation, the method's part after normalization included
- * (§ 14.3.9 steps 8-12; § 27-34's "import key"), for importKey, unwrapKey
- * and deriveKey: `raw` (raw_length bytes) for a byte format, `j` for JWK. */
+ * (§ 14.3.9 steps 8-12; § 23-34's "import key"), for importKey, unwrapKey
+ * and deriveKey: `raw` (raw_length bytes) for a byte format, `j` for JWK.
+ * A derivation's key is import_kdf_key's, an elliptic curve key
+ * import_ec_key's. */
 static JSValue import_key(JSContext *ctx, const SubtleParams *p, int format, const uint8_t *raw, size_t raw_length,
                           const DJwk *j, bool extractable, uint32_t usages)
 {
     if (is_kdf(p->alg)) return import_kdf_key(ctx, p, format, raw, raw_length, extractable, usages);
+    if (is_ec(p->alg)) return import_ec_key(ctx, p, format, raw, raw_length, j, extractable, usages);
     bool aes = is_aes(p->alg);
     if (p->alg == SUBTLE_ALG_HMAC && p->has_length && p->length == 0) {
         fail(ctx, "DataError", "An HMAC key's length cannot be zero");
@@ -1079,7 +1339,75 @@ static int key_exports(JSContext *ctx, const DKey *k)
     return is_kdf(k->alg) ? fail(ctx, "NotSupportedError", "This algorithm's keys are never exported") : 0;
 }
 
-/* exportKey's checks and operation (§ 14.3.10 steps 6-7; § 27-31's
+/* The longest unpadded base64url of an elliptic curve coordinate, and its NUL. */
+#define EC_TEXT_MAX ((SUBTLE_EC_SIZE_MAX * 4 + 2) / 3 + 1)
+
+/* An elliptic curve key's JWK members (JWA § 6.2.1-2): x and y, and d for
+ * a private key (`d` left empty for a public one). */
+static void ec_jwk_texts(const DKey *k, char x[EC_TEXT_MAX], char y[EC_TEXT_MAX], char d[EC_TEXT_MAX])
+{
+    size_t size = subtle_ec_size(k->curve);
+    const uint8_t *point = ec_point(k);
+    subtle_base64url_encode(point + 1, size, x);
+    subtle_base64url_encode(point + 1 + size, size, y);
+    d[0] = '\0';
+    if (k->type == kPrivate) subtle_base64url_encode(k->material, size, d);
+}
+
+/* An elliptic curve key in a byte format (§ 23.7.5, § 24.4.4) into `out`
+ * (SUBTLE_EC_DER_MAX bytes): spki and raw are a public key's and pkcs8 a
+ * private key's, InvalidAccessError for the other half. */
+static int ec_key_bytes(JSContext *ctx, const DKey *k, int format, uint8_t *out, size_t *length)
+{
+    if (format != F_SPKI && format != F_RAW && format != F_PKCS8)
+        return fail(ctx, "NotSupportedError", "This algorithm's keys are not exported in that format");
+    if ((format == F_PKCS8) != (k->type == kPrivate))
+        return fail(ctx, "InvalidAccessError", format == F_PKCS8 ? "Only a private key is exported as pkcs8"
+                                                                 : "Only a public key is exported in that format");
+    size_t point_length = 1 + 2 * subtle_ec_size(k->curve);
+    if (format == F_PKCS8) {
+        *length = subtle_ec_pkcs8_encode(k->curve, k->material, ec_point(k), out);
+    } else if (format == F_SPKI) {
+        *length = subtle_ec_spki_encode(k->curve, ec_point(k), out);
+    } else {
+        os64_memcpy(out, ec_point(k), point_length);
+        *length = point_length;
+    }
+    return 0;
+}
+
+/* An elliptic curve key's export (§ 23.7.5, § 24.4.4): a byte format's
+ * ArrayBuffer, or the JWK object, its members crv, d, ext, key_ops, kty,
+ * x, y in WebIDL's order. */
+static JSValue export_ec_key(JSContext *ctx, const DKey *k, int format)
+{
+    if (format != F_JWK) {
+        uint8_t bytes[SUBTLE_EC_DER_MAX];
+        size_t length;
+        if (ec_key_bytes(ctx, k, format, bytes, &length) < 0) return JS_EXCEPTION;
+        JSValue buffer = JS_NewArrayBufferCopy(ctx, bytes, length);
+        wipe(bytes, sizeof(bytes));
+        return buffer;
+    }
+    char x[EC_TEXT_MAX], y[EC_TEXT_MAX], d[EC_TEXT_MAX];
+    ec_jwk_texts(k, x, y, d);
+    JSValue jwk = JS_NewObject(ctx);
+    int status = JS_IsException(jwk) ? -1 : define(ctx, jwk, "crv", JS_NewString(ctx, subtle_curve_name(k->curve)));
+    if (status == 0 && d[0] != '\0') status = define(ctx, jwk, "d", JS_NewString(ctx, d));
+    if (status == 0) status = define(ctx, jwk, "ext", JS_NewBool(ctx, k->extractable));
+    if (status == 0) status = define(ctx, jwk, "key_ops", usage_array(ctx, k->usages));
+    if (status == 0) status = define(ctx, jwk, "kty", JS_NewString(ctx, "EC"));
+    if (status == 0) status = define(ctx, jwk, "x", JS_NewString(ctx, x));
+    if (status == 0) status = define(ctx, jwk, "y", JS_NewString(ctx, y));
+    wipe((uint8_t *)d, sizeof(d));
+    if (status < 0) {
+        JS_FreeValue(ctx, jwk);
+        return JS_EXCEPTION;
+    }
+    return jwk;
+}
+
+/* exportKey's checks and operation (§ 14.3.10 steps 6-7; § 23-31's
  * "export key"): an ArrayBuffer or the JWK object. */
 static JSValue export_key(JSContext *ctx, const DKey *k, int format)
 {
@@ -1088,6 +1416,7 @@ static JSValue export_key(JSContext *ctx, const DKey *k, int format)
         fail(ctx, "InvalidAccessError", "This key is not extractable");
         return JS_EXCEPTION;
     }
+    if (is_ec(k->alg)) return export_ec_key(ctx, k, format);
     if (format == F_RAW) return JS_NewArrayBufferCopy(ctx, k->material, k->bytes);
     if (format != F_JWK) {
         fail(ctx, "NotSupportedError", "This algorithm's keys are not exported in that format");
@@ -1124,22 +1453,35 @@ static JSValue export_key(JSContext *ctx, const DKey *k, int format)
  * what it was). js_malloc'd, *length bytes. */
 static char *jwk_json(JSContext *ctx, const DKey *k, bool pad, size_t *length)
 {
-    char alg[16];
-    size_t key = subtle_base64url_size(k->bytes), cap = key + 168;
+    char alg[16], x[EC_TEXT_MAX], y[EC_TEXT_MAX], d[EC_TEXT_MAX];
+    bool ec = is_ec(k->alg);
+    size_t key = ec ? 3 * EC_TEXT_MAX : subtle_base64url_size(k->bytes), cap = key + 168;
     char *json = js_malloc(ctx, cap);
     if (json == NULL) return NULL;
-    size_t at = (size_t)os64_snprintf(json, cap, "{\"alg\":\"%s\",\"ext\":%s,\"k\":\"", jwk_alg(k, alg, sizeof(alg)),
-                                      k->extractable ? "true" : "false");
-    subtle_base64url_encode(k->material, k->bytes, json + at);
-    at += key;
-    at += (size_t)os64_snprintf(json + at, cap - at, "\",\"key_ops\":[");
+    size_t at;
+    if (ec) {
+        ec_jwk_texts(k, x, y, d);
+        at = (size_t)os64_snprintf(json, cap, "{\"crv\":\"%s\",", subtle_curve_name(k->curve));
+        if (d[0] != '\0') at += (size_t)os64_snprintf(json + at, cap - at, "\"d\":\"%s\",", d);
+        wipe((uint8_t *)d, sizeof(d));
+        at += (size_t)os64_snprintf(json + at, cap - at, "\"ext\":%s,\"key_ops\":[", k->extractable ? "true" : "false");
+    } else {
+        at = (size_t)os64_snprintf(json, cap, "{\"alg\":\"%s\",\"ext\":%s,\"k\":\"", jwk_alg(k, alg, sizeof(alg)),
+                                   k->extractable ? "true" : "false");
+        subtle_base64url_encode(k->material, k->bytes, json + at);
+        at += key;
+        at += (size_t)os64_snprintf(json + at, cap - at, "\",\"key_ops\":[");
+    }
     bool first = true;
     for (int i = 0; i < USAGE_COUNT; i++) {
         if (!(k->usages & (1u << i))) continue;
         at += (size_t)os64_snprintf(json + at, cap - at, "%s\"%s\"", first ? "" : ",", kUsages[i]);
         first = false;
     }
-    at += (size_t)os64_snprintf(json + at, cap - at, "],\"kty\":\"oct\"}");
+    if (ec)
+        at += (size_t)os64_snprintf(json + at, cap - at, "],\"kty\":\"EC\",\"x\":\"%s\",\"y\":\"%s\"}", x, y);
+    else
+        at += (size_t)os64_snprintf(json + at, cap - at, "],\"kty\":\"oct\"}");
     while (pad && at % 8 != 0) json[at++] = ' ';
     *length = at;
     return json;
@@ -1264,8 +1606,30 @@ static JSValue crypt(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParam
     return buffer_answer(ctx, out, out_length);
 }
 
-/* sign and verify (§ 14.3.3-4): HMAC under the key's own hash; a
- * signature that does not match is false, never an error. */
+/* ECDSA's sign and verify (§ 23.7.1-2): a private key signs, a public key
+ * verifies (InvalidAccessError otherwise), over the message's digest by
+ * the parameters' hash. */
+static JSValue ecdsa(JSContext *ctx, const SubtleParams *p, const DKey *k, bool signing, const uint8_t *data,
+                     size_t length, const uint8_t *signature, size_t signature_length)
+{
+    if (k->type != (signing ? kPrivate : kPublic)) {
+        fail(ctx, "InvalidAccessError", signing ? "Only a private key signs" : "Only a public key verifies");
+        return JS_EXCEPTION;
+    }
+    if (!signing)
+        return JS_NewBool(ctx, subtle_ecdsa_verify(k->curve, p->hash, ec_point(k), data, length, signature,
+                                                   signature_length));
+    uint8_t out[2 * SUBTLE_EC_SIZE_MAX];
+    size_t made = subtle_ecdsa_sign(k->curve, p->hash, k->material, data, length, out);
+    if (made == 0) {
+        fail(ctx, "OperationError", "The signature could not be made");
+        return JS_EXCEPTION;
+    }
+    return JS_NewArrayBufferCopy(ctx, out, made);
+}
+
+/* sign and verify (§ 14.3.3-4): HMAC under the key's own hash, or ECDSA;
+ * a signature that does not match is false, never an error. */
 static JSValue sign(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParams *p, bool signing)
 {
     if (normalize(dom, ctx, c->algorithm[0], signing ? SUBTLE_OP_SIGN : SUBTLE_OP_VERIFY, p) < 0)
@@ -1276,6 +1640,7 @@ static JSValue sign(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtleParams
     if (bytes_of(dom, ctx, c->buffers[signing ? 0 : 1], &data, &length) < 0) return JS_EXCEPTION;
     const DKey *k = c->keys[0];
     if (key_fits(ctx, p, k, signing ? U_SIGN : U_VERIFY) < 0) return JS_EXCEPTION;
+    if (p->alg == SUBTLE_ALG_ECDSA) return ecdsa(ctx, p, k, signing, data, length, signature, signature_length);
     uint8_t mac[SUBTLE_DIGEST_MAX];
     size_t size = subtle_digest_size(k->hash);
     if (!subtle_hmac(k->hash, k->material, k->bytes, data, length, mac)) {
@@ -1335,7 +1700,14 @@ static JSValue wrap_key(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, SubtlePa
     }
     uint8_t *plain;
     size_t plain_length;
-    if (c->format == F_RAW) {
+    if (is_ec(key->alg) && c->format != F_JWK) {
+        plain = js_malloc(ctx, SUBTLE_EC_DER_MAX);
+        if (plain == NULL) return JS_EXCEPTION;
+        if (ec_key_bytes(ctx, key, c->format, plain, &plain_length) < 0) {
+            js_free(ctx, plain);
+            return JS_EXCEPTION;
+        }
+    } else if (c->format == F_RAW) {
         plain = js_malloc(ctx, key->bytes ? key->bytes : 1);
         if (plain == NULL) return JS_EXCEPTION;
         if (key->bytes) os64_memcpy(plain, key->material, key->bytes);
@@ -1412,16 +1784,45 @@ out:
     return result;
 }
 
-/* The derive bits operation (§ 33.4.1, § 34.4.1) of `k` for `bits`
- * (`has_bits` false for a null length): a js_malloc'd result in *out
- * (*out_length bytes), or -1 with the failure pending. Neither derivation
- * takes a null length or one within a byte; HKDF makes at most 255 hashes'
- * worth, PBKDF2 at most SUBTLE_PBKDF2_MAX_BYTES, and PBKDF2 refuses no
- * iterations before it answers a length of none. */
+/* ECDH's derive bits (§ 24.4.2), its checks in its order: the public
+ * key's type and algorithm, the length against the secret's, then the base
+ * key's type, algorithm and curve against the public key's. A null length
+ * is the whole secret (the X coordinate, the curve's size); any other is
+ * its first `bits` bits, the bits past them in the last byte zero. */
+static int ecdh(JSContext *ctx, const SubtleParams *p, const DKey *k, bool has_bits, uint32_t bits, uint8_t **out,
+                size_t *out_length)
+{
+    const DKey *peer = p->peer_key;
+    if (peer->type != kPublic) return fail(ctx, "InvalidAccessError", "ECDH's public is not a public key");
+    if (peer->alg != p->alg) return fail(ctx, "InvalidAccessError", "ECDH's public is not an ECDH key");
+    size_t size = subtle_ec_size(peer->curve);
+    if (has_bits && bits > 8 * size) return fail(ctx, "OperationError", "That is longer than the shared secret");
+    if (k->type != kPrivate) return fail(ctx, "InvalidAccessError", "ECDH derives from a private key");
+    if (k->alg != peer->alg) return fail(ctx, "InvalidAccessError", "The two keys are not one algorithm's");
+    if (k->curve != peer->curve) return fail(ctx, "InvalidAccessError", "The two keys are not on one curve");
+    size_t length = has_bits ? ((size_t)bits + 7) / 8 : size;
+    *out = js_malloc(ctx, size);
+    if (*out == NULL) return -1;
+    if (!subtle_ecdh(k->curve, k->material, ec_point(peer), *out))
+        return fail(ctx, "OperationError", "The shared secret could not be made");
+    if (has_bits && bits % 8) (*out)[length - 1] &= (uint8_t)(0xff << (8 - bits % 8));
+    for (size_t i = length; i < size; i++) (*out)[i] = 0;
+    *out_length = length;
+    return 0;
+}
+
+/* The derive bits operation (§ 24.4.2, § 33.4.1, § 34.4.1) of `k` for
+ * `bits` (`has_bits` false for a null length): a js_malloc'd result in
+ * *out (*out_length bytes), or -1 with the failure pending. ECDH's is
+ * ecdh()'s. Neither derivation takes a null length or one within a byte;
+ * HKDF makes at most 255 hashes' worth, PBKDF2 at most
+ * SUBTLE_PBKDF2_MAX_BYTES, and PBKDF2 refuses no iterations before it
+ * answers a length of none. */
 static int derive(JSContext *ctx, os64_dom_t *dom, const SubtleParams *p, const DKey *k, bool has_bits, uint32_t bits,
                   uint8_t **out, size_t *out_length)
 {
     *out = NULL;
+    if (p->alg == SUBTLE_ALG_ECDH) return ecdh(ctx, p, k, has_bits, bits, out, out_length);
     if (!has_bits || bits % 8 != 0) return fail(ctx, "OperationError", "A derivation's length is a multiple of 8");
     size_t length = bits / 8;
     const uint8_t *salt, *info;
@@ -1462,9 +1863,10 @@ static JSValue derive_bits(os64_dom_t *dom, JSContext *ctx, SubtleCall *c, Subtl
 
 /* The get key length operation (§ 27-34) of a normalized derived key type:
  * 0 with the length in *bits, *has_bits false for null, or -1 with the
- * failure pending. Null is HKDF's and PBKDF2's answer, and both refuse a
- * null length to derive, so a derivation key is never deriveKey's result:
- * OperationError, as the spec's steps imply. */
+ * failure pending. Null is HKDF's and PBKDF2's answer: ECDH derives its
+ * whole secret for it, and the derivations refuse it to derive, so a
+ * derivation key is derived from an ECDH key and never from another
+ * derivation's (OperationError, as the spec's steps imply). */
 static int key_length(JSContext *ctx, const SubtleParams *p, bool *has_bits, uint32_t *bits)
 {
     *has_bits = true;

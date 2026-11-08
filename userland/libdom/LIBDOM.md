@@ -1373,7 +1373,11 @@ unwrap they are (RFC 3394, a wrapped JWK padded with spaces to its 8
 bytes); and HKDF and PBKDF2, whose keys are imported raw and never
 exported, for `deriveBits` and `deriveKey` (the derived key type
 normalized for importKey and for get key length, then the derivation's
-bits imported raw). A dictionary's own buffers (an `iv`, a `salt`) are
+bits imported raw); and ECDSA and ECDH on P-256, P-384 and P-521, key
+pairs (`generateKey` answers a CryptoKeyPair) imported and exported as
+spki, pkcs8, raw and JWK, a private key holding its public point beside
+`d` so either half exports, ECDSA's `sign` and `verify`, and ECDH's
+`deriveBits` and `deriveKey`. A dictionary's own buffers (an `iv`, a `salt`) are
 copied as § 18.4.4 step 10 copies them, after its hash is normalized; a
 later normalization's getters cannot reach them. A CryptoKey's material is
 engine heap, zeroed by its finalizer; its `algorithm` and `usages` are
@@ -1396,8 +1400,8 @@ the same files `tools/subtle_bearssl.sh` lists for the host harnesses), so
 libtls.so exports nothing new. Its interfaces' members, and Crypto's, have
 WebIDL's shape (`d_idl_members`: operations enumerable, accessors named
 "get x"). `tools/test_subtle_core_host.sh` holds the core to FIPS 180-2's,
-NIST SP 800-38A's, the GCM paper's, RFC 4231's, RFC 3394's, RFC 5869's
-and RFC 6070's vectors; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
+NIST SP 800-38A's, the GCM paper's, RFC 4231's, RFC 3394's, RFC 5869's,
+RFC 6070's, RFC 6979's and RFC 5903's vectors and WPT's EC key fixtures; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
 
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),

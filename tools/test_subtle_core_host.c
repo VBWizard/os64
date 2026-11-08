@@ -1,7 +1,6 @@
 /* libdom's Web Cryptography core (userland/libdom/subtle_core.c) held to
- * the standards: FIPS 180-2's example messages for every digest (the empty
- * message, "abc", the 448-bit message and a million "a"), and the registry
- * matching names as normalization does. Run by
+ * the standards' published vectors, each family's function naming its
+ * sources, and the registry matching names as normalization does. Run by
  * tools/test_subtle_core_host.sh, under ASan and UBSan. */
 #include "../userland/libdom/subtle_core.h"
 
@@ -305,6 +304,294 @@ static void kdf_cases(void)
           "PBKDF2 refuses no iterations, and what is no hash");
 }
 
+/* RFC 6979 A.2.5-A.2.7: each curve's key, then r || s for each hash over "sample" and "test"; every one checked against OpenSSL's verifier. */
+static const struct { subtle_curve_t curve; const char *d, *x, *y; struct { subtle_alg_t hash; const char *message, *signature; } sigs[8]; } kRfc6979[] = {
+    {SUBTLE_CURVE_P256, "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721",
+     "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6",
+     "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299",
+     {
+      {SUBTLE_ALG_SHA_1, "sample", "61340c88c3aaebeb4f6d667f672ca9759a6ccaa9fa8811313039ee4a35471d326d7f147dac089441bb2e2fe8f7a3fa264b9c475098fdcf6e00d7c996e1b8b7eb"},
+      {SUBTLE_ALG_SHA_1, "test", "0cbcc86fd6abd1d99e703e1ec50069ee5c0b4ba4b9ac60e409e8ec5910d81a8901b9d7b73dfaa60d5651ec4591a0136f87653e0fd780c3b1bc872ffdeae479b1"},
+      {SUBTLE_ALG_SHA_256, "sample", "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8"},
+      {SUBTLE_ALG_SHA_256, "test", "f1abb023518351cd71d881567b1ea663ed3efcf6c5132b354f28d3b0b7d38367019f4113742a2b14bd25926b49c649155f267e60d3814b4c0cc84250e46f0083"},
+      {SUBTLE_ALG_SHA_384, "sample", "0eafea039b20e9b42309fb1d89e213057cbf973dc0cfc8f129edddc800ef77194861f0491e6998b9455193e34e7b0d284ddd7149a74b95b9261f13abde940954"},
+      {SUBTLE_ALG_SHA_384, "test", "83910e8b48bb0c74244ebdf7f07a1c5413d61472bd941ef3920e623fbccebeb68ddbec54cf8cd5874883841d712142a56a8d0f218f5003cb0296b6b509619f2c"},
+      {SUBTLE_ALG_SHA_512, "sample", "8496a60b5e9b47c825488827e0495b0e3fa109ec4568fd3f8d1097678eb97f002362ab1adbe2b8adf9cb9edab740ea6049c028114f2460f96554f61fae3302fe"},
+      {SUBTLE_ALG_SHA_512, "test", "461d93f31b6540894788fd206c07cfa0cc35f46fa3c91816fff1040ad1581a0439af9f15de0db8d97e72719c74820d304ce5226e32dedae67519e840d1194e55"},
+     }},
+    {SUBTLE_CURVE_P384, "6b9d3dad2e1b8c1c05b19875b6659f4de23c3b667bf297ba9aa47740787137d896d5724e4c70a825f872c9ea60d2edf5",
+     "ec3a4e415b4e19a4568618029f427fa5da9a8bc4ae92e02e06aae5286b300c64def8f0ea9055866064a254515480bc13",
+     "8015d9b72d7d57244ea8ef9ac0c621896708a59367f9dfb9f54ca84b3f1c9db1288b231c3ae0d4fe7344fd2533264720",
+     {
+      {SUBTLE_ALG_SHA_1, "sample", "ec748d839243d6fbef4fc5c4859a7dffd7f3abddf72014540c16d73309834fa37b9ba002899f6fda3a4a9386790d4eb2a3bcfa947beef4732bf247ac17f71676cb31a847b9ff0cbc9c9ed4c1a5b3facf26f49ca031d4857570ccb5ca4424a443"},
+      {SUBTLE_ALG_SHA_1, "test", "4bc35d3a50ef4e30576f58cd96ce6bf638025ee624004a1f7789a8b8e43d0678acd9d29876daf46638645f7f404b11c7d5a6326c494ed3ff614703878961c0fde7b2c278f9a65fd8c4b7186201a2991695ba1c84541327e966fa7b50f7382282"},
+      {SUBTLE_ALG_SHA_256, "sample", "21b13d1e013c7fa1392d03c5f99af8b30c570c6f98d4ea8e354b63a21d3daa33bde1e888e63355d92fa2b3c36d8fb2cdf3aa443fb107745bf4bd77cb3891674632068a10ca67e3d45db2266fa7d1feebefdc63eccd1ac42ec0cb8668a4fa0ab0"},
+      {SUBTLE_ALG_SHA_256, "test", "6d6defac9ab64dabafe36c6bf510352a4cc27001263638e5b16d9bb51d451559f918eedaf2293be5b475cc8f0188636b2d46f3becbcc523d5f1a1256bf0c9b024d879ba9e838144c8ba6baeb4b53b47d51ab373f9845c0514eefb14024787265"},
+      {SUBTLE_ALG_SHA_384, "sample", "94edbb92a5ecb8aad4736e56c691916b3f88140666ce9fa73d64c4ea95ad133c81a648152e44acf96e36dd1e80fabe4699ef4aeb15f178cea1fe40db2603138f130e740a19624526203b6351d0a3a94fa329c145786e679e7b82c71a38628ac8"},
+      {SUBTLE_ALG_SHA_384, "test", "8203b63d3c853e8d77227fb377bcf7b7b772e97892a80f36ab775d509d7a5feb0542a7f0812998da8f1dd3ca3cf023dbddd0760448d42d8a43af45af836fce4de8be06b485e9b61b827c2f13173923e06a739f040649a667bf3b828246baa5a5"},
+      {SUBTLE_ALG_SHA_512, "sample", "ed0959d5880ab2d869ae7f6c2915c6d60f96507f9cb3e047c0046861da4a799cfe30f35cc900056d7c99cd7882433709512c8cceee3890a84058ce1e22dbc2198f42323ce8aca9135329f03c068e5112dc7cc3ef3446defceb01a45c2667fdd5"},
+      {SUBTLE_ALG_SHA_512, "test", "a0d5d090c9980faf3c2ce57b7ae951d31977dd11c775d314af55f76c676447d06fb6495cd21b4b6e340fc236584fb277976984e59b4c77b0e8e4460dca3d9f20e07b9bb1f63beefaf576f6b2e8b224634a2092cd3792e0159ad9cee37659c736"},
+     }},
+    {SUBTLE_CURVE_P521, "00fad06daa62ba3b25d2fb40133da757205de67f5bb0018fee8c86e1b68c7e75caa896eb32f1f47c70855836a6d16fcc1466f6d8fbec67db89ec0c08b0e996b83538",
+     "01894550d0785932e00eaa23b694f213f8c3121f86dc97a04e5a7167db4e5bcd371123d46e45db6b5d5370a7f20fb633155d38ffa16d2bd761dcac474b9a2f5023a4",
+     "00493101c962cd4d2fddf782285e64584139c2f91b47f87ff82354d6630f746a28a0db25741b5b34a828008b22acc23f924faafbd4d33f81ea66956dfeaa2bfdfcf5",
+     {
+      {SUBTLE_ALG_SHA_1, "sample", "00343b6ec45728975ea5cba6659bbb6062a5ff89eea58be3c80b619f322c87910fe092f7d45bb0f8eee01ed3f20babec079d202ae677b243ab40b5431d497c55d75d00e7b0e675a9b24413d448b8cc119d2bf7b2d2df032741c096634d6d65d0dbe3d5694625fb9e8104d3b842c1b0e2d0b98bea19341e8676aef66ae4eba3d5475d5d16"},
+      {SUBTLE_ALG_SHA_1, "test", "013bad9f29abe20de37ebeb823c252ca0f63361284015a3bf430a46aaa80b87b0693f0694bd88afe4e661fc33b094cd3b7963bed5a727ed8bd6a3a202abe009d036701e9bb81ff7944ca409ad138dbbee228e1afcc0c890fc78ec8604639cb0dbdc90f717a99ead9d272855d00162ee9527567dd6a92cbd629805c0445282bbc916797ff"},
+      {SUBTLE_ALG_SHA_256, "sample", "01511bb4d675114fe266fc4372b87682baecc01d3cc62cf2303c92b3526012659d16876e25c7c1e57648f23b73564d67f61c6f14d527d54972810421e7d87589e1a7004a171143a83163d6df460aaf61522695f207a58b95c0644d87e52aa1a347916e4f7a72930b1bc06dbe22ce3f58264afd23704cbb63b29b931f7de6c9d949a7ecfc"},
+      {SUBTLE_ALG_SHA_256, "test", "000e871c4a14f993c6c7369501900c4bc1e9c7b0b4ba44e04868b30b41d8071042eb28c4c250411d0ce08cd197e4188ea4876f279f90b3d8d74a3c76e6f1e4656aa800cd52dbaa33b063c3a6cd8058a1fb0a46a4754b034fcc644766ca14da8ca5ca9fde00e88c1ad60ccba759025299079d7a427ec3cc5b619bfbc828e7769bcd694e86"},
+      {SUBTLE_ALG_SHA_384, "sample", "01ea842a0e17d2de4f92c15315c63ddf72685c18195c2bb95e572b9c5136ca4b4b576ad712a52be9730627d16054ba40cc0b8d3ff035b12ae75168397f5d50c6745101f21a3cee066e1961025fb048bd5fe2b7924d0cd797babe0a83b66f1e35eeaf5fde143fa85dc394a7dee766523393784484bdf3e00114a1c857cde1aa203db65d61"},
+      {SUBTLE_ALG_SHA_384, "test", "014bee21a18b6d8b3c93fab08d43e739707953244fdbe924fa926d76669e7ac8c89df62ed8975c2d8397a65a49dcc09f6b0ac62272741924d479354d74ff6075578c0133330865c067a0eaf72362a65e2d7bc4e461e8c8995c3b6226a21bd1aa78f0ed94fe536a0dca35534f0cd1510c41525d163fe9d74d134881e35141ed5e8e95b979"},
+      {SUBTLE_ALG_SHA_512, "sample", "00c328fafcbd79dd77850370c46325d987cb525569fb63c5d3bc53950e6d4c5f174e25a1ee9017b5d450606add152b534931d7d4e8455cc91f9b15bf05ec36e377fa00617cce7cf5064806c467f678d3b4080d6f1cc50af26ca209417308281b68af282623eaa63e5b5c0723d8b8c37ff0777b1a20f8ccb1dccc43997f1ee0e44da4a67a"},
+      {SUBTLE_ALG_SHA_512, "test", "013e99020abf5cee7525d16b69b229652ab6bdf2affcaef38773b4b7d08725f10cdb93482fdcc54edcee91eca4166b2a7c6265ef0ce2bd7051b7cef945babd47ee6d01fbd0013c674aa79cb39849527916ce301c66ea7ce8b80682786ad60f98f7e78a19ca69eff5c57400e3b3a0ad66ce0978214d13baf4e9ac60752f7b155e2de4dce3"},
+     }},
+};
+/* RFC 5903 § 8.1-8.3: the initiator's key i and public (gix, giy), the responder's r and (grx, gry), and the shared girx. */
+static const struct { subtle_curve_t curve; const char *i, *gi, *r, *gr, *shared; } kRfc5903[] = {
+    {SUBTLE_CURVE_P256,
+     "c88f01f510d9ac3f70a292daa2316de544e9aab8afe84049c62a9c57862d1433",
+     "04dad0b65394221cf9b051e1feca5787d098dfe637fc90b9ef945d0c37725811805271a0461cdb8252d61f1c456fa3e59ab1f45b33accf5f58389e0577b8990bb3",
+     "c6ef9c5d78ae012a011164acb397ce2088685d8f06bf9be0b283ab46476bee53",
+     "04d12dfb5289c8d4f81208b70270398c342296970a0bccb74c736fc7554494bf6356fbf3ca366cc23e8157854c13c58d6aac23f046ada30f8353e74f33039872ab",
+     "d6840f6b42f6edafd13116e0e12565202fef8e9ece7dce03812464d04b9442de"},
+    {SUBTLE_CURVE_P384,
+     "099f3c7034d4a2c699884d73a375a67f7624ef7c6b3c0f160647b67414dce655e35b538041e649ee3faef896783ab194",
+     "04667842d7d180ac2cde6f74f37551f55755c7645c20ef73e31634fe72b4c55ee6de3ac808acb4bdb4c88732aee95f41aa9482ed1fc0eeb9cafc4984625ccfc23f65032149e0e144ada024181535a0f38eeb9fcff3c2c947dae69b4c634573a81c",
+     "41cb0779b4bdb85d47846725fbec3c9430fab46cc8dc5060855cc9bda0aa2942e0308312916b8ed2960e4bd55a7448fc",
+     "04e558dbef53eecde3d3fccfc1aea08a89a987475d12fd950d83cfa41732bc509d0d1ac43a0336def96fda41d0774a3571dcfbec7aacf3196472169e838430367f66eebe3c6e70c416dd5f0c68759dd1fff83fa40142209dff5eaad96db9e6386c",
+     "11187331c279962d93d604243fd592cb9d0a926f422e47187521287e7156c5c4d603135569b9e9d09cf5d4a270f59746"},
+    {SUBTLE_CURVE_P521,
+     "0037ade9319a89f4dabdb3ef411aaccca5123c61acab57b5393dce47608172a095aa85a30fe1c2952c6771d937ba9777f5957b2639bab072462f68c27a57382d4a52",
+     "040015417e84dbf28c0ad3c278713349dc7df153c897a1891bd98bab4357c9ecbee1e3bf42e00b8e380aeae57c2d107564941885942af5a7f4601723c4195d176ced3e017cae20b6641d2eeb695786d8c946146239d099e18e1d5a514c739d7cb4a10ad8a788015ac405d7799dc75e7b7d5b6cf2261a6a7f1507438bf01beb6ca3926f9582",
+     "0145ba99a847af43793fdd0e872e7cdfa16be30fdc780f97bccc3f078380201e9c677d600b343757a3bdbf2a3163e4c2f869cca7458aa4a4effc311f5cb151685eb9",
+     "0400d0b3975ac4b799f5bea16d5e13e9af971d5e9b984c9f39728b5e5739735a219b97c356436adc6e95bb0352f6be64a6c2912d4ef2d0433ced2b6171640012d9460f015c68226383956e3bd066e797b623c27ce0eac2f551a10c2c724d9852077b87220b6536c5c408a1d2aebb8e86d678ae49cb57091f4732296579ab44fcd17f0fc56a",
+     "01144c7d79ae6956bc8edb8e7c787c4521cb086fa64407f97894e5e6b2d79b04d1427e73ca4baa240a34786859810c06b3c715a3a8cc3151f2bee417996d19f3ddea"},
+};
+/* WPT's EC key fixtures (WebCryptoAPI/util/ec_key_fixtures.js): spki, pkcs8 as other browsers write it, pkcs8 without the public key, and the JWK's d. */
+static const struct { subtle_curve_t curve; const char *spki, *pkcs8, *pkcs8_private_only, *raw, *d; } kWptEc[] = {
+    {SUBTLE_CURVE_P256,
+     "3059301306072a8648ce3d020106082a8648ce3d03010703420004d210b0a6f9d9f012868058b43fa4f471018543bba00c9250df9257c2acae5dd1ce037552d481450ce39b4d1095701b175bfab34b8e6c099e18f1c198358361e8",
+     "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b020101042013d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544eaa14403420004d210b0a6f9d9f012868058b43fa4f471018543bba00c9250df9257c2acae5dd1ce037552d481450ce39b4d1095701b175bfab34b8e6c099e18f1c198358361e8",
+     "3041020100301306072a8648ce3d020106082a8648ce3d03010704273025020101042013d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544ea",
+     "04d210b0a6f9d9f012868058b43fa4f471018543bba00c9250df9257c2acae5dd1ce037552d481450ce39b4d1095701b175bfab34b8e6c099e18f1c198358361e8",
+     "13d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544ea"},
+    {SUBTLE_CURVE_P384,
+     "3076301006072a8648ce3d020106052b8104002203620004219c14d66617b36ec6d8856b385b73a74d344fd8ae75ef046435dda54e3b44bd5fbdebd1d08dd69e2d7dc1dc218cb435bd28138cc778337a842f6bd61b240e74249f24667c2a5810a76bfc28e0335f88a6501dec01976da85afb00869cb6ace8",
+     "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b02010104304537b5990784d3c2d22e96a8f92fa1aa492ee873e576a41582e144183c9888d10e6b9eb4ced4b2cc4012e4ac5ea84073a16403620004219c14d66617b36ec6d8856b385b73a74d344fd8ae75ef046435dda54e3b44bd5fbdebd1d08dd69e2d7dc1dc218cb435bd28138cc778337a842f6bd61b240e74249f24667c2a5810a76bfc28e0335f88a6501dec01976da85afb00869cb6ace8",
+     "304e020100301006072a8648ce3d020106052b810400220437303502010104304537b5990784d3c2d22e96a8f92fa1aa492ee873e576a41582e144183c9888d10e6b9eb4ced4b2cc4012e4ac5ea84073",
+     "04219c14d66617b36ec6d8856b385b73a74d344fd8ae75ef046435dda54e3b44bd5fbdebd1d08dd69e2d7dc1dc218cb435bd28138cc778337a842f6bd61b240e74249f24667c2a5810a76bfc28e0335f88a6501dec01976da85afb00869cb6ace8",
+     "4537b5990784d3c2d22e96a8f92fa1aa492ee873e576a41582e144183c9888d10e6b9eb4ced4b2cc4012e4ac5ea84073"},
+    {SUBTLE_CURVE_P521,
+     "30819b301006072a8648ce3d020106052b8104002303818600040156f479f8df1e20a7ffc04ce420c3e154ae251996bee42f034b84d41b743f34e45f311b813a9cdec8cda59bbbbd31d460b3292521e7c1b722e5667c03db2fae753f01501736cfe247394320d8e4afc2fd39b5a9331061b81e2241282b9e17891822b5b79e052f4597b59643fd39379c51bd5125c4f48bc3f025ce3cd36953286ccb38fb",
+     "3081ee020100301006072a8648ce3d020106052b810400230481d63081d3020101044200f408758368ba930f30f76ae054fe5cd2ce7fda2c9f76a6d436cf75d66c440bfe6331c7c172a12478193c8251487bc91263fa50217f85ff636f59cd546e3ab483b4a1818903818600040156f479f8df1e20a7ffc04ce420c3e154ae251996bee42f034b84d41b743f34e45f311b813a9cdec8cda59bbbbd31d460b3292521e7c1b722e5667c03db2fae753f01501736cfe247394320d8e4afc2fd39b5a9331061b81e2241282b9e17891822b5b79e052f4597b59643fd39379c51bd5125c4f48bc3f025ce3cd36953286ccb38fb",
+     "3060020100301006072a8648ce3d020106052b8104002304493047020101044200f408758368ba930f30f76ae054fe5cd2ce7fda2c9f76a6d436cf75d66c440bfe6331c7c172a12478193c8251487bc91263fa50217f85ff636f59cd546e3ab483b4",
+     "040156f479f8df1e20a7ffc04ce420c3e154ae251996bee42f034b84d41b743f34e45f311b813a9cdec8cda59bbbbd31d460b3292521e7c1b722e5667c03db2fae753f01501736cfe247394320d8e4afc2fd39b5a9331061b81e2241282b9e17891822b5b79e052f4597b59643fd39379c51bd5125c4f48bc3f025ce3cd36953286ccb38fb",
+     "00f408758368ba930f30f76ae054fe5cd2ce7fda2c9f76a6d436cf75d66c440bfe6331c7c172a12478193c8251487bc91263fa50217f85ff636f59cd546e3ab483b4"},
+};
+
+/* The elliptic curves: RFC 6979's deterministic signatures reproduced
+ * exactly (BearSSL's nonce is RFC 6979's, so a sign that differs by a bit
+ * is a bug) and verified, a flipped bit or a short signature refused;
+ * RFC 5903's ECDH from both sides; WPT's spki and pkcs8 decoded and
+ * re-encoded byte for byte; and what each must refuse. */
+static void ec_cases(void)
+{
+    uint8_t d[SUBTLE_EC_SIZE_MAX], point[SUBTLE_EC_POINT_MAX], other[SUBTLE_EC_POINT_MAX];
+    uint8_t sig[2 * SUBTLE_EC_SIZE_MAX], der[SUBTLE_EC_DER_MAX + 2], out[SUBTLE_EC_DER_MAX];
+    char want[2 * SUBTLE_EC_POINT_MAX + 3], what[128];
+    for (size_t v = 0; v < sizeof(kRfc6979) / sizeof(kRfc6979[0]); v++) {
+        subtle_curve_t c = kRfc6979[v].curve;
+        size_t size = subtle_ec_size(c);
+        unhex(kRfc6979[v].d, d);
+        check(subtle_ec_scalar_ok(c, d), "an RFC 6979 key is a private key");
+        snprintf(want, sizeof(want), "04%s%s", kRfc6979[v].x, kRfc6979[v].y);
+        subtle_ec_public(c, d, point);
+        snprintf(what, sizeof(what), "%s: RFC 6979's public key", subtle_curve_name(c));
+        same_hex(point, 1 + 2 * size, want, what);
+        check(subtle_ec_point_ok(c, point, 1 + 2 * size), what);
+        for (int s = 0; s < 8; s++) {
+            const char *message = kRfc6979[v].sigs[s].message;
+            subtle_alg_t hash = kRfc6979[v].sigs[s].hash;
+            size_t length = strlen(message);
+            snprintf(what, sizeof(what), "%s, %s, \"%s\": RFC 6979's signature", subtle_curve_name(c),
+                     subtle_alg_name(hash), message);
+            check(subtle_ecdsa_sign(c, hash, d, (const uint8_t *)message, length, sig) == 2 * size, what);
+            same_hex(sig, 2 * size, kRfc6979[v].sigs[s].signature, what);
+            check(subtle_ecdsa_verify(c, hash, point, (const uint8_t *)message, length, sig, 2 * size), what);
+            sig[size - 1] ^= 1;
+            check(!subtle_ecdsa_verify(c, hash, point, (const uint8_t *)message, length, sig, 2 * size),
+                  "a signature with a bit flipped does not verify");
+            sig[size - 1] ^= 1;
+            check(!subtle_ecdsa_verify(c, hash, point, (const uint8_t *)"Sample", length, sig, 2 * size),
+                  "another message does not verify");
+            check(!subtle_ecdsa_verify(c, hash, point, (const uint8_t *)message, length, sig, 2 * size - 1),
+                  "a signature a byte short does not verify");
+            /* Each half with a zero byte before it: the same integers, which
+             * BearSSL's raw verify would take, and no WebCrypto signature. */
+            uint8_t padded[2 * SUBTLE_EC_SIZE_MAX + 2] = {0};
+            memcpy(padded + 1, sig, size);
+            memcpy(padded + 2 + size, sig + size, size);
+            check(!subtle_ecdsa_verify(c, hash, point, (const uint8_t *)message, length, padded, 2 * size + 2),
+                  "halves padded past the curve's size do not verify");
+        }
+    }
+    for (size_t v = 0; v < sizeof(kRfc5903) / sizeof(kRfc5903[0]); v++) {
+        subtle_curve_t c = kRfc5903[v].curve;
+        size_t size = subtle_ec_size(c);
+        uint8_t secret[SUBTLE_EC_SIZE_MAX];
+        snprintf(what, sizeof(what), "%s: RFC 5903's shared secret", subtle_curve_name(c));
+        unhex(kRfc5903[v].i, d);
+        unhex(kRfc5903[v].gr, point);
+        subtle_ec_public(c, d, other);
+        same_hex(other, 1 + 2 * size, kRfc5903[v].gi, "RFC 5903's g^i");
+        check(subtle_ecdh(c, d, point, secret), what);
+        same_hex(secret, size, kRfc5903[v].shared, what);
+        unhex(kRfc5903[v].r, d);
+        check(subtle_ecdh(c, d, other, secret), what);
+        same_hex(secret, size, kRfc5903[v].shared, what);
+        point[1 + size] ^= 1;
+        check(!subtle_ecdh(c, d, point, secret) && !subtle_ec_point_ok(c, point, 1 + 2 * size),
+              "a point off the curve: no ECDH, and no public key");
+    }
+    for (size_t v = 0; v < sizeof(kWptEc) / sizeof(kWptEc[0]); v++) {
+        subtle_curve_t c = kWptEc[v].curve, got;
+        size_t size = subtle_ec_size(c), length, point_length;
+        const uint8_t *key;
+        const char *name = subtle_curve_name(c);
+        uint8_t raw[SUBTLE_EC_POINT_MAX], scalar[SUBTLE_EC_SIZE_MAX];
+        unhex(kWptEc[v].raw, raw);
+        unhex(kWptEc[v].d, scalar);
+        snprintf(what, sizeof(what), "%s: WPT's spki decodes to its raw point", name);
+        length = unhex(kWptEc[v].spki, der);
+        check(subtle_ec_spki_decode(der, length, &got, &key, &point_length) && got == c &&
+                  point_length == 1 + 2 * size && memcmp(key, raw, point_length) == 0,
+              what);
+        snprintf(what, sizeof(what), "%s: spki encodes as WPT's", name);
+        same_hex(out, subtle_ec_spki_encode(c, raw, out), kWptEc[v].spki, what);
+        snprintf(what, sizeof(what), "%s: WPT's pkcs8 decodes to its d and point", name);
+        length = unhex(kWptEc[v].pkcs8, der);
+        check(subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length) && got == c &&
+                  memcmp(d, scalar, size) == 0 && key != NULL && point_length == 1 + 2 * size &&
+                  memcmp(key, raw, point_length) == 0,
+              what);
+        snprintf(what, sizeof(what), "%s: pkcs8 encodes as WPT's", name);
+        same_hex(out, subtle_ec_pkcs8_encode(c, scalar, raw, out), kWptEc[v].pkcs8, what);
+        snprintf(what, sizeof(what), "%s: a pkcs8 without its public key", name);
+        length = unhex(kWptEc[v].pkcs8_private_only, der);
+        check(subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length) && got == c &&
+                  memcmp(d, scalar, size) == 0 && key == NULL,
+              what);
+        subtle_ec_public(c, d, point);
+        check(memcmp(point, raw, 1 + 2 * size) == 0, "d's public key is the fixture's");
+        /* What both containers refuse: a byte short, a byte over, another
+         * algorithm, and (spki) a compressed point left to the caller. */
+        length = unhex(kWptEc[v].spki, der);
+        check(!subtle_ec_spki_decode(der, length - 1, &got, &key, &point_length), "a truncated spki is refused");
+        der[length] = 0;
+        check(!subtle_ec_spki_decode(der, length + 1, &got, &key, &point_length), "a byte after an spki is refused");
+        der[8] ^= 1; /* id-ecPublicKey's last byte but two */
+        check(!subtle_ec_spki_decode(der, length, &got, &key, &point_length), "another algorithm's spki is refused");
+        length = unhex(kWptEc[v].pkcs8, der);
+        check(!subtle_ec_pkcs8_decode(der, length - 1, &got, d, &key, &point_length), "a truncated pkcs8 is refused");
+        der[length] = 0;
+        check(!subtle_ec_pkcs8_decode(der, length + 1, &got, d, &key, &point_length),
+              "a byte after a pkcs8 is refused");
+        raw[0] = 0x02;
+        check(!subtle_ec_point_ok(c, raw, 1 + size), "a compressed point is refused");
+        check(!subtle_ec_point_ok(c, raw, 1 + 2 * size), "a point that is not 0x04-led is refused");
+    }
+    /* A pkcs8 whose ECPrivateKey names its curve, the same and another;
+     * and one whose d dropped its leading zero byte. Made from P-256's. */
+    {
+        subtle_curve_t got;
+        const uint8_t *key;
+        size_t point_length;
+        static const char kNamed[] =
+            "3081930201003013" "06072a8648ce3d0201" "06082a8648ce3d030107" "0479" "3077" "020101"
+            "0420" "13d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544ea"
+            "a00a" "06082a8648ce3d030107"
+            "a144034200" "04d210b0a6f9d9f012868058b43fa4f471018543bba00c9250df9257c2acae5dd1"
+            "ce037552d481450ce39b4d1095701b175bfab34b8e6c099e18f1c198358361e8";
+        size_t length = unhex(kNamed, der);
+        check(subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length) && key != NULL,
+              "an ECPrivateKey naming its own curve");
+        der[79] = 0x08; /* the [0] curve's last byte: no longer secp256r1 */
+        check(!subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length),
+              "an ECPrivateKey naming another curve is refused");
+        static const char kShort[] = "3040020100301306072a8648ce3d020106082a8648ce3d03010704263024020101"
+                                     "041f" "d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544ea";
+        length = unhex(kShort, der);
+        check(subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length) && d[0] == 0 && d[1] == 0xd3,
+              "a d without its leading zero is padded back");
+    }
+    /* RFC 5958's version 1, whose [1] public key no PrivateKeyInfo has,
+     * refused with and without one; and a d with a leading zero more than
+     * the curve's size, read as its value. Made from WPT's P-256 key. */
+    {
+        subtle_curve_t got;
+        const uint8_t *key;
+        size_t point_length, length;
+        uint8_t scalar[SUBTLE_EC_SIZE_MAX];
+        static const char kVersion1[] = "308185020101301306072a8648ce3d020106082a8648ce3d03010704273025020101042013d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544ea81420004d210b0a6f9d9f012868058b43fa4f471018543bba00c9250df9257c2acae5dd1ce037552d481450ce39b4d1095701b175bfab34b8e6c099e18f1c198358361e8";
+        static const char kVersion0Outer[] = "308185020100301306072a8648ce3d020106082a8648ce3d03010704273025020101042013d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544ea81420004d210b0a6f9d9f012868058b43fa4f471018543bba00c9250df9257c2acae5dd1ce037552d481450ce39b4d1095701b175bfab34b8e6c099e18f1c198358361e8";
+        static const char kExtraZero[] = "3042020100301306072a8648ce3d020106082a8648ce3d0301070428302602010104210013d33a2d5abf9cf9ebb21ff860d4aefe6e56e77790f4dee9b40884ebd33544ea";
+        unhex(kWptEc[0].d, scalar);
+        length = unhex(kVersion1, der);
+        check(!subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length), "a version 1 pkcs8 is refused");
+        length = unhex(kWptEc[0].pkcs8_private_only, der);
+        der[4] = 1; /* the version's value */
+        check(!subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length),
+              "version 1 without a public key is refused too");
+        length = unhex(kVersion0Outer, der);
+        check(!subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length),
+              "a [1] public key after a version 0 key is refused");
+        length = unhex(kExtraZero, der);
+        check(subtle_ec_pkcs8_decode(der, length, &got, d, &key, &point_length) && memcmp(d, scalar, 32) == 0,
+              "a d with a leading zero too many is read as its value");
+    }
+    /* Scalars: zero, the order, the order minus one. */
+    for (int c = 0; c < SUBTLE_CURVE_COUNT; c++) {
+        size_t size = subtle_ec_size((subtle_curve_t)c);
+        memset(d, 0, sizeof(d));
+        check(!subtle_ec_scalar_ok((subtle_curve_t)c, d), "zero is no private key");
+        static const char *const kOrders[] = {
+            "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973",
+            "01fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409",
+        };
+        unhex(kOrders[c], d);
+        check(!subtle_ec_scalar_ok((subtle_curve_t)c, d), "the order is no private key");
+        d[size - 1] -= 1;
+        check(subtle_ec_scalar_ok((subtle_curve_t)c, d), "the order less one is a private key");
+    }
+    /* Generated keys sign, and verify, and agree. */
+    for (int c = 0; c < SUBTLE_CURVE_COUNT; c++) {
+        size_t size = subtle_ec_size((subtle_curve_t)c);
+        uint8_t seed[48], d2[SUBTLE_EC_SIZE_MAX], s1[SUBTLE_EC_SIZE_MAX], s2[SUBTLE_EC_SIZE_MAX];
+        for (int i = 0; i < 48; i++) seed[i] = (uint8_t)(i * 7 + c);
+        check(subtle_ec_generate((subtle_curve_t)c, seed, sizeof(seed), d) && subtle_ec_scalar_ok((subtle_curve_t)c, d),
+              "a generated key is a private key");
+        seed[0] ^= 1;
+        check(subtle_ec_generate((subtle_curve_t)c, seed, sizeof(seed), d2) && memcmp(d, d2, size) != 0,
+              "another seed, another key");
+        subtle_ec_public((subtle_curve_t)c, d, point);
+        subtle_ec_public((subtle_curve_t)c, d2, other);
+        check(subtle_ecdsa_sign((subtle_curve_t)c, SUBTLE_ALG_SHA_256, d, (const uint8_t *)"abc", 3, sig) == 2 * size &&
+                  subtle_ecdsa_verify((subtle_curve_t)c, SUBTLE_ALG_SHA_256, point, (const uint8_t *)"abc", 3, sig,
+                                      2 * size),
+              "a generated key signs, and its public key verifies");
+        check(subtle_ecdh((subtle_curve_t)c, d, other, s1) && subtle_ecdh((subtle_curve_t)c, d2, point, s2) &&
+                  memcmp(s1, s2, size) == 0,
+              "two generated keys agree");
+    }
+    check(subtle_curve_named("P-256", 5) == SUBTLE_CURVE_P256 && subtle_curve_named("P-521", 5) == SUBTLE_CURVE_P521 &&
+              subtle_curve_named("p-256", 5) < 0 && subtle_curve_named("P-256\0", 6) < 0 &&
+              subtle_curve_named("P-512", 5) < 0,
+          "a curve is named exactly");
+    check(subtle_ecdsa_sign(SUBTLE_CURVE_P256, SUBTLE_ALG_COUNT, d, (const uint8_t *)"a", 1, sig) == 0,
+          "ECDSA refuses what is no hash");
+}
+
 int main(void)
 {
     static const struct {
@@ -382,6 +669,24 @@ int main(void)
               subtle_registered(SUBTLE_OP_DIGEST, "HMAC", 4, &dict) < 0 &&
               subtle_registered(SUBTLE_OP_DERIVE_BITS, "AES-GCM", 7, &dict) < 0,
           "an algorithm is no operation's but its own (wrapKey falls back to encrypt in the binding)");
+    check(subtle_registered(SUBTLE_OP_SIGN, "ecdsa", 5, &dict) == SUBTLE_ALG_ECDSA && dict == SUBTLE_DICT_ECDSA &&
+              subtle_registered(SUBTLE_OP_VERIFY, "ECDSA", 5, &dict) == SUBTLE_ALG_ECDSA && dict == SUBTLE_DICT_ECDSA &&
+              subtle_registered(SUBTLE_OP_GENERATE_KEY, "ECDSA", 5, &dict) == SUBTLE_ALG_ECDSA &&
+              dict == SUBTLE_DICT_EC_KEY_GEN &&
+              subtle_registered(SUBTLE_OP_IMPORT_KEY, "EcDsA", 5, &dict) == SUBTLE_ALG_ECDSA &&
+              dict == SUBTLE_DICT_EC_KEY_IMPORT &&
+              subtle_registered(SUBTLE_OP_DERIVE_BITS, "ecdh", 4, &dict) == SUBTLE_ALG_ECDH &&
+              dict == SUBTLE_DICT_ECDH_DERIVE &&
+              subtle_registered(SUBTLE_OP_GENERATE_KEY, "ECDH", 4, &dict) == SUBTLE_ALG_ECDH &&
+              dict == SUBTLE_DICT_EC_KEY_GEN &&
+              subtle_registered(SUBTLE_OP_IMPORT_KEY, "ECDH", 4, &dict) == SUBTLE_ALG_ECDH &&
+              dict == SUBTLE_DICT_EC_KEY_IMPORT,
+          "ECDSA and ECDH, each operation with its dictionary");
+    check(subtle_registered(SUBTLE_OP_SIGN, "ECDH", 4, &dict) < 0 &&
+              subtle_registered(SUBTLE_OP_DERIVE_BITS, "ECDSA", 5, &dict) < 0 &&
+              subtle_registered(SUBTLE_OP_GET_KEY_LENGTH, "ECDH", 4, &dict) < 0 &&
+              subtle_registered(SUBTLE_OP_ENCRYPT, "ECDH", 4, &dict) < 0,
+          "neither curve algorithm is another's, and no key is derived as ECDH's");
     check(subtle_registered(SUBTLE_OP_WRAP_KEY, "aes-kw", 6, &dict) == SUBTLE_ALG_AES_KW && dict == SUBTLE_DICT_ALGORITHM &&
               subtle_registered(SUBTLE_OP_UNWRAP_KEY, "AES-KW", 6, &dict) == SUBTLE_ALG_AES_KW &&
               subtle_registered(SUBTLE_OP_ENCRYPT, "AES-KW", 6, &dict) < 0 &&
@@ -409,6 +714,7 @@ int main(void)
     base64url_cases();
     aes_kw_cases();
     kdf_cases();
+    ec_cases();
 
     printf("subtle core: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
