@@ -80,12 +80,41 @@ Reproduce the focused host run with
 `tools/generate_image_memory_fixture.py` regenerates the PNG and three pages
 without downloaded assets.
 
-Hardware readings are pending. Deliver Yonder, its matching shared-library
-dependency closure and these four fixture files in a frozen cohort. Record
-the source commit and SHA-256 manifest with each measurement. Keep Modern Web
-and scripting enabled, use 100% zoom and the same window geometry, and run
-each fixture three times. The local-file fixtures isolate image ownership;
-they do not measure HTTP caching.
+Hardware baseline records were retrieved on 2026-11-08. The installed Yonder
+executable was read back and matches the frozen `f75c325a` baseline-links
+cohort byte-for-byte (SHA-256
+`f6424ff6964d94ca4d2ad9fece7adcf8b5e22ba69aa897a6b550f28f8042f6c8`).
+Shared libraries were not read back. The raw reports and executable readback
+are preserved with a SHA-256 manifest in the private measurement archive.
+
+Modern Web and scripting were enabled, at 100% zoom, with a recorded layout
+viewport of 2522×1257 pixels. These valid visits reproduce the exact ownership
+figures in the controlled-observations table above:
+
+| Page | Corpus records | Decode calls per visit | Native pixels requested |
+|---|---|---:|---:|
+| Untouched | `file-1696`, `file-1700`, `file-1701` | 1 | 0 |
+| Metadata | `file-1697`, `file-1699`, `file-1702` | 2 | 0 |
+| Canvas | `file-1698` | 2 | 1 |
+
+The metadata visits retain 8,294,400 native raster bytes despite having no
+pixel acquisitions. The Canvas visit retains the same native raster and
+records one pixel acquisition. Each visit retains 57,600 display bytes, with
+no outstanding pictures or reported budget, submission or decode refusals.
+`file-1695` is excluded: it predates the PNG installation repair and has zero
+decode calls and no retained pixels.
+
+Cumulative decode/reduction counters are 56,943–59,714 µs for untouched,
+105,495–106,956 µs for metadata, and 106,520 µs for the single Canvas visit.
+These are sums of decoder work, not navigation latency or a statistical
+performance comparison. Save points differ: most reports were finalized when
+leaving the page, `file-1701` also contains a manual paint reading, and
+`file-1702` was saved at picture completion. There is one valid Canvas visit,
+so the planned three-visit Canvas measurement remains outstanding.
+
+Keep the frozen cohort, viewport and settings fixed for comparisons, recording
+source revisions and manifests. The local-file fixtures isolate image ownership;
+their fetch counters are zero and they do not measure HTTP caching.
 
 For the live-site baseline, keep the same viewport, cache condition and
 interaction sequence on Microsoft Design wallpapers, Unsplash, Wallpapercat

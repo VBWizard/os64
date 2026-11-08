@@ -88,8 +88,8 @@ report PASS and match visually; the inactive page should remain large. The PNG
 must be installed beside the HTML, as described in
 [IMAGE_MEMORY_BASELINE.md](IMAGE_MEMORY_BASELINE.md).
 
-Preserve the original three M0 diagnostic records before installing the I0
-cohort. Compare Microsoft Design `/wallpapers/` at the same viewport, zoom and
+The original M0 diagnostic records are preserved, and their image ownership
+readings match the host baseline. Compare Microsoft Design `/wallpapers/` at the same viewport, zoom and
 cache conditions, recording stylesheet activation and horizontal extent as well
 as the memory census. Attribute any resulting image-size/memory change to CSS
 activation separately from I1–I3.

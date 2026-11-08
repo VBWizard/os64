@@ -5,7 +5,8 @@ Source baseline: `c21b57b370f1068f79d8867a5588ef24b999e064` (`origin/userland`).
 Branch: `codex/yonder-image-memory-design`.
 
 Implementation evidence: [M0 baseline](IMAGE_MEMORY_BASELINE.md) and
-[I0 stylesheet preload](IMAGE_MEMORY_I0.md). Hardware comparison remains pending.
+[I0 stylesheet preload](IMAGE_MEMORY_I0.md). The M0 hardware baseline is captured;
+I0 hardware comparison remains pending.
 
 ## 1. Decision and scope
 
