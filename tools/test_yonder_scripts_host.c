@@ -6975,6 +6975,7 @@ static void memory_census_cases(void) {
      * the departure census is taken before they go. */
     page_departs();
     check(g.page.census_left && g.page.census.n==2,"census: a departure takes the last sample before the scripts go");
+    check(census_due()==YONDER_NEVER,"census: and retires the timer, though the page may stay on screen");
     loop_drop();
     const char *file=diag_file("/tmp/diag",name);
     check(has(file,"\nwritten: when the page was left\n") && has(file,"\nmemory: heap 64.0M (uncounted ") &&

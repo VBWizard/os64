@@ -3181,11 +3181,12 @@ static void diag_census(Page *p, bool sample)
 }
 
 // When the shown page's next timeline sample is due; never for a page not
-// censused.
+// censused, nor once its departure sample is taken (the page may stay on
+// screen, scriptless, while a navigation is stopped or slow).
 static uint64_t census_due(void)
 {
     const Page *p = &g.page;
-    if (!p->censused || p->diag == NULL) return YONDER_NEVER;
+    if (!p->censused || p->census_left || p->diag == NULL) return YONDER_NEVER;
     const yonder_census_timeline_t *tl = &p->census;
     return tl->n == 0 ? yonder_now_ms() : p->census_began + tl->samples[tl->n - 1].ms + tl->interval_ms;
 }
@@ -3198,7 +3199,7 @@ static uint64_t census_due(void)
 static void census_turn(void)
 {
     Page *p = &g.page;
-    if (!p->censused || p->diag == NULL) return;
+    if (!p->censused || p->census_left || p->diag == NULL) return;
     if (yonder_census_timeline_due(&p->census, yonder_now_ms() - p->census_began)) {
         diag_census(p, true);
         diag_write(p->diag);
