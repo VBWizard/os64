@@ -589,6 +589,120 @@ static void dom_window_subtle_tier2_cases(void)
     fixture_free(&f);
 }
 
+/* crypto.subtle, tier 3a (WEB_CRYPTO.md): HKDF against RFC 5869 A.1 and
+ * PBKDF2 against RFC 6070, a derivation key's import and export refusals,
+ * deriveBits' lengths, deriveKey into AES and HMAC (the derived key is the
+ * derivation's first bits) and each of its refusals in the spec's order,
+ * AES-KW against RFC 3394 4.1 through wrapKey and back, a JWK padded to
+ * AES-KW's 8 bytes, and the dictionary members copied when they are
+ * converted (a salt, an iv), which a later getter must not reach. Every
+ * expectation is node's WebCrypto's but three, where node departs from
+ * the spec: a derivation key's format is checked before its usages, an
+ * HMAC length of 0 is get key length's TypeError, and a key's usages read
+ * back in the recognized order (the spec's normalized value), where node
+ * keeps the caller's. */
+static void dom_window_subtle_tier3a_cases(void)
+{
+    os64_dom_options_t options = window_options(WINDOW_URL);
+    os64_js_config_t config = fixture_config();
+    config.limits.jobs_per_turn = (uint64_t)1 << 20;
+    DomFixture f = fixture_configured(0, 0, &config);
+    if (f.runtime && f.state) {
+        os64_js_outcome_t outcome;
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
+    }
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT SUBTLE_JS
+        "globalThis.log=[];"
+        "function unhex(t){return new Uint8Array(t.match(/../g).map(x=>parseInt(x,16)))}"
+        "(async()=>{const s=crypto.subtle,enc=t=>new TextEncoder().encode(t);"
+        "const refused=async(p,n,t)=>{try{await p;log.push(t+': resolved')}catch(e){log.push(t+': '+(e.name===n?'ok':e.name))}};"
+        "const hk=await s.importKey('raw',unhex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'),'HKDF',false,['deriveBits','deriveKey']);"
+        "const hp={name:'HKDF',hash:'SHA-256',salt:unhex('000102030405060708090a0b0c'),info:unhex('f0f1f2f3f4f5f6f7f8f9')};"
+        "log.push('hkdf:'+hex(await s.deriveBits(hp,hk,336)).slice(0,16));"
+        "log.push('hkdf key:'+[hk.type,hk.extractable,hk.algorithm.name,hk.algorithm.length,hk.usages.join('/')].join());"
+        "const pk=await s.importKey('raw',enc('password'),{name:'pbkdf2'},false,['deriveBits']);"
+        "log.push('pbkdf2:'+hex(await s.deriveBits({name:'PBKDF2',hash:'SHA-1',salt:enc('salt'),iterations:2},pk,160)));"
+        "log.push('empty:'+(await s.deriveBits(hp,hk,0)).byteLength);"
+        "await refused(s.deriveBits(hp,hk,null),'OperationError','a null length');"
+        "await refused(s.deriveBits(hp,hk),'OperationError','no length');"
+        "await refused(s.deriveBits(hp,hk,230),'OperationError','a length within a byte');"
+        "await refused(s.deriveBits({...hp,hash:'SHA-1'},hk,8*255*20+8),'OperationError','past 255 hashes');"
+        "await refused(s.deriveBits(hp,pk,256),'InvalidAccessError','another algorithm\\'s key');"
+        "await refused(s.deriveBits({name:'PBKDF2',hash:'SHA-1',salt:enc('salt'),iterations:0},pk,160),'OperationError','no iterations');"
+        "await refused(s.deriveBits({name:'HKDF',hash:'SHA-256',info:new Uint8Array(0)},hk,256),'TypeError','a missing salt');"
+        "await refused(s.deriveBits({...hp,hash:'AES-GCM'},hk,256),'NotSupportedError','a hash that is no digest');"
+        "await refused(s.importKey('raw',new Uint8Array(4),'HKDF',true,['deriveBits']),'SyntaxError','an extractable derivation key');"
+        "await refused(s.importKey('spki',new Uint8Array(4),'PBKDF2',false,['sign']),'NotSupportedError','the format before the usages');"
+        "await refused(s.importKey('raw',new Uint8Array(4),'HKDF',false,['sign']),'SyntaxError','a usage it lacks');"
+        "await refused(s.exportKey('raw',hk),'NotSupportedError','exporting a derivation key');"
+        "await refused(s.generateKey({name:'HKDF'},false,['deriveBits']),'NotSupportedError','generating one');"
+        "const bitsOnly=await s.importKey('raw',new Uint8Array(4),'HKDF',false,['deriveBits']);"
+        "await refused(s.deriveKey(hp,bitsOnly,{name:'AES-GCM',length:128},true,['encrypt']),'InvalidAccessError','deriveKey wants deriveKey');"
+        "const ak=await s.deriveKey(hp,hk,{name:'AES-GCM',length:256},true,['encrypt']);"
+        "log.push('derived aes:'+(hex(await s.exportKey('raw',ak))===hex(await s.deriveBits(hp,hk,256)))+','+ak.algorithm.length);"
+        "const mk=await s.deriveKey(hp,hk,{name:'HMAC',hash:{name:'sha-512'}},false,['sign']);"
+        "log.push('derived hmac:'+mk.algorithm.hash.name+','+mk.algorithm.length);"
+        "await refused(s.deriveKey(hp,hk,{name:'HMAC',hash:'SHA-256',length:0},true,['sign']),'TypeError','an HMAC length of 0');"
+        "await refused(s.deriveKey(hp,hk,{name:'AES-GCM',length:512},true,['encrypt']),'OperationError','an AES length of 512');"
+        "await refused(s.deriveKey(hp,hk,{name:'AES-GCM'},true,['encrypt']),'TypeError','an AES type with no length');"
+        "await refused(s.deriveKey(hp,hk,'HKDF',false,['deriveBits']),'OperationError','a derivation key derived');"
+        "await refused(s.deriveKey(hp,hk,{name:'AES-GCM',length:128},true,[]),'SyntaxError','no usages, after the derivation');"
+        "const salt=unhex('000102030405060708090a0b0c');"
+        "const seen=await s.deriveKey({name:'HKDF',hash:'SHA-256',salt,info:hp.info},hk,{get name(){salt.fill(0);return 'AES-GCM'},length:256},true,['encrypt']);"
+        "log.push('salt copied:'+(hex(await s.exportKey('raw',seen))===hex(await s.exportKey('raw',ak))));"
+        "const kek=await s.importKey('raw',unhex('000102030405060708090a0b0c0d0e0f'),'AES-KW',true,['wrapKey','unwrapKey']);"
+        "const data=await s.importKey('raw',unhex('00112233445566778899aabbccddeeff'),'AES-CBC',true,['encrypt']);"
+        "const wrapped=await s.wrapKey('raw',data,kek,'AES-KW');"
+        "log.push('kw:'+hex(wrapped));"
+        "const back=await s.unwrapKey('raw',wrapped,kek,{name:'AES-KW'},'AES-CBC',true,['encrypt']);"
+        "log.push('kw back:'+hex(await s.exportKey('raw',back)));"
+        "const bad=new Uint8Array(wrapped);bad[23]^=1;"
+        "await refused(s.unwrapKey('raw',bad,kek,'AES-KW','AES-CBC',true,['encrypt']),'OperationError','an altered wrapped key');"
+        "await refused(s.unwrapKey('raw',new Uint8Array(16),kek,'AES-KW','AES-CBC',true,['encrypt']),'OperationError','one block to unwrap');"
+        "const short=await s.importKey('raw',new Uint8Array(8),{name:'HMAC',hash:'SHA-256'},true,['sign']);"
+        "await refused(s.wrapKey('raw',short,kek,'AES-KW'),'OperationError','one block to wrap');"
+        "const wj=await s.wrapKey('jwk',data,kek,'AES-KW');"
+        "const uj=await s.unwrapKey('jwk',wj,kek,'AES-KW','AES-CBC',true,['encrypt']);"
+        "log.push('kw jwk padded:'+(wj.byteLength%8)+','+hex(await s.exportKey('raw',uj)));"
+        "await refused(s.encrypt({name:'AES-KW'},kek,new Uint8Array(16)),'NotSupportedError','AES-KW encrypting');"
+        "await refused(s.wrapKey('raw',hk,kek,'AES-KW'),'NotSupportedError','wrapping a derivation key');"
+        "const kwj=await s.exportKey('jwk',kek);"
+        "log.push('kw jwk:'+kwj.alg+','+kwj.key_ops.join('/'));"
+        "const gk=await s.generateKey({name:'AES-KW',length:192},true,['wrapKey']);"
+        "log.push('kw generated:'+gk.algorithm.length+','+(await s.exportKey('raw',gk)).byteLength);"
+        "await refused(s.generateKey({name:'AES-KW',length:128},true,['encrypt']),'SyntaxError','an AES-KW key that encrypts');"
+        "const gw=await s.generateKey({name:'AES-GCM',length:128},false,['wrapKey','unwrapKey']);"
+        "const iv=new Uint8Array(12);"
+        "const gwrapped=await s.wrapKey('raw',data,gw,{name:'AES-GCM',iv});"
+        "const un=await s.unwrapKey('raw',gwrapped,gw,{name:'AES-GCM',iv},{get name(){iv[0]=1;return 'AES-CBC'}},true,['encrypt']);"
+        "log.push('iv copied:'+hex(await s.exportKey('raw',un)).slice(0,8));"
+        "})().catch(e=>log.push('threw: '+e.name+' '+e.message));",
+        "subtle tier 3a: the calls");
+    subtle_settle(&f);
+    dom_script(&f, STORAGE_ASSERT
+        "{const want=["
+        "'hkdf:3cb25f25faacd57a','hkdf key:secret,false,HKDF,,deriveKey/deriveBits',"
+        "'pbkdf2:ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957','empty:0','a null length: ok','no length: ok',"
+        "'a length within a byte: ok','past 255 hashes: ok','another algorithm\\'s key: ok',"
+        "'no iterations: ok','a missing salt: ok','a hash that is no digest: ok',"
+        "'an extractable derivation key: ok','the format before the usages: ok','a usage it lacks: ok',"
+        "'exporting a derivation key: ok','generating one: ok','deriveKey wants deriveKey: ok',"
+        "'derived aes:true,256','derived hmac:SHA-512,1024','an HMAC length of 0: ok',"
+        "'an AES length of 512: ok','an AES type with no length: ok','a derivation key derived: ok',"
+        "'no usages, after the derivation: ok','salt copied:true',"
+        "'kw:1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5','kw back:00112233445566778899aabbccddeeff',"
+        "'an altered wrapped key: ok','one block to unwrap: ok','one block to wrap: ok',"
+        "'kw jwk padded:0,00112233445566778899aabbccddeeff','AES-KW encrypting: ok',"
+        "'wrapping a derivation key: ok','kw jwk:A128KW,wrapKey/unwrapKey','kw generated:192,24',"
+        "'an AES-KW key that encrypts: ok','iv copied:00112233'"
+        "];"
+        "for(let i=0;i<Math.max(log.length,want.length);i++)"
+        "assert(log[i]===want[i],'entry '+i+': got '+log[i]+', want '+want[i]);}",
+        "subtle tier 3a: answered");
+    fixture_free(&f);
+}
+
 static void dom_window_cases(void)
 {
     dom_window_member_cases();
@@ -596,6 +710,7 @@ static void dom_window_cases(void)
     dom_window_crypto_cases();
     dom_window_subtle_cases();
     dom_window_subtle_tier2_cases();
+    dom_window_subtle_tier3a_cases();
     dom_window_microtask_cases();
     dom_window_sweep_cases();
 }

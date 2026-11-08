@@ -1368,7 +1368,14 @@ SHA-1, SHA-256, SHA-384 and SHA-512, and AES-CTR, AES-CBC, AES-GCM and
 HMAC: their keys generated, imported and exported raw and as JWK,
 `encrypt`, `decrypt`, `sign` and `verify`, and `wrapKey`/`unwrapKey`
 through the cipher's `encrypt` and `decrypt`, as § 14.3.11 allows an
-algorithm with no wrap operation of its own. A CryptoKey's material is
+algorithm with no wrap operation of its own; AES-KW, whose own wrap and
+unwrap they are (RFC 3394, a wrapped JWK padded with spaces to its 8
+bytes); and HKDF and PBKDF2, whose keys are imported raw and never
+exported, for `deriveBits` and `deriveKey` (the derived key type
+normalized for importKey and for get key length, then the derivation's
+bits imported raw). A dictionary's own buffers (an `iv`, a `salt`) are
+copied when it is converted, as § 18.4.4 copies them; a later
+normalization's getters cannot reach them. A CryptoKey's material is
 engine heap, zeroed by its finalizer; its `algorithm` and `usages` are
 made once, at the key's birth, so every read is the same object. DEBTS.md
 books the rest, by WEB_CRYPTO.md § 2's tiers. Each method converts its arguments as WebIDL
@@ -1383,13 +1390,14 @@ rejection, never a throw**, as WebIDL makes one for a promise-returning
 operation: the work is done on the call and the answer queued, in call
 order, for one binding timer of no delay that settles every answer
 waiting (`settle_later`, `settle_drain`), which is DIVERGENCES.md's row,
-and why a buffer is read where it lies rather than copied. The BearSSL objects it
+and why an argument's buffer is read where it lies rather than copied. The BearSSL objects it
 calls are linked into libdom.so privately (`library.mk`'s `LIBDOM_BEARSSL`,
 the same files `tools/subtle_bearssl.sh` lists for the host harnesses), so
 libtls.so exports nothing new. Its interfaces' members, and Crypto's, have
 WebIDL's shape (`d_idl_members`: operations enumerable, accessors named
 "get x"). `tools/test_subtle_core_host.sh` holds the core to FIPS 180-2's,
-NIST SP 800-38A's, the GCM paper's and RFC 4231's vectors; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
+NIST SP 800-38A's, the GCM paper's, RFC 4231's, RFC 3394's, RFC 5869's
+and RFC 6070's vectors; WPT's WebCryptoAPI holds the binding (`tools/wpt/expected/WebCryptoAPI.txt`).
 
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),

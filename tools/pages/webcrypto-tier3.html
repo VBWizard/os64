@@ -1,0 +1,195 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>crypto.subtle, tier 3</title>
+<style>
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.pass{color:#080}.fail{color:#c00}
+button{margin:.2em}
+</style>
+</head><body>
+<h1>crypto.subtle, tier 3</h1>
+<p>WEB_CRYPTO.md's tier 3, what fewer pages want, built in slices. Each line
+is a check against a published value or the behaviour Web Cryptography
+requires; another browser shows every line PASS, and so should yonder.</p>
+<p><b>3a, derivation and AES-KW:</b> HKDF (RFC 5869's test cases), PBKDF2
+(RFC 6070's), <code>deriveBits</code> and <code>deriveKey</code>, and AES-KW
+(RFC 3394's) wrapping and unwrapping keys.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+<h2>How long PBKDF2 holds the page</h2>
+<p>yonder does a derivation's work on the call (WEB_CRYPTO.md § 5), and the
+page chooses PBKDF2's iteration count, so the page waits while it runs. Each
+button derives 256 bits with PBKDF2 over SHA-256 at that many iterations and
+prints the time. Sign-in pages use from about a hundred thousand to six
+hundred thousand.</p>
+<p id="counts"></p>
+<pre id="timing">Pick a count.</pre>
+<script>
+const lines = [];
+let passed = 0, failed = 0;
+function record(ok, what, detail) {
+  if (ok) passed++; else failed++;
+  lines.push((ok ? 'PASS ' : 'FAIL ') + what + (ok || !detail ? '' : '\n     ' + detail));
+}
+const subtle = crypto.subtle;
+const enc = s => new TextEncoder().encode(s);
+function hex(b) { return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join(''); }
+function unhex(s) { return new Uint8Array(s.match(/../g).map(x => parseInt(x, 16))); }
+async function is(what, make, want) {
+  try {
+    const got = await make();
+    record(got === want, what, 'got ' + got + ', want ' + want);
+  } catch (e) { record(false, what, 'rejected: ' + e.name + ' ' + e.message); }
+}
+async function rejectsWith(what, make, name) {
+  let promise;
+  try { promise = make(); } catch (e) { record(false, what, 'threw instead of rejecting: ' + e.name); return; }
+  if (!(promise instanceof Promise)) { record(false, what, 'no promise'); return; }
+  try { await promise; record(false, what, 'resolved; want ' + name); }
+  catch (e) { record(e.name === name, what, 'rejected with ' + e.name + ', want ' + name); }
+}
+
+async function hkdf() {
+  const cases = [
+    ['RFC 5869 A.1', '0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', '000102030405060708090a0b0c',
+     'f0f1f2f3f4f5f6f7f8f9', 42,
+     '3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865'],
+    ['RFC 5869 A.2 (longer inputs and output)',
+     '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f' +
+     '303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f',
+     '606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f' +
+     '909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf',
+     'b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf' +
+     'e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff', 82,
+     'b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09' +
+     'da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87'],
+    ['RFC 5869 A.3 (empty salt and info)', '0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', '', '', 42,
+     '8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8'],
+  ];
+  for (const [what, ikm, salt, info, length, okm] of cases) {
+    const key = await subtle.importKey('raw', unhex(ikm), 'HKDF', false, ['deriveBits']);
+    await is('HKDF-SHA-256, ' + what,
+             async () => hex(await subtle.deriveBits({name: 'HKDF', hash: 'SHA-256',
+                                                      salt: salt ? unhex(salt) : new Uint8Array(0),
+                                                      info: info ? unhex(info) : new Uint8Array(0)}, key, length * 8)), okm);
+  }
+  const key = await subtle.importKey('raw', unhex(cases[0][1]), 'HKDF', false, ['deriveBits', 'deriveKey']);
+  const params = {name: 'HKDF', hash: 'SHA-256', salt: unhex(cases[0][2]), info: unhex(cases[0][3])};
+  await is('an HKDF key is secret, never extractable, and has no length',
+           async () => [key.type, key.extractable, key.algorithm.name, key.algorithm.length].join(), 'secret,false,HKDF,');
+  await is('a length of 0 derives nothing', async () => (await subtle.deriveBits(params, key, 0)).byteLength, 0);
+  await rejectsWith('a null length: OperationError', () => subtle.deriveBits(params, key, null), 'OperationError');
+  await rejectsWith('a length within a byte: OperationError', () => subtle.deriveBits(params, key, 230), 'OperationError');
+  await rejectsWith('an HKDF key that is extractable: SyntaxError',
+                    () => subtle.importKey('raw', new Uint8Array(4), 'HKDF', true, ['deriveBits']), 'SyntaxError');
+  await rejectsWith('exporting an HKDF key: NotSupportedError', () => subtle.exportKey('raw', key), 'NotSupportedError');
+  await rejectsWith('a hash that is no digest: NotSupportedError',
+                    () => subtle.deriveBits({...params, hash: 'AES-GCM'}, key, 256), 'NotSupportedError');
+  const aes = await subtle.deriveKey(params, key, {name: 'AES-GCM', length: 256}, true, ['encrypt']);
+  await is('deriveKey makes an AES key of the derivation\'s first 256 bits',
+           async () => hex(await subtle.exportKey('raw', aes)), cases[0][5].slice(0, 64));
+  const mac = await subtle.deriveKey(params, key, {name: 'HMAC', hash: 'SHA-512'}, false, ['sign']);
+  await is('deriveKey makes an HMAC key the hash\'s block size long',
+           async () => mac.algorithm.hash.name + ' ' + mac.algorithm.length, 'SHA-512 1024');
+  await rejectsWith('an AES length of 512: OperationError',
+                    () => subtle.deriveKey(params, key, {name: 'AES-GCM', length: 512}, true, ['encrypt']), 'OperationError');
+  await rejectsWith('an AES key type with no length: TypeError',
+                    () => subtle.deriveKey(params, key, {name: 'AES-GCM'}, true, ['encrypt']), 'TypeError');
+  const bitsOnly = await subtle.importKey('raw', new Uint8Array(4), 'HKDF', false, ['deriveBits']);
+  await rejectsWith('deriveKey with a key that may only derive bits: InvalidAccessError',
+                    () => subtle.deriveKey(params, bitsOnly, {name: 'AES-GCM', length: 128}, true, ['encrypt']),
+                    'InvalidAccessError');
+}
+
+async function pbkdf2() {
+  const cases = [
+    ['c=1', 'password', 'salt', 1, 20, '0c60c80f961f0e71f3a9b524af6012062fe037a6'],
+    ['c=2', 'password', 'salt', 2, 20, 'ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957'],
+    ['c=4096', 'password', 'salt', 4096, 20, '4b007901b765489abead49d926f721d065a429c1'],
+    ['two output blocks', 'passwordPASSWORDpassword', 'saltSALTsaltSALTsaltSALTsaltSALTsalt', 4096, 25,
+     '3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038'],
+    ['NUL bytes', 'pass\0word', 'sa\0lt', 4096, 16, '56fa6aa75548099dcc37d7f03425e0c3'],
+  ];
+  for (const [what, password, salt, iterations, length, dk] of cases) {
+    const key = await subtle.importKey('raw', enc(password), 'PBKDF2', false, ['deriveBits']);
+    await is('PBKDF2-HMAC-SHA1, RFC 6070 ' + what,
+             async () => hex(await subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-1', salt: enc(salt), iterations},
+                                                     key, length * 8)), dk);
+  }
+  const key = await subtle.importKey('raw', enc('password'), 'PBKDF2', false, ['deriveBits']);
+  await rejectsWith('no iterations: OperationError',
+                    () => subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-1', salt: enc('salt'), iterations: 0}, key, 160),
+                    'OperationError');
+  await rejectsWith('a PBKDF2 key used for HKDF: InvalidAccessError',
+                    () => subtle.deriveBits({name: 'HKDF', hash: 'SHA-256', salt: enc('s'), info: enc('i')}, key, 256),
+                    'InvalidAccessError');
+}
+
+async function aesKw() {
+  const kek = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
+  const data = '00112233445566778899aabbccddeeff000102030405060708090a0b0c0d0e0f';
+  const cases = [
+    ['4.1, 128 bits under a 128-bit KEK', 32, 32, '1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5'],
+    ['4.2, 128 bits under a 192-bit KEK', 48, 32, '96778b25ae6ca435f92b5b97c050aed2468ab8a17ad84e5d'],
+    ['4.3, 128 bits under a 256-bit KEK', 64, 32, '64e8c3f9ce0f5ba263e9777905818a2a93c8191e7d6e8ae7'],
+    ['4.4, 192 bits under a 192-bit KEK', 48, 48, '031d33264e15d33268f24ec260743edce1c6c7ddee725a936ba814915c6762d2'],
+    ['4.5, 192 bits under a 256-bit KEK', 64, 48, 'a8f9bc1612c68b3ff6e6f4fbe30e71e4769c8b80a32cb8958cd5d17d6b254da1'],
+    ['4.6, 256 bits under a 256-bit KEK', 64, 64,
+     '28c9f404c4b810f4cbccb35cfb87f8263f5786e2d80ed326cbc7f0e71a99f43bfb988b9b7a02dd21'],
+  ];
+  for (const [what, kekHex, dataHex, wrapped] of cases) {
+    const wrapper = await subtle.importKey('raw', unhex(kek.slice(0, kekHex)), 'AES-KW', false, ['wrapKey', 'unwrapKey']);
+    const key = await subtle.importKey('raw', unhex(data.slice(0, dataHex)), 'AES-CBC', true, ['encrypt']);
+    await is('AES-KW, RFC 3394 ' + what, async () => hex(await subtle.wrapKey('raw', key, wrapper, 'AES-KW')), wrapped);
+    await is('AES-KW, RFC 3394 ' + what.slice(0, 3) + ' unwraps back', async () => hex(await subtle.exportKey('raw',
+             await subtle.unwrapKey('raw', unhex(wrapped), wrapper, 'AES-KW', 'AES-CBC', true, ['encrypt']))),
+             data.slice(0, dataHex));
+  }
+  const wrapper = await subtle.importKey('raw', unhex(kek.slice(0, 32)), 'AES-KW', true, ['wrapKey', 'unwrapKey']);
+  const altered = unhex(cases[0][3]);
+  altered[23] ^= 1;
+  await rejectsWith('an altered wrapped key: OperationError',
+                    () => subtle.unwrapKey('raw', altered, wrapper, 'AES-KW', 'AES-CBC', true, ['encrypt']), 'OperationError');
+  const key = await subtle.importKey('raw', unhex(data.slice(0, 32)), 'AES-CBC', true, ['encrypt']);
+  const wrappedJwk = await subtle.wrapKey('jwk', key, wrapper, 'AES-KW');
+  await is('a JWK wraps under AES-KW and unwraps back',
+           async () => hex(await subtle.exportKey('raw',
+             await subtle.unwrapKey('jwk', wrappedJwk, wrapper, 'AES-KW', 'AES-CBC', true, ['encrypt']))), data.slice(0, 32));
+  await rejectsWith('AES-KW does not encrypt: NotSupportedError',
+                    () => subtle.encrypt({name: 'AES-KW'}, wrapper, new Uint8Array(16)), 'NotSupportedError');
+  await rejectsWith('an AES-KW key that would encrypt: SyntaxError',
+                    () => subtle.generateKey({name: 'AES-KW', length: 128}, true, ['encrypt']), 'SyntaxError');
+  await is('an AES-KW key exports as an A128KW JWK', async () => (await subtle.exportKey('jwk', wrapper)).alg, 'A128KW');
+}
+
+async function checks() {
+  record(window.isSecureContext === true, 'this page is a secure context');
+  await hkdf();
+  await pbkdf2();
+  await aesKw();
+}
+checks().catch(e => record(false, 'the checks themselves', e.name + ' ' + e.message)).then(() => {
+  document.getElementById('checks').textContent = lines.join('\n');
+  const summary = document.getElementById('summary');
+  summary.textContent = passed + ' passed, ' + failed + ' failed';
+  summary.className = failed ? 'fail' : 'pass';
+});
+
+async function time(iterations) {
+  const out = document.getElementById('timing');
+  out.textContent = 'Deriving with ' + iterations.toLocaleString() + ' iterations...';
+  const key = await subtle.importKey('raw', enc('correct horse battery staple'), 'PBKDF2', false, ['deriveBits']);
+  const t0 = performance.now();
+  await subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt: enc('a salt'), iterations}, key, 256);
+  const ms = performance.now() - t0;
+  out.textContent = iterations.toLocaleString() + ' iterations: ' + ms.toFixed(1) + ' ms (' +
+                    Math.round(iterations / (ms / 1000)).toLocaleString() + ' iterations a second)';
+}
+for (const n of [100000, 310000, 600000, 1000000]) {
+  const b = document.createElement('button');
+  b.textContent = n.toLocaleString();
+  b.onclick = () => time(n);
+  document.getElementById('counts').appendChild(b);
+}
+</script>
+</body></html>

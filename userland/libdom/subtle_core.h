@@ -37,6 +37,9 @@ typedef enum {
     SUBTLE_ALG_AES_CBC,
     SUBTLE_ALG_AES_GCM,
     SUBTLE_ALG_HMAC,
+    SUBTLE_ALG_AES_KW,
+    SUBTLE_ALG_HKDF,
+    SUBTLE_ALG_PBKDF2,
     SUBTLE_ALG_COUNT
 } subtle_alg_t;
 
@@ -50,6 +53,9 @@ typedef enum {
     SUBTLE_DICT_AES_GCM,        /* AesGcmParams: additionalData, iv, tagLength */
     SUBTLE_DICT_HMAC_KEY_GEN,   /* HmacKeyGenParams: hash, length */
     SUBTLE_DICT_HMAC_IMPORT,    /* HmacImportParams: hash, length */
+    SUBTLE_DICT_AES_DERIVED,    /* AesDerivedKeyParams: length */
+    SUBTLE_DICT_HKDF,           /* HkdfParams: hash, info, salt */
+    SUBTLE_DICT_PBKDF2,         /* Pbkdf2Params: hash, iterations, salt */
 } subtle_dict_t;
 
 /* The algorithm registered for `op` whose name matches `name` (`length`
@@ -122,6 +128,17 @@ bool subtle_aes_gcm_decrypt(const uint8_t *key, size_t key_length, const uint8_t
                             const uint8_t *aad, size_t aad_length, size_t tag_bytes, const uint8_t *in,
                             size_t length, uint8_t *out, size_t *out_length);
 
+/* AES-KW (RFC 3394; § 30): `in` (a multiple of 8 bytes, at least 16)
+ * wrapped into `out`, which holds length + 8 bytes; that length, or 0 for
+ * an input the scheme cannot take. */
+size_t subtle_aes_kw_wrap(const uint8_t *key, size_t key_length, const uint8_t *in, size_t length, uint8_t *out);
+/* `in` (a multiple of 8 bytes, at least 24) unwrapped into `out` (length -
+ * 8 bytes) and its length; false for an input the scheme cannot take or
+ * one whose integrity check fails, in which case `out` holds nothing a
+ * caller may use. */
+bool subtle_aes_kw_unwrap(const uint8_t *key, size_t key_length, const uint8_t *in, size_t length, uint8_t *out,
+                          size_t *out_length);
+
 /* ── HMAC (RFC 2104) ──────────────────────────────────────────────────── */
 
 /* A hash's block size in bytes (an HMAC key's default length); 0 for an
@@ -132,6 +149,20 @@ size_t subtle_hash_block_size(subtle_alg_t hash);
  * subtle_digest_size(hash) bytes; false for an algorithm that is no hash. */
 bool subtle_hmac(subtle_alg_t hash, const uint8_t *key, size_t key_length, const uint8_t *data, size_t length,
                  uint8_t *out);
+
+/* ── The key derivations ───────────────────────────────────────────────── */
+
+/* PBKDF2 (RFC 8018 § 5.2; § 34) with HMAC over `hash`: `length` bytes into
+ * `out`; false for an algorithm that is no hash or no iterations. Its time
+ * is the iteration count's, which a page chooses. */
+bool subtle_pbkdf2(subtle_alg_t hash, const uint8_t *password, size_t password_length, const uint8_t *salt,
+                   size_t salt_length, uint32_t iterations, uint8_t *out, size_t length);
+/* HKDF (RFC 5869; § 33), extract then expand, `length` bytes into `out`; an
+ * empty salt is a present one of no bytes, which HMAC pads as it would the
+ * hash's length of zeros. False for an algorithm that is no hash or a
+ * length past 255 times the hash's. */
+bool subtle_hkdf(subtle_alg_t hash, const uint8_t *key, size_t key_length, const uint8_t *salt, size_t salt_length,
+                 const uint8_t *info, size_t info_length, uint8_t *out, size_t length);
 
 /* Whether `a` and `b` hold the same `length` bytes, in time that depends on
  * the length alone (a MAC's comparison). */
