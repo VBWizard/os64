@@ -4761,15 +4761,25 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     buttons_follow();
 }
 
-// A request a page makes, judged by libway: refused with its sentence,
-// asked about in the bar, or sent. `request` is consumed either way. The
-// page that asked is the one the request names and tells: `from`, its
+// A local document's file GET goes to the local reader; other requests are
+// judged by libway: refused, asked about in the bar, or sent. `request` is
+// consumed either way. The page that asked is the one the request names and tells: `from`, its
 // address, is its Referer, and `record` takes a refusal's line — that
 // page's own wherever it is in its arrival, whichever page is on screen.
 // `by` is whether a person on that page asked or the page itself did.
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask, const char *from,
                              way_initiator_t by, yonder_diag_t *record)
 {
+    // The network scheme policy cannot authorize the local reader. A file
+    // document may follow another file, while a network document still goes
+    // through libway's refusal. The local reader does not submit POST bodies.
+    if (request->method == OS64_PAGE_METHOD_GET && os64_streq(request->scheme, "file") &&
+        from != NULL && os64_strlen(from) >= 7 && os64_memcmp(from, "file://", 7) == 0 &&
+        request->url != NULL && os64_strlen(request->url) >= 7 &&
+        os64_memcmp(request->url, "file://", 7) == 0) {
+        start_trip(request->url, request, from, kind, by, NULL);
+        return;
+    }
     way_judgement_t j = way_judge(&g.way, request, ask);
     if (j.kind == WAY_REFUSE) {
         os64_page_request_free(request);

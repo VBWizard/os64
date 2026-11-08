@@ -3805,6 +3805,38 @@ static void loop_local_file(void) {
     slurp_path=NULL;
     loop_drop();
 }
+static void local_link_cases(void)
+{
+    const char *names[] = {"image-memory-untouched.html", "image-memory-metadata.html", "image-memory-canvas.html"};
+    for (unsigned i = 0; i < 3; i++) {
+        stream_window();
+        g.scripts_on = true; g.script_ms = 5000;
+        char html[256], path[256];
+        snprintf(html, sizeof(html), "<a id=next href='%s'>next</a>", names[i]);
+        slurp_path = "/tests/pages/image-memory-untouched.html";
+        slurp_bytes = html;
+        open_address(slurp_path, NAV_GO, NULL, NULL);
+        check(loop_settle() && probe_id("next"), "local link: source file arrives");
+        snprintf(path, sizeof(path), "/tests/pages/%s", names[i]);
+        slurp_path = path;
+        slurp_bytes = "<p id=out>linked file</p>";
+        follow_link(os64_page_link_for(page_model(&g.page), probe_id("next")));
+        check(g.stream.active && g.stream.local != NULL && pool_work.job == NULL,
+              "local link: relative file link starts local reading without a network job");
+        check(loop_settle() && probe_text_is("out", "linked file"),
+              "local link: linked file arrives through the navigation stream");
+        slurp_path = NULL;
+        loop_drop();
+    }
+    loop_page("<a id=next href='file:///tests/pages/image-memory-canvas.html'>local file</a>");
+    check(loop_settle(), "local link: network source arrives");
+    void *pending = pool_work.job;
+    follow_link(os64_page_link_for(page_model(&g.page), probe_id("next")));
+    check(!g.stream.active && pool_work.job == pending && probe_id("next") &&
+          strstr(g.status_text, "does not fetch") != NULL,
+          "local link: a network document cannot navigate into local files");
+    loop_drop();
+}
 static void loop_handlers_only(void) {
     loop_page("<body onload=\"document.getElementById('h').textContent='onload ran '+(this===window)\">"
         "<h1 id=h>waiting</h1></body>");
@@ -11642,6 +11674,14 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    if(getenv("YONDER_LOCAL_LINKS_ONLY")) {
+        local_link_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"local links: text released");
+        check(live==0,"local links: heap empty");
+        printf("yonder local links: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_IMAGES_ONLY")) {
         picture_sizes_cases(); data_picture_cases(); picture_memory_baseline(); picture_memory_pages();
         os64_text_font_release(probe_font);
@@ -11740,6 +11780,7 @@ int main(void)
     picture_sizes_cases();
     picture_memory_baseline();
     picture_memory_pages();
+    local_link_cases();
     covered_link_cases();
     clipped_control_cases();
     classic_downloaded_cases();

@@ -93,3 +93,18 @@ and the chosen Reddit feed. Preserve individual diagnostic records. On
 Microsoft Design, record stylesheet activation and horizontal extent as well
 as memory; I0's eventual geometry change must be attributed separately from
 I2/I3. No hardware improvement is claimed by this baseline slice.
+
+## Local-navigation correction after hardware feedback
+
+The first hardware visit exposed a pre-existing navigation gap: relative
+links resolved to valid file URLs, but `request_navigate` sent them through
+libway's HTTP-only scheme check before the local reader could handle them.
+Direct address-bar opening worked, which is how the initial fixtures were
+tested. Local-document file GETs now use the existing local navigation path;
+network-document file links remain refused.
+
+The regression exercises all three comparison-page filenames through link
+activation and checks the network-document refusal. The full host suite passes
+23,610 checks with ASan, UBSan and LeakSanitizer; the image ownership readings
+and immediate Canvas readback above remain unchanged. The correction is a new
+frozen delivery with the original libraries and fixture files reused.
