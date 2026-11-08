@@ -40,6 +40,14 @@
 #define YONDER_SCRIPT_MEMORY_MB_MIN 16
 #define YONDER_SCRIPT_MEMORY_MB_MAX 2048
 
+// A page's DOM budget, in MiB (yonder.conf's `dom_memory_mb`): what libdom
+// may hold for the page's scripts beside the engine's own heap, its node
+// wrappers above all. A feed that keeps every post it has shown keeps their
+// wrappers too; the record's `memory dom` line says what a page held.
+#define YONDER_DOM_MEMORY_MB_DEFAULT 64
+#define YONDER_DOM_MEMORY_MB_MIN 8
+#define YONDER_DOM_MEMORY_MB_MAX 1024
+
 // Opens with the current choices, or focuses the existing dialog.
 // Callbacks receive a validated agent/script policy (the switch and the
 // time limit in seconds), zoom (thousandths, whole percentages from 25
@@ -106,6 +114,9 @@ uint32_t yonder_settings_saved_script_seconds(void);
 // The saved script heap (`script_memory_mb = 512`), whole MiB from
 // YONDER_SCRIPT_MEMORY_MB_MIN to _MAX; the default when absent or not one.
 uint32_t yonder_settings_saved_script_memory_mb(void);
+// The saved DOM budget (`dom_memory_mb = 128`), whole MiB from
+// YONDER_DOM_MEMORY_MB_MIN to _MAX; the default when absent or not one.
+uint32_t yonder_settings_saved_dom_memory_mb(void);
 // Whether pages on `host` are censused (MEMORY_CENSUS.md § 7): a
 // `census = <host>` line names that host or a parent of it, or says `*`,
 // which alone names "" (a page with no host).

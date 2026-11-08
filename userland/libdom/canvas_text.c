@@ -186,7 +186,7 @@ static int canonical_font(DValue *e,JSContext *ctx,const char *s,size_t n,canvas
 static canvas_text_style_t text_style(DValue *e)
 {
     canvas_state_t state={.text={.font="10px sans-serif",.size=10}};
-    d_canvas_sync(e);if(e->canvas)canvas_state(e->canvas,&state);
+    d_canvas_sync(e);if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
     return state.text;
 }
 static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
@@ -207,7 +207,7 @@ static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     else for(unsigned i=0;i<count;++i)if(n==os64_strlen(names[i])&&!os64_memcmp(s,names[i],n)){*slot=i;valid=1;break;}
     JS_FreeCString(ctx,s);
     if(valid<0)return JS_EXCEPTION;
-    return valid&&e->canvas?d_canvas_result(ctx,canvas_set_text_style(e->canvas,&style)):JS_UNDEFINED;
+    return valid&&d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_set_text_style(d_more_peek(e)->canvas,&style)):JS_UNDEFINED;
 }
 static JSValue metric_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
 {
@@ -317,7 +317,7 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     } else {
         double squeeze=limited&&width>max_width?max_width/width:1;
         os64_geometry_map_t placement={scale*squeeze,0,0,scale,x-anchor*squeeze,y+baseline};
-        result=e->canvas?d_canvas_result(ctx,canvas_draw_contours(e->canvas,commands.commands,commands.count,&placement,magic==2)):JS_UNDEFINED;
+        result=d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_draw_contours(d_more_peek(e)->canvas,commands.commands,commands.count,&placement,magic==2)):JS_UNDEFINED;
     }
     os64_text_run_release(run);d_canvas_release(dom,commands.commands,capacity);return result;
 }

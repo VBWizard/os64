@@ -113,9 +113,9 @@ static JSValue exported(JSContext *ctx,JSValueConst self,int argc,JSValueConst *
     }
     DValue *e=d_find(dom,node);
     if(d_canvas_prepare(e)!=CANVAS_OK)return JS_NewString(ctx,"data:,");
-    if(!canvas_origin_clean(e->canvas))return d_error(ctx,"SecurityError","Canvas contains an image from another origin");
+    if(!canvas_origin_clean(d_more_peek(e)->canvas))return d_error(ctx,"SecurityError","Canvas contains an image from another origin");
     canvas_bitmap_t bitmap;
-    if(canvas_bitmap(e->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)return JS_NewString(ctx,"data:,");
+    if(canvas_bitmap(d_more_peek(e)->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)return JS_NewString(ctx,"data:,");
     size_t png_size;
     if(os64_png_encode_size(bitmap.width,bitmap.height,&png_size)!=OS64_PNG_OK)return JS_NewString(ctx,"data:,");
     const char prefix[]="data:image/png;base64,";
@@ -164,8 +164,8 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
             }
         }
         d_canvas_sync(e);canvas_state_t state={.image_smoothing=true};
-        if(e->canvas)canvas_state(e->canvas,&state);
-        if(set)return !valid||!e->canvas?JS_UNDEFINED:d_canvas_result(ctx,canvas_set_smoothing(e->canvas,
+        if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
+        if(set)return !valid||!d_more_peek(e)->canvas?JS_UNDEFINED:d_canvas_result(ctx,canvas_set_smoothing(d_more_peek(e)->canvas,
             magic==I_SMOOTH?enabled:state.image_smoothing,magic==I_QUALITY?quality:state.image_quality));
         return magic==I_SMOOTH?JS_NewBool(ctx,state.image_smoothing):
             JS_NewString(ctx,state.image_quality==2?"high":state.image_quality==1?"medium":"low");
@@ -183,10 +183,10 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
         DValue *source=d_find(dom,source_node);
         if(d_canvas_prepare(source)!=CANVAS_OK)return d_error(ctx,"InvalidStateError","Canvas source is unavailable");
         canvas_bitmap_t bitmap;
-        if(canvas_bitmap(source->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)
+        if(canvas_bitmap(d_more_peek(source)->canvas,&bitmap)!=CANVAS_OK||!bitmap.width||!bitmap.height)
             return d_error(ctx,"InvalidStateError","Canvas source has no pixels");
         image.surface=(draw2d_surface_t){(void *)bitmap.pixels,bitmap.width,bitmap.height,bitmap.stride,bitmap.capacity,DRAW2D_ARGB8_PREMULTIPLIED};
-        image.origin_clean=canvas_origin_clean(source->canvas);
+        image.origin_clean=canvas_origin_clean(d_more_peek(source)->canvas);
     } else {
         os64_dom_image_status_t status=image_acquire(dom,source_node,true,&image);borrowed=true;
         if(status!=OS64_DOM_IMAGE_READY) {
@@ -199,7 +199,7 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     if(count==4){dw=v[2];dh=v[3];}
     if(count==8){sx=v[0];sy=v[1];sw=v[2];sh=v[3];dx=v[4];dy=v[5];dw=v[6];dh=v[7];}
     d_canvas_sync(e);
-    canvas_status_t status=e->canvas?canvas_draw_image(e->canvas,&image.surface,image.origin_clean,sx,sy,sw,sh,dx,dy,dw,dh):CANVAS_OK;
+    canvas_status_t status=d_more_peek(e)->canvas?canvas_draw_image(d_more_peek(e)->canvas,&image.surface,image.origin_clean,sx,sy,sw,sh,dx,dy,dw,dh):CANVAS_OK;
     if(borrowed)image_release(dom,&image);
     return d_canvas_result(ctx,status);
 }

@@ -843,7 +843,9 @@ static JSValue attributes_of(os64_dom_t *dom, JSContext *ctx, const os64_html_no
 {
     DValue *owner = d_find(dom, element);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    if (owner->attributes != NULL) return JS_DupValue(ctx, owner->attributes->value);
+    if (d_more_peek(owner)->attributes != NULL) return JS_DupValue(ctx, d_more_peek(owner)->attributes->value);
+    DValueMore *more = d_more(dom, ctx, owner);
+    if (more == NULL) return JS_EXCEPTION;
     JSValue object = JS_NewObjectClass(ctx, (int)dom->named_map_class);
     DValue *entry = JS_IsException(object) ? NULL : d_retain(dom, ctx, object);
     if (entry == NULL) return JS_EXCEPTION;
@@ -851,7 +853,7 @@ static JSValue attributes_of(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     entry->target = element;
     os64_html_hold(dom->document, element);
     JS_SetOpaque(object, entry);
-    owner->attributes = entry;
+    more->attributes = entry;
     return JS_DupValue(ctx, object);
 }
 

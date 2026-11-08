@@ -10,6 +10,7 @@ static JSClassID anchor_slot, node_slot, collection_slot, style_slot, token_slot
 
 static const char *const kMemKindNames[OS64_DOM_MEM_KINDS] = {
     [OS64_DOM_MEM_OTHER] = "other", [OS64_DOM_MEM_WRAPPER] = "wrapper", [OS64_DOM_MEM_RETAINED] = "retained",
+    [OS64_DOM_MEM_EXTRA] = "extra",
     [OS64_DOM_MEM_LISTENER] = "listener", [OS64_DOM_MEM_ATTR] = "attr", [OS64_DOM_MEM_COLLECTION] = "collection",
     [OS64_DOM_MEM_MUTATION] = "mutation", [OS64_DOM_MEM_INTERSECTION] = "intersection",
     [OS64_DOM_MEM_RESIZE] = "resize", [OS64_DOM_MEM_CUSTOM] = "custom", [OS64_DOM_MEM_RANGE] = "range",
@@ -189,6 +190,30 @@ DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value)
     dom->values = entry;
     dom->retained++;
     return entry;
+}
+
+const DValueMore d_no_more;
+
+DValueMore *d_more(os64_dom_t *dom, JSContext *ctx, DValue *entry)
+{
+    if (entry->more != NULL) return entry->more;
+    entry->more = d_alloc_kind(dom, sizeof(*entry->more), OS64_DOM_MEM_EXTRA);
+    if (entry->more == NULL && ctx != NULL) d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded");
+    return entry->more;
+}
+
+void d_unretain(os64_dom_t *dom, JSContext *ctx, DValue *entry)
+{
+    dom->values = entry->next;
+    dom->retained--;
+    JS_FreeValue(ctx, entry->value);
+    d_free(dom, entry);
+}
+
+void d_more_free(os64_dom_t *dom, DValue *entry)
+{
+    d_free(dom, entry->more);
+    entry->more = NULL;
 }
 
 bool d_same_object(JSValueConst value, const DValue *held)
@@ -567,7 +592,8 @@ void os64_dom_free(os64_dom_t *dom)
         d_attr_free(dom, entry);
         d_canvas_free(entry);
         d_adopted_free(dom, entry);
-        d_free(dom, entry->output_default);
+        d_free(dom, d_more_peek(entry)->output_default);
+        d_more_free(dom, entry);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);
         if (entry->target != NULL)

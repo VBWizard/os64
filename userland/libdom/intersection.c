@@ -89,6 +89,9 @@ struct DIntersections {
     /* Observations not made, or entries not kept, for want of memory:
      * reported at the next notify, which a loss queues. */
     uint64_t lost;
+    /* The budget refused the last step its batch, and the loss is said; a
+     * step refused again before one is had says nothing more. */
+    bool starved;
     /* When, on the host's clock (options.now_ms), the first target the
      * last step passed over for its observer's `delay` may be observed:
      * the step is owed then whatever moves. UINT64_MAX for none. */
@@ -393,8 +396,13 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         os64_dom_intersection_t *grown = d_alloc_kind(dom, s->observed * sizeof(*grown), OS64_DOM_MEM_INTERSECTION);
         if (grown == NULL) {
             /* No room to ask: every observation this step would have made
-             * is lost, and the notify that says so as the page's quota is
-             * queued. */
+             * is lost, and the first refusal queues the notify that says so
+             * as the page's quota. Its targets stay owed, so the host steps
+             * again whenever it runs; a refusal after the first, before a
+             * batch is had, has nothing new to say and queues nothing, or a
+             * page at its budget would be stepped and told without end. */
+            if (s->starved) return false;
+            s->starved = true;
             s->lost += s->observed;
             s->queued = true;
             return true;
@@ -403,6 +411,7 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
         s->batch = grown;
         s->batch_cap = s->observed;
     }
+    s->starved = false;
     size_t n = 0;
     for (DIObserver *o = s->observers; o != NULL; o = o->next) {
         const os64_html_node_t *root;

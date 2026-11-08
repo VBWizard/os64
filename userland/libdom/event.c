@@ -2215,6 +2215,7 @@ void d_event_target_finalize(JSRuntime *rt, DValue *entry)
         listener->callback = JS_UNDEFINED;
     }
     d_event_free(entry->dom, entry);
+    d_more_free(entry->dom, entry);
     entry->dom = NULL;
 }
 

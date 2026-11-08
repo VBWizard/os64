@@ -57,16 +57,16 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
         }
         d_canvas_sync(e);
         canvas_state_t state={.line={1,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER}};
-        if(e->canvas)canvas_state(e->canvas,&state);
+        if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
         if(set) {
-            if(!e->canvas)return JS_UNDEFINED;
-            if(magic==P_COMPOSITE)return selected<0?JS_UNDEFINED:d_canvas_result(ctx,canvas_set_composite(e->canvas,selected));
-            if(magic==P_DASH_OFFSET)return d_canvas_result(ctx,canvas_set_dash_offset(e->canvas,number));
+            if(!d_more_peek(e)->canvas)return JS_UNDEFINED;
+            if(magic==P_COMPOSITE)return selected<0?JS_UNDEFINED:d_canvas_result(ctx,canvas_set_composite(d_more_peek(e)->canvas,selected));
+            if(magic==P_DASH_OFFSET)return d_canvas_result(ctx,canvas_set_dash_offset(d_more_peek(e)->canvas,number));
             if(magic==P_WIDTH)state.line.width=number;
             if(magic==P_MITER)state.line.miter_limit=number;
             if(magic==P_CAP&&selected>=0)state.line.cap=selected;
             if(magic==P_JOIN&&selected>=0)state.line.join=selected;
-            return d_canvas_result(ctx,canvas_set_line(e->canvas,&state.line));
+            return d_canvas_result(ctx,canvas_set_line(d_more_peek(e)->canvas,&state.line));
         }
         if(magic==P_WIDTH)return JS_NewFloat64(ctx,state.line.width);
         if(magic==P_MITER)return JS_NewFloat64(ctx,state.line.miter_limit);
@@ -87,8 +87,8 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
             d_sequence_free(ctx,items,count);
         }
         d_canvas_sync(e);
-        if(magic==P_DASH_SET)return e->canvas?d_canvas_result(ctx,canvas_set_dash(e->canvas,dash,count)):JS_UNDEFINED;
-        canvas_state_t state={0};if(e->canvas)canvas_state(e->canvas,&state);
+        if(magic==P_DASH_SET)return d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_set_dash(d_more_peek(e)->canvas,dash,count)):JS_UNDEFINED;
+        canvas_state_t state={0};if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
         JSValue array=JS_NewArray(ctx);if(JS_IsException(array))return array;
         for(size_t i=0;i<state.dash_count;++i)if(JS_SetPropertyUint32(ctx,array,i,JS_NewFloat64(ctx,state.dash[i]))<0) {
             JS_FreeValue(ctx,array);return JS_EXCEPTION;
@@ -113,7 +113,7 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     }
     if(path) {
         d_canvas_sync(e);
-        return e->canvas?d_path2d_draw(ctx,e,path,magic==P_FILL?CANVAS_PATH_FILL:
+        return d_more_peek(e)->canvas?d_path2d_draw(ctx,e,path,magic==P_FILL?CANVAS_PATH_FILL:
             magic==P_STROKE?CANVAS_PATH_STROKE:CANVAS_PATH_CLIP,even_odd):JS_UNDEFINED;
     }
     unsigned required=magic==P_MOVE||magic==P_LINE||magic==P_TRANSLATE||magic==P_SCALE?2:
@@ -137,37 +137,37 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     if((magic==P_ARC&&v[2]<0)||(magic==P_ELLIPSE&&(v[2]<0||v[3]<0)))
         return d_error(ctx,"IndexSizeError","Canvas arc radius is negative");
     if(magic==P_ARC_TO&&v[4]<0) {
-        if(e->canvas) {
-            canvas_status_t s=canvas_arc_to(e->canvas,v[0],v[1],v[2],v[3],v[4]);
+        if(d_more_peek(e)->canvas) {
+            canvas_status_t s=canvas_arc_to(d_more_peek(e)->canvas,v[0],v[1],v[2],v[3],v[4]);
             if(s!=CANVAS_BAD_ARGUMENT)return d_canvas_result(ctx,s);
         }
         return d_error(ctx,"IndexSizeError","Canvas arc radius is negative");
     }
-    if(!e->canvas)return JS_UNDEFINED;
+    if(!d_more_peek(e)->canvas)return JS_UNDEFINED;
     canvas_status_t status=CANVAS_OK;
     switch(magic) {
-    case P_BEGIN:status=canvas_begin_path(e->canvas);break;
+    case P_BEGIN:status=canvas_begin_path(d_more_peek(e)->canvas);break;
     case P_CLOSE:case P_MOVE:case P_LINE:case P_QUAD:case P_CUBIC: {
         os64_geometry_command_t command={.verb=magic==P_CLOSE?OS64_GEOMETRY_CLOSE:magic==P_MOVE?OS64_GEOMETRY_MOVE:
             magic==P_LINE?OS64_GEOMETRY_LINE:magic==P_QUAD?OS64_GEOMETRY_QUADRATIC:OS64_GEOMETRY_CUBIC,
             .p={{v[0],v[1]},{v[2],v[3]},{v[4],v[5]}}};
-        status=canvas_path_command(e->canvas,&command);break;
+        status=canvas_path_command(d_more_peek(e)->canvas,&command);break;
     }
-    case P_RECT:status=canvas_path_rect(e->canvas,v[0],v[1],v[2],v[3]);break;
-    case P_ARC:status=canvas_ellipse(e->canvas,v[0],v[1],v[2],v[2],0,v[3],v[4],ccw);break;
-    case P_ELLIPSE:status=canvas_ellipse(e->canvas,v[0],v[1],v[2],v[3],v[4],v[5],v[6],ccw);break;
-    case P_ARC_TO:status=canvas_arc_to(e->canvas,v[0],v[1],v[2],v[3],v[4]);break;
-    case P_FILL:status=canvas_fill(e->canvas,even_odd);break;
-    case P_STROKE:status=canvas_stroke(e->canvas);break;
-    case P_CLIP:status=canvas_clip(e->canvas,even_odd);break;
-    case P_STROKE_RECT:status=canvas_stroke_rect(e->canvas,v[0],v[1],v[2],v[3]);break;
+    case P_RECT:status=canvas_path_rect(d_more_peek(e)->canvas,v[0],v[1],v[2],v[3]);break;
+    case P_ARC:status=canvas_ellipse(d_more_peek(e)->canvas,v[0],v[1],v[2],v[2],0,v[3],v[4],ccw);break;
+    case P_ELLIPSE:status=canvas_ellipse(d_more_peek(e)->canvas,v[0],v[1],v[2],v[3],v[4],v[5],v[6],ccw);break;
+    case P_ARC_TO:status=canvas_arc_to(d_more_peek(e)->canvas,v[0],v[1],v[2],v[3],v[4]);break;
+    case P_FILL:status=canvas_fill(d_more_peek(e)->canvas,even_odd);break;
+    case P_STROKE:status=canvas_stroke(d_more_peek(e)->canvas);break;
+    case P_CLIP:status=canvas_clip(d_more_peek(e)->canvas,even_odd);break;
+    case P_STROKE_RECT:status=canvas_stroke_rect(d_more_peek(e)->canvas,v[0],v[1],v[2],v[3]);break;
     default:
         if(magic==P_TRANSLATE){transform.tx=v[0];transform.ty=v[1];}
         if(magic==P_SCALE){transform.a=v[0];transform.d=v[1];}
         if(magic==P_ROTATE){transform.a=transform.d=cos(v[0]);transform.b=sin(v[0]);transform.c=-transform.b;}
         if(magic==P_TRANSFORM||(magic==P_SET_TRANSFORM&&required))
             transform=(os64_geometry_map_t){v[0],v[1],v[2],v[3],v[4],v[5]};
-        status=canvas_transform(e->canvas,&transform,magic==P_SET_TRANSFORM||magic==P_RESET_TRANSFORM);
+        status=canvas_transform(d_more_peek(e)->canvas,&transform,magic==P_SET_TRANSFORM||magic==P_RESET_TRANSFORM);
     }
     return d_canvas_result(ctx,status);
 }
