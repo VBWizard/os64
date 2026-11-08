@@ -2,9 +2,10 @@
 
 2026-11-08. Implementation evidence for the stylesheet prerequisite in
 [IMAGE_MEMORY.md](IMAGE_MEMORY.md). This addresses the missing stylesheet
-activation pattern found on Microsoft Design wallpapers. Hardware acceptance
-and the live-site comparison remain pending; this document claims no measured
-hardware memory improvement.
+activation pattern found on Microsoft Design wallpapers. The hardware layout
+gate and gallery passed on 2026-11-08. A controlled before/after memory
+comparison remains pending; this document claims no measured hardware memory
+improvement.
 
 ## Behavior
 
@@ -93,3 +94,26 @@ readings match the host baseline. Compare Microsoft Design `/wallpapers/` at the
 cache conditions, recording stylesheet activation and horizontal extent as well
 as the memory census. Attribute any resulting image-size/memory change to CSS
 activation separately from I1–I3.
+
+### Hardware result, 2026-11-08
+
+The user confirmed that Microsoft Design wallpapers fits the page width with
+no horizontal scrollbar and that the gallery passes, including the deliberately
+large inactive image. Saved records 1703–1706 cover active, inactive, ordinary
+and a second inactive visit. All are clean at a 2522×1257 content viewport,
+100% zoom, with Modern Web and scripting enabled. Active and ordinary each
+have two ready sheets and 57,600 B of display pixels; inactive has one ready
+sheet and 8,294,400 B of display pixels. No gallery image refusals occurred.
+
+Microsoft record 1707 has seven of seven sheets ready. It retains 428,830,948 B
+of display pixels and 244,788,704 B of native pixels attributed solely to
+metadata, with 24 retained-budget refusals. Thus passing the layout gate does
+not close the image-memory work. The report also lists unsupported features
+and a failed Clarity script fetch; the acceptance covers layout and the gallery,
+not complete site compatibility.
+
+The intended frozen source is `046dbff6`. A post-test executable readback
+matches a different build, while the saved reports contain the preload
+instrumentation. The running cohort at capture is not independently verified;
+retain this provenance limit when using these records. Repeated controlled
+memory and timing comparisons remain separate from this visual acceptance.
