@@ -143,7 +143,7 @@ static size_t node_bucket(const os64_html_node_t *node)
 static char *copy_text(os64_dom_t *dom, const char *text)
 {
     size_t size = os64_strlen(text) + 1;
-    char *out = d_alloc(dom, size);
+    char *out = d_alloc_kind(dom, size, OS64_DOM_MEM_CUSTOM);
     if (out != NULL) os64_memcpy(out, text, size);
     return out;
 }
@@ -200,7 +200,7 @@ static DCustom *record_of(os64_dom_t *dom, const os64_html_node_t *element, bool
     for (DCustom *r = s->records[at]; r != NULL; r = r->hash_next)
         if (r->element == element) return r;
     if (!make) return NULL;
-    DCustom *r = d_alloc(dom, sizeof(*r));
+    DCustom *r = d_alloc_kind(dom, sizeof(*r), OS64_DOM_MEM_CUSTOM);
     if (r == NULL) return NULL;
     os64_memset(r, 0, sizeof(*r));
     r->element = element;
@@ -233,7 +233,7 @@ static bool queue_push(os64_dom_t *dom, DElementQueue *q, DCustom *r)
 {
     if (q->count == q->cap) {
         size_t cap = q->cap != 0 ? q->cap * 2 : 8;
-        DCustom **items = d_alloc(dom, cap * sizeof(*items));
+        DCustom **items = d_alloc_kind(dom, cap * sizeof(*items), OS64_DOM_MEM_CUSTOM);
         if (items == NULL) return false;
         if (q->count != 0) os64_memcpy(items, q->items, q->count * sizeof(*items));
         d_free(dom, q->items);
@@ -292,7 +292,7 @@ static void enqueue(os64_dom_t *dom, const os64_html_node_t *element, int kind, 
     size_t lengths[4] = {0}, size = sizeof(DReaction);
     for (int i = 0; strings != NULL && i < 4; i++)
         if (strings[i] != NULL) size += (lengths[i] = os64_strlen(strings[i]) + 1);
-    DReaction *reaction = d_alloc(dom, size);
+    DReaction *reaction = d_alloc_kind(dom, size, OS64_DOM_MEM_CUSTOM);
     DCustom *r = reaction != NULL ? record_of(dom, element, true) : NULL;
     if (r == NULL) {
         d_free(dom, reaction);
@@ -374,7 +374,7 @@ static void attribute_changed(os64_dom_t *dom, const os64_html_change_t *c)
     const char *was = NULL;
     char *long_old = NULL;
     if (c->attr_old != NULL) {
-        char *into = c->attr_old_len < sizeof(old) ? old : (long_old = d_alloc(dom, c->attr_old_len + 1));
+        char *into = c->attr_old_len < sizeof(old) ? old : (long_old = d_alloc_kind(dom, c->attr_old_len + 1, OS64_DOM_MEM_CUSTOM));
         if (into == NULL) {
             dom->custom->lost++;
             return;
@@ -478,7 +478,7 @@ static int upgrade(os64_dom_t *dom, JSContext *ctx, DCustom *r)
      * nothing queued for it, and is reported. */
     if (d->depth == d->stack_cap) {
         size_t cap = d->stack_cap != 0 ? d->stack_cap * 2 : 4;
-        const os64_html_node_t **stack = d_alloc(dom, cap * sizeof(*stack));
+        const os64_html_node_t **stack = d_alloc_kind(dom, cap * sizeof(*stack), OS64_DOM_MEM_CUSTOM);
         if (stack == NULL) {
             JS_FreeValue(ctx, self);
             d_error(ctx, "QuotaExceededError", "Custom element construction stack quota exceeded");
@@ -664,7 +664,7 @@ int d_reactions_push(os64_dom_t *dom, JSContext *ctx)
     if (s == NULL) return 0;
     if (s->depth == s->stack_cap) {
         size_t cap = s->stack_cap != 0 ? s->stack_cap * 2 : 8;
-        DElementQueue *stack = d_alloc(dom, cap * sizeof(*stack));
+        DElementQueue *stack = d_alloc_kind(dom, cap * sizeof(*stack), OS64_DOM_MEM_CUSTOM);
         if (stack == NULL) {
             d_error(ctx, "QuotaExceededError", "Custom element reaction stack quota exceeded");
             return -1;
@@ -912,7 +912,7 @@ static int string_each(void *opaque, JSContext *ctx, JSValueConst item)
     if (!d_string(s->dom, ctx, item, &text)) return -1;
     if (*s->count == s->cap) {
         size_t grown = s->cap != 0 ? s->cap * 2 : 8;
-        char **array = d_alloc(s->dom, grown * sizeof(*array));
+        char **array = d_alloc_kind(s->dom, grown * sizeof(*array), OS64_DOM_MEM_CUSTOM);
         if (array == NULL) {
             d_string_free(s->dom, &text);
             d_error(ctx, "QuotaExceededError", "Custom element definition quota exceeded");
@@ -1042,7 +1042,7 @@ static void reading_free(os64_dom_t *dom, JSContext *ctx, DReading *r)
 static DDefinition *record_definition(os64_dom_t *dom, JSContext *ctx, const char *name, JSValueConst constructor,
                                       DReading *reading)
 {
-    DDefinition *d = d_alloc(dom, sizeof(*d));
+    DDefinition *d = d_alloc_kind(dom, sizeof(*d), OS64_DOM_MEM_CUSTOM);
     if (d == NULL) {
         d_error(ctx, "QuotaExceededError", "Custom element definition quota exceeded");
         return NULL;
@@ -1205,7 +1205,7 @@ static JSValue when_defined(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCo
         JSValue constructor = d->constructor->value;
         settled = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &constructor);
     } else {
-        w = d_alloc(dom, sizeof(*w));
+        w = d_alloc_kind(dom, sizeof(*w), OS64_DOM_MEM_CUSTOM);
         if (w != NULL) {
             os64_memset(w, 0, sizeof(*w));
             w->name = copy_text(dom, name.data);
@@ -1384,7 +1384,7 @@ static bool wrapped_already(const DWrapList *list, JSValueConst owner, JSAtom ke
 
 static bool wrapped_add(os64_dom_t *dom, DWrapList *list, JSValueConst owner, JSAtom key)
 {
-    DWrapped *w = d_alloc(dom, sizeof(*w));
+    DWrapped *w = d_alloc_kind(dom, sizeof(*w), OS64_DOM_MEM_CUSTOM);
     if (w == NULL) return false;
     w->owner = JS_VALUE_GET_PTR(owner);
     w->key = key;
@@ -1470,8 +1470,8 @@ static int reactions_wrap(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     struct DCustomState *s = dom->custom;
     size_t rows = d_reactions_rows();
-    s->row_states = d_alloc(dom, rows);
-    DWrapList *list = d_alloc(dom, sizeof(*list));
+    s->row_states = d_alloc_kind(dom, rows, OS64_DOM_MEM_CUSTOM);
+    DWrapList *list = d_alloc_kind(dom, sizeof(*list), OS64_DOM_MEM_CUSTOM);
     if (s->row_states == NULL || list == NULL) {
         d_free(dom, list);
         d_error(ctx, "QuotaExceededError", "Custom element reactions quota exceeded");
@@ -1528,7 +1528,7 @@ int d_custom_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static JSClassID slot;
     static const JSClassDef registry_class = {.class_name = "CustomElementRegistry"};
-    dom->custom = d_alloc(dom, sizeof(*dom->custom));
+    dom->custom = d_alloc_kind(dom, sizeof(*dom->custom), OS64_DOM_MEM_CUSTOM);
     if (dom->custom == NULL) {
         d_error(ctx, "QuotaExceededError", "Custom element registry quota exceeded");
         return -1;

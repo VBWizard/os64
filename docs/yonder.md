@@ -306,6 +306,7 @@ cache_dir = /var/cache/yonder
 | `animations` | `on` or `off`: whether a page's CSS animations move | `on` |
 | `motion` | `reduce` or `no-preference`: what pages are told about movement | `no-preference` |
 | `diagnostics` | a directory to write a file about each page into, an absolute path | none |
+| `census` | a host whose pages' files say in detail who holds their memory, by kind and over time (MEMORY_CENSUS.md): that host and its subdomains, or `*` for every page. Repeat the line for more hosts. Every page's file has the one-line summary either way | none |
 | `modern` | `on` or `off`: the Modern Web surface | `on` |
 | `shadow_dom` | `off`: no shadow trees (`attachShadow`, scoped style, `adoptedStyleSheets` and the rest), for a developer comparing a page without them; anything else leaves them on, with `modern` on; read when yonder starts | on |
 | `ranges` | `off`: no DOM Range (`Range`, `StaticRange`, `createRange`) and an always-empty Selection, for a developer comparing a page without them; anything else leaves them on, with `modern` on; read when yonder starts | on |

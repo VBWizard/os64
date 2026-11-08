@@ -1956,6 +1956,25 @@ size_t yonder_scripts_heap_peak(const yonder_scripts_t *s)
     return s->runtime != NULL ? os64_js_heap_peak(s->runtime) : s->heap_peak;
 }
 
+void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bool detail)
+{
+    if (s == NULL || sheet == NULL || s->runtime == NULL || s->dom == NULL) return;
+    yonder_census_owner(sheet, "dom", os64_dom_bytes(s->dom), 0, NULL);
+    yonder_census_owner(sheet, "canvas", os64_dom_canvas_bytes(s->dom), 0, NULL);
+    size_t held = 0;
+    os64_dom_body_stats(s->dom, &held, NULL);
+    yonder_census_owner(sheet, "bodies", held, 0, NULL);
+    yonder_census_owner(sheet, "script", os64_js_heap_bytes(s->runtime), 0, NULL);
+    if (!detail) return;
+    for (int k = 0; k < OS64_DOM_MEM_KINDS; k++) {
+        os64_dom_mem_t m = os64_dom_memory(s->dom, (os64_dom_mem_kind_t)k);
+        yonder_census_dom_kind(sheet, os64_dom_mem_kind_name((os64_dom_mem_kind_t)k), m.bytes, m.blocks);
+    }
+    int64_t began = os64_micros();
+    sheet->script_known = os64_js_heap_census(s->runtime, &sheet->script);
+    sheet->cost_us += (uint64_t)(os64_micros() - began);
+}
+
 bool yonder_scripts_alive(const yonder_scripts_t *s)
 {
     return s != NULL && !s->dead;

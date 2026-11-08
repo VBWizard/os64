@@ -30,6 +30,7 @@
 #include "os64/font_config.h"
 #include "os64/font_provider.h"
 #include "os64/mem.h"
+#include "os64/arena.h"
 #include "os64/proc.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
@@ -54,6 +55,7 @@
 #include "scale.h"
 #include "warp.h"
 #include "filter.h"
+#include "census.h"
 #include "settings.h"
 #include "scripts.h"
 #include "diag.h"
@@ -821,6 +823,15 @@ typedef struct Page {
     int32_t nevents;
     bool scroll_asked, loaded;
     double ask_x, ask_y;
+    // THE MEMORY CENSUS (MEMORY_CENSUS.md): decided at the record's first
+    // observation, from its final address (`census` in yonder.conf); a
+    // censused page's timeline, its times counted from that observation
+    // (`census_began`, yonder_now_ms). `census_left`: the census taken as
+    // the page was left, while its scripts still were, stands as the
+    // record's last word (page_clear).
+    bool census_decided, censused, census_left;
+    uint64_t census_began;
+    yonder_census_timeline_t census;
 } Page;
 
 static void webfonts_families_shown(const Page *p);
@@ -907,6 +918,7 @@ static void sheets_free(Page *p)
 }
 
 static void diag_leave(Page *p);
+static void diag_census(Page *p, bool sample);
 static void page_event_free(PageEvent *e)
 {
     os64_free(e->old_url);
@@ -992,6 +1004,12 @@ static void page_clear(Page *p)
     if (p->npics) layout_revision(&s_layout_resources.pictures);
     measured_forget(page_doc(p));
     page_session_free(p);
+    // The census of a page being left is taken while everything it counts
+    // is still here, the scripts included (diag_census).
+    if (p->diag != NULL) {
+        diag_census(p, true);
+        p->census_left = true;
+    }
     // The host borrows the record (its miss hook), so the record goes after
     // it, while the tree and the cascade it looks at are still here.
     yonder_scripts_free(p->scripts);
@@ -3050,6 +3068,129 @@ static void diag_fonts(Page *p);
 static void diag_paint(Page *p);
 static void diag_motion(Page *p);
 
+// ── The memory census (MEMORY_CENSUS.md) ──────────────────────────────
+
+// One moment's census of `p`: every owner's total and the process heap
+// around them; with `detail`, libdom's kinds and the script heap's own
+// census too.
+static void census_fill(Page *p, yonder_census_sheet_t *sheet, bool detail)
+{
+    os64_memset(sheet, 0, sizeof(*sheet));
+    os64_heap_report_t heap;
+    os64_heap_report_copy(&heap);
+    sheet->heap_known = true;
+    sheet->heap_mapped = heap.bytes_mapped;
+    sheet->heap_live = heap.bytes_live;
+    const os64_html_document_t *doc = page_doc(p);
+    if (doc != NULL)
+        yonder_census_owner(sheet, "html",
+                            doc->arena_bytes + os64_html_retired_bytes(doc) + os64_html_changes_bytes(doc),
+                            doc->node_count, "nodes");
+    if (p->state != NULL)
+        yonder_census_owner(sheet, "page", os64_page_state_bytes(p->state), 0, NULL);
+    // Entries may share a parse (SheetParse.refs): each is counted once.
+    uint64_t sheets = 0;
+    for (int32_t i = 0; i < p->nsheets; i++) {
+        const SheetParse *source = p->sheets[i].source;
+        bool seen = source == NULL;
+        for (int32_t j = 0; j < i && !seen; j++) seen = p->sheets[j].source == source;
+        if (!seen) sheets += os64_arena_stats(source->parsed.arena).reserved_bytes;
+    }
+    yonder_census_owner(sheet, "sheets", sheets, (uint64_t)p->nsheets, "sheets");
+    yonder_census_owner(sheet, "cascade", garb_cascade_bytes(p->cascade), 0, NULL);
+    if (p->tree != NULL) {
+        flow_tree_stats_t t = flow_tree_stats(p->tree);
+        yonder_census_owner(sheet, "layout", t.styles_bytes + t.boxes_bytes + t.lines_bytes + t.public_bytes,
+                            t.boxes, "boxes");
+    }
+    yonder_census_owner(sheet, "pictures", p->kept_bytes, (uint64_t)p->npics, "pictures");
+    yonder_scripts_census(p->scripts, sheet, detail);
+}
+
+// Whether the page at `address` is censused: its host named by `census`.
+// An address with no host (a file, data:) is censused only by `*`.
+static bool census_wanted(const char *address)
+{
+    if (address == NULL) return false;
+    os64_url_t *url = os64_malloc(sizeof(*url));
+    bool parsed = url != NULL && os64_url_parse(address, url) == OS64_URL_OK;
+    bool wanted = yonder_settings_censused(parsed ? url->host : "");
+    os64_free(url);
+    return wanted;
+}
+
+// The census's lines on `p`'s record (MEMORY_CENSUS.md § 2): the summary
+// on every record, as it stands now. A SAMPLE — the census's timer, and the
+// page being left — also adds to a censused page's timeline and writes its
+// detail, which walks the script heap; an ordinary observation does not,
+// so the walks keep the timeline's pace however often a record is looked
+// at. The added lines together keep YONDER_CENSUS_DETAIL_MAX. Built in one
+// buffer the loop's thread owns.
+static char s_census_line[YONDER_CENSUS_DETAIL_MAX];
+// A detail line, `key: value` and its newline charged to `*left`; one
+// with nothing to say, or no room, is forgotten. (Forgetting is by prefix:
+// no detail key is the beginning of another key.)
+static void census_fact(yonder_diag_t *d, const char *key, size_t length, size_t *left)
+{
+    size_t cost = os64_strlen(key) + 3 + length;
+    if (length == 0 || cost > *left) {
+        yonder_diag_forget(d, key);
+        return;
+    }
+    yonder_diag_fact(d, key, s_census_line);
+    *left -= cost;
+}
+
+static void diag_census(Page *p, bool sample)
+{
+    yonder_diag_t *d = p->diag;
+    if (d == NULL || p->census_left) return;
+    if (!p->census_decided) {
+        const char *address = yonder_diag_fact_value(d, "final address");
+        if (address != NULL) {
+            p->census_decided = true;
+            p->censused = census_wanted(address);
+            p->census_began = yonder_now_ms();
+            yonder_census_timeline_init(&p->census);
+        }
+    }
+    bool detail = p->censused && sample;
+    yonder_census_sheet_t sheet;
+    census_fill(p, &sheet, detail);
+    // The summary always has the process heap to say, so it is never
+    // forgotten (which, by prefix, would take the detail lines with it).
+    size_t length = yonder_census_summary(&sheet, s_census_line, sizeof(s_census_line));
+    yonder_diag_fact(d, "memory", s_census_line);
+    size_t left = YONDER_CENSUS_DETAIL_MAX - (length + 9);
+    if (!detail) return;
+    yonder_census_timeline_add(&p->census, yonder_now_ms() - p->census_began, &sheet);
+    // A part with nothing to say this time is forgotten, so a line from an
+    // earlier sample never stands beside this one's figures.
+    census_fact(d, "memory dom", yonder_census_dom_line(&sheet, s_census_line, left), &left);
+    census_fact(d, "memory script", yonder_census_script_line(&sheet, s_census_line, left), &left);
+    census_fact(d, "census", yonder_census_state_line(&p->census, s_census_line, left), &left);
+    census_fact(d, "memory timeline", yonder_census_timeline_line(&p->census, s_census_line, left), &left);
+}
+
+// When the shown page's next timeline sample is due; never for a page not
+// censused.
+static uint64_t census_due(void)
+{
+    const Page *p = &g.page;
+    if (!p->censused || p->diag == NULL) return YONDER_NEVER;
+    const yonder_census_timeline_t *tl = &p->census;
+    return tl->n == 0 ? yonder_now_ms() : p->census_began + tl->samples[tl->n - 1].ms + tl->interval_ms;
+}
+
+// THE CENSUS'S TURN: the shown page's timeline sample, when one is due.
+static void census_turn(void)
+{
+    Page *p = &g.page;
+    if (!p->censused || p->diag == NULL) return;
+    if (yonder_census_timeline_due(&p->census, yonder_now_ms() - p->census_began))
+        diag_census(p, true);
+}
+
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
@@ -3058,6 +3199,7 @@ static void diag_observe(Page *p, const char *when)
         diag_cascade(d, p->cascade);
     char v[128];
     yonder_diag_fact(d, "written", when);
+    diag_census(p, false);
     if (p->svg_cache) {
         yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(p->svg_cache);
         os64_snprintf(v, sizeof(v), "%lu hits, %lu misses, %lu rasterizations, %lu bypasses",
@@ -7942,7 +8084,8 @@ typedef struct {
 // A deadline offered to `d`. The loop meets a script's timer (script_turn,
 // and the stream's and the arriving page's turns), a storage commit
 // (storage_turn), a cookie file's write (cookies_turn, offered as a timer
-// is), the settle (pictures_settle) and the stream's wait for its
+// is), a censused page's timeline sample (census_turn, likewise), the
+// settle (pictures_settle) and the stream's wait for its
 // sheets (stream_turn) itself, after the events; the bell meets pictures_tick,
 // coming_show and downloads_heard. Motion and script frames run after tasks.
 // Two deadlines at one moment are common — the clock steps by the tick —
@@ -8039,6 +8182,9 @@ static void pictures_schedule(void)
     }
     // The cookie file's next write, which the loop makes (cookies_turn).
     deadline_offer(&d, yonder_cookies_due(s_cookies), PAST_TIMERS);
+    // A censused page's next timeline sample, which the loop takes
+    // (census_turn).
+    deadline_offer(&d, census_due(), PAST_TIMERS);
     // An `--exit-when-loaded` run's next look at whether to leave, which the
     // loop makes (exit_follow).
     deadline_offer(&d, exit_due(), PAST_TIMERS);
@@ -17232,6 +17378,7 @@ int main(int argc, char **argv)
         motion_tick();
         storage_turn();
         cookies_turn();
+        census_turn();
         children_turn();
         downloads_turn();
         pictures_settle();

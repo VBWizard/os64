@@ -326,9 +326,9 @@ static void remove_listener(os64_dom_t *dom, DValue *entry, DListener *listener)
 static DListener *listener_new(os64_dom_t *dom, JSContext *ctx, DValue *entry, const char *type,
                                bool at_head)
 {
-    DListener *listener = d_alloc(dom, sizeof(*listener));
+    DListener *listener = d_alloc_kind(dom, sizeof(*listener), OS64_DOM_MEM_LISTENER);
     size_t length = os64_strlen(type) + 1;
-    char *copy = listener != NULL ? d_alloc(dom, length) : NULL;
+    char *copy = listener != NULL ? d_alloc_kind(dom, length, OS64_DOM_MEM_LISTENER) : NULL;
     if (copy == NULL) {
         d_free(dom, listener);
         d_error(ctx, "QuotaExceededError", "DOM listener quota exceeded");
@@ -413,7 +413,7 @@ static int slot_refresh(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
     char *copy = NULL;
     if (text != NULL) {
         size_t length = os64_strlen(text) + 1;
-        copy = d_alloc(dom, length);
+        copy = d_alloc_kind(dom, length, OS64_DOM_MEM_LISTENER);
         if (copy == NULL) {
             d_error(ctx, "QuotaExceededError", "DOM handler quota exceeded");
             return -1;

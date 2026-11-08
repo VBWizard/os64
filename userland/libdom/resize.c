@@ -196,7 +196,7 @@ static int64_t gather(os64_dom_t *dom, size_t depth, size_t *skipped)
     struct DResizes *s = dom->resizes;
     *skipped = 0;
     if (s->batch_cap < s->observed) {
-        os64_dom_resize_t *grown = d_alloc(dom, s->observed * sizeof(*grown));
+        os64_dom_resize_t *grown = d_alloc_kind(dom, s->observed * sizeof(*grown), OS64_DOM_MEM_RESIZE);
         if (grown == NULL) return -1;
         d_free(dom, s->batch);
         s->batch = grown;
@@ -485,7 +485,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
     uint32_t script = d_callback_script(dom, ctx, argv[0]);
-    DRObserver *o = script != D_SCRIPT_FAILED ? d_alloc(dom, sizeof(*o)) : NULL;
+    DRObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_RESIZE) : NULL;
     JSValue object = o != NULL ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class) : JS_EXCEPTION;
     JS_FreeValue(ctx, prototype);
     if (JS_IsException(object)) {
@@ -561,10 +561,10 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         return JS_UNDEFINED;
     }
     if (s->buckets == NULL) {
-        s->buckets = d_alloc(dom, D_RO_BUCKETS * sizeof(*s->buckets));
+        s->buckets = d_alloc_kind(dom, D_RO_BUCKETS * sizeof(*s->buckets), OS64_DOM_MEM_RESIZE);
         if (s->buckets != NULL) os64_memset(s->buckets, 0, D_RO_BUCKETS * sizeof(*s->buckets));
     }
-    t = s->buckets != NULL ? d_alloc(dom, sizeof(*t)) : NULL;
+    t = s->buckets != NULL ? d_alloc_kind(dom, sizeof(*t), OS64_DOM_MEM_RESIZE) : NULL;
     if (t == NULL) {
         hold_update(dom, ctx, o);
         return d_error(ctx, "QuotaExceededError", "ResizeObserver quota exceeded");
@@ -616,7 +616,7 @@ int d_resizes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     static const JSClassDef entry_def = {.class_name = "ResizeObserverEntry", .finalizer = entry_finalizer,
                                          .gc_mark = entry_mark};
     static const JSClassDef size_def = {.class_name = "ResizeObserverSize", .finalizer = size_finalizer};
-    struct DResizes *s = d_alloc(dom, sizeof(*s));
+    struct DResizes *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_RESIZE);
     if (s == NULL) {
         d_error(ctx, "QuotaExceededError", "ResizeObserver quota exceeded");
         return -1;

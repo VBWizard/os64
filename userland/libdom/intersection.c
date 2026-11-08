@@ -294,7 +294,7 @@ static void queue_entry(os64_dom_t *dom, DIObserver *o, const DTarget *t, double
                         const double rect[4], const double inter[4], bool intersecting, double ratio)
 {
     struct DIntersections *s = dom->intersections;
-    DEntry *e = d_alloc(dom, sizeof(*e));
+    DEntry *e = d_alloc_kind(dom, sizeof(*e), OS64_DOM_MEM_INTERSECTION);
     if (e == NULL) {
         s->lost++;
         return;
@@ -390,7 +390,7 @@ bool os64_dom_intersections_update(os64_dom_t *dom)
     if (s->observed == 0 || dom->intersections_provider == NULL) return false;
     /* The batch: one item for each target whose root it can meet. */
     if (s->batch_cap < s->observed) {
-        os64_dom_intersection_t *grown = d_alloc(dom, s->observed * sizeof(*grown));
+        os64_dom_intersection_t *grown = d_alloc_kind(dom, s->observed * sizeof(*grown), OS64_DOM_MEM_INTERSECTION);
         if (grown == NULL) {
             /* No room to ask: every observation this step would have made
              * is lost, and the notify that says so as the page's quota is
@@ -765,7 +765,7 @@ static int number_each(void *opaque, JSContext *ctx, JSValueConst item)
     if (to_double(ctx, item, &v) < 0) return -1;
     if (n->count == n->cap) {
         size_t grown = n->cap != 0 ? n->cap * 2 : 8;
-        double *array = d_alloc(n->dom, grown * sizeof(*array));
+        double *array = d_alloc_kind(n->dom, grown * sizeof(*array), OS64_DOM_MEM_INTERSECTION);
         if (array == NULL) {
             d_error(ctx, "QuotaExceededError", "IntersectionObserver quota exceeded");
             return -1;
@@ -942,7 +942,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
         prototype = JS_GetClassProto(ctx, s->observer_class);
     }
     uint32_t script = d_callback_script(dom, ctx, argv[0]);
-    DIObserver *o = script != D_SCRIPT_FAILED ? d_alloc(dom, sizeof(*o)) : NULL;
+    DIObserver *o = script != D_SCRIPT_FAILED ? d_alloc_kind(dom, sizeof(*o), OS64_DOM_MEM_INTERSECTION) : NULL;
     JSValue frozen = o != NULL ? frozen_numbers(ctx, thresholds.values, thresholds.count) : JS_EXCEPTION;
     JSValue object = !JS_IsException(frozen) ? JS_NewObjectProtoClass(ctx, prototype, s->observer_class)
                                               : JS_EXCEPTION;
@@ -995,7 +995,7 @@ static JSValue observe(os64_dom_t *dom, JSContext *ctx, DIObserver *o, int argc,
         return JS_EXCEPTION;
     }
     if (target_find(s, o, target) != NULL) return JS_UNDEFINED;
-    DTarget *t = d_alloc(dom, sizeof(*t));
+    DTarget *t = d_alloc_kind(dom, sizeof(*t), OS64_DOM_MEM_INTERSECTION);
     if (t == NULL) return d_error(ctx, "QuotaExceededError", "IntersectionObserver quota exceeded");
     *t = (DTarget){.observer = o, .node = target, .previous_index = -1, .prev = o->targets_last};
     os64_html_hold(dom->document, target);
@@ -1155,7 +1155,7 @@ int d_intersections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
                                             .gc_mark = observer_mark};
     static const JSClassDef entry_def = {.class_name = "IntersectionObserverEntry", .finalizer = entry_finalizer,
                                          .gc_mark = entry_mark};
-    struct DIntersections *s = d_alloc(dom, sizeof(*s));
+    struct DIntersections *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_INTERSECTION);
     if (s == NULL) {
         d_error(ctx, "QuotaExceededError", "IntersectionObserver quota exceeded");
         return -1;

@@ -3339,6 +3339,18 @@ bool garb_cascade_matches_scoped(const garb_cascade_t *c, const garb_sheet_in_t 
     return true;
 }
 
+size_t garb_cascade_bytes(const garb_cascade_t *c)
+{
+    if (c == NULL) return 0;
+    size_t bytes = sizeof(*c) + os64_arena_stats(c->self.arena).reserved_bytes +
+                   os64_arena_stats(c->reads.arena).reserved_bytes;
+    for (int32_t i = 0; i < c->nattrs; i++) bytes += os64_arena_stats(c->attrs[i].arena).reserved_bytes;
+    bytes += (size_t)c->rulecap * sizeof(*c->rules) + (size_t)c->entrycap * sizeof(*c->entries) +
+             (size_t)c->slotcap * sizeof(*c->slots) + (size_t)c->keyframecap * sizeof(*c->keyframes) +
+             (size_t)c->attrcap * sizeof(*c->attrs);
+    return bytes;
+}
+
 void garb_cascade_free(garb_cascade_t *c)
 {
     if (c == NULL)

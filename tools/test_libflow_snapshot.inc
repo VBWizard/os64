@@ -36,6 +36,11 @@ static void snapshot_cases(void)
                      "<div id=right><p id=b>second</p></div>");
     flow_reuse_inputs_t input = {.resource_owner = p.doc, .state_owner = p.page};
     flow_tree_t *old = snapshot_layout(&p, NULL, &input);
+    flow_tree_stats_t sized = flow_tree_stats(old), none = flow_tree_stats(NULL);
+    expect("tree stats: a layout reports its arenas and boxes (MEMORY_CENSUS.md)",
+           sized.boxes >= 6 && sized.boxes_bytes > 0 && sized.lines_bytes > 0 && sized.public_bytes > 0 &&
+           sized.styles_bytes > 0, NULL);
+    expect("tree stats: NULL reports nothing", !none.boxes && !none.boxes_bytes && !none.styles_bytes, NULL);
     flow_reuse_stats_t stats = flow_reuse_stats(old);
     expect("snapshot: first layout captures bounded membership", old && stats.nodes_indexed > 8 &&
            stats.refused[FLOW_REUSE_NO_SOURCE] == 1 && !stats.source_ready, NULL);

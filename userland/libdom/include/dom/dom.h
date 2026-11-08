@@ -744,6 +744,39 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
+/* WHAT os64_dom_bytes HOLDS, by kind (MEMORY_CENSUS.md § 4): every block
+ * the binding charges carries the kind of thing it was made for, and these
+ * are the live bytes, live blocks and blocks ever made of each. The kinds
+ * sum to os64_dom_bytes. `other` is what no kind claims, counted like the
+ * rest so the unclaimed share is itself a number. */
+typedef enum {
+    OS64_DOM_MEM_OTHER,
+    OS64_DOM_MEM_WRAPPER,     /* a node wrapper's record (its object is the engine's) */
+    OS64_DOM_MEM_RETAINED,    /* any other value the binding holds for script */
+    OS64_DOM_MEM_LISTENER,    /* event listeners */
+    OS64_DOM_MEM_ATTR,        /* Attr records and attribute maps */
+    OS64_DOM_MEM_COLLECTION,  /* live collections and their snapshots */
+    OS64_DOM_MEM_MUTATION,    /* mutation observers, registrations and records */
+    OS64_DOM_MEM_INTERSECTION,/* intersection observers, targets and entries */
+    OS64_DOM_MEM_RESIZE,      /* resize observers */
+    OS64_DOM_MEM_CUSTOM,      /* custom element definitions and reactions */
+    OS64_DOM_MEM_RANGE,       /* live ranges */
+    OS64_DOM_MEM_TIMER,       /* timers */
+    OS64_DOM_MEM_URL,         /* URL and URLSearchParams state */
+    OS64_DOM_MEM_TEXT,        /* text the binding copies out: content, encodings */
+    OS64_DOM_MEM_KINDS
+} os64_dom_mem_kind_t;
+typedef struct {
+    size_t bytes, blocks;
+    uint64_t made;
+} os64_dom_mem_t;
+/* The kind's name as the census prints it ("wrapper"); "?" past the enum. */
+const char *os64_dom_mem_kind_name(os64_dom_mem_kind_t kind);
+/* One kind's counters; all zero for NULL or a kind past the enum. */
+os64_dom_mem_t os64_dom_memory(const os64_dom_t *dom, os64_dom_mem_kind_t kind);
+/* Canvas bitmaps, which the binding keeps apart from os64_dom_bytes under
+ * their own cap. NULL answers zero. */
+size_t os64_dom_canvas_bytes(const os64_dom_t *dom);
 /* The bytes the page keeps outside the engine now (responses' and Blobs'),
  * against max_body_bytes, and how many responses failed since the binding
  * was made because their bytes could not be kept: past that bound, or the

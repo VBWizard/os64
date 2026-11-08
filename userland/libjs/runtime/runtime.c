@@ -1276,6 +1276,41 @@ JS_PUBLIC size_t os64_js_heap_peak(const os64_js_runtime_t *runtime)
     return runtime != NULL ? runtime->allocator.peak_bytes : 0;
 }
 
+JS_PUBLIC size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime)
+{
+    return runtime != NULL ? runtime->allocator.charged_bytes : 0;
+}
+
+JS_PUBLIC bool os64_js_heap_census(os64_js_runtime_t *runtime, os64_js_heap_census_t *out)
+{
+    if (out == NULL) return false;
+    os64_memset(out, 0, sizeof(*out));
+    if (runtime == NULL || runtime->engine == NULL || runtime->failure != OS64_JS_OK || runtime->active)
+        return false;
+    JSMemoryUsage use;
+    JS_ComputeMemoryUsage(runtime->engine, &use);
+    out->objects = (uint64_t)use.obj_count;
+    out->object_bytes = (uint64_t)use.obj_size;
+    out->properties = (uint64_t)use.prop_count;
+    out->property_bytes = (uint64_t)use.prop_size;
+    out->strings = (uint64_t)use.str_count;
+    out->string_bytes = (uint64_t)use.str_size;
+    out->atoms = (uint64_t)use.atom_count;
+    out->atom_bytes = (uint64_t)use.atom_size;
+    out->shapes = (uint64_t)use.shape_count;
+    out->shape_bytes = (uint64_t)use.shape_size;
+    out->functions = (uint64_t)use.js_func_count;
+    out->function_bytes = (uint64_t)use.js_func_size;
+    out->function_code_bytes = (uint64_t)use.js_func_code_size;
+    out->arrays = (uint64_t)use.array_count;
+    out->fast_array_elements = (uint64_t)use.fast_array_elements;
+    out->binary_objects = (uint64_t)use.binary_object_count;
+    out->binary_bytes = (uint64_t)use.binary_object_size;
+    out->blocks = (uint64_t)use.malloc_count;
+    out->charged_bytes = runtime->allocator.charged_bytes;
+    return true;
+}
+
 /* Not through enter(): a host clears itself from a runtime that has failed
  * as readily as from one that has not, before its opaque goes away. */
 JS_PUBLIC os64_js_status_t os64_js_set_script_host(os64_js_runtime_t *runtime, const char *caller_abi,

@@ -107,7 +107,7 @@ uint64_t d_attr_steps(void)
 
 static char *copy_bytes(os64_dom_t *dom, const char *text, size_t length)
 {
-    char *copy = d_alloc(dom, length + 1);
+    char *copy = d_alloc_kind(dom, length + 1, OS64_DOM_MEM_ATTR);
     if (copy == NULL) return NULL;
     os64_memcpy(copy, text, length);
     copy[length] = '\0';
@@ -191,7 +191,7 @@ static void record_add(os64_dom_t *dom, DAttr *rec)
 {
     if (dom->attr_attached >= dom->attr_capacity * 2) {
         size_t capacity = dom->attr_capacity * 2;
-        DAttr **table = capacity <= SIZE_MAX / sizeof(*table) ? d_alloc(dom, capacity * sizeof(*table)) : NULL;
+        DAttr **table = capacity <= SIZE_MAX / sizeof(*table) ? d_alloc_kind(dom, capacity * sizeof(*table), OS64_DOM_MEM_ATTR) : NULL;
         if (table != NULL) {
             DAttr **old = dom->attr_table;
             size_t old_capacity = dom->attr_capacity;
@@ -229,7 +229,7 @@ static void record_remove(os64_dom_t *dom, DAttr *rec)
  * object held by the registry. NULL with QuotaExceededError thrown. */
 static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const char *ns)
 {
-    DAttr *rec = d_alloc(dom, sizeof(*rec));
+    DAttr *rec = d_alloc_kind(dom, sizeof(*rec), OS64_DOM_MEM_ATTR);
     if (rec != NULL) {
         rec->name = copy_bytes(dom, name, os64_strlen(name));
         rec->ns = ns != NULL ? copy_bytes(dom, ns, os64_strlen(ns)) : NULL;
@@ -918,7 +918,7 @@ static bool cursor_for(os64_dom_t *dom, const os64_html_node_t *element)
     if (count > c->capacity) {
         size_t capacity = c->capacity * 2 > count ? c->capacity * 2 : count < 16 ? 16 : count;
         const os64_html_attr_t **list = capacity <= SIZE_MAX / sizeof(*list) ?
-            d_alloc(dom, capacity * sizeof(*list)) : NULL;
+            d_alloc_kind(dom, capacity * sizeof(*list), OS64_DOM_MEM_ATTR) : NULL;
         if (list == NULL) return false;
         d_free(dom, c->list);
         c->list = list;
@@ -1226,7 +1226,7 @@ static void attr_finalizer(JSRuntime *rt, JSValue value)
 int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
 {
     dom->attr_capacity = 64;
-    dom->attr_table = d_alloc(dom, dom->attr_capacity * sizeof(*dom->attr_table));
+    dom->attr_table = d_alloc_kind(dom, dom->attr_capacity * sizeof(*dom->attr_table), OS64_DOM_MEM_ATTR);
     if (dom->attr_table == NULL) {
         dom->attr_capacity = 0;
         d_error(ctx, "QuotaExceededError", "DOM attribute table quota exceeded");

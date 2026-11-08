@@ -710,6 +710,23 @@ int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) 
     /* A value too long for `out` is TRUNCATED, as the real reader says. */
     return os64_strcopy(out,cap,value)<cap ? 0 : OS64_CONF_TRUNCATED;
 }
+/* yonder.conf's `census` lines (a repeated key, read whole), up to four; NULL ends them. */
+static const char *saved_census[5];
+int64_t os64_conf_find_read(const char *name, os64_conf_fn fn, void *user, char *path_out, size_t cap) {
+    check(os64_streq(name,"yonder.conf"),"repeated settings read Yonder configuration");
+    if(path_out!=NULL && cap>0) path_out[0]='\0';
+    int64_t n=0;
+    for(int i=0;saved_census[i]!=NULL && i<4;i++,n++)
+        if(!fn("census",saved_census[i],user)) break;
+    return n;
+}
+/* The process heap as a census reads it: a report, its figures made up. */
+void os64_heap_report_copy(os64_heap_report_t *out) {
+    memset(out,0,sizeof(*out));
+    out->magic=OS64_HEAP_REPORT_MAGIC;
+    out->bytes_mapped=(uint64_t)64<<20;
+    out->bytes_live=(uint64_t)48<<20;
+}
 int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     check(os64_streq(file,"yonder.conf"),"settings save Yonder configuration");
     if(os64_streq(key,"scripts")) os64_strcopy(saved_scripts,sizeof(saved_scripts),value);
@@ -6934,6 +6951,42 @@ static void custom_element_parse_case(void) {
     if(own) { yonder_diag_free(g.page.diag); g.page.diag=NULL; }
     loop_drop();
 }
+/* THE MEMORY CENSUS (MEMORY_CENSUS.md): every record says who holds the
+ * page's memory on one line; a page whose host yonder.conf's `census`
+ * names is sampled — at once, on the census's timer, and as it is left,
+ * while its scripts still exist — and its file says it by kind and over
+ * time; a host it does not name says nothing more. Runs where the page
+ * files are written (diag_page_cases). */
+static void memory_census_cases(void) {
+    saved_census[0]="fixture.test"; saved_census[1]=NULL;
+    loop_page("<script>globalThis.kept=[];for(var i=0;i<200;i++)kept.push(document.createElement('i'))</script><p>x");
+    check(loop_settle() && g.page.censused,"census: a page on a named host is censused");
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    diag_observe(&g.page,"when asked");
+    check(g.page.census.n==0,"census: an observation alone takes no sample");
+    census_turn();
+    check(g.page.census.n==1,"census: the first sample is due at once");
+    census_turn();
+    check(g.page.census.n==1,"census: and the next not before its interval");
+    loop_drop();
+    const char *file=diag_file("/tmp/diag",name);
+    check(has(file,"\nwritten: when the page was left\n") && has(file,"\nmemory: heap 64.0M (uncounted ") &&
+          has(file,"; script ") && has(file,"; dom ") && has(file," nodes"),
+          "census: the record left behind still counts the scripts, taken before they were freed");
+    check(has(file,"\nmemory dom: ") && has(file,"wrapper ") && has(file,"\nmemory script: objects "),
+          "census: and has libdom by kind and the script heap by what it holds");
+    check(has(file,"\nmemory timeline: +0s heap 64.0M script ") && has(file,"\ncensus: on; 2 samples every 10s;"),
+          "census: and a timeline: the first sample and the one taken as the page was left");
+    saved_census[0]=NULL;
+    loop_page("<p>x");
+    check(loop_settle() && !g.page.censused,"census: a page on a host not named is not");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    census_turn();
+    loop_drop();
+    file=diag_file("/tmp/diag",name);
+    check(has(file,"\nmemory: heap ") && !has(file,"memory dom") && !has(file,"memory timeline") &&
+          !has(file,"\ncensus: "),"census: its record has the summary and nothing more");
+}
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
     yonder_diag_t *d=yonder_diag_new(url,seq,0);
     if(d!=NULL && s_diag.dir[0]!='\0') yonder_diag_claim(d,s_diag.dir,false);
@@ -11090,6 +11143,7 @@ static void diag_cases(void) {
     diag_unit_cases();
     diag_setting_cases();
     diag_page_cases();
+    memory_census_cases();
     diag_bytes_case();
     diag_picture_case();
     diag_cookies_case();

@@ -1425,6 +1425,33 @@ static void task_cases(void)
           "and never falls once the script lets it go");
     os64_js_destroy(runtime);
 
+    /* MEMORY_CENSUS.md § 5: the live charge follows what script holds, both
+     * ways, and the census counts what was made. */
+    runtime = task_fixture(&config, "globalThis.make=()=>{globalThis.many=[];"
+                                    "for(var i=0;i<20000;i++)many.push({i:i,s:'x'+i})}");
+    if (!runtime) return;
+    size_t live_before = os64_js_heap_bytes(runtime);
+    os64_js_heap_census_t census_before, census_after;
+    check(os64_js_heap_census(runtime, &census_before) && census_before.charged_bytes == live_before,
+          "a census reads the live charge");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "make", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "make", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK, "a task that makes objects runs");
+    size_t live_grown = os64_js_heap_bytes(runtime);
+    check(live_grown > live_before + ((size_t)1 << 20) && live_grown <= os64_js_heap_peak(runtime),
+          "the live charge rises with what script made, and never past the peak");
+    check(os64_js_heap_census(runtime, &census_after) &&
+          census_after.objects >= census_before.objects + 20000 &&
+          census_after.strings >= census_before.strings + 20000 && census_after.object_bytes > 0,
+          "the census counts the objects and strings made");
+    check(execute_fixture(runtime, "many=null", &outcome) == OS64_JS_OK, "script lets them go");
+    JS_RunGC(JS_GetRuntime(os64_js_context(runtime, OS64_JS_ABI_ID, &outcome)));
+    check(os64_js_heap_bytes(runtime) < live_grown - ((size_t)1 << 20), "the live charge falls when they are collected");
+    os64_js_heap_census_t none;
+    check(!os64_js_heap_census(NULL, &none) && none.objects == 0 && os64_js_heap_bytes(NULL) == 0,
+          "NULL has no census and no charge");
+    os64_js_destroy(runtime);
+
     /* A peak only a resize reaches: one array grown by reallocation to
      * 4 MB and let go before anything else is allocated. */
     runtime = task_fixture(&config, "globalThis.burst=()=>{(function(){var a=[];"
