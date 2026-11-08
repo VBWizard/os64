@@ -1004,9 +1004,11 @@ uint64_t os64_dom_intersections_next(const os64_dom_t *dom);
  * layout, a scroll, a resize) or one is owed. It asks the provider once
  * and queues an entry for each target whose threshold index or
  * intersecting state changed; it runs no script. True when the delivery
- * task is due after it; false when nothing is, and when the provider
- * refused the batch (the step observed nothing, and is owed again as it
- * was). */
+ * task is due after it, the first step the DOM budget refuses its batch
+ * among them (the task reports the observations lost); false when nothing
+ * is, when the provider refused the batch (the step observed nothing, and
+ * is owed again as it was), and when the budget refuses the batch again
+ * before a step has had one. */
 bool os64_dom_intersections_update(os64_dom_t *dom);
 /* RESIZE OBSERVATIONS (Resize Observer 1; INTERSECTION_OBSERVER.md § 11):
  * the binding keeps the observers, the host answers every observed target's

@@ -531,6 +531,52 @@ static void dom_intersection_lifetime_cases(void)
     fixture_free(&f);
 }
 
+/* A batch the DOM budget refuses is said lost once. Its targets stay owed,
+ * so the host steps again whenever it runs, and a step refused again before
+ * one is had queues nothing: otherwise a page at its budget is stepped and
+ * told without end. The first step that has a batch observes, and a
+ * refusal after that is said again. */
+static void dom_intersection_starved_cases(void)
+{
+    DomFixture f = io_fixture();
+    if (!fixture_ready(&f)) return;
+    io_place("one", 0, 0, 10, 10);
+    io_place("two", 0, 0, 10, 10);
+    io_place("box", 0, 0, 10, 10);
+    io_script(&f, "globalThis.L=[];globalThis.errors=[];window.onerror=m=>{errors.push(String(m));return true};"
+        "for(const id of ['one','two','box'])new IntersectionObserver(es=>L.push(...es))"
+        ".observe(document.getElementById(id));", "starved: setup");
+    os64_js_outcome_t out;
+    /* The step's first allocation is its batch. */
+    size_t target = dom_attempts + 1;
+    dom_fail_at = target;
+    check(os64_dom_intersections_update(f.binding), "starved: the first refusal queues its report");
+    dom_fail_at = 0;
+    check(dom_attempts >= target, "starved: the batch was refused");
+    (void)os64_dom_intersections_fire(f.binding, &out);
+    io_script(&f, "assert(errors.length===1&&/3 intersection observations were lost/.test(errors[0])&&L.length===0,"
+        "errors.join())", "starved: the loss is said");
+    for (int again = 0; again < 3; again++) {
+        dom_fail_at = dom_attempts + 1;
+        check(!os64_dom_intersections_update(f.binding) && !os64_dom_intersections_due(f.binding),
+              "starved: a refusal again queues nothing");
+        dom_fail_at = 0;
+    }
+    check(os64_dom_intersections_owed(f.binding), "starved: its targets are still owed");
+    check(os64_dom_intersections_update(f.binding), "starved: a step with a batch observes");
+    (void)os64_dom_intersections_fire(f.binding, &out);
+    io_script(&f, "assert(L.length===3&&errors.length===1,L.length+' '+errors.join())", "starved: observed, said once");
+    /* A fourth target outgrows the batch: refused after one was had, said again. */
+    io_script(&f, "new IntersectionObserver(es=>L.push(...es)).observe(document.getElementById('one'));",
+              "starved: a fourth target");
+    dom_fail_at = dom_attempts + 1;
+    check(os64_dom_intersections_update(f.binding), "starved: a refusal after a batch is said again");
+    dom_fail_at = 0;
+    (void)os64_dom_intersections_fire(f.binding, &out);
+    io_script(&f, "assert(errors.length===2,errors.join())", "starved: the second loss is said");
+    fixture_free(&f);
+}
+
 /* Every allocation the step and the task make, failed in turn: an entry
  * that could not be kept is reported once as the quota, the next step
  * goes on, and the teardown accounts for every byte. Then the interface's
@@ -587,5 +633,6 @@ static void dom_intersection_cases(void)
     dom_intersection_step_cases();
     dom_intersection_lifetime_cases();
     dom_intersection_sweep_cases();
+    dom_intersection_starved_cases();
 }
 #undef IO_ASSERT

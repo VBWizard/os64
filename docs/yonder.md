@@ -303,6 +303,7 @@ cache_dir = /var/cache/yonder
 | `scripts` | `on` or `off`: whether a page's JavaScript runs | `off` |
 | `script_seconds` | how long one piece of a page's JavaScript may run, 1 to 60 seconds | 5 |
 | `script_memory_mb` | how much memory one page's JavaScript may hold, 16 to 2048 megabytes; read when yonder starts | 256 |
+| `dom_memory_mb` | how much memory the document's side of one page's JavaScript may hold (the objects scripts are given for the page's elements, their listeners and collections), 8 to 1024 megabytes; read when yonder starts | 64 |
 | `animations` | `on` or `off`: whether a page's CSS animations move | `on` |
 | `motion` | `reduce` or `no-preference`: what pages are told about movement | `no-preference` |
 | `diagnostics` | a directory to write a file about each page into, an absolute path | none |
@@ -315,7 +316,7 @@ cache_dir = /var/cache/yonder
 | `cookies` | `on`, `session` or `off`: whether cookies are kept in the profile's `cookies` file, only while the window is open, or not at all | `on` |
 
 A value yonder cannot use is ignored and the default used; a bad `agent`,
-`cache_mb`, `zoom`, `script_seconds`, `script_memory_mb` or `diagnostics` also says so in the
+`cache_mb`, `zoom`, `script_seconds`, `script_memory_mb`, `dom_memory_mb` or `diagnostics` also says so in the
 log, and a bad `modern`, `profile`, `downloads` or `cookies` on the status line.
 
 ## Fonts

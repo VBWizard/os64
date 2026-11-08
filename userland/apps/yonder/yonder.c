@@ -1883,9 +1883,9 @@ static struct {
     // Each script task's budget (Settings' script time limit, yonder.conf's
     // script_seconds), in milliseconds.
     uint64_t script_ms;
-    // Each page's script heap (yonder.conf's script_memory_mb), in bytes,
-    // read once as yonder starts.
-    size_t script_memory;
+    // Each page's script heap (yonder.conf's script_memory_mb) and DOM
+    // budget (dom_memory_mb), in bytes, read once as yonder starts.
+    size_t script_memory, dom_memory;
     // A resize or a zoom is laid out once the events that arrived with it
     // are drained: a drag sends a stream of them, a person zooming presses
     // several times, and a big page takes long enough to lay out that
@@ -9885,7 +9885,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     int64_t modified;
     stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
-        .url = url, .execution_ms = g.script_ms, .memory_bytes = g.script_memory, .serial = serial,
+        .url = url, .execution_ms = g.script_ms, .memory_bytes = g.script_memory, .dom_bytes = g.dom_memory,
+        .serial = serial,
         .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .keep_bytecode = script_keep_bytecode,
         .kept_module = script_kept_module,
@@ -11222,7 +11223,8 @@ static Observed observed_now(void)
 // covered, as the animation frames are not. It only queues: the callbacks
 // run in the delivery task (script_turn). True when the step ran and that
 // task waits, which the loop rings itself back for; false when it did not
-// run, or its batch was refused.
+// run, or when its batch was refused, by the provider or by a DOM budget
+// that refused it before (os64_dom_intersections_update).
 static bool intersections_turn(void)
 {
     yonder_scripts_t *s = g.page.scripts;
@@ -17171,6 +17173,7 @@ int main(int argc, char **argv)
     s_ranges = yonder_settings_saved_ranges();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     g.script_memory = (size_t)yonder_settings_saved_script_memory_mb() << 20;
+    g.dom_memory = (size_t)yonder_settings_saved_dom_memory_mb() << 20;
     const char *modern_refused;
     g.modern = yonder_settings_saved_modern(&modern_refused);
     const char *diag_refused = diag_dir_open();
