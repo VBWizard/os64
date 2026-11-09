@@ -209,8 +209,10 @@ transfer savings.
 The original local and live I3 hardware gates are complete for `a131eece`.
 Retain that frozen cohort. The evidence supports removing metadata-created
 copies; PR review additionally identified the unnecessary post-reduction full
-owners above, now corrected in the review branch. The corrected build needs
-the separate hardware gate in the review response. Inactive-owner eviction and
+owners above, now corrected in the review branch. The separate hardware gate
+for `0abc8edb` is complete in the [review response](IMAGE_MEMORY_PR513_REVIEW.md),
+including zero reconstruction-raster bytes on both Microsoft visits and the
+additional inline-SVG diagnostic follow-up. Inactive-owner eviction and
 decoder policy changes remain measured follow-ups. The local first-draw
 promotion's 58.2 ms cost is explicit evidence
 of the synchronous latency tradeoff, rather than a claim that promotion is free.

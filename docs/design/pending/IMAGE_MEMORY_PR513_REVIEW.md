@@ -1,8 +1,8 @@
 # PR #513 review response
 
 2026-11-09. Disposition of Fable's implementation review of `81c25438`.
-The original P5 evidence remains attached to its frozen `a131eece` cohort;
-these corrections require the hardware checks below.
+The original P5 evidence remains attached to its frozen `a131eece` cohort.
+The corrected `0abc8edb` cohort passed the image hardware gate recorded below.
 
 ## Findings
 
@@ -84,5 +84,60 @@ With Modern Web and scripts enabled, use the new frozen cohort:
    compare native/reconstruction, retained total/peak, source counts and
    refusals with the original I3 captures. Account for live-page/cache changes.
 
-These hardware checks are pending. The original P5 numbers must not be relabeled
-as measurements of the corrected build.
+## Corrected-cohort P5 results
+
+Chris completed the checklist and reported PASS for the local galleries,
+including responsive selection at both zooms and the replacement button, and
+successful live-page layout. Readback of all 22 installed runtime files and the
+seven relevant installed fixtures matched the frozen `0abc8edb` bundle
+byte-for-byte. Records 1998–2004 use Modern Web/scripts and a 2522×1257 content
+viewport; their initial zoom is 100%. The original saved HTML does not preserve
+on-screen PASS text, so those visual results are Chris's observations.
+
+| Record | Fixture | Display bytes | Native bytes | Encoded bytes | Retained peak bytes |
+|---|---|---:|---:|---:|---:|
+| 1998 | Metadata | 57,600 | 0 | 9,780 | 67,380 |
+| 1999 | One-shot Canvas | 57,600 | 8,294,400 | 0 | 8,352,000 |
+| 2000 | Late layout | 57,600 | 0 | 9,780 | 8,304,180 |
+| 2001 | Responsive, final account | 148,452 | 230,400 | 0 | 465,592 |
+
+All four records are clean and have zero image refusals. Late layout records
+one resample: its early whole raster contributes to the peak, but no native or
+reconstruction raster remains after reduction. Canvas records one synchronous
+promotion taking **46,590 µs**. Responsive records two pixel acquisitions and
+one 1,393 µs promotion; its retained native raster has Canvas use, with zero
+reconstruction-only bytes. Its two numbered paint readings do not constitute
+independent per-zoom memory snapshots: repeated `d` captures replace the memory
+facts. The visual checks at both zooms passed as reported above.
+
+Both live records name `https://microsoft.design/wallpapers/` at 100%, with seven
+ready stylesheets and no outstanding picture jobs:
+
+| Metric | Original I3 return, 1923 | Corrected first, 2002 | Corrected return, 2004 |
+|---|---:|---:|---:|
+| Catalog entries / shown | 42 / 42 | 82 / 82 | 42 / 42 |
+| Display bytes | 518,184,996 | 523,240,996 | 518,184,996 |
+| Native / reconstruction bytes | 57,768,960 / 57,768,960 | 0 / 0 | 0 / 0 |
+| Encoded backing bytes | 0 | 5,857,424 | 5,523,911 |
+| Settled retained picture bytes | 575,953,956 | 529,098,420 | 523,708,907 |
+| Retained picture peak bytes | 575,953,956 | 561,935,728 | 557,155,809 |
+| Fresh-cache image replies | 42 | 82 | 42 |
+| Worker decode/reduction total, µs | 2,924,950 | 3,560,630 | 3,485,185 |
+
+Both corrected visits have zero image network transfers, pixel acquisitions,
+promotions, metadata-only native bytes and image refusals. The return visit
+retains **52,245,049 fewer picture bytes** than the original I3 return: the
+57,768,960-byte reconstruction subdivision is replaced by 5,523,911 encoded
+bytes, with the same display-byte total and catalog count. This is an observed
+live-page comparison, not a whole-process saving or a controlled timing/network
+benchmark. Decode work increased in these samples; no speedup is claimed.
+
+The live diagnostics retain 96 MISSING features and the Clarity script fetch
+failure. They also report **one unsupported inline-SVG failure absent from the
+original I3 captures**. The saved list of 50 inline SVGs is identical, and the
+SVG adapter/rendering call site and installed libsvg are unchanged from that
+cohort. Layout/cascade changes arrived in the intervening base integration;
+these facts do not establish the warning's cause. Keep it as an open diagnostic
+follow-up, not an image-fetch failure or a claim of a wholly clean live page.
+The image hardware gate is complete for `0abc8edb`; no new implementation or
+broader SVG acceptance is implied by this evidence update.
