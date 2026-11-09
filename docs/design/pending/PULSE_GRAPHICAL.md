@@ -103,7 +103,8 @@ network dials. Other hidden meters leave no empty placeholder cards.
 Layout selection uses available width and measured text. A shorter height
 cannot be obtained by silently clipping a row: the native minimum is updated
 for the chosen layout. Breakpoints need a small stable margin so dragging near
-one does not continually alternate layouts. Changing the layout during a drag
+one does not continually alternate layouts. Measure that margin in content
+pixels. Changing the layout during a drag
 must account for the existing minimum-size call cancelling an active gesture.
 
 Compact is an explicit option. Shrinking Instruments does not quietly enable
@@ -123,7 +124,8 @@ card. Examples:
 
 - **CPU:** overall utilization, normalized across cores.
 - **RAM:** used, available, and total memory.
-- **Disk:** selected mount, used space, available space, and total capacity.
+- **Disk:** selected mount, used space, available space, and total capacity;
+  explicitly identify this as filesystem capacity, not disk activity or an alarm.
 - **Download or upload:** current rate, selected interface or aggregation, and
   the shared recent-peak scale.
 
@@ -197,22 +199,39 @@ peak markers come from the same displayed snapshot. Changing display units
 changes formatting, not the recorded byte rates.
 
 Keep history with the sampler, using bounded timestamped per-second buckets
-rather than a sample-count window. For multiple samples in a second, retain the
-maximum for each metric. Expire buckets by elapsed time using the existing
-network history's second-boundary convention. The existing network history
-stores the maximum across both directions; extend it or share its timing with
-separate direction histories so one direction's peak is not attributed to the
-other. CPU and memory have their own validity and maxima.
+rather than a sample-count window. Read `os64_micros()` once at sampling time
+and use its monotonic microseconds divided by 1,000,000 for every peak bucket
+and the network ceiling. Wall-clock time and `set_time` do not participate.
+Retain the existing second-boundary expiry rule: a bucket contributes while
+`now_second - bucket_second < 60`. Boundary quantization is less than one
+second. For multiple samples in a second, retain the maximum for each metric.
+
+The existing network scale already uses monotonic uptime ticks, not wall time.
+However, `pulse_sample()` reuses the previous second when its system sample
+has no usable tick snapshot, which can freeze expiry while sampling fails.
+Read the history clock independently of sampler success so old peaks expire
+even when measurements are unavailable. CPU utilization still uses its tick
+ledgers; this change concerns history age, not the CPU percentage calculation.
+A failed clock read must not become an unsigned timestamp or a new sample in
+a stale bucket: expose peak history as unavailable for that turn and use the
+next valid monotonic time to expire retained buckets.
+
+The existing network history stores the maximum across both directions;
+extend it or share its timing with separate direction histories so one
+direction's peak is not attributed to the other. CPU and memory have their
+own validity and maxima. A decreasing injected timestamp is a clock-contract
+violation to reject in tests, not a supported wall-clock adjustment or a reason
+to reset history in normal operation.
 
 Missing samples do not contribute zeroes or erase valid earlier peaks. If the
 current value is unavailable, keep the neutral current-state display; a
 remaining historical mark must be distinguishable and explained in details.
 When no valid sample remains, remove that metric's marker. A valid zero peak
-can appear at the zero endpoint. History starts empty on launch and resets on a
-backward clock discontinuity. An interface change clears network peaks and
-scale together, preserving CPU and memory history. View/mode, unit, refresh
-interval, and visibility changes do not clear history; sampling and aging
-continue while a meter is hidden or Classic is selected.
+can appear at the zero endpoint. History starts empty on launch. An interface
+change clears network peaks and scale together, preserving CPU and memory
+history. View/mode, unit, refresh interval, and visibility changes do not
+clear history; sampling and aging continue while a meter is hidden or Classic
+is selected.
 
 ## Remembering the user's arrangement
 
@@ -248,7 +267,9 @@ The current generic placement helper assumes a single size per configuration.
 Pulse needs an explicit routing layer for sizes indexed by view and mode;
 attaching ordinary placement instances to the same `geometry` key is incorrect.
 Programmatic size changes must not be mistaken for a user resize of the
-outgoing presentation.
+outgoing presentation. The shared placement helper can gain a role/mode key
+when a second application needs it; that extraction is tracked in the GUI
+section of `DEBTS.md`. Keep the Pulse adapter small enough to move there.
 
 Preparing a view or mode change includes its font, layout, and drawing
 resources. Failure leaves the previous view usable and reports the reason. A
@@ -274,13 +295,25 @@ be retained. Report actual memory and CPU costs against Classic rather than
 relying on a rounded 0% label. There is no browser, SVG document engine, or
 JavaScript runtime inside Pulse.
 
+The current `os64_gui_event_wait()` and `os64_gui_event_wait_any()` ABI has no
+timeout argument. `ui_dispatcher.c` calls the latter through a wait callback
+that also has no deadline parameter. Keep the worker-based hover deadline;
+there is no timed wait to reuse and this slice does not add one.
+
 The timer worker remains separate from widget ownership. It can check a
-published hover deadline alongside the sampling deadline and ring a distinct
-notification bit when details become due. Its existing sleep steps are at most
-250 ms, so a nominal 500 ms hover can take about 500–750 ms plus scheduling
-latency. A hover notification must not trigger an extra system sample. Cancel
-pending hover state at teardown and join the worker before releasing window or
-drawing resources.
+published monotonic hover deadline alongside the sampling deadline and ring
+a distinct notification bit when details become due. Its existing sleep
+steps are at most 250 ms, so a nominal 500 ms hover can take about 500–750 ms
+plus scheduling latency. A hover notification must not trigger an extra
+system sample. Cancel pending hover state at teardown and join the worker
+before releasing window or drawing resources.
+
+The existing compositor's `pointer_state_locked()` targets the topmost content
+under the pointer, independently of keyboard focus, and libui consumes
+`OS64_GUI_EVENT_POINTER_STATE` without discarding it on blur. Before building
+the detail card, verify native delivery in QEMU with Pulse pinned and another
+app focused. Treat a failure as a window-system regression, not a reason to
+poll global pointer position or steal focus from the other application.
 
 ### Restoring a size needs a kernel entry point
 
@@ -300,26 +333,77 @@ dials. Recreating Pulse's window on each change would instead complicate focus,
 its timer handle, and the open Settings dialog.
 
 Propose a small `os64_gui_window_set_content_size()` syscall, with its number
-assigned after checking the then-current syscall table. It should:
+assigned after checking the then-current syscall table. It is an exact request
+on an owned window:
 
-- Validate ownership and dimensions, reject desktop/popup targets, and honor
-  the current minimum, reserved surface capacity, and frame insets.
-- Resize a normal window without changing focus, pin state, or its handle.
-  Preserve the maximized frame while updating its normal restore dimensions
-  when the window is maximized.
-- Notify the client of an actual surface-size change through the existing
-  resize event. Keep programmatic changes distinct from completed user
-  placement events used for preference saving.
-- Handle an active native resize gesture through the same cancellation rules
-  as the minimum-size setter, with coverage for its remaining button releases.
-- Return an error without a partial geometry change on invalid requests.
+- Check ownership and ordinary-window policy, rejecting desktop/popup targets.
+  Validate the full raw arguments before narrowing dimensions. Under the GUI
+  lock, derive the frame using the current decoration insets and check the
+  effective minimum, including the decoration's width floor, and reserved
+  surface capacity before touching geometry or cancelling gestures.
+- Keep the frame's top-left corner anchored when the new frame fits. Otherwise
+  shift its position just enough to fit the complete frame on screen, using
+  `x = clamp(old_x, 0, screen_width - frame_width)` and the equivalent for y.
+  If the requested content plus chrome cannot fit on screen, refuse. Shifting
+  position is permitted; silently reducing the requested size is not.
+- Refuse dimensions below the effective minimum or above reserved capacity
+  without change. Give these distinct size-error results, and a third for
+  failure to fit the complete frame on screen. Existing ownership/handle and
+  malformed-argument errors retain their meanings. Allocate the new error
+  values with the ABI change; the caller cannot infer its capacity today.
+- Resize without changing focus, pin state, minimization state, or handle.
+  For a maximized window, anchor and fit the **normal restore frame**, updating
+  its dimensions/position without changing the maximized frame or current
+  surface. Document this hidden restore-state change in the public header.
+- Return success for an already satisfied request; `wm_resize()` returning
+  false for a no-op is not a syscall failure. Its surface-size invariant
+  checks remain in place; reuse the engine without promising that its boolean
+  result alone distinguishes no-op from an internal refusal.
+- Use the existing `WINDOW_RESIZE` notification and readback after an actual
+  visible geometry change. A restore-only change needs no surface resize
+  notification. Add no programmatic-origin flag, tag, or new event type.
+- Retain the existing `WINDOW_PLACEMENT` contract: it describes completed user
+  gestures, not automatic fitting, minimum growth, or this syscall. Userland
+  refreshes layout on resize notifications and saves preferences from placement
+  notifications. It records its requested target for transition bookkeeping;
+  matching resize dimensions are not a reliable event-origin identifier when
+  changes coalesce. Reconcile current state after a notification or input loss.
+- After validation, handle active resize gestures through the existing
+  cancellation rules, including their remaining button releases. An invalid
+  request must leave both geometry and the active gesture untouched.
 
-The view/mode transition must stage resources before changing native geometry
-and restore the previous minimum if the requested size fails. On a kernel
-without the new operation, allow view/mode changes and manual resizing using
-the existing minimum-size rules, but explain that automatic size restoration is
-unavailable. This preserves a usable graphical view while making the kernel
-requirement specific. The dials and hover details themselves require no new
+The frame-fitting policy parallels content-window creation, whose fit step
+lives in `gui_client.c`; it does not reuse the creation path's size-clamping
+semantics. Pulse may explicitly calculate a smaller live fitting target when
+restoring a preference on a smaller screen, preserving the stored preference.
+The kernel must still honor that explicit target exactly or refuse it.
+
+The view/mode transition stages fonts, layout, and drawing resources before
+changing native state. Snapshot the old minimum and live geometry. If raising
+a new minimum grows the old window and the subsequent exact-size request
+fails, restore both the old minimum and old geometry before retiring the old
+view; restoring the floor alone does not undo that growth. Exercise this
+failure ordering in tests. Re-read native state after any failed rollback and
+keep the still-active view laid out to the actual surface, reporting the
+failure rather than claiming the transition was atomic.
+
+Keep a bounded older-kernel behavior: a view/mode change that fits the current
+surface can proceed, while automatic size restoration reports that it is
+unavailable. If the candidate cannot fit, retain the current view and ask for
+manual resizing or a kernel update before retrying. Do not grow the window
+through a minimum-size side effect to emulate the missing operation. Manual
+resizing remains available. Staged delivery can install userland before the corresponding
+kernel is booted. A successful rebuild does not establish which kernel is
+running. Test this path on a kernel without the new handler rather than
+assuming the mixed deployment cannot occur.
+
+Do not call every rejected request an old kernel. The existing unimplemented
+syscall result is -1, also used for an invalid GUI handle. Revalidate the live
+owned window with readback before presenting the unavailable-operation hint;
+report known bounds/ownership failures as their actual cause. Preserve the
+user's preferred sizes on failure and avoid repeated retry/error messages.
+The fallback does not emulate the syscall by recreating windows or launch a
+second sizing engine. The dials and hover details themselves require no new
 syscall.
 
 ## Implementation slices and acceptance
@@ -328,15 +412,21 @@ syscall.
 | --- | --- | --- |
 | 1 — Draw and fit | Deterministic normal/compact Instruments previews using production drawing code, including recent-peak markers | Compact demonstrated around 320–360 pixels with readable values; inspect 24- and 26-pixel text, long rates, missing data, and hidden meters |
 | 2 — Switch and resize | Classic/Instruments selection, Compact toggle, per-view/mode preferences, live peak histories, and the size-request syscall | Switch views and toggle Compact without losing position, peaks, focus, pin state, or saved sizes; Classic ignores but retains the Instruments compact preference; verify older-kernel fallback |
-| 3 — Details and finish | Mouse/keyboard detail cards, bounded caches, and lifecycle cleanup | Hover while Yonder has focus; resize with details visible; close with Settings open; compare CPU and memory against Classic |
+| 3 — Details and finish | Mouse/keyboard detail cards, bounded caches, and lifecycle cleanup | Verify unfocused hover delivery before building the overlay; resize with details visible; close with Settings open; measure idle/loaded CPU and peak cache bytes against Classic, including the 8 MiB cache target |
 
 Host tests should cover layout bounds at breakpoints, allocation/failure paths,
 configuration preservation, scale/needle/peak agreement, peak expiry and
 per-metric validity and distinct direction peaks, multiple samples per second,
-long gaps, backward clocks, interface changes, independent hover/sample
-deadlines, and window ownership/resize behavior. Run meaningful regressions
+long gaps, wall-clock changes, history expiry during sampler failure,
+clock-contract violations in injected tests, interface changes, independent
+hover/sample deadlines, and window ownership/resize behavior. Run meaningful regressions
 under ASan, UBSan, and LeakSanitizer. Native QEMU tests cover the actual resize
-syscall, focus, frame composition, pinning, and pointer delivery.
+syscall, focus, frame composition, pinning, and pointer delivery. Include
+requests near each screen edge/corner, a frame too large to fit, distinct
+minimum/capacity refusals, maximized restore-only changes, no-op success,
+active-gesture refusal/cancellation, and absence of user-placement writes for
+programmatic fitting. Slice 2 takes the kernel review route for the syscall
+and its native fixture; slices 1 and 3 retain application review scope.
 
 Hardware acceptance repeats the successful real workloads: compression and file
 deletion, a network speed test, and a heavy Yonder page. Check both Instruments
