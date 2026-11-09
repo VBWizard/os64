@@ -275,6 +275,52 @@ Deliver each hardware slice as a small frozen cohort with matching libraries
 and checksums. Include a kernel only for the slice that adds native size
 restoration, with its requirement called out. Keep accepted cohorts intact.
 
+## Follow-up for a floating instrument cluster
+
+Keep the five-dial Compact layout in the current scope. A later presentation
+can visually join the instrument rims while removing the rectangular panel,
+so the desktop and other applications show through the spaces between them.
+The instruments remain visible; the containing window still exists to own
+their pixels, input, position, and lifetime.
+
+Prefer **click-through gaps with interactive instruments**. Hovering over a
+dial should still show its details, and an instrument rim or small handle can
+provide a place to drag the cluster. A settings/context action must remain
+reachable without a titlebar. Fully passing mouse input through the entire
+cluster would prevent its ordinary hover and click interactions; that would
+be a distinct locked-overlay mode with an external way to unlock it.
+
+The inspected window system needs additional support for this presentation:
+
+| Capability | Current behavior | Follow-up requirement |
+| --- | --- | --- |
+| Frame | No-decorations removes the titlebar but retains a one-pixel border | A genuinely frameless ordinary window, retaining normal lifetime and focus rules |
+| Visible shape | Client content is copied as a rectangle | A published shape mask or per-pixel alpha, allowing empty space around visible dials |
+| Drawing underneath | Occlusion assumes the window's whole frame is opaque | Transparent gaps must not hide or suppress updates from underlying windows |
+| Pointer targeting | `wm_topmost_at()` uses the frame rectangle | An input region that passes gap clicks and hover to the window below while retaining dial input |
+
+The existing creation-time combination of no decorations and pinned also
+classifies a window as a popup. A persistent instrument cluster must not
+accidentally inherit menu lifecycle or owner-focus restrictions from that
+combination. Give the window type and decoration policy an explicit contract.
+
+Drawing a translucent color inside Pulse does not make the desktop visible:
+the current compositor still copies the window surface opaquely. Likewise,
+merely skipping a pixel would leave stale backbuffer content because the
+opaque window has already prevented painting underneath it. Visual shape,
+occlusion, damage, and input routing must agree.
+
+A binary cutout shape could establish the first version: solid instruments
+and transparent gaps. Antialiased outer edges and translucent shadows require
+partial-alpha composition. Keep the input region independent of decorative
+shadows, and publish validated shape/input state consistently with the drawn
+content. The follow-up should cover movement, resizing, shape changes,
+partial overlap, pointer capture, and hover transitions over the gaps.
+
+This is window-system work with Pulse as its first consumer, rather than an
+extra dial-rendering option. It does not block Instruments, resizable Compact,
+or their hover details in a normal window.
+
 Skins, graphs, per-core dials, disk activity, and animated needle interpolation
-remain separate follow-ups. This design establishes the renderer separation
-that can support them without committing to a skin file format.
+also remain separate follow-ups. This design establishes the renderer
+separation that can support them without committing to a skin file format.
