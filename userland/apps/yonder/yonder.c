@@ -6100,7 +6100,8 @@ static void pictures_judge(Page *p)
             continue;
         if (pic->need_w != pic->refused_w || pic->need_h != pic->refused_h)
             pic->refused_w = pic->refused_h = 0;
-        if(pic->full && pic->state==PIC_SHOWN && pic->image.pixels!=pic->full->image.pixels &&
+        if(pic->kind==YONDER_PICTURE_RASTER && pic->full && pic->state==PIC_SHOWN &&
+           pic->image.pixels!=pic->full->image.pixels &&
            pic->need_w==pic->width && pic->need_h==pic->height) {
             size_t small=(size_t)pic->image.width*pic->image.height*4;
             os64_image_free(&pic->image);pic->image=pic->full->image;
@@ -6556,10 +6557,10 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     if (bytes > PICTURES_KEPT_MAX - g.page.kept_bytes ||
         backing > PICTURES_KEPT_MAX - g.page.kept_bytes - bytes) {
         g.page.picture_budget_refusals++;
-        // Metadata remains successful. Reconstruction fits independently of
-        // a raster; a refused promotion must not discard that last source.
+        // Metadata remains successful. Raster backing can supply a smaller
+        // display; refused sequences leave room for other displayable images.
         pic->state = PIC_NOT_KEPT;
-        if(encoded && encoded<=PICTURES_KEPT_MAX-g.page.kept_bytes) {
+        if(pic->kind==YONDER_PICTURE_RASTER && encoded && encoded<=PICTURES_KEPT_MAX-g.page.kept_bytes) {
             pic->encoded=product->encoded;product->encoded=NULL;
             pic->cost=encoded;g.page.kept_bytes+=encoded;
             if(g.page.kept_bytes>g.page.picture_kept_peak)g.page.picture_kept_peak=g.page.kept_bytes;

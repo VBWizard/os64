@@ -124,14 +124,21 @@ static void image_ownership_gif(bool http,bool crowded)
     responsive_drain();
     Picture *pic=&g.page.pics[0];
     check(pic->kind==YONDER_PICTURE_SEQUENCE && !pic->full &&
-          (crowded?(pic->state==PIC_NOT_KEPT && pic->encoded && !pic->moving):!pic->encoded),
-          "image ownership: admitted GIF uses sequence input; refused GIF can retain encoded input alone");
+          (crowded?(pic->state==PIC_NOT_KEPT && !pic->encoded && !pic->moving):!pic->encoded),
+          "image ownership: admitted GIF uses sequence input; refused GIF keeps no encoded body");
     if(crowded) {
         os64_dom_image_view_t view;
-        check(canvas_source(g.page.way.doc,probe_id("i"),true,&view)==OS64_DOM_IMAGE_READY &&
-              ((uint32_t *)view.surface.pixels)[0]==0xffff0000,
-              "image ownership: a budget-refused animation still supplies its retained default frame");
-        canvas_source_release(g.page.way.doc,&view);g.page.kept_bytes=pic->cost;
+        check(pic->cost==0 && g.page.kept_bytes==PICTURES_KEPT_MAX-sizeof(gif)-4,
+              "image ownership: refused GIF leaves remaining display budget unspent");
+        check(canvas_source(g.page.way.doc,probe_id("i"),false,&view)==OS64_DOM_IMAGE_READY &&
+              view.surface.width==1 && view.surface.height==1,
+              "image ownership: refused GIF retains successful natural dimensions");
+        canvas_source_release(g.page.way.doc,&view);
+        g.page.kept_bytes=pic->cost;
+        check(canvas_source(g.page.way.doc,probe_id("i"),true,&view)==OS64_DOM_IMAGE_REFUSED &&
+              !pic->full && !pic->encoded && g.page.image_promotion_refusals==1 && nfake_requests==1,
+              "image ownership: refused HTTP GIF pixels stay refused without backing or a new request even after room returns");
+        canvas_source_release(g.page.way.doc,&view);
     }
     if(pic->moving) {
         check(os64_image_sequence_next(pic->moving)==OS64_IMAGE_OK &&
@@ -143,6 +150,14 @@ static void image_ownership_gif(bool http,bool crowded)
               os64_image_sequence_frame(pic->moving)->pixels[0]==0xff00ff00,
               "image ownership: Canvas synchronously reads the default red GIF frame without rewinding display");
         canvas_source_release(g.page.way.doc,&view);
+        pic->need_w=pic->width;pic->need_h=pic->height;
+        uint64_t revision=s_layout_resources.pictures;
+        size_t cost=pic->cost,kept=g.page.kept_bytes;
+        pictures_judge(&g.page);
+        check(!pic->image.pixels && pic->cost==cost && g.page.kept_bytes==kept &&
+              s_layout_resources.pictures==revision && !pic->resample_owed &&
+              os64_image_sequence_frame(pic->moving)->pixels[0]==0xff00ff00,
+              "image review: judging a promoted GIF keeps its moving display without raster reattachment or layout invalidation");
     }
     if(http){data_pool_close();probe_drop();fake_fetch_reset();}else sizes_close();
     check(live==baseline,"image ownership: GIF sequence and default-frame promotion release");

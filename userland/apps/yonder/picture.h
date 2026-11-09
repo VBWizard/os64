@@ -68,7 +68,7 @@ typedef struct {
     // of arriving as new.
     uint32_t cover_w, cover_h;
     bool resample;
-    bool recoverable;              // preserve non-data raster/GIF bytes through admission/layout
+    bool recoverable;              // preserve non-data raster bytes through admission/layout
     yonder_picture_backing_t *source; // owned immutable input for a resample
     bool source_clean;
 } yonder_picture_job_t;

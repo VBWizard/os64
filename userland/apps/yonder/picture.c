@@ -27,12 +27,12 @@ void yonder_picture_backing_free(yonder_picture_backing_t *b)
     os64_free(b->bytes);os64_image_free(&b->image);os64_free(b);
 }
 
-// Admission and the first layout choose which representation to retain. An
-// admitted GIF owns its input; a refused one can keep the body alone. A data:
+// Raster admission and the first layout choose which representation to retain.
+// Sequences own their input; refused sequences keep no separate body. A data:
 // URL already supplies immutable bytes.
 static void preserve_body(const yonder_picture_job_t *j,yonder_picture_t *p,uint8_t **bytes,size_t len)
 {
-    if(!j->recoverable || j->data_url || p->status!=OS64_IMAGE_OK || p->kind==YONDER_PICTURE_SVG)return;
+    if(!j->recoverable || j->data_url || p->status!=OS64_IMAGE_OK || p->kind!=YONDER_PICTURE_RASTER)return;
     p->encoded=yonder_picture_backing_new();
     if(!p->encoded) {
         p->status=OS64_IMAGE_NO_MEMORY;

@@ -10,7 +10,7 @@ The corrected `0abc8edb` cohort passed the image hardware gate recorded below.
 |---|---|---|
 | 1, P1: resample without backing is refused and repeatedly retried | Fixed | Missing backing falls through to the worker's request/cache/file/data path. Submit refusal records the requested dimensions. A test refuses both the original raster and its encoded body, then displays a 57,600-byte thumbnail from the HTTP cache without a second network transfer. Its body still does not fit; that does not prevent display admission. Repeated judgement at a refused size submits nothing; changing the need permits another attempt. |
 | 2, P1: early whole arrival retains full plus reduced grids | Fixed | A whole arrival keeps its encoded response through the first known layout decision when it fits. Reduction retires the unborrowed full owner; keeping the whole display drops redundant bytes. Canvas-acquired full owners remain available to their loans and subsequent draws. A late-layout test clears/disables the cache and changes the server response before reduction: the retained original bytes supply the thumbnail and immediate Canvas readback, with no refetch. |
-| 3, P2: GIF input retained twice | Fixed | An admitted sequence owns the retained input; the catalog drops the second body. `os64_image_sequence_default` decodes that owned input without advancing or rewinding playback. Tests cover HTTP and data GIFs after advancing to a different displayed frame. See the admission detail below. |
+| 3, P2: GIF input retained twice | Fixed | An admitted sequence owns the retained input; the worker preserves no separate sequence body. `os64_image_sequence_default` decodes that owned input without advancing or rewinding playback. Tests cover HTTP and data GIFs after advancing to a different displayed frame. See the admission detail below. |
 | 4, P2: data body retained beside its address | Fixed | Data jobs do not preserve a separate encoded body. Resampling and synchronous pixel promotion decode the retained data URL. The delivered page scripts also run with data transport in the host harness and retain zero encoded-body bytes. |
 | 5, P2: preload body limit changes successful load into error | Fixed | Fetch success survives independently of retained-body admission, including failure to allocate the response record. An activation whose body was dropped requests the original URL through the normal cache path. A regression fills the preload account, observes `load`, activates the stylesheet, and applies its CSS with one network request in total. |
 | 6, P2: repeated linear image-source lookups | Fixed; one suggested call removal rejected | A growing node hash index replaces list scans in source lookup, display lookup and map refresh. The ownership list remains for iteration/cleanup. A 256-image test checks identity through index growth. The end-of-poll update is necessary, as demonstrated below. |
@@ -39,14 +39,15 @@ late-layout fixture cases, passed 24,560 checks. The call is retained and its
 purpose is documented beside it. The node index and selective invalidation
 remove the quadratic lookup and redundant selection costs motivating finding 6.
 
-**The GIF worker keeps its response through admission.** Excluding sequences
-from body preservation before the admission decision would lose the useful
-NOT_KEPT case: the sequence may exceed the remaining budget while its encoded
-input fits. The worker therefore retains the response until admission. An
-admitted sequence drops that extra body; a refused sequence can retain the body
-alone after the sequence is freed. A tight-budget HTTP GIF regression verifies
-that the latter can still supply its default frame synchronously. There is no
-second encoded copy retained beside an admitted sequence.
+**GIF input belongs to an admitted sequence.** The first correction retained
+the worker response through admission so a NOT_KEPT sequence could keep its
+encoded body alone for a later Canvas default-frame draw. Round two reconsidered
+that policy: no path restores a refused sequence to animated display, so Chris
+chose to leave the remaining picture budget available for displayable images.
+The worker now preserves separate encoded backing for non-data rasters, not
+sequences. An admitted sequence supplies Canvas's default frame from its owned
+input; a refused HTTP/file sequence has no backing and refuses pixel acquisition.
+Data URLs still carry their reconstruction in their address.
 
 ## Validation and limits
 
@@ -141,3 +142,30 @@ these facts do not establish the warning's cause. Keep it as an open diagnostic
 follow-up, not an image-fetch failure or a claim of a wholly clean live page.
 The image hardware gate is complete for `0abc8edb`; no new implementation or
 broader SVG acceptance is implied by this evidence update.
+
+## Round two
+
+- **Raster reattachment applied to sequences:** fixed by restricting the
+  grow-to-whole shortcut to `YONDER_PICTURE_RASTER`. The regression promotes a
+  GIF's red default frame after animation advances to green, then judges it at
+  natural size. Both HTTP and data-URL cases verify that the moving display,
+  ownership account and layout revision stay unchanged, with no resample owed.
+  Before the guard, both cases failed this check.
+- **Encoded retention for a refused sequence:** Chris chose to discard the
+  separate body, prioritizing remaining room for displayable images. The worker
+  preserves separate input for non-data rasters; the refused-arrival path also
+  restricts body adoption to rasters. A refused HTTP GIF retains dimensions and
+  no picture bytes. Its pixel request returns REFUSED and is counted without a
+  new fetch, even after the simulated competing memory is released. Admitted
+  GIFs retain their sequence input and independent Canvas default-frame behavior;
+  data URLs retain their address as before.
+
+The frozen P5 cohort and its acceptance above remain `0abc8edb`. These narrow
+GIF corrections are covered by host regression tests; they do not relabel the
+earlier hardware captures as a run of the subsequent source.
+
+Round-two validation: the complete Yonder host suite passes **24,564 checks,
+zero failures**, with ASan, UBSan and LeakSanitizer enabled outside the sandbox.
+The target Yonder build passes. The pre-fix focused run fails precisely the
+two new HTTP/data GIF judgement checks (4,119 checks, two failures). No library
+implementation changed in this round.

@@ -29,7 +29,9 @@ Canvas acquires pixels synchronously:
 - GIF display animation and Canvas's default frame remain independent. The
   admitted sequence keeps its own input/canvases, without a second retained
   body. Default-frame acquisition decodes that input without changing playback.
-  A sequence refused by the retained budget can keep the encoded body alone.
+  A sequence refused by the retained budget keeps no separate encoded body;
+  metadata remains available, but an HTTP/file GIF without backing refuses a
+  Canvas pixel request. Data URLs still carry their own reconstruction bytes.
 - SVG keeps its secure-static document and synchronous rendering contract.
   A refused SVG document can still report successful dimensions; pixel
   acquisition explicitly refuses when no document was admitted.
