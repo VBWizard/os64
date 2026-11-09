@@ -1,6 +1,6 @@
 // Review the equality and role inventories when these records change. Size
 // guards supplement that review; a same-size field edit still needs inspection.
-_Static_assert(sizeof(FBox) == 504 && sizeof(FItem) == 104 && sizeof(FInline) == 72,
+_Static_assert(sizeof(FBox) == 528 && sizeof(FItem) == 104 && sizeof(FInline) == 72,
                "review layout correspondence fields");
 // Call-local correspondence. No old arena address escapes into the new tree.
 FReusePair *f_reuse_pair(const FReuseMatch *m, const FBox *box)

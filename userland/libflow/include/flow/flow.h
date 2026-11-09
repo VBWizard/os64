@@ -744,8 +744,9 @@ typedef struct {
     bool pixelated;
     flow_length_t width, height;    // AUTO, PX or PERCENT
     // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
-    // outside flex and grid). A percentage on a height limit binds
-    // nothing, as a percentage height does not.
+    // outside flex and grid). A percentage on a height limit, as a
+    // percentage height, is of the containing block's height where that
+    // is definite, and binds nothing where it is not (CSS 2.1 § 10.7).
     flow_length_t min_width, max_width, min_height, max_height;
     // Whether width, height and their limits measure the content box or
     // the border box (CSS Sizing 3 § 4.1).

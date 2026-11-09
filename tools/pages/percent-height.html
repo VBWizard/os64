@@ -1,0 +1,84 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Percentage heights</title>
+<style>
+html{height:100%}
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.track{height:6px;width:300px;background:#ddd;margin:1em 0}
+.fill{height:100%;width:0;background:#0969da;animation:fill 3s linear infinite}
+@keyframes fill{to{width:100%}}
+.eq{display:flex;align-items:flex-end;gap:4px;height:32px;margin:1em 0}
+.eq span{display:block;width:8px;height:100%;background:#1a7f37;transform-origin:bottom;animation:bar 1s ease-in-out infinite alternate}
+.eq span:nth-child(2){animation-delay:-.3s}
+.eq span:nth-child(3){animation-delay:-.6s}
+.eq span:nth-child(4){animation-delay:-.9s}
+@keyframes bar{from{transform:scaleY(.2)}to{transform:scaleY(1)}}
+#probe div{background:#ccc}
+</style>
+</head><body>
+<h1>Percentage heights</h1>
+<p>CSS 2.1 &sect; 10.5: a percentage height is of the containing block's
+height when that height does not wait on the content (a length, a
+percentage that itself resolved, an absolute box's, and the window's above
+the root), and is <code>auto</code> when it does. Another browser shows
+every check PASS, and so should yonder.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+
+<h2>Look</h2>
+<p>A progress bar whose fill is <code>height: 100%</code> of a 6-pixel
+track, its width animated: a blue bar fills the grey track again and
+again.</p>
+<div class="track"><div class="fill"></div></div>
+<p>An equalizer: bars <code>height: 100%</code> of a 32-pixel row that
+aligns them to its foot, each scaled by keyframes: four green bars rise
+and fall.</p>
+<div class="eq"><span></span><span></span><span></span><span></span></div>
+
+<h2>Measured</h2>
+<div id="probe">
+  <div style="height:6px;width:100px"><div id="m-fill" style="height:100%;width:50%;background:#888"></div></div>
+  <div style="display:flex;align-items:flex-end;height:32px;margin-top:4px">
+    <div id="m-bar" style="width:10px;height:100%"></div><div id="m-half" style="width:10px;height:50%"></div>
+  </div>
+  <div style="height:200px;margin-top:4px;display:flex;gap:4px;align-items:flex-start">
+    <div style="height:50%;width:40px"><div id="m-chain" style="height:50%;width:20px;background:#888"></div></div>
+    <div id="m-min" style="min-height:50%;width:40px"></div>
+    <div id="m-max" style="height:150px;max-height:25%;width:40px"></div>
+  </div>
+  <div style="height:100px;margin-top:4px">
+    <div id="m-border" style="box-sizing:border-box;height:100%;padding:10px;border:2px solid #444;width:60px"></div>
+  </div>
+  <div style="margin-top:4px"><div id="m-auto" style="height:100%;width:40px"></div></div>
+</div>
+
+<script>
+const lines = [];
+let passed = 0, failed = 0;
+function record(ok, what, detail) {
+  if (ok) passed++; else failed++;
+  lines.push((ok ? 'PASS ' : 'FAIL ') + what + (ok || !detail ? '' : '\n     ' + detail));
+}
+const H = id => document.getElementById(id).getBoundingClientRect().height;
+function near(a, b) { return Math.abs(a - b) <= 1; }
+
+const root = document.documentElement.getBoundingClientRect().height;
+record(near(root, innerHeight), 'the root\'s height: 100% is the window\'s height',
+  'root ' + root + ', window ' + innerHeight);
+record(near(H('m-fill'), 6), 'a fill\'s height: 100% of a 6px track is 6px', 'got ' + H('m-fill'));
+record(near(H('m-bar'), 32) && near(H('m-half'), 16),
+  'bars of a 32px flex-end row: 100% is 32px, 50% is 16px',
+  'got ' + H('m-bar') + ' and ' + H('m-half'));
+record(near(H('m-chain'), 50), '50% of 50% of 200px is 50px', 'got ' + H('m-chain'));
+record(near(H('m-min'), 100), 'an empty box\'s min-height: 50% of 200px holds it at 100px',
+  'got ' + H('m-min'));
+record(near(H('m-max'), 50), 'max-height: 25% of 200px cuts a 150px box to 50px', 'got ' + H('m-max'));
+record(near(H('m-border'), 100), 'a border box\'s height: 100% of 100px is 100px, its frame within',
+  'got ' + H('m-border'));
+record(near(H('m-auto'), 0), 'height: 100% of a parent its content sizes is auto: an empty box is 0',
+  'got ' + H('m-auto'));
+
+document.getElementById('summary').textContent = passed + ' passed, ' + failed + ' failed';
+document.getElementById('checks').textContent = lines.join('\n');
+</script>
+</body></html>

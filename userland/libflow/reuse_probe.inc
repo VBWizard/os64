@@ -25,7 +25,7 @@ static void graft_enter(L *l, GraftProbe *p, FBox *b, int64_t x, int64_t w,
         .bottom = sp && sp->any ? max64(sp->bottom[0], sp->bottom[1]) : INT64_MIN,
         .pending = pending, .outside_marker = l->nmarkers > l->marker_floor};
     b->origin_x = x; b->origin_y = cur->y;
-    *b->reuse_call = (FReuseCall){.box = b, .cbw = w, .cbh = definite_height(b->parent),
+    *b->reuse_call = (FReuseCall){.box = b, .cbw = w, .cbh = definite_height(l, b->parent),
         .forced_w = forced, .pm_pos = cur->pm.pos, .pm_neg = cur->pm.neg,
         .first_set = cursor_placed(cur), .bfc = f_bfc_root(b),
         .parent_align = b->parent ? b->parent->style->text_align : FLOW_ALIGN_LEFT};
