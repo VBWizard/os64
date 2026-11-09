@@ -288,7 +288,7 @@ static void style_cases(void)
         "            input inline-block\n"
         "            select inline-block\n"
         "            textarea inline-block\n"
-        "            button inline-block\n");
+        "            button inline-block align=center\n");
 
     // ── Quirks mode ─────────────────────────────────────────────────────
 

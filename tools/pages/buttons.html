@@ -1,0 +1,123 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Buttons the page draws</title>
+<style>
+body{font-family:sans-serif;margin:2em;max-width:62em}
+pre{background:#eee;color:#000;padding:.6em;white-space:pre-wrap}
+.row{display:flex;gap:1em;align-items:center;flex-wrap:wrap;margin:.8em 0}
+.icon{background:transparent;border:0;padding:4px;cursor:pointer}
+.icon svg{display:block;width:16px;height:16px}
+.go{width:80px;height:80px;border-radius:50%;background:#1a7f37;color:#fff;border:0;font-size:22px;font-weight:bold}
+.pill{border:1px solid #888;background:#f4f4f4;padding:.3em .9em;border-radius:1em}
+.pill.on{background:#0969da;color:#fff;border-color:#0969da}
+.link{background:none;border:0;padding:0;color:#0969da;text-decoration:underline;font:inherit}
+.big{border:0;background-color:white;color:#000;font-size:40px;letter-spacing:.5rem;display:block;width:100%;height:160px;outline:1px dashed #888}
+#probe{position:relative}
+#probe button{font:16px sans-serif}
+</style>
+</head><body>
+<h1>Buttons the page draws</h1>
+<p>STYLED_BUTTONS.md: a <code>&lt;button&gt;</code> that holds elements, or
+whose background, border or corners the page styled, is laid out like any
+element, so its icons, words and colours are the page's. A button of plain
+text that the page left alone is still the toolkit's button. Every button
+still takes the click, the focus and the keys. Another browser shows every
+check PASS, and so should yonder.</p>
+<p id="summary">Running...</p>
+<pre id="checks"></pre>
+
+<h2>Look and click</h2>
+<p>Click each button, and Tab to one and press Space: the line below says
+which was pressed and how many times.</p>
+<p id="pressed">Nothing pressed yet.</p>
+<div class="row">
+  <button class="icon" data-name="search" title="Search"><svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="#333" stroke-width="2"/><path d="M10 10l4.5 4.5" stroke="#333" stroke-width="2"/></svg></button>
+  <button class="icon" data-name="star" title="Star"><svg viewBox="0 0 16 16"><path d="M8 1l2.2 4.6 5 .7-3.6 3.5.9 5L8 12.4 3.5 14.8l.9-5L.8 6.3l5-.7z" fill="#d4a017"/></svg></button>
+  <button class="icon" data-name="bell" title="Notifications"><svg viewBox="0 0 16 16"><path d="M8 1a4 4 0 0 0-4 4v4L2 12h12l-2-3V5a4 4 0 0 0-4-4zM6 13a2 2 0 0 0 4 0z" fill="#333"/></svg></button>
+  <button class="go" data-name="GO">GO</button>
+  <span><button class="pill on" data-name="Multi">Multi</button> <button class="pill" data-name="Single">Single</button></span>
+  <button class="link" data-name="link-like">a button that looks like a link</button>
+</div>
+<div class="row">
+  <button data-name="plain">Save</button>
+  <span>A plain button: the toolkit's own.</span>
+</div>
+<div class="row">
+  <button data-name="unstyled icon"><svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6" fill="#c00"/></svg></button>
+  <span>An unstyled button holding an icon: the icon alone, no frame, and it still clicks.</span>
+</div>
+<p>The auxclick demo's button, 160 pixels tall: a click gives it a new
+background colour, its words stay centred.</p>
+<button class="big" id="big" data-name="big">Click me!</button>
+
+<h2 id="probe-heading">Measured</h2>
+<div id="probe">
+  <button id="p-icon" style="background:none;border:0;padding:4px"><svg viewBox="0 0 16 16" width="16" height="16"><rect width="16" height="16" fill="#888"/></svg></button>
+  <div id="p-wrap" style="width:400px"><button id="p-block" style="display:block;background:none;border:0;padding:0">Go</button></div>
+  <button id="p-tall" style="height:60px;background:none;border:0;padding:0"><span id="p-tall-in">mid</span></button>
+  <button id="p-flex" style="display:flex;background:none;border:0;padding:0"><span id="p-a">a</span><span id="p-b">b</span></button>
+  <button id="p-before" class="before" style="background:none;border:0;padding:0"></button>
+  <style>#p-before::before{content:"xy"}</style>
+  <button id="p-float" style="display:block;background:none;border:0;padding:0"><span style="float:left;width:10px;height:30px;background:#888"></span></button>
+</div>
+
+<script>
+const lines = [];
+let passed = 0, failed = 0;
+function record(ok, what, detail) {
+  if (ok) passed++; else failed++;
+  lines.push((ok ? 'PASS ' : 'FAIL ') + what + (ok || !detail ? '' : '\n     ' + detail));
+}
+const R = id => document.getElementById(id).getBoundingClientRect();
+function near(a, b, slack) { return Math.abs(a - b) <= slack; }
+
+const icon = R('p-icon');
+record(near(icon.width, 24, 1) && near(icon.height, 24, 2),
+  'an icon button is its icon and its padding, 24 by 24',
+  'got ' + icon.width + ' by ' + icon.height);
+const block = R('p-block'), wrap = R('p-wrap');
+record(block.width < wrap.width / 4,
+  'a block-level button is as wide as its words, not its container',
+  'button ' + block.width + ', container ' + wrap.width);
+const tall = R('p-tall'), mid = R('p-tall-in');
+record(near(mid.top - tall.top, (tall.height - mid.height) / 2, 2),
+  'a button 60 pixels tall holds its words in the middle',
+  'words at ' + (mid.top - tall.top) + ' of ' + tall.height + ', words ' + mid.height + ' tall');
+const a = R('p-a'), b = R('p-b');
+record(b.left >= a.right - 1 && near(a.top, b.top, 1),
+  'a flex button lays its items side by side',
+  'a ' + a.left + '..' + a.right + ' at ' + a.top + ', b ' + b.left + ' at ' + b.top);
+const before = R('p-before');
+record(before.width > 0 && before.width < 60,
+  'an empty button with a ::before is as wide as what ::before draws',
+  'got ' + before.width);
+const fl = R('p-float');
+record(fl.height >= 30,
+  'a button holds the float inside it',
+  'got ' + fl.height + ' tall');
+const big = R('big');
+record(big.height > 150 && big.width > 300,
+  'the auxclick button takes the size the page gives it',
+  'got ' + big.width + ' by ' + big.height);
+
+document.getElementById('summary').textContent = passed + ' passed, ' + failed + ' failed';
+document.getElementById('summary').className = failed ? 'fail' : 'pass';
+document.getElementById('checks').textContent = lines.join('\n');
+
+const counts = {};
+for (const button of document.querySelectorAll('button[data-name]')) {
+  button.addEventListener('click', () => {
+    const name = button.dataset.name;
+    counts[name] = (counts[name] || 0) + 1;
+    document.getElementById('pressed').textContent =
+      'Pressed: ' + name + ' (' + counts[name] + (counts[name] === 1 ? ' time)' : ' times)');
+    if (button.classList.contains('pill')) {
+      for (const p of document.querySelectorAll('.pill')) p.classList.toggle('on', p === button);
+    }
+    if (button.id === 'big') {
+      const r = () => Math.floor(Math.random() * 255);
+      button.style.backgroundColor = 'rgb(' + r() + ',' + r() + ',' + r() + ')';
+    }
+  });
+}
+</script>
+</body></html>

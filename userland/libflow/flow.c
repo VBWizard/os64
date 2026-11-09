@@ -3538,7 +3538,8 @@ static bool within(const flow_box_t *b, const flow_box_t *of)
 
 // Whether a box draws anything of its own at (x, y), a point in its rect:
 // nothing when it is of opacity 0 (`unpainted`); else text, a list
-// marker, a picture and a control draw what they hold; and any other box
+// marker, a picture and a replaced control draw what they hold (a button
+// the page draws is laid out, and answers as any box); and any other box
 // draws only its background, a colour or a picture, its borders, its inset
 // shadows and its outline (an outer shadow is drawn outside its border
 // box), so inside its borders a transparent one draws nothing but where an
@@ -3550,7 +3551,7 @@ static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
     if (b->unpainted)
         return false;
     if (b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_MARKER || b->kind == FLOW_BOX_REPLACED ||
-        b->control >= 0 || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))
+        (b->control >= 0 && b->replaced) || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))
         return true;
     const flow_style_t *s = b->style;
     if (s->has_background || flow_background_has_image(s))
@@ -4372,7 +4373,7 @@ static bool part_from(void *ctx, const os64_html_node_t *a, const FStyled *st, c
 }
 
 // Whether element `n` draws nothing in `tree`: no box stands for it or for
-// anything inside it — what a replaced element holds (a button's content,
+// anything inside it — what a replaced element holds (a select's options,
 // which its widget draws instead) and what is under a `display: none`.
 static bool draws_none(const flow_tree_t *tree, const os64_html_node_t *n)
 {

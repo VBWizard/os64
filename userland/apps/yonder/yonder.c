@@ -1824,7 +1824,9 @@ typedef enum {
 typedef struct {
     InputKind kind;
     const os64_html_node_t *node;       // held, in `doc`
-    const os64_html_node_t *related;    // held: over/out's other node, a click's link, a focus change's other node
+    // held: over/out's other node, a click's link, a focus change's other
+    // node, a button's click target (button_clicked)
+    const os64_html_node_t *related;
     const os64_html_document_t *doc;
     int32_t x, y;                       // window coordinates, for a mouse event
     uint8_t was;                        // IN_CHECK: the box before the click (WAS_*)
@@ -8649,8 +8651,11 @@ static const os64_html_node_t *next_within(const os64_html_node_t *n, const os64
 }
 
 // A button's caption: its value, or the element's own text for a `button` —
-// all of it, however deep (`<button><span>Search</span></button>`) — or the
-// name the standard gives a submit or reset with neither.
+// all of it, however deep — or the name the standard gives a submit or
+// reset with neither. The face draws it only for a replaced button (a
+// `<button>` of text alone the page left alone, an input); a `<button>`
+// the page draws is laid out, and its caption names a widget that paints
+// nothing.
 static void button_caption(const os64_page_control_t *c, char *out, size_t cap)
 {
     out[0] = '\0';
@@ -8809,13 +8814,31 @@ static void form_reset(int32_t form)
     forms_sync_from_model(true);
 }
 
+static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link);
+
+// What a button's click is dispatched at: the element under the pointer
+// when it is inside the button, as other browsers target a click on a
+// button's icon at the icon and let it bubble; else the button itself (a
+// face's button holds no element, and a key's press has no place).
+static const os64_html_node_t *button_target(const FormWidget *fw)
+{
+    os64_gui_rect_t r = fw->w->bounds;
+    if (g.pointer_x < r.x || g.pointer_y < r.y || g.pointer_x >= r.x + r.w || g.pointer_y >= r.y + r.h)
+        return fw->node;
+    const os64_html_node_t *at = element_at(g.pointer_x, g.pointer_y, NULL);
+    for (const os64_html_node_t *n = at; n != NULL; n = os64_html_flat_parent(page_doc(&g.page), n))
+        if (n == fw->node)
+            return at;
+    return fw->node;
+}
+
 static void button_clicked(os64_ui_widget_t *w, void *user)
 {
     if (s_pointer_replay) return;
     (void)w;
     const FormWidget *fw = user;
     if (scripts_live()) {
-        input_queue(IN_BUTTON, fw->node, NULL, g.pointer_x, g.pointer_y, false);
+        input_queue(IN_BUTTON, fw->node, button_target(fw), g.pointer_x, g.pointer_y, false);
         return;
     }
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
@@ -9416,7 +9439,7 @@ static bool gadget(const flow_box_t *b, int32_t control)
 
 // A widget class that is `cls` in all but painting: libui skips a class
 // with no paint and still hit-tests, focuses and dispatches to it. One copy
-// per class, made once; NULL when the few slots are spent, and the gadget
+// per class, made once; NULL when the few slots are spent, and the widget
 // is then hidden instead.
 static const os64_ui_class_t *unpainted_class(const os64_ui_class_t *cls)
 {
@@ -9453,7 +9476,9 @@ static void forms_place(void)
         if (fw->own_class == NULL)
             fw->own_class = fw->w->cls;
         const os64_ui_class_t *cls = fw->own_class;
-        if (gadget(b, widget_control(fw)))
+        // A button the page draws is laid out, not replaced, and its widget
+        // rides over it unpainted, as a gadget's does (STYLED_BUTTONS.md).
+        if (gadget(b, widget_control(fw)) || !b->replaced)
             cls = unpainted_class(fw->own_class);
         bool shown = x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h && x + at.w > v.x && y + at.h > v.y &&
                      at.w > 0 && at.h > 0 && !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
@@ -12768,8 +12793,10 @@ static void inputs_run(void)
             break;
         }
         case IN_BUTTON: {
+            // The click goes to its target, inside the button or the button
+            // itself, and bubbles; what it does is the button's.
             os64_dom_event_t ev = mouse_event("click", true, &in);
-            if (page_event(&ev, in.node))
+            if (page_event(&ev, in.related != NULL ? in.related : in.node))
                 break;
             control = os64_page_control_for(page_model(&g.page), in.node);
             const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);

@@ -312,12 +312,24 @@ static void boxes_cases(void)
         "        text \" \"\n"
         "        atomic select control 1\n");
 
-    boxes_case("a button's content is its widget's, not the page's",
+    boxes_case("a button of text alone is its widget's, which draws the caption",
+        "<!doctype html><p><button>Save</button><textarea>t</textarea>",
+        "block html\n"
+        "  block body\n"
+        "    block p\n"
+        "      atomic button control 0\n"
+        "      atomic textarea control 1\n");
+
+    boxes_case("a button holding an element is laid out, still a control",
         "<!doctype html><p><button><b>B</b></button><textarea>t</textarea>",
         "block html\n"
         "  block body\n"
         "    block p\n"
         "      atomic button control 0\n"
+        "        block button\n"
+        "          open b\n"
+        "          text \"B\"\n"
+        "          close b\n"
         "      atomic textarea control 1\n");
 
     boxes_case("links: libpage's index on the opening edge",
